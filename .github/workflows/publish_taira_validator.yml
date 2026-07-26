@@ -24,17 +24,29 @@ on:
 
 env:
   DPN_VALIDATOR_LOCK_SHA256: 08c939a65668814951adbd6f09ec4589a368dc41a7daac3cb3e8a096d8679986
+  IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}
+  IROHA_RUST_BUILDER_IMAGE: ${{ vars.IROHA_RUST_BUILDER_IMAGE }}
+  IROHA_RUNTIME_IMAGE: ${{ vars.IROHA_RUNTIME_IMAGE }}
 
 jobs:
   image:
+    environment: taira-validator-publish
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ vars.IROHA_CI_IMAGE }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
+      - name: Validate digest-pinned Docker base images
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_RUST_BUILDER_IMAGE" \
+            --runtime "$IROHA_RUNTIME_IMAGE"
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CI_IMAGE" \
+            --runtime "$IROHA_CI_IMAGE"
 
       - name: Reconstruct reviewed DPN validator source and install lock
         shell: bash
@@ -92,7 +104,7 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
-          version: latest
+          version: v0.34.1
           install: true
 
       - name: Resolve image tags
@@ -131,6 +143,8 @@ jobs:
           load: true
           tags: local/taira-validator:smoke
           build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
             "PROFILE=release"
             "CONFIG_PROFILE=taira"
             "FEATURES=embedded-soracloud-runtime"
@@ -155,6 +169,8 @@ jobs:
             commit=${{ env.DPN_VALIDATOR_BASE_GIT_HEAD }}
             validator-source-tree=${{ env.DPN_VALIDATOR_SOURCE_TREE_SHA256 }}
           build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
             "PROFILE=release"
             "CONFIG_PROFILE=taira"
             "FEATURES=embedded-soracloud-runtime"

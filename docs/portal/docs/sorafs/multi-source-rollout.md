@@ -25,20 +25,14 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
    - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
    - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
 2. **Stage configuration.**
-   - Persist the orchestrator JSON config in the layered `iroha_config` tree:
-
-     ```toml
-     [torii.sorafs.orchestrator]
-     config_path = "/etc/iroha/sorafs/orchestrator.json"
-     ```
-
-     Update the JSON with rollout-specific limits (`max_providers`, retry budgets). Feed the same file to staging/production so diffs stay small.
+   - Store the canonical client-side orchestrator JSON at `/etc/iroha/sorafs/orchestrator.json`. This file is consumed explicitly by client/orchestrator workloads; it is not an `iroha_config` or Torii namespace. Update it with rollout-specific limits (`max_providers`, retry budgets), deploy the same reviewed file to staging/production, and pass it to every CLI fetch as `--orchestrator-config=/etc/iroha/sorafs/orchestrator.json`.
 3. **Exercise canonical fixtures.**
    - Populate the manifest/token environment variables and run the deterministic fetch:
 
      ```bash
      sorafs_cli fetch \
        --plan fixtures/sorafs_manifest/ci_sample/payload.plan.json \
+       --orchestrator-config=/etc/iroha/sorafs/orchestrator.json \
        --manifest-id "$CANARY_MANIFEST_ID" \
        --provider name=alpha,provider-id="$PROVIDER_ALPHA_ID",gateway-key="$PROVIDER_ALPHA_GATEWAY_KEY",base-url=https://gw-alpha.example/,stream-token="$PROVIDER_ALPHA_TOKEN" \
        --provider name=beta,provider-id="$PROVIDER_BETA_ID",gateway-key="$PROVIDER_BETA_GATEWAY_KEY",base-url=https://gw-beta.example/,stream-token="$PROVIDER_BETA_TOKEN" \
@@ -63,7 +57,7 @@ Follow this procedure when a provider serves corrupt chunks, times out persisten
    - Save relevant log excerpts from `telemetry::sorafs.fetch.*` targets.
 2. **Apply an immediate override.**
    - Mark the provider penalised in the telemetry snapshot distributed to the orchestrator (set `penalty=true` or clamp `token_health` to `0`). The next scoreboard build will exclude the provider automatically.
-   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
+   - For ad-hoc smoke tests, pass `--deny-provider gw-alpha` alongside `--orchestrator-config=/etc/iroha/sorafs/orchestrator.json` to `sorafs_cli fetch` so the failure path is exercised without waiting for telemetry propagation.
    - Redeploy the updated telemetry/config bundle to the affected environment (staging → canary → production). Document the change in the incident log.
 3. **Validate the override.**
    - Re-run the canonical fixture fetch. Confirm the scoreboard marks the provider as ineligible with reason `policy_denied`.
@@ -85,7 +79,7 @@ Follow this procedure when a provider serves corrupt chunks, times out persisten
 For each phase:
 
 1. Update the orchestrator JSON with the intended `max_providers` and retry budgets.
-2. Run `sorafs_cli fetch` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
+2. Run `sorafs_cli fetch --orchestrator-config=/etc/iroha/sorafs/orchestrator.json` or the SDK integration test suite against the canonical fixture and a representative manifest from the environment.
 3. Capture scoreboard + summary artefacts and attach them to the release record.
 4. Review telemetry dashboards with the on-call engineer before promoting to the next phase.
 

@@ -6140,13 +6140,13 @@ mod tests {
                 .expect("parent remainder")
         );
         assert!(
-            CancelAssetLock::new(child_id)
+            CancelAssetLock::new(child_id, child_remaining.clone())
                 .execute(&buyer_id, &mut stx)
                 .is_err(),
             "buyer cannot bypass authoritative settlement by cancelling channel custody"
         );
         assert!(
-            DrawdownAssetLock::new(child_id, child_remaining)
+            DrawdownAssetLock::new(child_id, child_remaining.clone(), child_remaining)
                 .execute(&settlement_id, &mut stx)
                 .is_err(),
             "matcher cannot bypass authoritative receipt settlement with generic drawdown"
@@ -6158,13 +6158,13 @@ mod tests {
             "an arbitrary caller cannot bypass channel maintenance with generic expiry"
         );
         assert!(
-            CancelAssetLock::new(parent_id)
+            CancelAssetLock::new(parent_id, parent_remaining.clone())
                 .execute(&buyer_id, &mut stx)
                 .is_err(),
             "buyer cannot bypass order cancellation by cancelling parent custody directly"
         );
         assert!(
-            DrawdownAssetLock::new(parent_id, parent_remaining)
+            DrawdownAssetLock::new(parent_id, parent_remaining.clone(), parent_remaining)
                 .execute(&settlement_id, &mut stx)
                 .is_err(),
             "matcher cannot draw down the remaining parent custody directly"

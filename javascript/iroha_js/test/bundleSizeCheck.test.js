@@ -335,7 +335,7 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 97_869],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 966_623, modules: 60 }],
+    ["toriiClient.js", { bytes: 966_355, modules: 60 }],
     ["transactionCodec.js (browser)", { bytes: 290_169, modules: 46 }],
     ["nexusApp.js (browser)", { bytes: 373_383, modules: 55 }],
     ["canonicalRequest.js (browser)", { bytes: 98_123, modules: 34 }],

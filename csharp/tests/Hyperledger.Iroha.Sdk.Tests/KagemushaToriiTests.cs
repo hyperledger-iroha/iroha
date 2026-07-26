@@ -52,13 +52,14 @@ public sealed class KagemushaToriiTests
     public async Task TopUpTransportsAnExternalV4NoritoArchiveWithoutAProverClaim()
     {
         var archive = NoritoArchive();
+        var expectedArchive = archive.ToArray();
         using var handler = new KagemushaHandler(request =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/v1/offline/top-up", request.RequestUri!.AbsolutePath);
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal(OperationId, Assert.Single(request.Headers.GetValues("Idempotency-Key")));
-            Assert.Equal(archive, request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
+            Assert.Equal(expectedArchive, request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
             var response = JsonResponse(OperationReferenceJson("top_up"), HttpStatusCode.Accepted);
             response.Headers.Location = new Uri($"/v1/offline/operations/{OperationId}", UriKind.Relative);
             return response;

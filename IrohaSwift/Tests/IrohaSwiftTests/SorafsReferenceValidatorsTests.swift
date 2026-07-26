@@ -3,10 +3,183 @@ import XCTest
 @testable import IrohaSwift
 
 final class SorafsReferenceValidatorsTests: XCTestCase {
+    private struct FixtureBundleInputSpec {
+        let kind: SorafsFixtureBundlePayloadKind
+        let path: String
+    }
+
+    private struct FixtureBundleProfile {
+        let outcomePath: String
+        let nowUnix: UInt64
+        let inputs: [FixtureBundleInputSpec]
+    }
+
     private static let nativeValidationRequiredEnvironment =
         "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"
     private static let nativeValidationRequiredMessage =
         "ABI-21 connect_norito_bridge with Governance DAG symbols is required."
+    private static let referenceFixtureGeneratedAtUnix: UInt64 = 1_700_001_234
+    private static let referenceBundleProfiles: [FixtureBundleProfile] = [
+        FixtureBundleProfile(
+            outcomePath: "bundle_heterogeneous_positive_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(kind: .pdpCommitment, path: "pdp/commitment_v1.to"),
+                FixtureBundleInputSpec(kind: .pdpChallenge, path: "pdp/challenge_v1.to"),
+                FixtureBundleInputSpec(kind: .pdpProof, path: "pdp/proof_v1.to"),
+                FixtureBundleInputSpec(kind: .porChallenge, path: "por/challenge_v1.to"),
+                FixtureBundleInputSpec(kind: .porProof, path: "por/proof_v1.to"),
+                FixtureBundleInputSpec(kind: .potrReceipt, path: "potr/receipt_v1.to"),
+                FixtureBundleInputSpec(kind: .repairTaskRecord, path: "repair/task_v1.to"),
+                FixtureBundleInputSpec(
+                    kind: .orderbookOrderRequest,
+                    path: "orderbook/order_request_v1.to"
+                ),
+                FixtureBundleInputSpec(
+                    kind: .orderbookOrderCancel,
+                    path: "orderbook/order_cancel_v1.to"
+                ),
+                FixtureBundleInputSpec(
+                    kind: .orderbookTradeEvent,
+                    path: "orderbook/trade_event_v1.to"
+                ),
+                FixtureBundleInputSpec(
+                    kind: .orderbookSettlementChannel,
+                    path: "orderbook/settlement_channel_v1.to"
+                ),
+                FixtureBundleInputSpec(
+                    kind: .orderbookSettlementReceipt,
+                    path: "orderbook/settlement_receipt_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(kind: .porChallenge, path: "por/challenge_v1.to"),
+                FixtureBundleInputSpec(kind: .porProof, path: "por/proof_v1.to"),
+                FixtureBundleInputSpec(
+                    kind: .orderbookOrderRequest,
+                    path: "orderbook/negative/order_request_bad_signature_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(kind: .porChallenge, path: "por/challenge_v1.to"),
+                FixtureBundleInputSpec(kind: .porProof, path: "por/proof_v1.to"),
+                FixtureBundleInputSpec(
+                    kind: .orderbookOrderRequest,
+                    path: "orderbook/negative/order_request_trailing_bytes_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_pdp_duplicate_hot_leaf_negative_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(kind: .pdpCommitment, path: "pdp/commitment_v1.to"),
+                FixtureBundleInputSpec(
+                    kind: .pdpChallenge,
+                    path: "pdp/negative/duplicate_hot_leaf_challenge_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_pdp_missing_signature_negative_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(kind: .pdpCommitment, path: "pdp/commitment_v1.to"),
+                FixtureBundleInputSpec(kind: .pdpChallenge, path: "pdp/challenge_v1.to"),
+                FixtureBundleInputSpec(
+                    kind: .pdpProof,
+                    path: "pdp/negative/missing_signature_proof_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_pdp_wrong_provider_negative_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(kind: .pdpCommitment, path: "pdp/commitment_v1.to"),
+                FixtureBundleInputSpec(kind: .pdpChallenge, path: "pdp/challenge_v1.to"),
+                FixtureBundleInputSpec(
+                    kind: .pdpProof,
+                    path: "pdp/negative/wrong_provider_proof_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            // The outcome names only the offender; the order establishes the expected digest.
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(
+                    kind: .repairTaskRecord,
+                    path: "repair/negative/task_manifest_mismatch_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
+            nowUnix: 1_700_000_001,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .replicationOrder,
+                    path: "replication_order/order_v1.to"
+                ),
+                FixtureBundleInputSpec(
+                    kind: .repairTaskRecord,
+                    path: "repair/negative/task_provider_unassigned_v1.to"
+                )
+            ]
+        ),
+        FixtureBundleProfile(
+            outcomePath: "bundle_routing_admission_positive_validation_outcome_v1.json",
+            nowUnix: 300,
+            inputs: [
+                FixtureBundleInputSpec(
+                    kind: .providerAdvert,
+                    path: "provider_admission/advert_v1.to"
+                ),
+                FixtureBundleInputSpec(
+                    kind: .providerAdmissionEnvelope,
+                    path: "provider_admission/envelope_v1.to"
+                )
+            ]
+        )
+    ]
 
     private let maxScaledXor =
         "6703903964971298549787012499102923063739682910296196688861780721860882015" +
@@ -25,6 +198,54 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         XCTAssertEqual(SorafsPopPayloadKind.issuedCredentialBundle.rawValue, 7)
         XCTAssertEqual(SorafsHedgingPayloadKind.priceFeed.rawValue, 1)
         XCTAssertEqual(SorafsHedgingPayloadKind.billingStatement.rawValue, 4)
+        let fixtureKinds: [SorafsFixtureBundlePayloadKind] = [
+            .providerAdvert,
+            .providerAdmissionEnvelope,
+            .replicationOrder,
+            .porChallenge,
+            .porProof,
+            .potrReceipt,
+            .repairEvidence,
+            .repairReport,
+            .repairTaskRecord,
+            .repairSlashProposal,
+            .repairTaskEvent,
+            .orderbookOrderRequest,
+            .orderbookOrderCancel,
+            .orderbookTradeEvent,
+            .orderbookSettlementChannel,
+            .orderbookSettlementReceipt,
+            .pdpCommitment,
+            .pdpChallenge,
+            .pdpProof,
+        ]
+        XCTAssertEqual(fixtureKinds.map(\.rawValue), (1...19).map { UInt32($0) })
+        XCTAssertEqual(
+            fixtureKinds.map(\.defaultLabel),
+            [
+                "provider-advert.to",
+                "provider-admission-envelope.to",
+                "replication-order.to",
+                "por-challenge.to",
+                "por-proof.to",
+                "potr-receipt.to",
+                "repair-evidence.to",
+                "repair-report.to",
+                "repair-task-record.to",
+                "repair-slash-proposal.to",
+                "repair-task-event.to",
+                "orderbook-order-request.to",
+                "orderbook-order-cancel.to",
+                "orderbook-trade-event.to",
+                "orderbook-settlement-channel.to",
+                "orderbook-settlement-receipt.to",
+                "pdp-commitment.to",
+                "pdp-challenge.to",
+                "pdp-proof.to",
+            ]
+        )
+        XCTAssertNil(SorafsFixtureBundlePayloadKind(rawValue: 0))
+        XCTAssertNil(SorafsFixtureBundlePayloadKind(rawValue: 20))
         XCTAssertEqual(SorafsOrderbookSide.bid.rawValue, 1)
         XCTAssertEqual(SorafsOrderbookTier.archive.rawValue, 3)
         XCTAssertEqual(SorafsOrderbookCancelReason.replaced.rawValue, 4)
@@ -33,6 +254,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         XCTAssertEqual(SorafsReferenceValidators.governanceDagCidBytesV1, 32)
         XCTAssertEqual(SorafsReferenceValidators.referenceMaxInputBytesV1, 67_108_864)
         XCTAssertEqual(SorafsReferenceValidators.referenceMaxLabelBytesV1, 1_024)
+        XCTAssertEqual(SorafsReferenceValidators.fixtureBundleMaxPayloadsV1, 64)
     }
 
     func testRejectsBlankLabelBeforeNativeDispatch() {
@@ -181,6 +403,62 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
                     error as? SorafsReferenceValidationError,
                     .invalidGovernanceDagInput(
                         "expectedBlockCid must contain exactly 32 bytes"
+                    )
+                )
+            }
+        }
+    }
+
+    func testBoundsFixtureBundleInputsBeforeNativeDispatch() {
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.validateFixtureBundleJSON(
+                payloads: [],
+                generatedAtUnix: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidFixtureBundleInput("payloads must contain 1...64 entries")
+            )
+        }
+
+        let item = SorafsFixtureBundlePayloadInput(
+            kind: .porProof,
+            payload: Data([0xA5])
+        )
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.validateFixtureBundleJSON(
+                payloads: Array(repeating: item, count: 65),
+                generatedAtUnix: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidFixtureBundleInput("payloads must contain 1...64 entries")
+            )
+        }
+    }
+
+    func testFixtureBundleInputSnapshotsPayloadValue() {
+        var source = Data([1, 2, 3])
+        let input = SorafsFixtureBundlePayloadInput(kind: .porProof, payload: source)
+        source[0] = 9
+        XCTAssertEqual(input.payload, Data([1, 2, 3]))
+    }
+
+    func testBoundsGovernanceLogNodeCidBeforeNativeDispatch() {
+        for invalidLength in [0, 31, 33] {
+            XCTAssertThrowsError(
+                try SorafsReferenceValidators.validateGovernanceLogNodeJSON(
+                    payload: Data(),
+                    expectedNodeCid: Data(repeating: 0, count: invalidLength),
+                    generatedAtUnix: 1
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? SorafsReferenceValidationError,
+                    .invalidGovernanceLogNodeInput(
+                        "expectedNodeCid must contain exactly 32 bytes"
                     )
                 )
             }
@@ -423,6 +701,99 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
                 name
             )
         }
+    }
+
+    func testValidatesLinkedFixtureBundleWhenNativeBridgeIsAvailable() throws {
+        try XCTSkipIf(
+            !SorafsReferenceValidators.isFixtureBundleNativeAvailable,
+            "SoraFS fixture-bundle reference bridge unavailable"
+        )
+        let json = try SorafsReferenceValidators.validateFixtureBundleJSON(
+            payloads: [
+                SorafsFixtureBundlePayloadInput(
+                    kind: .replicationOrder,
+                    payload: try fixture("sorafs_manifest/replication_order/order_v1.to"),
+                    label: "replication-order.to"
+                ),
+                SorafsFixtureBundlePayloadInput(
+                    kind: .porProof,
+                    payload: try fixture("sorafs_manifest/por/proof_v1.to"),
+                    label: "por-proof.to"
+                )
+            ],
+            nowUnix: 1_700_000_001,
+            generatedAtUnix: 1_700_001_238
+        )
+        let jsonData = try XCTUnwrap(json.data(using: .utf8))
+        let outcome = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: jsonData) as? [String: Any]
+        )
+        XCTAssertEqual(outcome["status"] as? String, "Ok")
+        XCTAssertEqual(outcome["code"] as? String, "SFS-OK-000")
+        XCTAssertEqual(
+            (outcome["generated_at"] as? NSNumber)?.uint64Value,
+            1_700_001_238
+        )
+        let inputs = try XCTUnwrap(outcome["inputs"] as? [[String: Any]])
+        XCTAssertEqual(
+            inputs.compactMap { $0["kind"] as? String },
+            ["replication_order", "por_proof"]
+        )
+    }
+
+    func testValidatesEveryReferenceSdkBundleOutcomeByteForByte() throws {
+        try XCTSkipIf(
+            !SorafsReferenceValidators.isFixtureBundleNativeAvailable,
+            "SoraFS fixture-bundle reference bridge unavailable"
+        )
+        let outcomePaths = Self.referenceBundleProfiles.map(\.outcomePath)
+        XCTAssertEqual(outcomePaths.count, 9)
+        XCTAssertEqual(outcomePaths, outcomePaths.sorted())
+
+        for profile in Self.referenceBundleProfiles {
+            let payloads = try profile.inputs.map { input in
+                SorafsFixtureBundlePayloadInput(
+                    kind: input.kind,
+                    payload: try fixture("sorafs_manifest/\(input.path)"),
+                    label: input.path
+                )
+            }
+            let actual = try SorafsReferenceValidators.validateFixtureBundleJSON(
+                payloads: payloads,
+                nowUnix: profile.nowUnix,
+                generatedAtUnix: Self.referenceFixtureGeneratedAtUnix
+            )
+            XCTAssertEqual(
+                Data(actual.utf8),
+                try fixture("sorafs_manifest/reference_sdk/\(profile.outcomePath)"),
+                profile.outcomePath
+            )
+        }
+    }
+
+    func testValidatesModerationGovernanceLogNodeOutcomeByteForByte() throws {
+        try XCTSkipIf(
+            !SorafsReferenceValidators.isGovernanceLogNodeNativeAvailable,
+            "SoraFS governance-log-node reference bridge unavailable"
+        )
+        let expectedNodeCid = try XCTUnwrap(
+            Data(
+                hexString: "9a2dc9a930494cbc70f0e4cab25df893"
+                    + "fb607e83f1fa52520ed62dabca918d5a"
+            )
+        )
+        let actual = try SorafsReferenceValidators.validateGovernanceLogNodeJSON(
+            payload: try fixture("sorafs_manifest/moderation/governance_node_v1.to"),
+            label: "moderation/governance_node_v1.to",
+            expectedNodeCid: expectedNodeCid,
+            generatedAtUnix: Self.referenceFixtureGeneratedAtUnix
+        )
+        XCTAssertEqual(
+            Data(actual.utf8),
+            try fixture(
+                "sorafs_manifest/moderation/governance_node_validation_outcome_v1.json"
+            )
+        )
     }
 
     func testValidatesAllPdpOutcomeFixturesWhenNativeBridgeIsAvailable() throws {

@@ -32,7 +32,7 @@ use iroha_data_model::sorafs::moderation_ledger::sorafs_repair_task_id_v1;
 #[cfg(feature = "app_api")]
 use iroha_futures::supervisor::ShutdownSignal;
 #[cfg(feature = "app_api")]
-use norito::json::{self, Map as JsonMap, Value as JsonValue};
+use norito::json::{self, Value as JsonValue};
 use norito::{
     codec::{Decode, Encode},
     decode_from_bytes,
@@ -42,10 +42,11 @@ use norito::{
 use parking_lot::{Mutex, RwLock};
 use sorafs_manifest::por::{
     AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1,
-    PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError,
-    PorProviderSummaryV1, PorProviderSummaryValidationError, PorReportIsoWeek,
-    PorReportIsoWeekValidationError, PorWeeklyReportV1, PorWeeklyReportValidationError,
-    ProviderVrfSubmissionV1, ProviderVrfSubmissionValidationError, provider_vrf_input,
+    PorChallengeOutcome, PorChallengePublicationV1, PorChallengePublicationValidationError,
+    PorChallengeStatusV1, PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
+    PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
+    PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
+    ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
 use sorafs_node::por_repair_source_identity_v1;
 #[cfg(feature = "app_api")]
@@ -2963,122 +2964,52 @@ fn load_vrf_state(
 }
 
 #[cfg(feature = "app_api")]
-/// Errors emitted when publishing PoR governance artefacts.
-#[derive(Debug, Error)]
-pub enum GovernancePublishError {
-    /// Failed while accessing the filesystem.
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    /// Norito or JSON serialisation failed prior to persistence.
-    #[error("serialization error: {0}")]
-    Serialisation(String),
-    /// Hardened atomic persistence failed.
-    #[error("secure persistence error: {0}")]
-    Persistence(String),
-}
+/// Narrow boundary for durable PoR Governance DAG publication.
+trait PorGovernancePublisher: Send + Sync {
+    /// Return whether a durable signed Governance DAG publisher is bound.
+    fn is_ready(&self) -> bool;
 
-#[cfg(feature = "app_api")]
-/// Emits PoR governance artefacts to a backing store.
-pub trait GovernancePublisher: Send + Sync {
-    /// Persist a challenge payload together with its duplicate sample metadata.
+    /// Publish one validated canonical challenge envelope.
     ///
     /// # Errors
     ///
-    /// Returns [`GovernancePublishError`] when the payload cannot be persisted.
+    /// Returns [`sorafs_node::GovernancePublishError`] when durable outbox
+    /// enqueueing or publication fails.
     fn publish_challenge(
         &self,
-        challenge: &PorChallengeV1,
-        duplicate_samples: usize,
-    ) -> Result<(), GovernancePublishError>;
+        publication: PorChallengePublicationV1,
+    ) -> Result<(), sorafs_node::GovernancePublishError>;
 
-    /// Persist the weekly governance report.
+    /// Publish one validated canonical weekly report.
     ///
     /// # Errors
     ///
-    /// Returns [`GovernancePublishError`] when writing the report fails.
+    /// Returns [`sorafs_node::GovernancePublishError`] when durable outbox
+    /// enqueueing or publication fails.
     fn publish_weekly_report(
         &self,
-        report: &PorWeeklyReportV1,
-    ) -> Result<(), GovernancePublishError>;
+        report: PorWeeklyReportV1,
+    ) -> Result<(), sorafs_node::GovernancePublishError>;
 }
 
 #[cfg(feature = "app_api")]
-/// Governance publisher that materialises artefacts on the filesystem.
-#[derive(Debug)]
-pub struct FilesystemGovernancePublisher {
-    root: PathBuf,
-}
-
-#[cfg(feature = "app_api")]
-impl FilesystemGovernancePublisher {
-    const MAX_ARTEFACT_BYTES: usize = 16 * 1024 * 1024;
-
-    /// Create a publisher and validate/create its private non-symlink root.
-    pub fn try_new(root: PathBuf) -> Result<Self, GovernancePublishError> {
-        let (_, root, _) = ensure_secure_parent(&root.join(".por-publisher-probe"))
-            .map_err(|error| GovernancePublishError::Persistence(error.to_string()))?;
-        Ok(Self { root })
+impl PorGovernancePublisher for sorafs_node::NodeHandle {
+    fn is_ready(&self) -> bool {
+        self.has_governance_publisher()
     }
 
-    fn write_json(
-        &self,
-        path: PathBuf,
-        value: JsonValue,
-        replace_existing: bool,
-    ) -> Result<(), GovernancePublishError> {
-        let body = json::to_json_pretty(&value)
-            .map_err(|err| GovernancePublishError::Serialisation(err.to_string()))?;
-        secure_atomic_write(
-            &path,
-            body.as_bytes(),
-            Self::MAX_ARTEFACT_BYTES,
-            replace_existing,
-        )
-        .map_err(|error| GovernancePublishError::Persistence(error.to_string()))
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl GovernancePublisher for FilesystemGovernancePublisher {
     fn publish_challenge(
         &self,
-        challenge: &PorChallengeV1,
-        duplicate_samples: usize,
-    ) -> Result<(), GovernancePublishError> {
-        let epoch_dir = self
-            .root
-            .join("challenges")
-            .join(format!("{:010}", challenge.epoch_id));
-        let mut payload = JsonMap::new();
-        payload.insert(
-            "challenge".into(),
-            json::to_value(challenge)
-                .map_err(|err| GovernancePublishError::Serialisation(err.to_string()))?,
-        );
-        payload.insert(
-            "duplicate_samples".into(),
-            JsonValue::from(duplicate_samples as u64),
-        );
-        let filename = format!("{}.json", hex::encode(challenge.challenge_id));
-        self.write_json(epoch_dir.join(filename), JsonValue::Object(payload), false)
+        publication: PorChallengePublicationV1,
+    ) -> Result<(), sorafs_node::GovernancePublishError> {
+        self.publish_por_challenge_publication(publication)
     }
 
     fn publish_weekly_report(
         &self,
-        report: &PorWeeklyReportV1,
-    ) -> Result<(), GovernancePublishError> {
-        let mut payload = JsonMap::new();
-        payload.insert(
-            "report".into(),
-            json::to_value(report)
-                .map_err(|err| GovernancePublishError::Serialisation(err.to_string()))?,
-        );
-        let filename = format!("{}-{:02}.json", report.cycle.year, report.cycle.week);
-        self.write_json(
-            self.root.join("reports").join(filename),
-            JsonValue::Object(payload),
-            true,
-        )
+        report: PorWeeklyReportV1,
+    ) -> Result<(), sorafs_node::GovernancePublishError> {
+        self.publish_por_weekly_report(report)
     }
 }
 
@@ -3103,7 +3034,10 @@ pub enum PorAutomationError {
     Coordinator(#[from] PorCoordinatorError),
     /// Governance publication step failed.
     #[error("governance publish failure: {0}")]
-    Governance(#[from] GovernancePublishError),
+    Governance(#[from] sorafs_node::GovernancePublishError),
+    /// Planned challenge metadata could not form a canonical publication.
+    #[error("invalid challenge publication: {0}")]
+    ChallengePublication(#[from] PorChallengePublicationValidationError),
     /// Timestamp arithmetic overflowed the supported range.
     #[error("timestamp overflow")]
     TimestampOverflow,
@@ -3123,7 +3057,7 @@ pub struct PorCoordinatorRuntime {
     /// Submission-capable verified provider used by the Torii ingest route.
     verified_vrf_provider: Option<Arc<VerifiedVrfProvider>>,
     /// Publisher invoked to emit governance-facing telemetry (reports, exports).
-    publisher: Arc<dyn GovernancePublisher>,
+    publisher: Arc<dyn PorGovernancePublisher>,
     /// Torii telemetry handle used for scheduler metrics.
     telemetry: crate::routing::MaybeTelemetry,
     /// Interval between PoR epochs in seconds.
@@ -3150,11 +3084,38 @@ impl PorCoordinatorRuntime {
         coordinator: Arc<PorCoordinator>,
         randomness: Arc<dyn RandomnessProvider>,
         vrf_provider: Arc<dyn VrfProvider>,
-        publisher: Arc<dyn GovernancePublisher>,
+        publisher: Arc<sorafs_node::NodeHandle>,
         epoch_interval_secs: u64,
         response_window_secs: u64,
         vrf_submission_deadline_secs: u64,
     ) -> Self {
+        Self::new_with_publisher(
+            storage,
+            coordinator,
+            randomness,
+            vrf_provider,
+            publisher,
+            epoch_interval_secs,
+            response_window_secs,
+            vrf_submission_deadline_secs,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_publisher(
+        storage: Arc<dyn PorStorage>,
+        coordinator: Arc<PorCoordinator>,
+        randomness: Arc<dyn RandomnessProvider>,
+        vrf_provider: Arc<dyn VrfProvider>,
+        publisher: Arc<dyn PorGovernancePublisher>,
+        epoch_interval_secs: u64,
+        response_window_secs: u64,
+        vrf_submission_deadline_secs: u64,
+    ) -> Self {
+        assert!(
+            publisher.is_ready(),
+            "enabled PoR runtime requires the embedded SoraFS node's signed Governance DAG publisher"
+        );
         Self {
             storage,
             coordinator,
@@ -3240,7 +3201,7 @@ impl PorCoordinatorRuntime {
             .coordinator
             .weekly_report(cycle.clone())
             .map_err(PorAutomationError::Coordinator)?;
-        self.publisher.publish_weekly_report(&report)?;
+        self.publisher.publish_weekly_report(report)?;
         self.last_report_marker
             .store(marker, AtomicOrdering::SeqCst);
         Ok(())
@@ -3290,20 +3251,19 @@ impl PorCoordinatorRuntime {
             duplicate_samples,
         } in planned
         {
+            let publication =
+                PorChallengePublicationV1::try_new(challenge.clone(), duplicate_samples)?;
             self.storage.record_challenge(&challenge)?;
             match self.coordinator.record_challenge(&challenge) {
                 Ok(()) | Err(PorCoordinatorError::DuplicateChallenge { .. }) => {}
                 Err(error) => return Err(PorAutomationError::Coordinator(error)),
             }
-            if let Err(err) = self
-                .publisher
-                .publish_challenge(&challenge, duplicate_samples)
-            {
+            if let Err(err) = self.publisher.publish_challenge(publication) {
                 iroha_logger::error!(
                     ?err,
                     provider_id = %hex::encode(challenge.provider_id),
                     challenge_id = %hex::encode(challenge.challenge_id),
-                    "failed to publish PoR challenge to governance DAG directory"
+                    "failed to publish PoR challenge through the durable Governance DAG outbox"
                 );
                 return Err(PorAutomationError::Governance(err));
             }
@@ -4853,31 +4813,11 @@ mod tests {
     mod runtime {
         use std::{
             collections::HashMap,
-            fs,
-            path::Path,
-            str::FromStr,
             sync::{
                 Arc,
                 atomic::{AtomicUsize, Ordering as AtomicOrdering},
             },
         };
-
-        use iroha_config::base::util::Bytes;
-        use iroha_data_model::{
-            metadata::Metadata,
-            name::Name,
-            sorafs::capacity::{CapacityDeclarationRecord, ProviderId},
-        };
-        use sorafs_manifest::{
-            BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy,
-            capacity::{
-                CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1,
-                LaneCommitmentV1,
-            },
-            provider_advert::StakePointer,
-        };
-        use sorafs_node::{NodeHandle, config::StorageConfig};
-        use tempfile::tempdir;
 
         use super::*;
         use crate::sorafs::por::{RandomnessProvider, VrfProvider};
@@ -4902,23 +4842,6 @@ mod tests {
         #[derive(Default, Clone)]
         struct StaticVrfProvider {
             map: HashMap<u64, HashMap<ManifestVrfKey, ManifestVrfBundle>>,
-        }
-
-        impl StaticVrfProvider {
-            fn with_entry(epoch: u64, manifest: [u8; 32], bundle: ManifestVrfBundle) -> Self {
-                let mut map = HashMap::new();
-                map.insert(
-                    epoch,
-                    HashMap::from([(
-                        ManifestVrfKey {
-                            provider_id: bundle.provider_id,
-                            manifest_digest: manifest,
-                        },
-                        bundle,
-                    )]),
-                );
-                Self { map }
-            }
         }
 
         impl VrfProvider for StaticVrfProvider {
@@ -4977,124 +4900,86 @@ mod tests {
 
         struct FailOncePublisher {
             attempts: AtomicUsize,
-            published: Mutex<Vec<PorChallengeV1>>,
+            published: Mutex<Vec<PorChallengePublicationV1>>,
         }
 
-        impl GovernancePublisher for FailOncePublisher {
+        impl PorGovernancePublisher for FailOncePublisher {
+            fn is_ready(&self) -> bool {
+                true
+            }
+
             fn publish_challenge(
                 &self,
-                challenge: &PorChallengeV1,
-                _duplicate_samples: usize,
-            ) -> Result<(), GovernancePublishError> {
+                publication: PorChallengePublicationV1,
+            ) -> Result<(), sorafs_node::GovernancePublishError> {
                 if self.attempts.fetch_add(1, AtomicOrdering::SeqCst) == 0 {
-                    return Err(GovernancePublishError::Io(std::io::Error::other(
-                        "injected publication failure",
-                    )));
+                    return Err(sorafs_node::GovernancePublishError::Io(
+                        std::io::Error::other("injected publication failure"),
+                    ));
                 }
-                self.published.lock().push(challenge.clone());
+                self.published.lock().push(publication);
                 Ok(())
             }
 
             fn publish_weekly_report(
                 &self,
-                _report: &PorWeeklyReportV1,
-            ) -> Result<(), GovernancePublishError> {
+                _report: PorWeeklyReportV1,
+            ) -> Result<(), sorafs_node::GovernancePublishError> {
                 Ok(())
             }
         }
 
-        fn storage_config(root: &Path) -> StorageConfig {
-            StorageConfig::builder()
-                .enabled(true)
-                .data_dir(root.join("storage"))
-                .max_capacity_bytes(Bytes(1_u64 << 30))
-                .build()
-        }
+        struct NotReadyPublisher;
 
-        fn declare_capacity(handle: &NodeHandle, provider_id: [u8; 32]) {
-            let declaration = CapacityDeclarationV1 {
-                version: CAPACITY_DECLARATION_VERSION_V1,
-                provider_id,
-                stake: StakePointer {
-                    pool_id: [0xAA; 32],
-                    stake_amount: "1".parse().expect("canonical stake quantity"),
-                },
-                committed_capacity_gib: 128,
-                chunker_commitments: vec![ChunkerCommitmentV1 {
-                    profile_id: "sorafs.sf1@1.0.0".to_string(),
-                    profile_aliases: None,
-                    committed_gib: 128,
-                    capability_refs: Vec::new(),
-                }],
-                lane_commitments: vec![LaneCommitmentV1 {
-                    lane_id: "default".to_string(),
-                    max_gib: 128,
-                }],
-                pricing: None,
-                valid_from: 1,
-                valid_until: 2,
-                metadata: Vec::new(),
-            };
-            let payload = norito::to_bytes(&declaration).expect("encode declaration");
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                Name::from_str("profile.sample_multiplier").expect("metadata key"),
-                1_u64,
-            );
-            let record = CapacityDeclarationRecord::new(
-                ProviderId::new(provider_id),
-                payload,
-                declaration.committed_capacity_gib,
-                1,
-                1,
-                2,
-                metadata,
-            );
-            handle
-                .record_capacity_declaration(&record)
-                .expect("record capacity declaration");
-        }
-
-        fn ingest_manifest(
-            handle: &NodeHandle,
-            payload: &[u8],
-        ) -> ([u8; 32], sorafs_manifest::ManifestV1) {
-            let plan = sorafs_car::CarBuildPlan::single_file(payload).expect("plan");
-            let digest = blake3::hash(payload);
-            let manifest = ManifestBuilder::new()
-                .root_cid(digest.as_bytes().to_vec())
-                .dag_codec(DagCodecId(0x71))
-                .chunking_from_profile(
-                    sorafs_chunker::ChunkProfile::DEFAULT,
-                    BLAKE3_256_MULTIHASH_CODE,
-                )
-                .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
-                .por_root(
-                    sorafs_car::compute_por_root(payload, &plan)
-                        .expect("derive canonical fixture PoR root"),
-                )
-                .content_length(plan.content_length)
-                .car_digest(digest.into())
-                .car_size(plan.content_length)
-                .pin_policy(PinPolicy::default())
-                .build()
-                .expect("manifest");
-            let mut reader = payload;
-            handle
-                .ingest_manifest(&manifest, &plan, &mut reader)
-                .expect("ingest manifest");
-            (manifest.digest().expect("digest").into(), manifest)
-        }
-
-        fn challenge_paths(root: &Path, epoch: u64) -> Vec<std::path::PathBuf> {
-            let epoch_dir = root.join("challenges").join(format!("{epoch:010}"));
-            if !epoch_dir.exists() {
-                return Vec::new();
+        impl PorGovernancePublisher for NotReadyPublisher {
+            fn is_ready(&self) -> bool {
+                false
             }
-            fs::read_dir(epoch_dir)
-                .expect("challenge dir")
-                .map(|entry| entry.expect("entry").path())
-                .collect()
+
+            fn publish_challenge(
+                &self,
+                _publication: PorChallengePublicationV1,
+            ) -> Result<(), sorafs_node::GovernancePublishError> {
+                unreachable!("constructor rejects a publisher that is not ready")
+            }
+
+            fn publish_weekly_report(
+                &self,
+                _report: PorWeeklyReportV1,
+            ) -> Result<(), sorafs_node::GovernancePublishError> {
+                unreachable!("constructor rejects a publisher that is not ready")
+            }
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "enabled PoR runtime requires the embedded SoraFS node's signed Governance DAG publisher"
+        )]
+        fn runtime_rejects_missing_signed_governance_publisher() {
+            let challenge = sample_challenge(true);
+            let storage = Arc::new(ReplaySafeStorage {
+                planned: Vec::new(),
+                recorded: Arc::new(Mutex::new(None)),
+            });
+            let randomness = PorRandomness {
+                epoch_id: challenge.epoch_id,
+                issued_at_unix: challenge.issued_at,
+                response_window_secs: challenge.deadline_at - challenge.issued_at,
+                drand_round: challenge.drand_round,
+                drand_randomness: challenge.drand_randomness,
+                drand_signature: challenge.drand_signature,
+            };
+
+            let _runtime = PorCoordinatorRuntime::new_with_publisher(
+                storage,
+                Arc::new(PorCoordinator::new()),
+                Arc::new(StaticRandomnessProvider { randomness }),
+                Arc::new(StaticVrfProvider::default()),
+                Arc::new(NotReadyPublisher),
+                3_600,
+                900,
+                300,
+            );
         }
 
         #[tokio::test]
@@ -5144,7 +5029,7 @@ mod tests {
                 drand_signature: challenge.drand_signature,
             };
             let coordinator = Arc::new(PorCoordinator::new());
-            let runtime = PorCoordinatorRuntime::new(
+            let runtime = PorCoordinatorRuntime::new_with_publisher(
                 storage,
                 Arc::clone(&coordinator),
                 Arc::new(StaticRandomnessProvider { randomness }),
@@ -5173,203 +5058,13 @@ mod tests {
                     .await
                     .expect("exact retry succeeds")
             );
-            assert_eq!(publisher.published.lock().as_slice(), &[challenge]);
+            let published = publisher.published.lock();
+            assert_eq!(published.len(), 1);
+            assert_eq!(published[0].challenge, challenge);
+            assert_eq!(published[0].duplicate_samples, 0);
+            drop(published);
             assert!(!runtime.run_once_at(now_secs).await.expect("epoch complete"));
             assert_eq!(publisher.attempts.load(AtomicOrdering::SeqCst), 2);
-        }
-
-        #[tokio::test]
-        async fn runtime_emits_governance_challenge_with_vrf() {
-            let temp_dir = tempdir().expect("temp dir");
-            let root = canonical_temp_root(&temp_dir);
-            let governance_dir = root.join("governance");
-            let handle = NodeHandle::new(storage_config(&root));
-            let provider_id = [0x11; 32];
-            declare_capacity(&handle, provider_id);
-            let payload = vec![0xAB; 512 * 1024];
-            let (manifest_digest, _manifest) = ingest_manifest(&handle, &payload);
-
-            let epoch_interval = 3_600;
-            let epoch_id = 500_000;
-            let vrf_deadline = 300;
-            let now_secs = epoch_id * epoch_interval + vrf_deadline;
-            let randomness = PorRandomness {
-                epoch_id,
-                issued_at_unix: now_secs,
-                response_window_secs: 900,
-                drand_round: 42_000,
-                drand_randomness: [0x21; 32],
-                drand_signature: [0xCD; 48],
-            };
-            let randomness_provider = Arc::new(StaticRandomnessProvider {
-                randomness: randomness.clone(),
-            });
-            let vrf_provider = Arc::new(StaticVrfProvider::with_entry(
-                epoch_id,
-                manifest_digest,
-                ManifestVrfBundle {
-                    provider_id,
-                    manifest_digest,
-                    epoch_id,
-                    drand_round: randomness.drand_round,
-                    output: [0x55; 32],
-                    proof: iroha_crypto::vrf::VrfProof::SigInG1([0x66; 48]),
-                },
-            ));
-            let publisher = Arc::new(
-                FilesystemGovernancePublisher::try_new(governance_dir.clone())
-                    .expect("governance publisher"),
-            );
-            let coordinator = Arc::new(PorCoordinator::new());
-            let storage: Arc<dyn PorStorage> = Arc::new(handle.clone());
-            #[cfg(feature = "telemetry")]
-            let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-            #[cfg(feature = "telemetry")]
-            let telemetry = crate::routing::MaybeTelemetry::from_profile(
-                Some(iroha_core::telemetry::Telemetry::new(metrics.clone(), true)),
-                iroha_config::parameters::actual::TelemetryProfile::Full,
-            );
-
-            let runtime = PorCoordinatorRuntime::new(
-                storage,
-                coordinator.clone(),
-                randomness_provider,
-                vrf_provider,
-                publisher,
-                epoch_interval,
-                randomness.response_window_secs,
-                vrf_deadline,
-            );
-            #[cfg(feature = "telemetry")]
-            let runtime = runtime.with_telemetry(telemetry);
-            let runtime = Arc::new(runtime);
-
-            let triggered = runtime.run_once_at(now_secs).await.expect("runtime tick");
-            assert!(triggered, "expected challenge scheduling on new epoch");
-            #[cfg(feature = "telemetry")]
-            assert_eq!(
-                metrics
-                    .torii_sorafs_por_challenges_total
-                    .with_label_values(&["scheduled"])
-                    .get(),
-                1,
-                "runtime should emit a scheduler metric for a published challenge"
-            );
-
-            let statuses = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-            assert_eq!(statuses.len(), 1);
-            let status = &statuses[0];
-            assert_eq!(status.epoch_id, epoch_id);
-            assert_eq!(status.drand_round, randomness.drand_round);
-            assert!(!status.forced, "VRF should prevent forced flag");
-            assert_eq!(status.status, PorChallengeOutcome::Pending);
-
-            let challenge_files = challenge_paths(&governance_dir, epoch_id);
-            assert_eq!(challenge_files.len(), 1, "challenge file emitted");
-            let challenge_json = fs::read_to_string(&challenge_files[0]).expect("challenge json");
-            let parsed: norito::json::Value =
-                norito::json::from_str(&challenge_json).expect("parse challenge json");
-            let duplicate_samples = parsed
-                .as_object()
-                .and_then(|map| map.get("duplicate_samples"))
-                .and_then(norito::json::Value::as_u64)
-                .expect("duplicate_samples");
-            assert_eq!(duplicate_samples, 0);
-            let forced_flag = parsed
-                .as_object()
-                .and_then(|map| map.get("challenge"))
-                .and_then(|value| value.as_object())
-                .and_then(|challenge| challenge.get("forced"))
-                .and_then(norito::json::Value::as_bool)
-                .expect("forced flag");
-            assert!(!forced_flag);
-
-            let reports_dir = governance_dir.join("reports");
-            assert!(
-                reports_dir.exists(),
-                "weekly report directory should be created"
-            );
-            assert!(
-                fs::read_dir(&reports_dir)
-                    .expect("reports dir")
-                    .next()
-                    .is_some(),
-                "weekly report emitted"
-            );
-
-            let retriggered = runtime.run_once_at(now_secs).await.expect("second tick");
-            assert!(
-                !retriggered,
-                "re-running same epoch should not schedule new challenges"
-            );
-        }
-
-        #[tokio::test]
-        async fn runtime_marks_forced_when_vrf_missing() {
-            let temp_dir = tempdir().expect("temp dir");
-            let root = canonical_temp_root(&temp_dir);
-            let governance_dir = root.join("governance");
-            let handle = NodeHandle::new(storage_config(&root));
-            let provider_id = [0x22; 32];
-            declare_capacity(&handle, provider_id);
-            let payload = vec![0xBC; 256 * 1024];
-            let (_manifest_digest, _manifest) = ingest_manifest(&handle, &payload);
-
-            let epoch_interval = 1_800;
-            let epoch_id = 600_000;
-            let vrf_deadline = 300;
-            let now_secs = epoch_id * epoch_interval + vrf_deadline;
-            let randomness = PorRandomness {
-                epoch_id,
-                issued_at_unix: now_secs,
-                response_window_secs: 600,
-                drand_round: 21_000,
-                drand_randomness: [0x31; 32],
-                drand_signature: [0xAA; 48],
-            };
-            let randomness_provider = Arc::new(StaticRandomnessProvider {
-                randomness: randomness.clone(),
-            });
-            let vrf_provider = Arc::new(StaticVrfProvider::default());
-            let publisher = Arc::new(
-                FilesystemGovernancePublisher::try_new(governance_dir.clone())
-                    .expect("governance publisher"),
-            );
-            let coordinator = Arc::new(PorCoordinator::new());
-            let storage: Arc<dyn PorStorage> = Arc::new(handle.clone());
-
-            let runtime = PorCoordinatorRuntime::new(
-                storage,
-                coordinator.clone(),
-                randomness_provider,
-                vrf_provider,
-                publisher,
-                epoch_interval,
-                randomness.response_window_secs,
-                vrf_deadline,
-            );
-
-            let triggered = runtime.run_once_at(now_secs).await.expect("runtime tick");
-            assert!(triggered, "forced challenge should be scheduled");
-
-            let statuses = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
-            assert_eq!(statuses.len(), 1);
-            let status = &statuses[0];
-            assert_eq!(status.epoch_id, epoch_id);
-            assert!(status.forced, "missing VRF should mark challenge forced");
-
-            let challenge_files = challenge_paths(&governance_dir, epoch_id);
-            assert_eq!(challenge_files.len(), 1);
-            let challenge_json = fs::read_to_string(&challenge_files[0]).expect("challenge json");
-            let forced_flag = norito::json::from_str::<norito::json::Value>(&challenge_json)
-                .expect("parse challenge json")
-                .as_object()
-                .and_then(|map| map.get("challenge"))
-                .and_then(|value| value.as_object())
-                .and_then(|challenge| challenge.get("forced"))
-                .and_then(norito::json::Value::as_bool)
-                .expect("forced flag");
-            assert!(forced_flag);
         }
     }
 }

@@ -33,11 +33,9 @@ use sorafs_manifest::{
     ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
     PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
     PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-    REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
-    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-    ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationSnapshotV1,
-    ReputationWeightsV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SignedReputationSnapshotV1,
-    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
+    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
+    StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
     validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
@@ -942,7 +940,9 @@ fn manifest_submit_posts_payload() {
 
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/pin/register");
+        when.method(POST)
+            .path("/v1/sorafs/pin/register")
+            .header("content-type", "application/x-norito");
         then.status(200)
             .header("Content-Type", "application/json")
             .body("{\"status\":\"ok\"}");
@@ -999,70 +999,14 @@ fn manifest_submit_posts_payload() {
 }
 
 #[test]
-fn storage_pin_posts_directory_payload_and_writes_summary() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
-    let payload_dir = tempdir.path().join("site");
-    fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
-    fs::write(payload_dir.join("index.html"), "<html>hayahi</html>").expect("write index");
-    fs::write(
-        payload_dir.join("assets").join("app.js"),
-        "console.log('hayahi');",
-    )
-    .expect("write script");
-
-    let server = MockServer::start();
-    let mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"manifest_id_hex":"deadbeef"}"#);
-    });
-
-    let summary_path = tempdir.path().join("storage_pin.summary.json");
-    let response_path = tempdir.path().join("storage_pin.response.json");
-
-    let assert = sorafs_cli_cmd()
+fn retired_storage_pin_subcommand_does_not_send_http() {
+    let output = sorafs_cli_cmd()
         .arg("storage")
         .arg("pin")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--payload={}", payload_dir.display()))
-        .arg(format!("--torii-url={}", server.base_url()))
-        .arg(format!("--summary-out={}", summary_path.display()))
-        .arg(format!("--response-out={}", response_path.display()))
-        .assert()
-        .success();
+        .output()
+        .expect("command executes");
 
-    mock.assert_calls(1);
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("storage summary");
-    let summary_file: Value =
-        from_slice(&fs::read(&summary_path).expect("read summary file")).expect("summary json");
-    assert_eq!(summary_stdout, summary_file);
-    assert_eq!(
-        summary_stdout.get("payload_kind").and_then(Value::as_str),
-        Some("directory")
-    );
-    assert_eq!(
-        summary_stdout
-            .get("payload_file_count")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        summary_stdout.get("status").and_then(Value::as_u64),
-        Some(200)
-    );
-    assert_eq!(
-        summary_stdout
-            .get("already_stored")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
-
-    let response_bytes = fs::read(&response_path).expect("read response body");
-    assert_eq!(response_bytes, br#"{"manifest_id_hex":"deadbeef"}"#);
+    assert!(!output.status.success());
 }
 
 #[test]
@@ -1125,54 +1069,13 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
 }
 
 #[test]
-fn storage_pin_treats_already_stored_conflict_as_success() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
-    let payload_path = tempdir.path().join("payload.bin");
-    fs::write(&payload_path, b"hayahi-live").expect("write payload");
-
-    let server = MockServer::start();
-    let mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(409)
-            .header("Content-Type", "application/json")
-            .body(r#"{"error":"bundle already stored"}"#);
-    });
-
-    let output = sorafs_cli_cmd()
-        .arg("storage")
-        .arg("pin")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--payload={}", payload_path.display()))
-        .arg(format!("--torii-url={}", server.base_url()))
-        .output()
-        .expect("command executes");
-
-    assert!(
-        output.status.success(),
-        "CLI must succeed for already-stored conflicts"
-    );
-
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("storage summary");
-    assert_eq!(summary.get("status").and_then(Value::as_u64), Some(409));
-    assert_eq!(
-        summary.get("already_stored").and_then(Value::as_bool),
-        Some(true)
-    );
-    mock.assert_calls(1);
-}
-
-#[test]
-fn deploy_posts_canonical_manifest_payload_and_pins_peers() {
+fn deploy_registers_canonical_manifest_for_provider_outbox_ingest() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("site.bin");
     let payload = b"sorafs deploy payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
 
     let primary = MockServer::start();
-    let peer = MockServer::start();
-    let extra_peer = MockServer::start();
     let (client_config, private_key) =
         write_deploy_client_config(tempdir.path(), &primary.base_url());
 
@@ -1187,39 +1090,19 @@ fn deploy_posts_canonical_manifest_payload_and_pins_peers() {
         then.status(200)
             .header("Content-Type", "application/json")
             .body(format!(
-                r#"{{"gateway_base_url":"{}","pin_torii_urls":["{}","{}"]}}"#,
-                primary.base_url(),
-                primary.base_url(),
-                peer.base_url()
+                r#"{{"gateway_base_url":"{}"}}"#,
+                primary.base_url()
             ));
     });
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
-            .body_includes("manifest_payload");
+            .header("content-type", "application/x-norito");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(
                 r#"{"manifest_digest_hex":"abc","pin_fee_nano":"123","pin_fee_asset_id":"xor#universal","pin_fee_treasury_account_id":"treasury@test"}"#,
             );
-    });
-    let primary_pin = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"status":"stored"}"#);
-    });
-    let peer_pin = peer.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(409)
-            .header("Content-Type", "application/json")
-            .body(r#"{"error":"bundle already stored"}"#);
-    });
-    let extra_peer_pin = extra_peer.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"status":"stored"}"#);
     });
     let gateway = primary.mock(|when, then| {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
@@ -1233,7 +1116,6 @@ fn deploy_posts_canonical_manifest_payload_and_pins_peers() {
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
         .arg(format!("--out-dir={}", out_dir.display()))
-        .arg(format!("--pin-torii-url={}", extra_peer.base_url()))
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
@@ -1241,9 +1123,6 @@ fn deploy_posts_canonical_manifest_payload_and_pins_peers() {
     status.assert_calls(1);
     discovery.assert_calls(1);
     register.assert_calls(1);
-    primary_pin.assert_calls(1);
-    peer_pin.assert_calls(1);
-    extra_peer_pin.assert_calls(1);
     gateway.assert_calls(1);
 
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
@@ -1276,15 +1155,29 @@ fn deploy_posts_canonical_manifest_payload_and_pins_peers() {
             .and_then(Value::as_str),
         Some("123")
     );
-    let pin_results = summary
-        .get("pin_results")
-        .and_then(Value::as_array)
-        .expect("pin results");
-    assert_eq!(pin_results.len(), 3);
-    assert!(
-        pin_results
-            .iter()
-            .all(|entry| { entry.get("success").and_then(Value::as_bool) == Some(true) })
+    assert_eq!(
+        summary
+            .get("provider_ingest")
+            .and_then(Value::as_object)
+            .and_then(|ingest| ingest.get("state"))
+            .and_then(Value::as_str),
+        Some("awaiting_finalized_provider_assignment")
+    );
+    assert_eq!(
+        summary
+            .get("provider_ingest")
+            .and_then(Value::as_object)
+            .and_then(|ingest| ingest.get("queued"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        summary
+            .get("provider_ingest")
+            .and_then(Value::as_object)
+            .and_then(|ingest| ingest.get("direct_http_ingest"))
+            .and_then(Value::as_bool),
+        Some(false)
     );
     assert!(out_dir.join("site.bin.car").exists());
     assert!(out_dir.join("site.bin.plan.json").exists());
@@ -1320,16 +1213,10 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
-            .body_includes("manifest_payload");
+            .header("content-type", "application/x-norito");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(r#"{"manifest_digest_hex":"abc","pin_fee_nano":"1"}"#);
-    });
-    let pin = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"status":"stored"}"#);
     });
     let gateway = primary.mock(|when, then| {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
@@ -1350,7 +1237,6 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
         .success();
 
     register.assert_calls(1);
-    pin.assert_calls(1);
     gateway.assert_calls(1);
 
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
@@ -1385,12 +1271,6 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             .header("Content-Type", "application/json")
             .body(r#"{"pin_fee_nano":"1"}"#);
     });
-    let pin = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"status":"stored"}"#);
-    });
     primary.mock(|when, then| {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
@@ -1411,17 +1291,9 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
-    pin.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
-    let endpoints = summary
-        .get("pin_endpoints")
-        .and_then(Value::as_array)
-        .expect("pin endpoints");
-    assert_eq!(endpoints.len(), 1);
-    let primary_url = primary.base_url();
-    assert_eq!(endpoints[0].as_str(), Some(primary_url.as_str()));
     assert!(
         summary
             .get("peer_discovery")
@@ -1467,12 +1339,6 @@ fn deploy_uses_transaction_fallback_when_pin_register_route_unavailable() {
         when.method(GET).path("/v1/sorafs/storage/peers");
         then.status(404).body("not found");
     });
-    let pin = primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"status":"stored"}"#);
-    });
     primary.mock(|when, then| {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
@@ -1494,7 +1360,6 @@ fn deploy_uses_transaction_fallback_when_pin_register_route_unavailable() {
     registry.assert_calls(1);
     transaction.assert_calls(1);
     pipeline.assert_calls(1);
-    pin.assert_calls(1);
 
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
@@ -1524,12 +1389,6 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         then.status(200)
             .header("Content-Type", "application/json")
             .body(r#"{"pin_fee_nano":"1"}"#);
-    });
-    primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"status":"stored"}"#);
     });
     primary.mock(|when, then| {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
@@ -1564,119 +1423,6 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         .expect("gateway check");
     assert_eq!(check.get("length_ok").and_then(Value::as_bool), Some(true));
     assert_eq!(check.get("hash_ok").and_then(Value::as_bool), Some(false));
-}
-
-#[test]
-fn deploy_failed_peer_exits_nonzero_and_writes_receipt_details() {
-    let tempdir = tempdir().expect("tempdir");
-    let payload_path = tempdir.path().join("payload.bin");
-    let payload = b"failed peer deploy".to_vec();
-    fs::write(&payload_path, &payload).expect("write payload");
-
-    let primary = MockServer::start();
-    let failed_peer = MockServer::start();
-    let (client_config, _private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url());
-    let summary_path = tempdir.path().join("deploy.failed.json");
-
-    primary.mock(|when, then| {
-        when.method(GET).path("/status");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"current_epoch":9}"#);
-    });
-    primary.mock(|when, then| {
-        when.method(GET).path("/v1/sorafs/storage/peers");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(format!(
-                r#"{{"gateway_base_url":"{}","pin_torii_urls":["{}","{}"]}}"#,
-                primary.base_url(),
-                primary.base_url(),
-                failed_peer.base_url()
-            ));
-    });
-    primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/pin/register");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"pin_fee_nano":"1"}"#);
-    });
-    primary.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"status":"stored"}"#);
-    });
-    let failed_pin = failed_peer.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(500)
-            .header("Content-Type", "application/json")
-            .body(r#"{"error":"disk full"}"#);
-    });
-    primary.mock(|when, then| {
-        when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
-        then.status(200).body(payload.clone());
-    });
-
-    let output = sorafs_cli_cmd()
-        .arg("deploy")
-        .arg(format!("--payload={}", payload_path.display()))
-        .arg(format!("--client-config={}", client_config.display()))
-        .arg(format!("--summary-out={}", summary_path.display()))
-        .output()
-        .expect("command executes");
-
-    assert!(
-        !output.status.success(),
-        "deploy should fail when a required peer pin fails"
-    );
-    failed_pin.assert_calls(1);
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
-    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
-    assert!(summary_path.exists(), "partial receipt should be written");
-    let pin_results = summary
-        .get("pin_results")
-        .and_then(Value::as_array)
-        .expect("pin results");
-    assert!(pin_results.iter().any(|entry| {
-        entry.get("success").and_then(Value::as_bool) == Some(false)
-            && entry
-                .get("error")
-                .and_then(Value::as_str)
-                .is_some_and(|message| message.contains("500"))
-    }));
-}
-
-#[test]
-fn storage_pin_payment_required_mentions_deploy() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
-    let payload_path = tempdir.path().join("payload.bin");
-    fs::write(&payload_path, b"needs paid record").expect("write payload");
-
-    let server = MockServer::start();
-    server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/storage/pin");
-        then.status(402)
-            .header("Content-Type", "application/json")
-            .body(r#"{"error":"manifest has no paid pin registry record"}"#);
-    });
-
-    let output = sorafs_cli_cmd()
-        .arg("storage")
-        .arg("pin")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--payload={}", payload_path.display()))
-        .arg(format!("--torii-url={}", server.base_url()))
-        .output()
-        .expect("command executes");
-
-    assert!(!output.status.success());
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
-    assert!(stderr.contains("sorafs_cli deploy"));
-    assert!(stderr.contains("manifest submit"));
 }
 
 #[test]
@@ -2083,7 +1829,7 @@ fn fetch_command_rejects_insecure_local_gateway_without_output() {
         "sorafs.sf1@1.0.0"
     );
 
-    let chunk_specs = plan.chunk_fetch_specs();
+    let chunk_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
     let server = MockServer::start();
     let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
     server.mock(|when, then| {
@@ -2450,52 +2196,6 @@ fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     .expect("reputation snapshot")
 }
 
-fn signed_reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
-    let snapshot = reputation_snapshot_fixture();
-    let metrics = ReputationProviderMetricsV1 {
-        version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
-        por_success_bps: 9_800,
-        pdp_success_bps: 9_700,
-        potr_success_bps: 9_600,
-        latency_health_bps: 9_000,
-        dispute_rate_bps: 100,
-        token_violation_rate_bps: 50,
-        repair_breach_rate_bps: 0,
-    };
-    let provider_input = |provider_id: &str| ReputationProviderInputV1 {
-        version: REPUTATION_PROVIDER_INPUT_VERSION_V1,
-        provider_id: provider_id.to_owned(),
-        metrics,
-        reserve_stage: ReputationReserveStageV1::Active,
-        previous_score_bps: None,
-        active_dispute: false,
-        slashing_event: false,
-    };
-    let scoring_evidence = ReputationScoringEvidenceV1 {
-        version: REPUTATION_SCORING_EVIDENCE_VERSION_V1,
-        provider_inputs: vec![provider_input("provider-a"), provider_input("provider-b")],
-        trust_edges: Vec::new(),
-    };
-    let mut envelope = SignedReputationSnapshotV1 {
-        version: SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
-        policy_digest: [0xA5; 32],
-        snapshot,
-        scoring_evidence_digest: scoring_evidence
-            .canonical_digest()
-            .expect("scoring evidence digest"),
-        scoring_evidence,
-        signatures: Vec::new(),
-    };
-    let signing_key = SigningKey::from_bytes(&[0x5A; 32]);
-    envelope.signatures.push(ReputationSnapshotSignatureV1 {
-        signer_id: "council-1".to_owned(),
-        signature: signing_key
-            .sign(&envelope.signing_digest().expect("signing digest"))
-            .to_bytes(),
-    });
-    envelope
-}
-
 fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -2679,57 +2379,15 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
 }
 
 #[test]
-fn reputation_publish_posts_snapshot_and_writes_summary() {
-    let tempdir = tempdir().expect("tempdir");
-    let envelope = signed_reputation_snapshot_fixture();
-    let snapshot = &envelope.snapshot;
-    let snapshot_path = tempdir.path().join("signed-reputation-snapshot.to");
-    let summary_path = tempdir.path().join("reputation-publish.json");
-    fs::write(
-        &snapshot_path,
-        envelope
-            .canonical_bytes()
-            .expect("encode signed reputation snapshot"),
-    )
-    .expect("write reputation snapshot");
-    let response_value = reputation_snapshot_summary_value(snapshot);
-    let response_body = to_vec(&response_value).expect("encode response");
-
-    let server = MockServer::start();
-    let mock = server.mock(|when, then| {
-        when.method(POST)
-            .path("/v1/sorafs/reputation/latest")
-            .header("content-type", "application/json")
-            .body_includes("\"provider_id\":\"provider-a\"");
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(response_body.clone());
-    });
-
+fn reputation_publish_command_is_retired() {
     let assert = sorafs_cli_cmd()
         .arg("reputation")
         .arg("publish")
-        .arg(format!("--torii-url={}", server.base_url()))
-        .arg(format!("--snapshot={}", snapshot_path.display()))
-        .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
-        .success();
-    mock.assert();
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let stdout_value: Value = norito::json::from_str(stdout.trim()).expect("stdout JSON");
-    let file_value: Value =
-        from_slice(&fs::read(&summary_path).expect("read summary")).expect("summary JSON");
-    for value in [&stdout_value, &file_value] {
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("accepted")
-        );
-        assert_eq!(
-            value.get("snapshot_id_hex").and_then(Value::as_str),
-            Some(hex_encode(snapshot.snapshot_id).as_str())
-        );
-    }
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("sorafs_cli reputation snapshot"));
+    assert!(!stderr.contains("sorafs_cli reputation publish"));
 }
 
 #[test]
@@ -4687,7 +4345,7 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         then.status(200).body(manifest_response.clone());
     });
 
-    for spec in plan.chunk_fetch_specs() {
+    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -4733,7 +4391,7 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         norito::json::from_str(stdout.trim()).expect("stdout must be json summary");
     assert_eq!(
         stdout_summary.get("chunk_count").and_then(Value::as_u64),
-        Some(plan.chunk_fetch_specs().len() as u64)
+        Some(plan.try_chunk_fetch_specs().expect("valid CAR plan").len() as u64)
     );
     assert_eq!(
         stdout_summary.get("chunker_handle").and_then(Value::as_str),
@@ -4765,7 +4423,10 @@ fn fetch_command_gateway_path_rejects_insecure_local_url() {
         .get("chunk_receipts")
         .and_then(Value::as_array)
         .expect("chunk receipts array");
-    assert_eq!(receipts.len(), plan.chunk_fetch_specs().len());
+    assert_eq!(
+        receipts.len(),
+        plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+    );
 }
 
 #[test]
@@ -4827,7 +4488,7 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
         then.status(200).body(manifest_response.clone());
     });
 
-    for spec in plan.chunk_fetch_specs() {
+    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -4872,7 +4533,7 @@ fn fetch_command_direct_policy_does_not_bypass_gateway_url_security() {
         .expect("stdout summary json");
     assert_eq!(
         stdout_summary.get("chunk_count").and_then(Value::as_u64),
-        Some(plan.chunk_fetch_specs().len() as u64)
+        Some(plan.try_chunk_fetch_specs().expect("valid CAR plan").len() as u64)
     );
     assert_eq!(
         stdout_summary
@@ -4960,7 +4621,7 @@ fn fetch_command_policy_override_does_not_bypass_gateway_url_security() {
         then.status(200).body(manifest_response.clone());
     });
 
-    for spec in plan.chunk_fetch_specs() {
+    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -5065,7 +4726,7 @@ fn fetch_command_config_does_not_bypass_gateway_url_security() {
         when.method(GET).path(manifest_path.as_str());
         then.status(200).body(manifest_response.clone());
     });
-    for spec in plan.chunk_fetch_specs() {
+    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -5228,7 +4889,7 @@ fn fetch_command_scoreboard_flag_does_not_bypass_gateway_url_security() {
         when.method(GET).path(manifest_path.as_str());
         then.status(200).body(manifest_response.clone());
     });
-    for spec in plan.chunk_fetch_specs() {
+    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
@@ -5410,7 +5071,7 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
     .expect("write manifest report");
 
     let server = MockServer::start();
-    for spec in plan.chunk_fetch_specs() {
+    for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,

@@ -49,35 +49,6 @@ internal static class ToriiSoraFsJson
         ValidateNonNegativeInt64(file.ChunkCount, $"{context}.chunk_count");
     }
 
-    internal static void ValidatePinAlias(ToriiSoraFsPinAlias? response, string context)
-    {
-        if (response is null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        RequireExactTokenText(response.Namespace, $"{context}.namespace");
-        RequireExactTokenText(response.Name, $"{context}.name");
-        ValidateCanonicalBase64(response.ProofBase64, $"{context}.proof_base64");
-    }
-
-    internal static void ValidatePinRegisterResponse(ToriiSoraFsPinRegisterResponse response, string context)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        ToriiSseEventJson.RequireExactSizedHex(response.ManifestDigestHex, $"{context}.manifest_digest_hex", 32);
-        RequireExactTokenText(response.ChunkerHandle, $"{context}.chunker_handle");
-        RequireRequiredUInt64(response.SubmittedEpoch, $"{context}.submitted_epoch");
-        RequireRequiredUInt64(response.ContentLength, $"{context}.content_length");
-        RequireRequiredUInt64(response.PinFeeNano, $"{context}.pin_fee_nano");
-        RequireExactTokenText(response.PinFeeAssetId, $"{context}.pin_fee_asset_id");
-        RequireCanonicalAccountId(response.PinFeeTreasuryAccountId, $"{context}.pin_fee_treasury_account_id");
-        if (response.Alias is not null)
-        {
-            ValidatePinAlias(response.Alias, $"{context}.alias");
-        }
-        ToriiSseEventJson.RequireOptionalExactSizedHex(response.SuccessorOfHex, $"{context}.successor_of_hex", 32);
-    }
 
     internal static void ValidateChunkerHandle(ToriiSoraFsChunkerHandle? response, string context)
     {
@@ -454,165 +425,6 @@ internal static class ToriiSoraFsJson
         throw new JsonException($"{context} JSON object is incomplete.");
     }
 
-    internal static ToriiSoraFsPinAlias ReadPinAlias(ref Utf8JsonReader reader, string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? namespaceValue = null;
-        string? name = null;
-        string? proofBase64 = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                var response = new ToriiSoraFsPinAlias
-                {
-                    Namespace = namespaceValue,
-                    Name = name,
-                    ProofBase64 = proofBase64,
-                };
-                ValidatePinAlias(response, context);
-                return response;
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "namespace":
-                    namespaceValue = ReadOptionalString(ref reader, $"{context}.namespace");
-                    break;
-                case "name":
-                    name = ReadOptionalString(ref reader, $"{context}.name");
-                    break;
-                case "proof_base64":
-                    proofBase64 = ReadOptionalString(ref reader, $"{context}.proof_base64");
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
-    }
-
-    internal static ToriiSoraFsPinRegisterResponse ReadPinRegisterResponse(
-        ref Utf8JsonReader reader,
-        string context)
-    {
-        if (reader.TokenType == JsonTokenType.Null)
-        {
-            throw new JsonException($"{context} must not be null.");
-        }
-
-        if (reader.TokenType != JsonTokenType.StartObject)
-        {
-            throw new JsonException($"{context} must be an object.");
-        }
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        string? manifestDigestHex = null;
-        string? chunkerHandle = null;
-        ulong? submittedEpoch = null;
-        ulong? contentLength = null;
-        ulong? pinFeeNano = null;
-        string? pinFeeAssetId = null;
-        string? pinFeeTreasuryAccountId = null;
-        ToriiSoraFsPinAlias? alias = null;
-        string? successorOfHex = null;
-
-        while (reader.Read())
-        {
-            if (reader.TokenType == JsonTokenType.EndObject)
-            {
-                var response = CreateWithDirectMetadataContext(
-                    () => new ToriiSoraFsPinRegisterResponse
-                    {
-                        ManifestDigestHex = manifestDigestHex,
-                        ChunkerHandle = chunkerHandle,
-                        SubmittedEpoch = submittedEpoch,
-                        ContentLength = contentLength,
-                        PinFeeNano = pinFeeNano,
-                        PinFeeAssetId = pinFeeAssetId,
-                        PinFeeTreasuryAccountId = pinFeeTreasuryAccountId,
-                        Alias = alias,
-                        SuccessorOfHex = successorOfHex,
-                    },
-                    context);
-                ValidatePinRegisterResponse(response, context);
-                return response;
-            }
-
-            if (reader.TokenType != JsonTokenType.PropertyName)
-            {
-                throw new JsonException($"{context} property name expected.");
-            }
-
-            var propertyName = reader.GetString() ?? throw new JsonException($"{context} property name must be a string.");
-            ToriiIdentifierJson.RequireUniqueProperty(seen, propertyName, context);
-            if (!reader.Read())
-            {
-                throw new JsonException($"{context}.{propertyName} is truncated.");
-            }
-
-            switch (propertyName)
-            {
-                case "manifest_digest_hex":
-                    manifestDigestHex = ReadOptionalString(ref reader, $"{context}.manifest_digest_hex");
-                    break;
-                case "chunker_handle":
-                    chunkerHandle = ReadOptionalString(ref reader, $"{context}.chunker_handle");
-                    break;
-                case "submitted_epoch":
-                    submittedEpoch = ReadNullableUInt64(ref reader, $"{context}.submitted_epoch");
-                    break;
-                case "content_length":
-                    contentLength = ReadNullableUInt64(ref reader, $"{context}.content_length");
-                    break;
-                case "pin_fee_nano":
-                    pinFeeNano = ReadNullableUInt64(ref reader, $"{context}.pin_fee_nano");
-                    break;
-                case "pin_fee_asset_id":
-                    pinFeeAssetId = ReadOptionalString(ref reader, $"{context}.pin_fee_asset_id");
-                    break;
-                case "pin_fee_treasury_account_id":
-                    pinFeeTreasuryAccountId = ReadOptionalString(ref reader, $"{context}.pin_fee_treasury_account_id");
-                    break;
-                case "alias":
-                    alias = reader.TokenType == JsonTokenType.Null ? null : ReadPinAlias(ref reader, $"{context}.alias");
-                    break;
-                case "successor_of_hex":
-                    successorOfHex = ReadOptionalString(ref reader, $"{context}.successor_of_hex");
-                    break;
-                default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
-            }
-        }
-
-        throw new JsonException($"{context} JSON object is incomplete.");
-    }
 
     internal static void WriteFileEntry(Utf8JsonWriter writer, ToriiSoraFsFileEntry response, string context)
     {
@@ -686,44 +498,6 @@ internal static class ToriiSoraFsJson
         writer.WriteEndObject();
     }
 
-    internal static void WritePinAlias(Utf8JsonWriter writer, ToriiSoraFsPinAlias response, string context)
-    {
-        ValidatePinAlias(response, context);
-
-        writer.WriteStartObject();
-        writer.WriteString("namespace", response.Namespace);
-        writer.WriteString("name", response.Name);
-        writer.WriteString("proof_base64", response.ProofBase64);
-        writer.WriteEndObject();
-    }
-
-    internal static void WritePinRegisterResponse(
-        Utf8JsonWriter writer,
-        ToriiSoraFsPinRegisterResponse response,
-        string context)
-    {
-        ValidatePinRegisterResponse(response, context);
-
-        writer.WriteStartObject();
-        writer.WriteString("manifest_digest_hex", response.ManifestDigestHex);
-        writer.WriteString("chunker_handle", response.ChunkerHandle);
-        writer.WriteNumber("submitted_epoch", RequireValue(response.SubmittedEpoch, $"{context}.submitted_epoch"));
-        writer.WriteNumber("content_length", RequireValue(response.ContentLength, $"{context}.content_length"));
-        writer.WriteNumber("pin_fee_nano", RequireValue(response.PinFeeNano, $"{context}.pin_fee_nano"));
-        writer.WriteString("pin_fee_asset_id", response.PinFeeAssetId);
-        writer.WriteString("pin_fee_treasury_account_id", response.PinFeeTreasuryAccountId);
-        writer.WritePropertyName("alias");
-        if (response.Alias is null)
-        {
-            writer.WriteNullValue();
-        }
-        else
-        {
-            WritePinAlias(writer, response.Alias, $"{context}.alias");
-        }
-        ToriiVpnJson.WriteNullableString(writer, "successor_of_hex", response.SuccessorOfHex);
-        writer.WriteEndObject();
-    }
 
     private static T RequireValue<T>(T? value, string field)
         where T : struct
@@ -1071,7 +845,6 @@ internal static class ToriiSoraFsJson
         {
             _ when TryMapCollectionField(paramName, nameof(ToriiSoraFsFileEntry.Path), "path", out var mapped) => mapped,
             _ when TryMapCollectionField(paramName, nameof(ToriiSoraFsCidLookupResponse.Files), "files", out var mapped) => mapped,
-            _ when TryMapNestedField(paramName, nameof(ToriiSoraFsPinRegisterResponse.Alias), "alias", out var mapped) => mapped,
             nameof(ToriiSoraFsFileEntry.Path) => "path",
             nameof(ToriiSoraFsFileEntry.Offset) => "offset",
             nameof(ToriiSoraFsFileEntry.Size) => "size",
@@ -1081,16 +854,6 @@ internal static class ToriiSoraFsJson
             nameof(ToriiSoraFsCidLookupResponse.ManifestDigestHex) => "manifest_digest_hex",
             nameof(ToriiSoraFsCidLookupResponse.ManifestIdHex) => "manifest_id_hex",
             nameof(ToriiSoraFsCidLookupResponse.IndexDocument) => "index_document",
-            nameof(ToriiSoraFsPinRegisterResponse.ChunkerHandle) => "chunker_handle",
-            nameof(ToriiSoraFsPinRegisterResponse.SubmittedEpoch) => "submitted_epoch",
-            nameof(ToriiSoraFsPinRegisterResponse.ContentLength) => "content_length",
-            nameof(ToriiSoraFsPinRegisterResponse.PinFeeNano) => "pin_fee_nano",
-            nameof(ToriiSoraFsPinRegisterResponse.PinFeeAssetId) => "pin_fee_asset_id",
-            nameof(ToriiSoraFsPinRegisterResponse.PinFeeTreasuryAccountId) => "pin_fee_treasury_account_id",
-            nameof(ToriiSoraFsPinRegisterResponse.SuccessorOfHex) => "successor_of_hex",
-            nameof(ToriiSoraFsPinAlias.Namespace) => "namespace",
-            nameof(ToriiSoraFsPinAlias.Name) => "name",
-            nameof(ToriiSoraFsPinAlias.ProofBase64) => "proof_base64",
             _ => paramName,
         };
     }
@@ -1237,45 +1000,5 @@ internal sealed class ToriiSoraFsPinPolicyJsonConverter : JsonConverter<ToriiSor
     public override void Write(Utf8JsonWriter writer, ToriiSoraFsPinPolicy value, JsonSerializerOptions options)
     {
         ToriiSoraFsJson.WritePinPolicy(writer, value, "SoraFS pin policy");
-    }
-}
-
-internal sealed class ToriiSoraFsPinAliasJsonConverter : JsonConverter<ToriiSoraFsPinAlias>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiSoraFsPinAlias Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiSoraFsJson.ReadPinAlias(ref reader, "SoraFS pin alias");
-    }
-
-    public override void Write(Utf8JsonWriter writer, ToriiSoraFsPinAlias value, JsonSerializerOptions options)
-    {
-        ToriiSoraFsJson.WritePinAlias(writer, value, "SoraFS pin alias");
-    }
-}
-
-internal sealed class ToriiSoraFsPinRegisterResponseJsonConverter :
-    JsonConverter<ToriiSoraFsPinRegisterResponse>
-{
-    public override bool HandleNull => true;
-
-    public override ToriiSoraFsPinRegisterResponse Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options)
-    {
-        return ToriiSoraFsJson.ReadPinRegisterResponse(ref reader, "SoraFS pin register response");
-    }
-
-    public override void Write(
-        Utf8JsonWriter writer,
-        ToriiSoraFsPinRegisterResponse value,
-        JsonSerializerOptions options)
-    {
-        ToriiSoraFsJson.WritePinRegisterResponse(writer, value, "SoraFS pin register response");
     }
 }

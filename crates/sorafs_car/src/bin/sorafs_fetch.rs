@@ -4654,7 +4654,7 @@ mod tests {
             .write_to(&mut car_bytes)
             .expect("write car");
 
-        let fetch_specs = plan.chunk_fetch_specs();
+        let fetch_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
         let fetch_array: Vec<Value> = fetch_specs
             .iter()
             .map(|spec| {
@@ -4762,7 +4762,7 @@ mod tests {
             .write_to(&mut car_bytes)
             .expect("write car");
 
-        let fetch_specs = plan.chunk_fetch_specs();
+        let fetch_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
         let fetch_array: Vec<Value> = fetch_specs
             .iter()
             .map(|spec| {

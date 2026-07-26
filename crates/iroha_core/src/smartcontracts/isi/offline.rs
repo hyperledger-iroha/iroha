@@ -2957,24 +2957,10 @@ pub mod isi {
         backend: &str,
         backend_tag: BackendTag,
     ) -> Result<(), Error> {
-        if BackendTag::is_pending_production_backend_label(backend) {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "offline transparent proofs may not use pending-production proof backends",
-            )
-            .into());
-        }
         if crate::zk::is_production_claim_backend_label(backend) {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
                 "offline transparent proofs may not use production-claim proof backends",
-            )
-            .into());
-        }
-        if backend_tag.is_pending_production_backend() {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "offline transparent verifier records may not use pending-production backend tags",
             )
             .into());
         }
@@ -3019,13 +3005,12 @@ pub mod isi {
             .into());
         }
         let backend = attachment.backend.as_str();
-        let backend_tag = if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
-            BackendTag::Halo2IpaPasta
-        } else if crate::zk::is_stark_fri_v1_backend(backend) {
-            BackendTag::Stark
-        } else {
-            BackendTag::Unsupported
-        };
+        let backend_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
+            labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha proof backend is not a supported generic OpenVerify engine",
+            )
+        })?;
         ensure_kagemusha_transparent_backend(backend, backend_tag)
     }
 
@@ -3241,13 +3226,6 @@ pub mod isi {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
                 "recursive Kagemusha redeem verifier-key registry commitment does not match the asset binding",
-            )
-            .into());
-        }
-        if record.backend.is_pending_production_backend() {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "recursive Kagemusha redeem verifier key uses a pending-production backend tag",
             )
             .into());
         }

@@ -323,8 +323,6 @@ pub use pdp::{
 };
 pub use pin_registry::{
     AliasBindingV1, AliasBindingValidationError, ManifestPolicyV1, ManifestPolicyValidationError,
-    ReplicationOrderV1 as PinRegistryReplicationOrderV1,
-    ReplicationOrderValidationError as PinRegistryReplicationOrderValidationError,
     ReplicationReceiptStatus, ReplicationReceiptV1, ReplicationReceiptValidationError,
 };
 pub use pop_credentials::{

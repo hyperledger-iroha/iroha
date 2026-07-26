@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.sorafs
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -10,6 +11,229 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 
 class SorafsReferenceValidatorsTest {
+    private data class FixtureBundleInputSpec(
+        val kind: SorafsFixtureBundlePayloadKind,
+        val path: String,
+    )
+
+    private data class FixtureBundleProfile(
+        val outcomePath: String,
+        val nowUnix: Long,
+        val inputs: List<FixtureBundleInputSpec>,
+    )
+
+    private val referenceFixtureGeneratedAtUnix = 1_700_001_234L
+    private val referenceBundleProfiles =
+        listOf(
+            FixtureBundleProfile(
+                "bundle_heterogeneous_positive_validation_outcome_v1.json",
+                1_700_000_001L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_COMMITMENT,
+                        "pdp/commitment_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_CHALLENGE,
+                        "pdp/challenge_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_PROOF,
+                        "pdp/proof_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.POR_CHALLENGE,
+                        "por/challenge_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.POR_PROOF,
+                        "por/proof_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.POTR_RECEIPT,
+                        "potr/receipt_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPAIR_TASK_RECORD,
+                        "repair/task_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_REQUEST,
+                        "orderbook/order_request_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_CANCEL,
+                        "orderbook/order_cancel_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.ORDERBOOK_TRADE_EVENT,
+                        "orderbook/trade_event_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.ORDERBOOK_SETTLEMENT_CHANNEL,
+                        "orderbook/settlement_channel_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.ORDERBOOK_SETTLEMENT_RECEIPT,
+                        "orderbook/settlement_receipt_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
+                1_700_000_001L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.POR_CHALLENGE,
+                        "por/challenge_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.POR_PROOF,
+                        "por/proof_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_REQUEST,
+                        "orderbook/negative/order_request_bad_signature_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
+                1_700_000_001L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.POR_CHALLENGE,
+                        "por/challenge_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.POR_PROOF,
+                        "por/proof_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.ORDERBOOK_ORDER_REQUEST,
+                        "orderbook/negative/order_request_trailing_bytes_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_pdp_duplicate_hot_leaf_negative_validation_outcome_v1.json",
+                1_700_000_001L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_COMMITMENT,
+                        "pdp/commitment_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_CHALLENGE,
+                        "pdp/negative/duplicate_hot_leaf_challenge_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_pdp_missing_signature_negative_validation_outcome_v1.json",
+                1_700_000_001L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_COMMITMENT,
+                        "pdp/commitment_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_CHALLENGE,
+                        "pdp/challenge_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_PROOF,
+                        "pdp/negative/missing_signature_proof_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_pdp_wrong_provider_negative_validation_outcome_v1.json",
+                1_700_000_001L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_COMMITMENT,
+                        "pdp/commitment_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_CHALLENGE,
+                        "pdp/challenge_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PDP_PROOF,
+                        "pdp/negative/wrong_provider_proof_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
+                1_700_000_001L,
+                // The outcome names only the offender; the order establishes the expected digest.
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPAIR_TASK_RECORD,
+                        "repair/negative/task_manifest_mismatch_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
+                1_700_000_001L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        "replication_order/order_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.REPAIR_TASK_RECORD,
+                        "repair/negative/task_provider_unassigned_v1.to",
+                    ),
+                ),
+            ),
+            FixtureBundleProfile(
+                "bundle_routing_admission_positive_validation_outcome_v1.json",
+                300L,
+                listOf(
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PROVIDER_ADVERT,
+                        "provider_admission/advert_v1.to",
+                    ),
+                    FixtureBundleInputSpec(
+                        SorafsFixtureBundlePayloadKind.PROVIDER_ADMISSION_ENVELOPE,
+                        "provider_admission/envelope_v1.to",
+                    ),
+                ),
+            ),
+        )
+
     private val maxScaledXor =
         "6703903964971298549787012499102923063739682910296196688861780721860882015" +
             "036773488400937149083451713845015929093243025426876941405973284973216824" +
@@ -28,6 +252,34 @@ class SorafsReferenceValidatorsTest {
         assertTrue(!SorafsOrderbookPayloadKind.TRADE_EVENT.isUserSignedPayload)
         assertEquals(1, SorafsPdpPayloadKind.COMMITMENT.bridgeCode)
         assertEquals(3, SorafsPdpPayloadKind.PROOF.bridgeCode)
+        assertEquals(
+            (1..19).toList(),
+            SorafsFixtureBundlePayloadKind.values().map { it.bridgeCode },
+        )
+        assertEquals(
+            listOf(
+                "provider-advert.to",
+                "provider-admission-envelope.to",
+                "replication-order.to",
+                "por-challenge.to",
+                "por-proof.to",
+                "potr-receipt.to",
+                "repair-evidence.to",
+                "repair-report.to",
+                "repair-task-record.to",
+                "repair-slash-proposal.to",
+                "repair-task-event.to",
+                "orderbook-order-request.to",
+                "orderbook-order-cancel.to",
+                "orderbook-trade-event.to",
+                "orderbook-settlement-channel.to",
+                "orderbook-settlement-receipt.to",
+                "pdp-commitment.to",
+                "pdp-challenge.to",
+                "pdp-proof.to",
+            ),
+            SorafsFixtureBundlePayloadKind.values().map { it.defaultLabel },
+        )
         assertEquals(1, SorafsPopPayloadKind.CREDENTIAL.bridgeCode)
         assertEquals(6, SorafsPopPayloadKind.MEMBERSHIP_PROOF.bridgeCode)
         assertEquals(7, SorafsPopPayloadKind.ISSUED_CREDENTIAL_BUNDLE.bridgeCode)
@@ -41,10 +293,83 @@ class SorafsReferenceValidatorsTest {
         assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(21))
         assertTrue(!SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false))
         assertTrue(SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true))
+        assertTrue(!SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, false))
+        assertTrue(SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, true))
+        assertTrue(!SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, false))
+        assertTrue(SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, true))
         assertEquals(64, SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1)
         assertEquals(32, SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1)
         assertEquals(67_108_864, SorafsReferenceValidators.REFERENCE_MAX_INPUT_BYTES_V1)
         assertEquals(1_024, SorafsReferenceValidators.REFERENCE_MAX_LABEL_BYTES_V1)
+        assertEquals(64, SorafsReferenceValidators.FIXTURE_BUNDLE_MAX_PAYLOADS_V1)
+    }
+
+    @Test
+    fun boundsFixtureBundleBeforeNativeDispatch() {
+        val empty = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateFixtureBundleJson(emptyList(), nowUnix = 1)
+        }
+        assertTrue(empty.message.orEmpty().contains("1..64"))
+
+        val item =
+            SorafsFixtureBundlePayloadInput(
+                SorafsFixtureBundlePayloadKind.POR_PROOF,
+                ByteArray(1),
+            )
+        val tooMany = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateFixtureBundleJson(
+                List(SorafsReferenceValidators.FIXTURE_BUNDLE_MAX_PAYLOADS_V1 + 1) { item },
+                nowUnix = 1,
+            )
+        }
+        assertTrue(tooMany.message.orEmpty().contains("1..64"))
+    }
+
+    @Test
+    fun fixtureBundleInputSnapshotsPayloadBytes() {
+        val source = byteArrayOf(1, 2, 3)
+        val input =
+            SorafsFixtureBundlePayloadInput(
+                SorafsFixtureBundlePayloadKind.POR_PROOF,
+                source,
+            )
+        source[0] = 9
+        val detached = input.noritoBytes()
+        assertEquals(1, detached[0].toInt())
+        detached[0] = 8
+        assertEquals(1, input.noritoBytes()[0].toInt())
+    }
+
+    @Test
+    fun rejectsMalformedUnicodeFixtureLabelBeforeNativeDispatch() {
+        val input =
+            SorafsFixtureBundlePayloadInput(
+                SorafsFixtureBundlePayloadKind.POR_PROOF,
+                ByteArray(1),
+                label = "\uD800",
+            )
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateFixtureBundleJson(
+                listOf(input),
+                nowUnix = 1,
+            )
+        }
+        assertTrue(error.message.orEmpty().contains("valid Unicode"))
+    }
+
+    @Test
+    fun boundsGovernanceLogNodeCidBeforeNativeDispatch() {
+        for (invalidCid in listOf(ByteArray(0), ByteArray(31), ByteArray(33))) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                SorafsReferenceValidators.validateGovernanceLogNodeJson(
+                    noritoBytes = ByteArray(0),
+                    label = null,
+                    expectedNodeCid = invalidCid,
+                    generatedAtUnix = 1,
+                )
+            }
+            assertTrue(error.message.orEmpty().contains("exactly 32 bytes"))
+        }
     }
 
     @Test
@@ -378,6 +703,86 @@ class SorafsReferenceValidatorsTest {
             )
             assertPdpOutcome(name, outcome)
         }
+    }
+
+    @Test
+    fun validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable() {
+        assumeTrue(SorafsReferenceValidators.isNativeAvailable())
+        val outcome =
+            SorafsReferenceValidators.validateFixtureBundleJson(
+                listOf(
+                    SorafsFixtureBundlePayloadInput(
+                        SorafsFixtureBundlePayloadKind.REPLICATION_ORDER,
+                        fixture("sorafs_manifest", "replication_order", "order_v1.to"),
+                        "replication-order.to",
+                    ),
+                    SorafsFixtureBundlePayloadInput(
+                        SorafsFixtureBundlePayloadKind.POR_PROOF,
+                        fixture("sorafs_manifest", "por", "proof_v1.to"),
+                        "por-proof.to",
+                    ),
+                ),
+                nowUnix = 1_700_000_001,
+                generatedAtUnix = 1_700_001_238,
+            )
+        assertTrue(outcome.contains("\"status\":\"Ok\""))
+        assertTrue(outcome.contains("\"code\":\"SFS-OK-000\""))
+        assertTrue(outcome.contains("\"generated_at\":1700001238"))
+    }
+
+    @Test
+    fun validatesEveryReferenceSdkBundleOutcomeByteForByte() {
+        assumeTrue(SorafsReferenceValidators.isNativeAvailable())
+        val outcomePaths = referenceBundleProfiles.map { it.outcomePath }
+        assertEquals(9, outcomePaths.size)
+        assertEquals(outcomePaths.sorted(), outcomePaths)
+
+        for (profile in referenceBundleProfiles) {
+            val payloads =
+                profile.inputs.map { input ->
+                    SorafsFixtureBundlePayloadInput(
+                        input.kind,
+                        fixture("sorafs_manifest", *input.path.split("/").toTypedArray()),
+                        input.path,
+                    )
+                }
+            val actual =
+                SorafsReferenceValidators.validateFixtureBundleJson(
+                    payloads,
+                    nowUnix = profile.nowUnix,
+                    generatedAtUnix = referenceFixtureGeneratedAtUnix,
+                )
+            assertArrayEquals(
+                fixture("sorafs_manifest", "reference_sdk", profile.outcomePath),
+                actual.toByteArray(Charsets.UTF_8),
+                profile.outcomePath,
+            )
+        }
+    }
+
+    @Test
+    fun validatesModerationGovernanceLogNodeOutcomeByteForByte() {
+        assumeTrue(SorafsReferenceValidators.isNativeAvailable())
+        val actual =
+            SorafsReferenceValidators.validateGovernanceLogNodeJson(
+                noritoBytes =
+                    fixture("sorafs_manifest", "moderation", "governance_node_v1.to"),
+                expectedNodeCid =
+                    decodeHex(
+                        "9a2dc9a930494cbc70f0e4cab25df893" +
+                            "fb607e83f1fa52520ed62dabca918d5a",
+                    ),
+                label = "moderation/governance_node_v1.to",
+                generatedAtUnix = referenceFixtureGeneratedAtUnix,
+            )
+        assertArrayEquals(
+            fixture(
+                "sorafs_manifest",
+                "moderation",
+                "governance_node_validation_outcome_v1.json",
+            ),
+            actual.toByteArray(Charsets.UTF_8),
+        )
     }
 
     @Test
@@ -734,6 +1139,13 @@ class SorafsReferenceValidatorsTest {
         val path = candidates.firstOrNull { Files.exists(it) }
             ?: throw IllegalStateException("missing fixture ${relative.joinToString("/")}")
         return Files.readAllBytes(path.normalizeAbsolute())
+    }
+
+    private fun decodeHex(value: String): ByteArray {
+        require(value.length % 2 == 0)
+        return ByteArray(value.length / 2) { index ->
+            value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+        }
     }
 
     private fun ByteArray.toHex(): String {

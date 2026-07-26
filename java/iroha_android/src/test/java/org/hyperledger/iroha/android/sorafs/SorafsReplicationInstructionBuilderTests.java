@@ -15,6 +15,7 @@ public final class SorafsReplicationInstructionBuilderTests {
 
   private static final String ORDER_ID =
       "44b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c0";
+  private static final String PROVIDER_ID = "11".repeat(32);
 
   public static void main(final String[] args) {
     testIssueReplicationOrder();
@@ -145,12 +146,15 @@ public final class SorafsReplicationInstructionBuilderTests {
     final CompleteReplicationOrderInstruction instruction =
         CompleteReplicationOrderInstruction.builder()
             .setOrderIdHex(ORDER_ID)
+            .setProviderIdHex(PROVIDER_ID)
             .setCompletionEpoch(31)
             .build();
     final Map<String, String> args = instruction.toArguments();
     assert "CompleteReplicationOrder".equals(args.get("action"))
         : "action mismatch";
     assert "31".equals(args.get("completion_epoch")) : "completion epoch mismatch";
+    assert PROVIDER_ID.equals(args.get("provider_id_hex")) : "provider id mismatch";
+    assert PROVIDER_ID.equals(instruction.providerIdHex()) : "provider id mismatch";
     assert instruction.completionEpoch() == 31 : "completion epoch mismatch";
   }
 
@@ -159,6 +163,7 @@ public final class SorafsReplicationInstructionBuilderTests {
     try {
       CompleteReplicationOrderInstruction.builder()
           .setOrderIdHex(ORDER_ID)
+          .setProviderIdHex(PROVIDER_ID)
           .setCompletionEpoch(-1);
     } catch (final IllegalArgumentException ex) {
       threw = true;

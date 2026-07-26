@@ -65,6 +65,9 @@ jobs:
           docs/portal/scripts/__tests__/sync-openapi.test.mjs
           docs/portal/scripts/__tests__/verify-openapi-versions.test.mjs
           docs/portal/scripts/__tests__/check-openapi-signatures.test.mjs
+          docs/portal/scripts/__tests__/openapi-manifest-v2.test.mjs
+          docs/portal/scripts/__tests__/openapi-release-contract.test.mjs
+          docs/portal/scripts/__tests__/openapi-safe-file.test.mjs
           docs/portal/scripts/__tests__/openapi-signature.test.mjs
       - name: Verify unsigned development artifact metadata
         run: |

@@ -3330,6 +3330,13 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
+        // Privacy governance and the complete PGC bootstrap mutate only typed
+        // protocol registries, root history, and encrypted-account state.
+        // They cannot move, mint, burn, lock, or delete transparent assets.
+        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
+        iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
+        iroha_data_model::isi::privacy::PublishPrivacyRootV1,
+        iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1,
         SetKeyValueBox,
         RemoveKeyValueBox,
         iroha_data_model::isi::SetAssetKeyValue,

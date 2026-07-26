@@ -3,21 +3,26 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import iroha_python.sorafs as sorafs_module
 import pytest
 
 from iroha_python import (
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+    SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1,
+    SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS,
     SORAFS_GOVERNANCE_DAG_CID_BYTES_V1,
     SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     SORAFS_ORDERBOOK_PAYLOAD_KINDS,
     SORAFS_PDP_PAYLOAD_KINDS,
     SORAFS_REFERENCE_MAX_LABEL_BYTES_V1,
+    SorafsFixtureBundlePayloadInput,
     SorafsGovernanceDagBlockInput,
     build_signed_orderbook_order_cancel,
     build_signed_orderbook_order_request,
     build_signed_orderbook_settlement_receipt,
     derive_orderbook_order_id,
     sign_orderbook_payload,
+    validate_fixture_bundle,
     validate_governance_dag_block,
     validate_governance_dag_head_chain,
     validate_orderbook_payload,
@@ -25,12 +30,157 @@ from iroha_python import (
     validate_pdp_challenge_proof,
     validate_pdp_commitment_challenge,
     validate_pdp_payload,
+    validate_governance_log_node,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ORDERBOOK_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "orderbook"
 _PDP_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "pdp"
+_SORAFS_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest"
 _GOVERNANCE_FIXTURES = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "governance"
+_MODERATION_FIXTURES = _SORAFS_FIXTURES / "moderation"
+_REFERENCE_SDK_FIXTURES = _SORAFS_FIXTURES / "reference_sdk"
+_REFERENCE_SDK_GENERATED_AT = 1_700_001_234
+_KINDS = SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS
+_REFERENCE_SDK_BUNDLE_PROFILES = (
+    (
+        "bundle_heterogeneous_positive",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (_KINDS["PDP_COMMITMENT"], "pdp/commitment_v1.to"),
+            (_KINDS["PDP_CHALLENGE"], "pdp/challenge_v1.to"),
+            (_KINDS["PDP_PROOF"], "pdp/proof_v1.to"),
+            (_KINDS["POR_CHALLENGE"], "por/challenge_v1.to"),
+            (_KINDS["POR_PROOF"], "por/proof_v1.to"),
+            (_KINDS["POTR_RECEIPT"], "potr/receipt_v1.to"),
+            (_KINDS["REPAIR_TASK_RECORD"], "repair/task_v1.to"),
+            (
+                _KINDS["ORDERBOOK_ORDER_REQUEST"],
+                "orderbook/order_request_v1.to",
+            ),
+            (
+                _KINDS["ORDERBOOK_ORDER_CANCEL"],
+                "orderbook/order_cancel_v1.to",
+            ),
+            (
+                _KINDS["ORDERBOOK_TRADE_EVENT"],
+                "orderbook/trade_event_v1.to",
+            ),
+            (
+                _KINDS["ORDERBOOK_SETTLEMENT_CHANNEL"],
+                "orderbook/settlement_channel_v1.to",
+            ),
+            (
+                _KINDS["ORDERBOOK_SETTLEMENT_RECEIPT"],
+                "orderbook/settlement_receipt_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_orderbook_bad_signature_negative",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (_KINDS["POR_CHALLENGE"], "por/challenge_v1.to"),
+            (_KINDS["POR_PROOF"], "por/proof_v1.to"),
+            (
+                _KINDS["ORDERBOOK_ORDER_REQUEST"],
+                "orderbook/negative/order_request_bad_signature_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_orderbook_trailing_bytes_negative",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (_KINDS["POR_CHALLENGE"], "por/challenge_v1.to"),
+            (_KINDS["POR_PROOF"], "por/proof_v1.to"),
+            (
+                _KINDS["ORDERBOOK_ORDER_REQUEST"],
+                "orderbook/negative/order_request_trailing_bytes_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_pdp_duplicate_hot_leaf_negative",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (_KINDS["PDP_COMMITMENT"], "pdp/commitment_v1.to"),
+            (
+                _KINDS["PDP_CHALLENGE"],
+                "pdp/negative/duplicate_hot_leaf_challenge_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_pdp_missing_signature_negative",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (_KINDS["PDP_COMMITMENT"], "pdp/commitment_v1.to"),
+            (_KINDS["PDP_CHALLENGE"], "pdp/challenge_v1.to"),
+            (
+                _KINDS["PDP_PROOF"],
+                "pdp/negative/missing_signature_proof_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_pdp_wrong_provider_negative",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (_KINDS["PDP_COMMITMENT"], "pdp/commitment_v1.to"),
+            (_KINDS["PDP_CHALLENGE"], "pdp/challenge_v1.to"),
+            (
+                _KINDS["PDP_PROOF"],
+                "pdp/negative/wrong_provider_proof_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_repair_manifest_mismatch_negative",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (
+                _KINDS["REPAIR_TASK_RECORD"],
+                "repair/negative/task_manifest_mismatch_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_repair_provider_unassigned_negative",
+        1_700_000_001,
+        (
+            (_KINDS["REPLICATION_ORDER"], "replication_order/order_v1.to"),
+            (
+                _KINDS["REPAIR_TASK_RECORD"],
+                "repair/negative/task_provider_unassigned_v1.to",
+            ),
+        ),
+    ),
+    (
+        "bundle_routing_admission_positive",
+        300,
+        (
+            (_KINDS["PROVIDER_ADVERT"], "provider_admission/advert_v1.to"),
+            (
+                _KINDS["PROVIDER_ADMISSION_ENVELOPE"],
+                "provider_admission/envelope_v1.to",
+            ),
+        ),
+    ),
+)
+try:
+    _HAS_GOVERNANCE_LOG_NODE_NATIVE = callable(
+        sorafs_module._crypto.sorafs_validate_governance_log_node_json
+    )
+except (AttributeError, RuntimeError):
+    _HAS_GOVERNANCE_LOG_NODE_NATIVE = False
 _ORDERBOOK_PRIVATE_KEY = bytes([0xB7]) * 32
 _ORDERBOOK_OWNER_ACCOUNT = b"merchant@paynet"
 _MAX_SCALED_XOR = (
@@ -46,10 +196,12 @@ def _assert_exact_outcome(
     outcome: dict[str, object],
     fixture_root: Path,
     fixture_name: str,
+    *,
+    ensure_ascii: bool = True,
 ) -> None:
     expected_text = (fixture_root / fixture_name).read_text(encoding="utf-8")
     assert outcome == json.loads(expected_text)
-    assert json.dumps(outcome, indent=2, ensure_ascii=True) + "\n" == expected_text
+    assert json.dumps(outcome, indent=2, ensure_ascii=ensure_ascii) + "\n" == expected_text
 
 
 def _assert_governance_outcome(
@@ -607,6 +759,110 @@ def test_validate_pdp_pair_and_bundle_helpers_accept_bound_fixtures() -> None:
     _assert_exact_outcome(bundle, _PDP_FIXTURES, "bundle_validation_outcome_v1.json")
 
 
+def test_validate_fixture_bundle_accepts_linked_replication_and_por() -> None:
+    outcome = validate_fixture_bundle(
+        (
+            SorafsFixtureBundlePayloadInput(
+                SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS["REPLICATION_ORDER"],
+                _fixture(_SORAFS_FIXTURES / "replication_order" / "order_v1.to"),
+                "replication-order.to",
+            ),
+            SorafsFixtureBundlePayloadInput(
+                SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS["POR_PROOF"],
+                _fixture(_SORAFS_FIXTURES / "por" / "proof_v1.to"),
+                "por-proof.to",
+            ),
+        ),
+        now_unix=1_700_000_001,
+        generated_at_unix=1_700_001_238,
+    )
+
+    assert outcome["status"] == "Ok"
+    assert outcome["code"] == "SFS-OK-000"
+    assert outcome["generated_at"] == 1_700_001_238
+    assert [entry["kind"] for entry in outcome["inputs"]] == [
+        "replication_order",
+        "por_proof",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("profile_name", "now_unix", "payload_specs"),
+    _REFERENCE_SDK_BUNDLE_PROFILES,
+    ids=[profile[0] for profile in _REFERENCE_SDK_BUNDLE_PROFILES],
+)
+def test_fixture_bundle_matches_release_wide_outcomes_byte_for_byte(
+    profile_name: str,
+    now_unix: int,
+    payload_specs: tuple[tuple[str, str], ...],
+) -> None:
+    assert len(_REFERENCE_SDK_BUNDLE_PROFILES) == 9
+    outcome = validate_fixture_bundle(
+        tuple(
+            SorafsFixtureBundlePayloadInput(
+                kind,
+                _fixture(_SORAFS_FIXTURES / path),
+                path,
+            )
+            for kind, path in payload_specs
+        ),
+        now_unix=now_unix,
+        generated_at_unix=_REFERENCE_SDK_GENERATED_AT,
+    )
+
+    _assert_exact_outcome(
+        outcome,
+        _REFERENCE_SDK_FIXTURES,
+        f"{profile_name}_validation_outcome_v1.json",
+    )
+
+
+def test_fixture_bundle_selectors_and_input_snapshots_are_exact() -> None:
+    assert tuple(SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS.values()) == (
+        "provider-advert",
+        "provider-admission-envelope",
+        "replication-order",
+        "por-challenge",
+        "por-proof",
+        "potr-receipt",
+        "repair-evidence",
+        "repair-report",
+        "repair-task-record",
+        "repair-slash-proposal",
+        "repair-task-event",
+        "orderbook-order-request",
+        "orderbook-order-cancel",
+        "orderbook-trade-event",
+        "orderbook-settlement-channel",
+        "orderbook-settlement-receipt",
+        "pdp-commitment",
+        "pdp-challenge",
+        "pdp-proof",
+    )
+    source = bytearray((1, 2, 3))
+    payload = SorafsFixtureBundlePayloadInput("por-proof", source)
+    source[0] = 9
+    assert payload.payload == bytes((1, 2, 3))
+    assert (
+        SorafsFixtureBundlePayloadInput("por-proof", b"\x00", "proof\u200b.to").label
+        == "proof\u200b.to"
+    )
+    with pytest.raises(ValueError, match="valid Unicode"):
+        SorafsFixtureBundlePayloadInput("por-proof", b"\x00", "\ud800")
+
+
+def test_validate_fixture_bundle_rejects_aliases_and_unbounded_input() -> None:
+    with pytest.raises(ValueError, match="fixture-bundle payload kind"):
+        SorafsFixtureBundlePayloadInput("por_proof", b"\x00")
+    with pytest.raises(ValueError, match=r"1\.\.=64"):
+        validate_fixture_bundle(())
+    item = SorafsFixtureBundlePayloadInput("por-proof", b"\x00")
+    with pytest.raises(ValueError, match=r"1\.\.=64"):
+        validate_fixture_bundle(
+            (item,) * (SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1 + 1)
+        )
+
+
 def test_all_pdp_negative_outcomes_match_exactly() -> None:
     commitment, challenge, _proof = _pdp_fixtures()
 
@@ -725,6 +981,57 @@ def test_reference_validation_rejects_bad_arguments_before_native_validation() -
         validate_orderbook_payload("order-request", b"\x00" * 8, generated_at_unix=-1)
     with pytest.raises(TypeError, match="bytes-like"):
         validate_pdp_payload("proof", "not-bytes")  # type: ignore[arg-type]
+
+
+@pytest.mark.skipif(
+    not _HAS_GOVERNANCE_LOG_NODE_NATIVE,
+    reason="native governance log-node validator has not been rebuilt",
+)
+def test_validate_governance_log_node_matches_moderation_outcome_byte_for_byte() -> None:
+    node_metadata = json.loads(
+        (_MODERATION_FIXTURES / "governance_node_v1.json").read_text(encoding="utf-8")
+    )
+    outcome = validate_governance_log_node(
+        _fixture(_MODERATION_FIXTURES / "governance_node_v1.to"),
+        expected_node_cid=bytes.fromhex(node_metadata["node_cid_hex"]),
+        label="moderation/governance_node_v1.to",
+        generated_at_unix=_REFERENCE_SDK_GENERATED_AT,
+    )
+
+    _assert_exact_outcome(
+        outcome,
+        _MODERATION_FIXTURES,
+        "governance_node_validation_outcome_v1.json",
+        ensure_ascii=False,
+    )
+
+
+def test_validate_governance_log_node_rejects_bad_cids_before_native_dispatch() -> None:
+    for invalid_length in (0, 31, 33):
+        with pytest.raises(
+            ValueError,
+            match=rf"exactly {SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes",
+        ):
+            validate_governance_log_node(
+                b"\x00",
+                expected_node_cid=bytes(invalid_length),
+                generated_at_unix=1,
+            )
+
+
+def test_validate_governance_log_node_fails_closed_without_native_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sorafs_module, "_crypto", object())
+    with pytest.raises(
+        RuntimeError,
+        match="sorafs_validate_governance_log_node_json",
+    ):
+        validate_governance_log_node(
+            b"\x00",
+            expected_node_cid=bytes(SORAFS_GOVERNANCE_DAG_CID_BYTES_V1),
+            generated_at_unix=1,
+        )
 
 
 def test_validate_governance_dag_block_accepts_canonical_fixture() -> None:

@@ -1,10 +1,14 @@
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
+import path from 'node:path';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 
-import {verifyOpenApiSignature} from './lib/openapi-signature.mjs';
+import {
+  parseOpenApiManifestV2Json,
+  verifyOpenApiManifestV2,
+} from './lib/openapi-manifest-v2.mjs';
 
 const DEFAULT_LOGGER = {
   info: (...args) => console.info(...args),
@@ -999,86 +1003,44 @@ export async function verifySpecDigest({
 
   let manifest;
   try {
-    manifest = JSON.parse(manifestRaw);
+    manifest = parseOpenApiManifestV2Json(manifestRaw, {
+      label: `OpenAPI manifest ${manifestPath}`,
+    });
   } catch (error) {
     throw new Error(
       `failed to parse OpenAPI manifest at ${manifestPath}: ${error.message ?? error}`,
     );
   }
 
-  const artifact = manifest?.artifact;
-  if (!artifact || typeof artifact !== 'object') {
-    throw new Error(`OpenAPI manifest ${manifestPath} is missing artifact metadata`);
-  }
-
-  const expectedDigest = normaliseHex(
-    artifact.sha256_hex ?? artifact.sha256Hex ?? artifact.sha256,
-    'artifact.sha256_hex',
-  );
   const actualDigest = createHash('sha256').update(specBuffer).digest('hex');
-
-  if (actualDigest !== expectedDigest) {
-    const hint = `OpenAPI spec digest mismatch for ${specPath}. Expected ${expectedDigest} but found ${actualDigest}. ${SYNC_HINT}`;
-    const error = new Error(hint);
-    error.code = 'ERR_SPEC_DIGEST_MISMATCH';
-    error.expected = expectedDigest;
-    error.actual = actualDigest;
-    throw error;
-  }
-
-  if (Number.isFinite(artifact.bytes)) {
-    const expectedBytes = Number(artifact.bytes);
-    const actualBytes = specBuffer.length;
-    if (actualBytes !== expectedBytes) {
-      const error = new Error(
-        `OpenAPI spec size mismatch for ${specPath}. Expected ${expectedBytes} bytes but found ${actualBytes}. ${SYNC_HINT}`,
-      );
-      error.code = 'ERR_SPEC_SIZE_MISMATCH';
-      error.expectedBytes = expectedBytes;
-      error.actualBytes = actualBytes;
-      throw error;
-    }
-  }
-
-  const signature = artifact.signature;
-  if (!signature) {
-    const error = new Error(
-      `OpenAPI manifest ${manifestPath} is missing artifact.signature. ${SYNC_HINT}`,
-    );
-    error.code = 'ERR_SPEC_SIGNATURE_MISSING';
-    throw error;
-  }
-  const signatureAlgorithm = signature.algorithm;
-  const signaturePublicKey =
-    signature.public_key_hex ?? signature.publicKeyHex ?? signature.public_key;
-  const signatureHex =
-    signature.signature_hex ?? signature.signatureHex ?? signature.value;
+  const expectedArtifactPath = path
+    .relative(
+      path.dirname(path.resolve(manifestPath)),
+      path.resolve(specPath),
+    )
+    .split(path.sep)
+    .join('/');
   try {
-    verifyOpenApiSignature({
-      algorithm: signatureAlgorithm,
-      publicKeyHex: signaturePublicKey,
-      signatureHex,
-      payload: specBuffer,
+    verifyOpenApiManifestV2({
+      manifest,
+      artifactBytes: specBuffer,
+      label: `OpenAPI manifest ${manifestPath}`,
+      expectedArtifactPath,
+      requireSignature: true,
+      requireClean: true,
     });
   } catch (error) {
     const err = new Error(
-      `OpenAPI manifest signature verification failed: ${error.message ?? error}. ${SYNC_HINT}`,
+      `OpenAPI manifest verification failed: ${error.message ?? error}. ${SYNC_HINT}`,
     );
-    err.code = 'ERR_SPEC_SIGNATURE_INVALID';
+    err.code = 'ERR_SPEC_MANIFEST_INVALID';
     throw err;
   }
 
   return {
     algorithm: 'sha256',
     bytes: specBuffer.length,
-    expected: expectedDigest,
+    expected: manifest.artifact.sha256_hex,
     actual: actualDigest,
   };
-}
-
-function normaliseHex(value, fieldName) {
-  if (typeof value !== 'string' || value.trim() === '') {
-    throw new Error(`OpenAPI manifest is missing ${fieldName}`);
-  }
-  return value.trim().toLowerCase();
 }

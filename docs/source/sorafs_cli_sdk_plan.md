@@ -18,7 +18,10 @@ Implemented command families:
 - `sorafs_cli car pack`, `manifest build`, `manifest proposal`, and `manifest submit` cover content-manifest preparation and submission.
 - `sorafs_cli storage prepare`, `storage pin`, `fetch`, `proof stream`, and `proof verify` cover local storage preparation, gateway fetches, proof requests, and trustless verification.
 - `sorafs_cli por status`, `por export`, and `por report` cover the local PoR operator surface. Challenge issuance belongs exclusively to the coordinator scheduler, and no command records manual success/failure observations.
-- `sorafs_cli reputation publish`, `snapshot`, `fetch`, `watch`, and `verify` cover the reputation workflow.
+- `sorafs_cli reputation snapshot`, `fetch`, `watch`, and `verify` cover the
+  read-only committed-projection and offline verification workflow. Snapshot
+  publication is an external threshold-signing/outbox operation and has no
+  local-authoritative CLI mutation command.
 - `sorafs-validate` validates and signs reference SDK fixtures; `soranet_trustless_verifier --validation-outcome` emits the same outcome contract for manifest/CAR replay.
 - `scripts/sorafs_gateway_self_cert.sh` and `cargo xtask sorafs-gateway-attest` generate and verify gateway conformance attestations.
 

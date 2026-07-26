@@ -53,6 +53,164 @@ const CHECKPOINT_LOCK_FILE_NAME: &str = "potr-receipts-state.lock";
 static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static CHECKPOINT_PROCESS_LOCK: Mutex<()> = Mutex::new(());
 
+/// Exact finalized provider-admission policy accepted for one PoTR receipt.
+///
+/// The binding is persisted with the final signed receipt before any ledger or
+/// repair handoff. `policy_identity` names one governance-controlled policy
+/// series, while `policy_digest` and `policy_sequence` identify the exact
+/// revision in that series. The finalized cursor prevents a stale fork or
+/// same-height substitution from being admitted after restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PotrAdmissionPolicyBindingV1 {
+    /// Provider governed by this admission revision.
+    pub provider_id: [u8; 32],
+    /// Stable identity of the provider-admission policy series.
+    pub policy_identity: [u8; 32],
+    /// Digest of the exact policy revision used by the admission reader.
+    pub policy_digest: [u8; 32],
+    /// Monotonic revision sequence within `policy_identity`.
+    pub policy_sequence: u64,
+    /// Finalized block height from which the reader obtained this revision.
+    pub finalized_height: u64,
+    /// Exact finalized block hash paired with `finalized_height`.
+    pub finalized_block_hash: [u8; 32],
+    /// Digest of the exact council-verified provider admission envelope.
+    pub admission_envelope_digest: [u8; 32],
+}
+
+impl PotrAdmissionPolicyBindingV1 {
+    /// Validate non-zero identity and finalized-anchor invariants.
+    pub fn validate(self) -> Result<(), PotrAdmissionPolicyBindingError> {
+        if self.provider_id == [0; 32] {
+            return Err(PotrAdmissionPolicyBindingError::ZeroProviderId);
+        }
+        if self.policy_identity == [0; 32] {
+            return Err(PotrAdmissionPolicyBindingError::ZeroPolicyIdentity);
+        }
+        if self.policy_digest == [0; 32] {
+            return Err(PotrAdmissionPolicyBindingError::ZeroPolicyDigest);
+        }
+        if self.policy_sequence == 0 {
+            return Err(PotrAdmissionPolicyBindingError::ZeroPolicySequence);
+        }
+        if self.finalized_height == 0 {
+            return Err(PotrAdmissionPolicyBindingError::ZeroFinalizedHeight);
+        }
+        if self.finalized_block_hash == [0; 32] {
+            return Err(PotrAdmissionPolicyBindingError::ZeroFinalizedBlockHash);
+        }
+        if self.admission_envelope_digest == [0; 32] {
+            return Err(PotrAdmissionPolicyBindingError::ZeroAdmissionEnvelopeDigest);
+        }
+        Ok(())
+    }
+
+    /// Validate this binding against the exact council-verified admission.
+    pub fn validate_for(
+        self,
+        admission: &AdmissionRecord,
+    ) -> Result<(), PotrAdmissionPolicyBindingError> {
+        self.validate()?;
+        if admission.provider_id() != &self.provider_id {
+            return Err(PotrAdmissionPolicyBindingError::ProviderMismatch);
+        }
+        if admission.envelope_digest() != &self.admission_envelope_digest {
+            return Err(PotrAdmissionPolicyBindingError::AdmissionEnvelopeMismatch);
+        }
+        Ok(())
+    }
+
+    /// Require this binding to be the same revision as, or a finalized
+    /// successor of, `floor`.
+    pub fn ensure_at_or_after(self, floor: Self) -> Result<(), PotrAdmissionPolicyProgressError> {
+        if self.provider_id != floor.provider_id {
+            return Err(PotrAdmissionPolicyProgressError::ProviderChanged);
+        }
+        if self.policy_identity != floor.policy_identity {
+            return Err(PotrAdmissionPolicyProgressError::PolicyIdentityChanged);
+        }
+        if self.policy_sequence < floor.policy_sequence {
+            return Err(PotrAdmissionPolicyProgressError::SequenceRollback);
+        }
+        if self.policy_sequence == floor.policy_sequence {
+            if self != floor {
+                return Err(PotrAdmissionPolicyProgressError::SequenceConflict);
+            }
+            return Ok(());
+        }
+        if self.policy_digest == floor.policy_digest {
+            return Err(PotrAdmissionPolicyProgressError::PolicyDigestReused);
+        }
+        if self.finalized_height < floor.finalized_height {
+            return Err(PotrAdmissionPolicyProgressError::FinalizedHeightRollback);
+        }
+        if self.finalized_height == floor.finalized_height
+            && self.finalized_block_hash != floor.finalized_block_hash
+        {
+            return Err(PotrAdmissionPolicyProgressError::FinalizedBlockConflict);
+        }
+        Ok(())
+    }
+}
+
+/// Invalid shape or admission association for a PoTR policy binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PotrAdmissionPolicyBindingError {
+    /// The provider identity is the zero sentinel.
+    #[error("PoTR admission binding provider identity is zero")]
+    ZeroProviderId,
+    /// The stable policy-series identity is the zero sentinel.
+    #[error("PoTR admission binding policy identity is zero")]
+    ZeroPolicyIdentity,
+    /// The exact policy revision digest is the zero sentinel.
+    #[error("PoTR admission binding policy digest is zero")]
+    ZeroPolicyDigest,
+    /// Policy revisions are one-based.
+    #[error("PoTR admission binding policy sequence is zero")]
+    ZeroPolicySequence,
+    /// A production admission must be observed from a committed block.
+    #[error("PoTR admission binding finalized height is zero")]
+    ZeroFinalizedHeight,
+    /// The finalized cursor has no block hash.
+    #[error("PoTR admission binding finalized block hash is zero")]
+    ZeroFinalizedBlockHash,
+    /// The council admission envelope digest is the zero sentinel.
+    #[error("PoTR admission binding envelope digest is zero")]
+    ZeroAdmissionEnvelopeDigest,
+    /// The binding and admission name different providers.
+    #[error("PoTR admission binding provider does not match the admission")]
+    ProviderMismatch,
+    /// The binding and admission carry different envelope digests.
+    #[error("PoTR admission binding envelope does not match the admission")]
+    AdmissionEnvelopeMismatch,
+}
+
+/// Invalid transition from a retained PoTR admission-policy floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PotrAdmissionPolicyProgressError {
+    /// A policy revision was supplied for another provider.
+    #[error("PoTR admission policy provider changed")]
+    ProviderChanged,
+    /// The stable governance policy identity was substituted.
+    #[error("PoTR admission policy identity changed")]
+    PolicyIdentityChanged,
+    /// The policy revision sequence moved backwards.
+    #[error("PoTR admission policy sequence moved backwards")]
+    SequenceRollback,
+    /// One sequence was associated with different exact policy material.
+    #[error("PoTR admission policy sequence conflicts with retained state")]
+    SequenceConflict,
+    /// A later sequence reused the prior exact policy digest.
+    #[error("PoTR admission policy sequence advanced without a new digest")]
+    PolicyDigestReused,
+    /// A newer policy revision claimed an older finalized height.
+    #[error("PoTR admission policy finalized height moved backwards")]
+    FinalizedHeightRollback,
+    /// One finalized height was associated with a different block hash.
+    #[error("PoTR admission policy finalized block conflicts with retained state")]
+    FinalizedBlockConflict,
+}
+
 #[cfg(unix)]
 const LOCK_EXCLUSIVE_NONBLOCKING: std::os::raw::c_int = 2 | 4;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -143,7 +301,7 @@ struct StoredPotrReceiptV1 {
     sequence: u64,
     receipt_digest: [u8; 32],
     request_scope_digest: [u8; 32],
-    admission_envelope_digest: [u8; 32],
+    admission_policy: PotrAdmissionPolicyBindingV1,
     gateway_public_key: [u8; 32],
     governed_provider_public_key: Vec<u8>,
     receipt: PotrReceiptV1,
@@ -297,8 +455,10 @@ impl PotrTracker {
         receipt: PotrReceiptV1,
         gateway_public_key: &[u8; 32],
         admission: &AdmissionRecord,
+        admission_policy: &PotrAdmissionPolicyBindingV1,
         repair: &dyn PotrLatencyRepairHandoff,
     ) -> Result<PotrRecordOutcome, PotrTrackerError> {
+        admission_policy.validate_for(admission)?;
         receipt.validate_with_governed_keys(gateway_public_key, admission)?;
         let canonical_receipt = receipt.signed_receipt_bytes()?;
         if canonical_receipt.len() > POTR_RECEIPT_MAX_CANONICAL_BYTES_V1 {
@@ -322,8 +482,16 @@ impl PotrTracker {
                     request_scope_digest,
                 });
             }
+            if existing.admission_policy != *admission_policy {
+                return Err(PotrTrackerError::AdmissionPolicyReplayConflict);
+            }
             true
         } else {
+            if let Some(floor) =
+                latest_admission_policy(&durable.runtime, &admission_policy.provider_id)
+            {
+                admission_policy.ensure_at_or_after(floor)?;
+            }
             if durable.runtime.digest_index.contains_key(&receipt_digest) {
                 return Err(PotrTrackerError::ReceiptDigestConflict { receipt_digest });
             }
@@ -340,7 +508,7 @@ impl PotrTracker {
                 sequence,
                 receipt_digest,
                 request_scope_digest,
-                admission_envelope_digest: *admission.envelope_digest(),
+                admission_policy: *admission_policy,
                 gateway_public_key: *gateway_public_key,
                 governed_provider_public_key,
                 receipt,
@@ -413,6 +581,15 @@ impl PotrTracker {
             .get(receipt_digest)
             .and_then(|scope| durable.runtime.records.get(scope))
             .map(StoredPotrReceiptV1::status))
+    }
+
+    /// Return the latest exact admission-policy binding retained for a provider.
+    pub fn admission_policy_floor(
+        &self,
+        provider_id: &[u8; 32],
+    ) -> Result<Option<PotrAdmissionPolicyBindingV1>, PotrTrackerError> {
+        let durable = self.lock_state()?;
+        Ok(latest_admission_policy(&durable.runtime, provider_id))
     }
 
     /// Return a bounded sequence-ordered status export.
@@ -509,7 +686,7 @@ impl PotrTracker {
                 .enqueue_proof_outcome(
                     receipt_digest,
                     &record.receipt,
-                    record.admission_envelope_digest,
+                    record.admission_policy.admission_envelope_digest,
                 )
                 .map_err(PotrTrackerError::ProofOutcomeHandoff)?;
             if proof_outcome_receipt == [0; 32] {
@@ -595,6 +772,18 @@ impl PotrTracker {
     }
 }
 
+fn latest_admission_policy(
+    runtime: &RuntimeState,
+    provider_id: &[u8; 32],
+) -> Option<PotrAdmissionPolicyBindingV1> {
+    runtime
+        .records
+        .values()
+        .filter(|record| record.receipt.provider_id == *provider_id)
+        .max_by_key(|record| record.sequence)
+        .map(|record| record.admission_policy)
+}
+
 fn build_latency_repair_report(
     receipt: &PotrReceiptV1,
     receipt_digest: [u8; 32],
@@ -658,6 +847,7 @@ fn validate_checkpoint(
     }
     let mut scopes = BTreeSet::new();
     let mut digests = BTreeSet::new();
+    let mut policy_floors: BTreeMap<[u8; 32], PotrAdmissionPolicyBindingV1> = BTreeMap::new();
     let mut previous_sequence = None;
     for record in &checkpoint.records {
         validate_record(record)?;
@@ -669,6 +859,17 @@ fn validate_checkpoint(
                 "PoTR records must have unique identities and increasing sequences".to_owned(),
             ));
         }
+        if let Some(floor) = policy_floors.get(&record.receipt.provider_id) {
+            record
+                .admission_policy
+                .ensure_at_or_after(*floor)
+                .map_err(|error| {
+                    PotrTrackerError::InvalidCheckpoint(format!(
+                        "PoTR admission policy history is inconsistent: {error}"
+                    ))
+                })?;
+        }
+        policy_floors.insert(record.receipt.provider_id, record.admission_policy);
         previous_sequence = Some(record.sequence);
     }
     if previous_sequence.is_some_and(|sequence| sequence >= checkpoint.next_sequence) {
@@ -681,10 +882,15 @@ fn validate_checkpoint(
 
 fn validate_record(record: &StoredPotrReceiptV1) -> Result<(), PotrTrackerError> {
     record.receipt.validate()?;
+    record.admission_policy.validate().map_err(|error| {
+        PotrTrackerError::InvalidCheckpoint(format!(
+            "persisted PoTR admission policy is invalid: {error}"
+        ))
+    })?;
     if record.sequence == 0
         || record.receipt_digest == [0; 32]
         || record.request_scope_digest == [0; 32]
-        || record.admission_envelope_digest == [0; 32]
+        || record.admission_policy.provider_id != record.receipt.provider_id
         || record.gateway_public_key == [0; 32]
         || record.governed_provider_public_key.is_empty()
         || record.receipt.signed_receipt_digest()? != record.receipt_digest
@@ -1089,6 +1295,15 @@ pub enum PotrTrackerError {
     /// Receipt shape, signature, or governed key binding failed.
     #[error("invalid final signed PoTR receipt: {0}")]
     Receipt(#[from] PotrReceiptValidationError),
+    /// The exact admission-policy binding was malformed or mismatched.
+    #[error("invalid PoTR admission-policy binding: {0}")]
+    AdmissionPolicyBinding(#[from] PotrAdmissionPolicyBindingError),
+    /// The supplied policy revision regressed or conflicted with durable state.
+    #[error("invalid PoTR admission-policy progression: {0}")]
+    AdmissionPolicyProgress(#[from] PotrAdmissionPolicyProgressError),
+    /// An exact signed-receipt replay attempted to substitute its policy binding.
+    #[error("PoTR signed-receipt replay changed its admission-policy binding")]
+    AdmissionPolicyReplayConflict,
     /// Tracker bounds are inconsistent.
     #[error("invalid PoTR tracker policy: {0}")]
     InvalidPolicy(String),
@@ -1478,6 +1693,27 @@ mod tests {
             .expect("Ed25519 gateway key")
     }
 
+    fn admission_policy_binding(
+        admission: &AdmissionRecord,
+        policy_sequence: u64,
+    ) -> PotrAdmissionPolicyBindingV1 {
+        let mut policy_hasher = blake3::Hasher::new();
+        policy_hasher.update(b"test.sorafs.potr.admission-policy.v1\0");
+        policy_hasher.update(&policy_sequence.to_le_bytes());
+        let mut block_hasher = blake3::Hasher::new();
+        block_hasher.update(b"test.sorafs.potr.finalized-block.v1\0");
+        block_hasher.update(&policy_sequence.to_le_bytes());
+        PotrAdmissionPolicyBindingV1 {
+            provider_id: *admission.provider_id(),
+            policy_identity: [0x81; 32],
+            policy_digest: *policy_hasher.finalize().as_bytes(),
+            policy_sequence,
+            finalized_height: 100 + policy_sequence,
+            finalized_block_hash: *block_hasher.finalize().as_bytes(),
+            admission_envelope_digest: *admission.envelope_digest(),
+        }
+    }
+
     fn signed_receipt(
         gateway_key: &KeyPair,
         provider_key: &KeyPair,
@@ -1514,6 +1750,7 @@ mod tests {
     #[test]
     fn final_signed_receipt_is_atomic_restart_safe_and_idempotent() {
         let (admission, gateway_key, provider_key) = governed_fixture();
+        let policy_binding = admission_policy_binding(&admission, 1);
         let gateway_public = gateway_public_key(&gateway_key);
         let receipt = signed_receipt(
             &gateway_key,
@@ -1530,13 +1767,25 @@ mod tests {
                 .expect("open tracker");
         assert!(matches!(
             tracker
-                .record_receipt(receipt.clone(), &gateway_public, &admission, &repair)
+                .record_receipt(
+                    receipt.clone(),
+                    &gateway_public,
+                    &admission,
+                    &policy_binding,
+                    &repair,
+                )
                 .expect("insert"),
             PotrRecordOutcome::Inserted(_)
         ));
         assert!(matches!(
             tracker
-                .record_receipt(receipt.clone(), &gateway_public, &admission, &repair)
+                .record_receipt(
+                    receipt.clone(),
+                    &gateway_public,
+                    &admission,
+                    &policy_binding,
+                    &repair,
+                )
                 .expect("replay"),
             PotrRecordOutcome::Existing(_)
         ));
@@ -1562,6 +1811,7 @@ mod tests {
     #[test]
     fn wrong_signer_and_overlapping_request_scope_fail_closed() {
         let (admission, gateway_key, provider_key) = governed_fixture();
+        let policy_binding = admission_policy_binding(&admission, 1);
         let gateway_public = gateway_public_key(&gateway_key);
         let repair = RecordingRepair::default();
         let tracker = PotrTracker::in_memory(8).expect("tracker");
@@ -1582,13 +1832,19 @@ mod tests {
             0,
         );
         assert!(matches!(
-            tracker.record_receipt(wrong, &gateway_public, &admission, &repair),
+            tracker.record_receipt(wrong, &gateway_public, &admission, &policy_binding, &repair,),
             Err(PotrTrackerError::Receipt(
                 PotrReceiptValidationError::GatewayKeyMismatch
             ))
         ));
         tracker
-            .record_receipt(baseline, &gateway_public, &admission, &repair)
+            .record_receipt(
+                baseline,
+                &gateway_public,
+                &admission,
+                &policy_binding,
+                &repair,
+            )
             .expect("baseline");
         let overlapping = signed_receipt(
             &gateway_key,
@@ -1598,7 +1854,13 @@ mod tests {
             512,
         );
         assert!(matches!(
-            tracker.record_receipt(overlapping, &gateway_public, &admission, &repair),
+            tracker.record_receipt(
+                overlapping,
+                &gateway_public,
+                &admission,
+                &policy_binding,
+                &repair,
+            ),
             Err(PotrTrackerError::RequestScopeConflict { .. })
         ));
     }
@@ -1606,6 +1868,7 @@ mod tests {
     #[test]
     fn proof_outcome_outage_persists_receipt_and_restart_replays_before_repair() {
         let (admission, gateway_key, provider_key) = governed_fixture();
+        let policy_binding = admission_policy_binding(&admission, 1);
         let gateway_public = gateway_public_key(&gateway_key);
         let receipt = signed_receipt(
             &gateway_key,
@@ -1621,7 +1884,13 @@ mod tests {
             PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
                 .expect("tracker");
         assert!(matches!(
-            tracker.record_receipt(receipt, &gateway_public, &admission, &failing),
+            tracker.record_receipt(
+                receipt,
+                &gateway_public,
+                &admission,
+                &policy_binding,
+                &failing,
+            ),
             Err(PotrTrackerError::ProofOutcomeHandoff(_))
         ));
         let persisted = tracker
@@ -1635,6 +1904,13 @@ mod tests {
         let restored =
             PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
                 .expect("restore");
+        assert_eq!(
+            restored
+                .admission_policy_floor(admission.provider_id())
+                .expect("restored admission policy"),
+            Some(policy_binding),
+            "the exact policy anchor must commit before the failed handoff"
+        );
         let handoff = RecordingRepair::default();
         assert_eq!(
             restored
@@ -1661,6 +1937,7 @@ mod tests {
     #[test]
     fn repair_outage_persists_pending_identity_and_restart_replays_exactly_once() {
         let (admission, gateway_key, provider_key) = governed_fixture();
+        let policy_binding = admission_policy_binding(&admission, 1);
         let gateway_public = gateway_public_key(&gateway_key);
         let receipt = signed_receipt(
             &gateway_key,
@@ -1676,7 +1953,13 @@ mod tests {
             PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
                 .expect("tracker");
         assert!(matches!(
-            tracker.record_receipt(receipt, &gateway_public, &admission, &failing),
+            tracker.record_receipt(
+                receipt,
+                &gateway_public,
+                &admission,
+                &policy_binding,
+                &failing,
+            ),
             Err(PotrTrackerError::RepairHandoff(_))
         ));
         assert_eq!(
@@ -1712,6 +1995,7 @@ mod tests {
     #[test]
     fn node_startup_defers_repair_required_potr_handoff() {
         let (admission, gateway_key, provider_key) = governed_fixture();
+        let policy_binding = admission_policy_binding(&admission, 1);
         let gateway_public = gateway_public_key(&gateway_key);
         let receipt = signed_receipt(
             &gateway_key,
@@ -1735,7 +2019,13 @@ mod tests {
         .expect("tracker");
         let failing = RecordingRepair::failing(1);
         assert!(matches!(
-            tracker.record_receipt(receipt, &gateway_public, &admission, &failing),
+            tracker.record_receipt(
+                receipt,
+                &gateway_public,
+                &admission,
+                &policy_binding,
+                &failing,
+            ),
             Err(PotrTrackerError::RepairHandoff(_))
         ));
         drop(tracker);
@@ -1778,8 +2068,91 @@ mod tests {
     }
 
     #[test]
+    fn admission_rotation_floor_survives_restart_and_rejects_rollback_and_replay_substitution() {
+        let (admission, gateway_key, provider_key) = governed_fixture();
+        let gateway_public = gateway_public_key(&gateway_key);
+        let policy_v1 = admission_policy_binding(&admission, 1);
+        let policy_v2 = admission_policy_binding(&admission, 2);
+        let first = signed_receipt(
+            &gateway_key,
+            &provider_key,
+            [0x71; 16],
+            PotrStatus::Success,
+            0,
+        );
+        let second = signed_receipt(
+            &gateway_key,
+            &provider_key,
+            [0x72; 16],
+            PotrStatus::Success,
+            1_024,
+        );
+        let stale = signed_receipt(
+            &gateway_key,
+            &provider_key,
+            [0x73; 16],
+            PotrStatus::Success,
+            2_048,
+        );
+        let dir = TempDir::new().expect("state dir");
+        let repair = RecordingRepair::default();
+        let tracker =
+            PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
+                .expect("tracker");
+        tracker
+            .record_receipt(
+                first.clone(),
+                &gateway_public,
+                &admission,
+                &policy_v1,
+                &repair,
+            )
+            .expect("initial policy receipt");
+        tracker
+            .record_receipt(
+                second.clone(),
+                &gateway_public,
+                &admission,
+                &policy_v2,
+                &repair,
+            )
+            .expect("rotated policy receipt");
+        drop(tracker);
+
+        let restored =
+            PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
+                .expect("restore");
+        assert_eq!(
+            restored
+                .admission_policy_floor(admission.provider_id())
+                .expect("policy floor"),
+            Some(policy_v2)
+        );
+        assert!(matches!(
+            restored
+                .record_receipt(first, &gateway_public, &admission, &policy_v1, &repair)
+                .expect("an exact old receipt replay remains idempotent after rotation"),
+            PotrRecordOutcome::Existing(_)
+        ));
+        assert!(matches!(
+            restored.record_receipt(stale, &gateway_public, &admission, &policy_v1, &repair,),
+            Err(PotrTrackerError::AdmissionPolicyProgress(
+                PotrAdmissionPolicyProgressError::SequenceRollback
+            ))
+        ));
+
+        let mut substituted = policy_v2;
+        substituted.policy_digest[0] ^= 0x80;
+        assert!(matches!(
+            restored.record_receipt(second, &gateway_public, &admission, &substituted, &repair,),
+            Err(PotrTrackerError::AdmissionPolicyReplayConflict)
+        ));
+    }
+
+    #[test]
     fn racing_conflicting_receipts_have_one_durable_winner() {
         let (admission, gateway_key, provider_key) = governed_fixture();
+        let policy_binding = admission_policy_binding(&admission, 1);
         let gateway_public = gateway_public_key(&gateway_key);
         let tracker = Arc::new(PotrTracker::in_memory(8).expect("tracker"));
         let repair = Arc::new(RecordingRepair::default());
@@ -1808,7 +2181,13 @@ mod tests {
             let barrier = Arc::clone(&barrier);
             workers.push(thread::spawn(move || {
                 barrier.wait();
-                tracker.record_receipt(receipt, &gateway_public, &admission, repair.as_ref())
+                tracker.record_receipt(
+                    receipt,
+                    &gateway_public,
+                    &admission,
+                    &policy_binding,
+                    repair.as_ref(),
+                )
             }));
         }
         barrier.wait();

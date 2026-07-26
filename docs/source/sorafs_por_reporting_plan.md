@@ -13,9 +13,13 @@ summary: Reference for the SF-9b validator tooling and reporting surfaces.
 
 ## Reporting
 
-- Generate weekly proof health report (JSON + Markdown) via `por report`.
-- Include metrics: total challenges, success rate, failures by provider.
-- Publish report to governance dashboards / Git repo.
+- Generate the validated `PorWeeklyReportV1` proof-health report via
+  `por report`.
+- Include deterministic integer metrics: total challenges, success rate,
+  failures, latency, forced challenges, and repair outcomes.
+- Publish the exact canonical Norito report through the embedded node's durable
+  runtime-signed Governance DAG outbox. Dashboard and human-readable views are
+  projections, not competing report authorities.
 
 ## GovernanceLog Integration
 
@@ -24,9 +28,11 @@ summary: Reference for the SF-9b validator tooling and reporting surfaces.
 
 ## Report Templates & Delivery
 
-Weekly proof-health reports are published in two artefacts: machine-consumable JSON and
-human-friendly Markdown. Both are generated from the same dataset and stored under
-`reports/por/<year>/<week>/`.
+The canonical weekly proof-health artefact is one validated
+`PorWeeklyReportV1` in the signed Governance DAG. Machine-consumable JSON and
+human-friendly Markdown are reproducible projections from the same committed
+report and may be stored under `reports/por/<year>/<week>/`; they are not
+independent publication records.
 
 ### JSON schema (`PorWeeklyReportV1`)
 

@@ -536,7 +536,12 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         metadata::Metadata,
-        sorafs::pin_registry::{ChunkerProfileHandle, PinPolicy, StorageClass},
+        sorafs::{
+            capacity::ProviderId,
+            pin_registry::{
+                ChunkerProfileHandle, PinPolicy, ReplicationOrderCompletionRecord, StorageClass,
+            },
+        },
     };
     use sorafs_manifest::capacity::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
@@ -640,14 +645,28 @@ mod tests {
             metadata: Vec::new(),
         };
         payload.validate().expect("valid test replication order");
+        let issued_by = fixture_account();
+        let provider_completions = match status {
+            ReplicationOrderStatus::Completed(completion_epoch) => canonical_providers
+                .iter()
+                .copied()
+                .map(|provider_id| ReplicationOrderCompletionRecord {
+                    provider_id: ProviderId::new(provider_id),
+                    completed_by: issued_by.clone(),
+                    completion_epoch,
+                })
+                .collect(),
+            ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_) => Vec::new(),
+        };
         let record = ReplicationOrderRecord {
             order_id,
             manifest_digest: manifest.0,
             manifest_root_cid: manifest.1.root_cid,
-            issued_by: fixture_account(),
+            issued_by,
             issued_epoch: 5,
             deadline_epoch: 20,
             canonical_order: norito::to_bytes(&payload).expect("encode replication order"),
+            provider_completions,
             status,
         };
         (order_id, record)

@@ -49,7 +49,7 @@ fn vk_record(
 }
 
 #[test]
-fn groth16_backend_tag_is_unsupported() {
+fn trusted_setup_backend_label_is_unsupported() {
     let (state, header) = new_block_ctx();
     let mut block = state.block(header);
     let exec = Executor::default();
@@ -71,8 +71,8 @@ fn groth16_backend_tag_is_unsupported() {
         id: vk_id.clone(),
         record: vk_record(
             "groth16/bn254:unsupported",
-            iroha_data_model::zk::BackendTag::Groth16,
-            "bn254",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pallas",
             vk_box,
             [0u8; 32],
         ),
@@ -83,7 +83,7 @@ fn groth16_backend_tag_is_unsupported() {
         .expect_err("trusted-setup VK backend should be rejected at admission");
     let msg = format!("{err:?}");
     assert!(
-        msg.contains("backend must be Halo2IpaPasta or Stark"),
+        msg.contains("trusted-setup verifying key backends"),
         "unexpected error: {msg}"
     );
 }

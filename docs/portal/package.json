@@ -31,7 +31,7 @@
     "check:norito-snippets": "node scripts/sync-norito-snippets.mjs --check",
     "test:norito-snippets": "node --test scripts/__tests__/sync-norito-snippets.manifest.test.mjs",
     "test:tryit-proxy": "node --test scripts/__tests__/tryit-proxy.test.mjs scripts/__tests__/tryit-proxy-probe.test.mjs scripts/__tests__/tryit-proxy-release.test.mjs",
-    "test:widgets": "node --test src/utils/__tests__/tryItProxy.test.mjs src/utils/__tests__/deviceAuth.test.mjs src/utils/__tests__/analytics.test.mjs plugins/norito-snippets-plugin/__tests__/watcher.test.mjs scripts/__tests__/portal-probe.test.mjs scripts/__tests__/link-checker.test.mjs scripts/__tests__/dns-cutover-plan.test.mjs scripts/__tests__/volunteer-brief-validator-lib.test.mjs scripts/__tests__/preview-feedback-log.test.mjs scripts/__tests__/preview-feedback-summary.test.mjs scripts/__tests__/preview-feedback-digest.test.mjs scripts/__tests__/preview-feedback-wave.test.mjs scripts/__tests__/docusaurus-config.test.mjs scripts/__tests__/monitor-publishing.test.mjs scripts/__tests__/check-openapi-signatures.test.mjs scripts/__tests__/openapi-signature.test.mjs scripts/__tests__/verify-openapi-versions.test.mjs scripts/__tests__/sync-i18n.test.mjs",
+    "test:widgets": "node --test src/utils/__tests__/tryItProxy.test.mjs src/utils/__tests__/deviceAuth.test.mjs src/utils/__tests__/analytics.test.mjs plugins/norito-snippets-plugin/__tests__/watcher.test.mjs scripts/__tests__/portal-probe.test.mjs scripts/__tests__/link-checker.test.mjs scripts/__tests__/dns-cutover-plan.test.mjs scripts/__tests__/volunteer-brief-validator-lib.test.mjs scripts/__tests__/preview-feedback-log.test.mjs scripts/__tests__/preview-feedback-summary.test.mjs scripts/__tests__/preview-feedback-digest.test.mjs scripts/__tests__/preview-feedback-wave.test.mjs scripts/__tests__/docusaurus-config.test.mjs scripts/__tests__/monitor-publishing.test.mjs scripts/__tests__/check-openapi-signatures.test.mjs scripts/__tests__/openapi-manifest-v2.test.mjs scripts/__tests__/openapi-signature.test.mjs scripts/__tests__/verify-openapi-versions.test.mjs scripts/__tests__/sync-i18n.test.mjs",
     "generate:volunteer-lint": "node scripts/volunteer-brief-validator.mjs",
     "generate:preview-summary": "node scripts/preview-feedback-summary.mjs"
   },
@@ -40,6 +40,7 @@
     "@docusaurus/preset-classic": "3.9.2",
     "@docusaurus/theme-classic": "3.9.2",
     "@docusaurus/theme-mermaid": "3.9.2",
+    "@noble/hashes": "1.4.0",
     "prism-react-renderer": "2.4.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",

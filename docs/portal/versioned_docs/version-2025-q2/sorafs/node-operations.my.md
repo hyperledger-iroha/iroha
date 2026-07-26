@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. base64 ကုဒ်ဖြင့် မန်နီးဖက်စ်ကို တင်ပြပါ-
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -141,7 +141,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   ````pin_fetch_roundtrip`၊ `pin_survives_restart`၊ `pin_quota_rejection` နှင့် `por_sampling_returns_verified_proofs` တို့ ပါဝင်ပါသည်။
 - ဒက်ရှ်ဘုတ်များသည် ခြေရာခံသင့်သည်-
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` နှင့် `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` နှင့် `torii_sorafs_storage_fetch_inflight`
   - `/v1/sorafs/capacity/state` မှတစ်ဆင့် PoR အောင်မြင်မှု/ကျရှုံးမှုကောင်တာများ ပေါ်လာသည်။
   - `sorafs_node_deal_publish_total{result=success|failure}` မှတစ်ဆင့် ဖြေရှင်းရန် ကြိုးစားမှုများ ထုတ်ဝေခြင်း။
 

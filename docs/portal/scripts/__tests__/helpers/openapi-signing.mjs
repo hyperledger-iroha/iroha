@@ -1,4 +1,14 @@
-import {createPrivateKey, createPublicKey, sign as signNode} from 'node:crypto';
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  sign as signNode,
+} from 'node:crypto';
+
+import {
+  computeOpenApiBlake3Hex,
+  encodeOpenApiManifestSigningPayload,
+} from '../../lib/openapi-manifest-v2.mjs';
 
 const ED25519_PRIVATE_KEY_DER_PREFIX = Buffer.from(
   '302e020100300506032b657004220420',
@@ -33,5 +43,63 @@ export function signPayload(payloadInput, {privateKeyHex = TEST_ED25519_PRIVATE_
   return {
     signatureHex: signature.toString('hex'),
     publicKeyHex,
+    privateKeyHex,
   };
+}
+
+export function buildOpenApiManifest({
+  artifactBytes,
+  path = 'torii.json',
+  generatedUnixMs = 1_700_000_000_000,
+  generatorCommit = 'ab'.repeat(20),
+  generatorDirty = false,
+  generatorSourceSha256Hex = generatorDirty ? 'cd'.repeat(32) : undefined,
+  sha256Hex,
+  blake3Hex,
+  privateKeyHex = TEST_ED25519_PRIVATE_KEY_HEX,
+  signed = true,
+} = {}) {
+  const bytes = Buffer.isBuffer(artifactBytes)
+    ? artifactBytes
+    : Buffer.from(artifactBytes, 'utf8');
+  const manifest = {
+    version: 2,
+    generated_unix_ms: generatedUnixMs,
+    generator_commit: generatorDirty ? null : generatorCommit,
+    generator_dirty: generatorDirty,
+    ...(generatorDirty
+      ? {generator_source_sha256_hex: generatorSourceSha256Hex}
+      : {}),
+    artifact: {
+      path,
+      bytes: bytes.length,
+      sha256_hex:
+        sha256Hex ?? createHash('sha256').update(bytes).digest('hex'),
+      blake3_hex: blake3Hex ?? computeOpenApiBlake3Hex(bytes),
+      signature: null,
+    },
+  };
+  if (signed) {
+    attachOpenApiManifestSignature(manifest, bytes, {privateKeyHex});
+  }
+  return manifest;
+}
+
+export function attachOpenApiManifestSignature(
+  manifest,
+  artifactBytes,
+  {privateKeyHex = TEST_ED25519_PRIVATE_KEY_HEX} = {},
+) {
+  manifest.artifact.signature = null;
+  const payload = encodeOpenApiManifestSigningPayload({
+    manifest,
+    artifactBytes,
+  });
+  const signature = signPayload(payload, {privateKeyHex});
+  manifest.artifact.signature = {
+    algorithm: 'ed25519',
+    public_key_hex: signature.publicKeyHex,
+    signature_hex: signature.signatureHex,
+  };
+  return signature;
 }

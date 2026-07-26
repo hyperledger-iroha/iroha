@@ -34419,9 +34419,9 @@ impl Kura {
 
     /// Repair Native AMX evidence after WSV commit and its Kura metadata join.
     ///
-    /// Unlike the pre-WSV publication path, startup repair requires and
-    /// revalidates the exact checkpoint and commit manifest in the same prune
-    /// critical section as finality, manifest proofs, and sidecar publication.
+    /// Startup repair requires and revalidates the exact checkpoint and commit
+    /// manifest in the same prune critical section as finality, manifest
+    /// proofs, and sidecar publication.
     pub(crate) fn repair_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,

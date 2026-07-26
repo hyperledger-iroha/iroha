@@ -74,7 +74,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     addr::SocketAddr,
-    numeric::{Numeric, Quantity},
+    numeric::{Numeric, Quantity, XorQuantity},
     unique_vec::UniqueVec,
 };
 use norito::{codec::Encode, streaming::EntropyMode};
@@ -8289,8 +8289,8 @@ pub struct SorafsPor {
     pub epoch_interval_secs: u64,
     /// Window granted to providers to submit proofs (seconds).
     pub response_window_secs: u64,
-    /// Filesystem directory used to persist governance DAG payloads.
-    pub governance_dag_dir: PathBuf,
+    /// Private filesystem directory for coordinator, drand, and VRF state.
+    pub state_dir: PathBuf,
     /// Pinned drand trust and transport configuration.
     pub drand: SorafsPorDrand,
     /// Durable authenticated provider VRF state path.
@@ -8313,7 +8313,7 @@ impl Default for SorafsPor {
             enabled: super::defaults::sorafs::por::ENABLED,
             epoch_interval_secs: super::defaults::sorafs::por::EPOCH_INTERVAL_SECS,
             response_window_secs: super::defaults::sorafs::por::RESPONSE_WINDOW_SECS,
-            governance_dag_dir: super::defaults::sorafs::por::governance_dir(),
+            state_dir: super::defaults::sorafs::por::state_dir(),
             drand: SorafsPorDrand::default(),
             vrf_state_path: super::defaults::sorafs::por::vrf_state_path(),
             vrf_submission_deadline_secs:
@@ -8388,14 +8388,362 @@ impl Default for SorafsPorDrand {
 }
 
 /// SoraFS appeal-finance settlement submitter configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SorafsAppealFinanceSettlement {
-    /// Runtime signer keypairs allowed to submit settlement transactions.
-    pub submitter_signers: Vec<KeyPair>,
+    /// Exact governed asset definition accepted by the appeal-finance APIs.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Exact ledger scale bound to the governed asset definition.
+    pub asset_scale: u32,
+    /// Governed inline appeal pricing policy.
+    pub pricing: SorafsAppealPricingPolicy,
+    /// Governed inline appeal settlement policy.
+    pub settlement: SorafsAppealSettlementPolicy,
+    /// Non-secret bindings for runtime-only HSM/KMS signer providers.
+    pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
     pub worker_scan_interval: Duration,
-    /// Maximum queue attempts for one unchanged worker settlement state.
+    /// Maximum signing/submission attempts for one semantic ledger operation.
     pub worker_max_retry_attempts: u32,
+    /// Maximum pending semantic operations retained durably.
+    pub worker_max_pending: usize,
+    /// Maximum finalized idempotency tombstones retained durably.
+    pub worker_max_completed: usize,
+    /// Maximum terminal dead letters retained durably.
+    pub worker_max_dead_letters: usize,
+    /// Maximum canonical checkpoint size.
+    pub worker_checkpoint_max_bytes: u64,
+}
+
+impl Default for SorafsAppealFinanceSettlement {
+    fn default() -> Self {
+        Self {
+            asset_definition_id: defaults::torii::sorafs_appeal_finance::asset_definition_id(),
+            asset_scale: defaults::torii::sorafs_appeal_finance::ASSET_SCALE,
+            pricing: SorafsAppealPricingPolicy::default(),
+            settlement: SorafsAppealSettlementPolicy::default(),
+            submitter_signers: Vec::new(),
+            worker_scan_interval: Duration::from_millis(
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
+            ),
+            worker_max_retry_attempts:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS,
+            worker_max_pending:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_PENDING,
+            worker_max_completed:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_COMPLETED,
+            worker_max_dead_letters:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS,
+            worker_checkpoint_max_bytes:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+/// Canonical inline appeal pricing policy carried by the validated config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPricingPolicy {
+    /// Governed policy version.
+    pub version: String,
+    /// Quote validity window in seconds.
+    pub quote_ttl_secs: u64,
+    /// Default moderation panel size used by pricing.
+    pub default_panel_size: u32,
+    /// Urgency multipliers.
+    pub urgency_multipliers: SorafsAppealUrgencyMultipliers,
+    /// Complete first-release appeal class inventory.
+    pub classes: SorafsAppealPricingClasses,
+}
+
+impl Default for SorafsAppealPricingPolicy {
+    fn default() -> Self {
+        Self {
+            version: defaults::torii::sorafs_appeal_finance::BASELINE_POLICY_VERSION.to_owned(),
+            quote_ttl_secs: defaults::torii::sorafs_appeal_finance::PRICING_QUOTE_TTL_SECS,
+            default_panel_size: defaults::torii::sorafs_appeal_finance::DEFAULT_PANEL_SIZE,
+            urgency_multipliers: SorafsAppealUrgencyMultipliers::default(),
+            classes: SorafsAppealPricingClasses::default(),
+        }
+    }
+}
+
+/// Canonical urgency multipliers for appeal pricing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealUrgencyMultipliers {
+    /// Multiplier applied to normal-urgency appeals.
+    pub normal: Numeric,
+    /// Multiplier applied to high-urgency appeals.
+    pub high: Numeric,
+}
+
+impl Default for SorafsAppealUrgencyMultipliers {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            normal: policy::numeric(policy::PRICING_URGENCY_NORMAL_MULTIPLIER),
+            high: policy::numeric(policy::PRICING_URGENCY_HIGH_MULTIPLIER),
+        }
+    }
+}
+
+/// Complete, closed first-release appeal pricing class inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPricingClasses {
+    /// Content moderation appeals.
+    pub content: SorafsAppealPricingClassPolicy,
+    /// Access-policy appeals.
+    pub access: SorafsAppealPricingClassPolicy,
+    /// Fraud appeals.
+    pub fraud: SorafsAppealPricingClassPolicy,
+    /// Other governed appeals.
+    pub other: SorafsAppealPricingClassPolicy,
+}
+
+impl Default for SorafsAppealPricingClasses {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            content: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_CONTENT_BASE_RATE_XOR,
+                policy::PRICING_CONTENT_BACKLOG_TARGET,
+                policy::PRICING_CONTENT_BACKLOG_CAP,
+                policy::PRICING_CONTENT_SIZE_DIVISOR_MB,
+                policy::PRICING_CONTENT_SIZE_CAP,
+                policy::PRICING_CONTENT_MIN_DEPOSIT_XOR,
+                policy::PRICING_CONTENT_MAX_DEPOSIT_XOR,
+            ),
+            access: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_ACCESS_BASE_RATE_XOR,
+                policy::PRICING_ACCESS_BACKLOG_TARGET,
+                policy::PRICING_ACCESS_BACKLOG_CAP,
+                policy::PRICING_ACCESS_SIZE_DIVISOR_MB,
+                policy::PRICING_ACCESS_SIZE_CAP,
+                policy::PRICING_ACCESS_MIN_DEPOSIT_XOR,
+                policy::PRICING_ACCESS_MAX_DEPOSIT_XOR,
+            ),
+            fraud: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_FRAUD_BASE_RATE_XOR,
+                policy::PRICING_FRAUD_BACKLOG_TARGET,
+                policy::PRICING_FRAUD_BACKLOG_CAP,
+                policy::PRICING_FRAUD_SIZE_DIVISOR_MB,
+                policy::PRICING_FRAUD_SIZE_CAP,
+                policy::PRICING_FRAUD_MIN_DEPOSIT_XOR,
+                policy::PRICING_FRAUD_MAX_DEPOSIT_XOR,
+            ),
+            other: SorafsAppealPricingClassPolicy::baseline(
+                policy::PRICING_OTHER_BASE_RATE_XOR,
+                policy::PRICING_OTHER_BACKLOG_TARGET,
+                policy::PRICING_OTHER_BACKLOG_CAP,
+                policy::PRICING_OTHER_SIZE_DIVISOR_MB,
+                policy::PRICING_OTHER_SIZE_CAP,
+                policy::PRICING_OTHER_MIN_DEPOSIT_XOR,
+                policy::PRICING_OTHER_MAX_DEPOSIT_XOR,
+            ),
+        }
+    }
+}
+
+/// Canonical pricing parameters for one appeal class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPricingClassPolicy {
+    /// Base XOR rate.
+    pub base_rate_xor: XorQuantity,
+    /// Backlog at which the backlog multiplier reaches one.
+    pub backlog_target: u32,
+    /// Additional backlog multiplier cap.
+    pub backlog_cap: Numeric,
+    /// Evidence-size divisor in MiB.
+    pub size_divisor_mb: Numeric,
+    /// Additional evidence-size multiplier cap.
+    pub size_cap: Numeric,
+    /// Minimum admitted appeal deposit.
+    pub min_deposit_xor: XorQuantity,
+    /// Maximum admitted appeal deposit.
+    pub max_deposit_xor: XorQuantity,
+    /// Governed class-level surge multiplier.
+    pub surge_multiplier: Numeric,
+}
+
+impl SorafsAppealPricingClassPolicy {
+    fn baseline(
+        base_rate_xor: &str,
+        backlog_target: u32,
+        backlog_cap: &str,
+        size_divisor_mb: &str,
+        size_cap: &str,
+        min_deposit_xor: &str,
+        max_deposit_xor: &str,
+    ) -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            base_rate_xor: policy::xor_quantity(base_rate_xor),
+            backlog_target,
+            backlog_cap: policy::numeric(backlog_cap),
+            size_divisor_mb: policy::numeric(size_divisor_mb),
+            size_cap: policy::numeric(size_cap),
+            min_deposit_xor: policy::xor_quantity(min_deposit_xor),
+            max_deposit_xor: policy::xor_quantity(max_deposit_xor),
+            surge_multiplier: policy::numeric(policy::PRICING_SURGE_MULTIPLIER),
+        }
+    }
+}
+
+/// Canonical inline appeal settlement policy carried by the validated config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealSettlementPolicy {
+    /// Governed policy version.
+    pub version: String,
+    /// Default moderation panel size used by settlement.
+    pub default_panel_size: u32,
+    /// Juror reward schedule.
+    pub panel_rewards: SorafsAppealPanelRewards,
+    /// Complete first-release settlement rule inventory.
+    pub rules: SorafsAppealSettlementRules,
+}
+
+impl Default for SorafsAppealSettlementPolicy {
+    fn default() -> Self {
+        Self {
+            version: defaults::torii::sorafs_appeal_finance::BASELINE_POLICY_VERSION.to_owned(),
+            default_panel_size: defaults::torii::sorafs_appeal_finance::DEFAULT_PANEL_SIZE,
+            panel_rewards: SorafsAppealPanelRewards::default(),
+            rules: SorafsAppealSettlementRules::default(),
+        }
+    }
+}
+
+/// Canonical appeal-panel reward schedule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealPanelRewards {
+    /// XOR stipend paid to each attending juror.
+    pub stipend_per_juror_xor: XorQuantity,
+    /// XOR bonus pool paid once per case.
+    pub case_bonus_xor: XorQuantity,
+}
+
+impl Default for SorafsAppealPanelRewards {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            stipend_per_juror_xor: policy::xor_quantity(policy::SETTLEMENT_STIPEND_PER_JUROR_XOR),
+            case_bonus_xor: policy::xor_quantity(policy::SETTLEMENT_CASE_BONUS_XOR),
+        }
+    }
+}
+
+/// Complete first-release appeal settlement rule inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealSettlementRules {
+    /// Rules for terminal moderation decisions.
+    pub decisions: SorafsAppealDecisionRules,
+    /// Rule applied before panel activation.
+    pub withdrawn_before_panel: SorafsAppealSettlementRule,
+    /// Rule applied after panel activation.
+    pub withdrawn_after_panel: SorafsAppealSettlementRule,
+    /// Rule applied to frivolous appeals.
+    pub frivolous: SorafsAppealSettlementRule,
+    /// Rule applied while an appeal remains escalated.
+    pub escalated: SorafsAppealSettlementRule,
+}
+
+impl Default for SorafsAppealSettlementRules {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            decisions: SorafsAppealDecisionRules::default(),
+            withdrawn_before_panel: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_WITHDRAWN_BEFORE_PANEL_REFUND_RATE,
+                policy::SETTLEMENT_WITHDRAWN_BEFORE_PANEL_TREASURY_RATE,
+            ),
+            withdrawn_after_panel: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_WITHDRAWN_AFTER_PANEL_REFUND_RATE,
+                policy::SETTLEMENT_WITHDRAWN_AFTER_PANEL_TREASURY_RATE,
+            ),
+            frivolous: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_FRIVOLOUS_REFUND_RATE,
+                policy::SETTLEMENT_FRIVOLOUS_TREASURY_RATE,
+            ),
+            escalated: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_ESCALATED_REFUND_RATE,
+                policy::SETTLEMENT_ESCALATED_TREASURY_RATE,
+            ),
+        }
+    }
+}
+
+/// Complete first-release decision settlement rule inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealDecisionRules {
+    /// Rule applied when the original decision is upheld.
+    pub uphold: SorafsAppealSettlementRule,
+    /// Rule applied when the original decision is overturned.
+    pub overturn: SorafsAppealSettlementRule,
+    /// Rule applied when the original decision is modified.
+    pub modify: SorafsAppealSettlementRule,
+}
+
+impl Default for SorafsAppealDecisionRules {
+    fn default() -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            uphold: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_UPHOLD_REFUND_RATE,
+                policy::SETTLEMENT_UPHOLD_TREASURY_RATE,
+            ),
+            overturn: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_OVERTURN_REFUND_RATE,
+                policy::SETTLEMENT_OVERTURN_TREASURY_RATE,
+            ),
+            modify: SorafsAppealSettlementRule::baseline(
+                policy::SETTLEMENT_MODIFY_REFUND_RATE,
+                policy::SETTLEMENT_MODIFY_TREASURY_RATE,
+            ),
+        }
+    }
+}
+
+/// Canonical refund/treasury fractions for one appeal outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealSettlementRule {
+    /// Fraction of the deposit returned to the appellant.
+    pub refund_rate: Numeric,
+    /// Fraction of the deposit transferred to treasury.
+    pub treasury_rate: Numeric,
+}
+
+impl SorafsAppealSettlementRule {
+    fn baseline(refund_rate: &str, treasury_rate: &str) -> Self {
+        use defaults::torii::sorafs_appeal_finance as policy;
+
+        Self {
+            refund_rate: policy::numeric(refund_rate),
+            treasury_rate: policy::numeric(treasury_rate),
+        }
+    }
+}
+
+/// Public identity of one appeal-finance runtime signer provider.
+///
+/// The opaque handle is resolved only through [`crate::parameters::actual::Root`]
+/// runtime dependencies. No private key or provider credential is accepted by
+/// configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealFinanceSignerBinding {
+    /// Stable opaque PKCS#11/HSM/KMS provider handle.
+    pub handle: String,
+    /// Exact transaction authority controlled by this signer.
+    pub authority: AccountId,
+    /// Exact Ed25519 public key expected from the runtime provider.
+    pub public_key: PublicKey,
+    /// First finalized block height at which this binding is active.
+    pub valid_from_block_height: u64,
+    /// First finalized block height at which this binding is revoked.
+    pub revoked_at_block_height: Option<u64>,
 }
 
 /// Embedded SoraFS storage configuration (Torii-owned).
@@ -8403,6 +8751,8 @@ pub struct SorafsAppealFinanceSettlement {
 pub struct SorafsStorage {
     /// Whether the storage worker is enabled.
     pub enabled: bool,
+    /// Exact on-chain provider identity projected into this storage worker.
+    pub provider_id: Option<ProviderId>,
     /// Root directory for chunk data, manifests, and telemetry artefacts.
     pub data_dir: PathBuf,
     /// Maximum on-disk footprint allocated to stored chunks.
@@ -8429,6 +8779,27 @@ pub struct SorafsStorage {
     /// Finalized-chain moderation orchestration policy. Transaction signing,
     /// finalized reads, and terminal sinks remain runtime-injected.
     pub moderation_orchestrator: Option<SorafsModerationOrchestrator>,
+    /// Production case-bound SFM-4b3 evidence-viewer policy. Finalized reads,
+    /// WebAuthn, rotating grants, erasure, and receipt signing remain
+    /// runtime-injected.
+    pub evidence_viewer: Option<SorafsEvidenceViewer>,
+    /// Finalized-ledger reputation projection and external publication policy.
+    ///
+    /// Finalized queries, threshold signing, Governance DAG publication, and
+    /// native journal transaction submission remain runtime-injected.
+    pub reputation_runtime: Option<SorafsReputationRuntime>,
+    /// Finalized-ledger billing projection, statement delivery, and
+    /// hedge-intent generation policy.
+    ///
+    /// Ledger queries, proof verification, HSM signing, immutable publication,
+    /// acknowledgement authority, and sealed epoch storage remain
+    /// runtime-injected.
+    pub hedging_billing_runtime: Option<SorafsHedgingBillingRuntime>,
+    /// Supervised finalized-ledger provider-ingest policy.
+    ///
+    /// Authenticated source fetching and completion signing are resolved from
+    /// runtime-only providers by their configured public identities.
+    pub provider_ingest_runtime: Option<SorafsProviderIngestRuntime>,
     /// Durable admission-bound PDP provider protocol policy.
     pub pdp_provider: SorafsPdpProviderPolicy,
     /// Retention and checkpoint bounds for auxiliary embedded runtime state.
@@ -8447,9 +8818,7 @@ pub struct SorafsStorage {
     pub reserve_worker: SorafsReserveWorker,
     /// Canonical Norito trust-policy file required for reputation snapshot admission.
     pub reputation_trust_policy_path: Option<PathBuf>,
-    /// Canonical Norito trust-policy file required for governed pricing admission.
-    pub pricing_trust_policy_path: Option<PathBuf>,
-    /// Canonical Norito trust-policy file required for signed hedging-feed admission.
+    /// Canonical Norito trust-policy file reused by the committed billing runtime.
     pub hedging_feed_trust_policy_path: Option<PathBuf>,
     /// Local SFM-4c privacy aggregate publication scheduler.
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
@@ -8459,12 +8828,12 @@ pub struct SorafsStorage {
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
     pub governance_dag_publisher_peer_id: Option<String>,
-    /// Optional Ed25519 signing-key path used for signed Governance DAG blocks.
-    pub governance_dag_signing_key_path: Option<PathBuf>,
+    /// Opaque runtime HSM/KMS signer handle used for signed Governance DAG blocks.
+    pub governance_dag_signer_handle: Option<String>,
+    /// Canonical lowercase Ed25519 public key bound to the runtime signer.
+    pub governance_dag_publisher_public_key_hex: Option<String>,
     /// Always-on Governance DAG public publisher and mirror service.
     pub governance_dag_service: SorafsGovernanceDagService,
-    /// Authentication and rate limits for manifest pin submissions.
-    pub pin: SorafsStoragePin,
 }
 
 /// Always-on Governance DAG public publisher and bounded mirror configuration.
@@ -8484,12 +8853,12 @@ pub struct SorafsGovernanceDagService {
     pub ipns_name: Option<String>,
     /// IPFS keystore alias passed to `name/publish` by `ipns` mode.
     pub ipns_key_name: Option<String>,
-    /// Runtime-only bearer-token file for the IPFS API.
-    pub ipfs_bearer_token_path: Option<PathBuf>,
-    /// Runtime-only bearer-token file for the signed-head endpoint.
-    pub head_bearer_token_path: Option<PathBuf>,
-    /// Runtime-only 32-byte key authenticating checkpoints and mirror indexes.
-    pub checkpoint_key_path: Option<PathBuf>,
+    /// Opaque runtime authenticator handle for the IPFS/Kubo API.
+    pub ipfs_authenticator_handle: Option<String>,
+    /// Opaque runtime authenticator handle for the signed-head endpoint.
+    pub head_authenticator_handle: Option<String>,
+    /// Opaque runtime sealed-checkpoint store handle.
+    pub checkpoint_store_handle: Option<String>,
     /// Canonical lowercase Ed25519 public key expected on every block, node, and head.
     pub publisher_public_key_hex: Option<String>,
     /// Filesystem feed reconciliation interval.
@@ -8545,6 +8914,33 @@ impl SorafsGovernanceDagServiceView {
     /// or its conditional service requirements are invalid.
     pub fn from_toml_source(mut src: TomlSource) -> Result<Self, FromTomlSourceError> {
         let root = src.table_mut();
+        if let Some(storage) = root
+            .get("sorafs")
+            .and_then(|value| value.as_table())
+            .and_then(|sorafs| sorafs.get("storage"))
+            .and_then(|value| value.as_table())
+        {
+            if storage.contains_key("governance_dag_signing_key_path") {
+                return Err(Report::new(FromTomlSourceError)
+                    .attach("sorafs.storage.governance_dag_signing_key_path is forbidden in V1"));
+            }
+            if let Some(service) = storage
+                .get("governance_dag_service")
+                .and_then(|value| value.as_table())
+            {
+                for field in [
+                    "ipfs_bearer_token_path",
+                    "head_bearer_token_path",
+                    "checkpoint_key_path",
+                ] {
+                    if service.contains_key(field) {
+                        return Err(Report::new(FromTomlSourceError).attach(format!(
+                            "sorafs.storage.governance_dag_service.{field} is forbidden in V1"
+                        )));
+                    }
+                }
+            }
+        }
         root.retain(|key, _| key == "sorafs");
         if let Some(sorafs) = root
             .get_mut("sorafs")
@@ -8682,6 +9078,201 @@ pub struct SorafsModerationOrchestrator {
     pub maintenance_batch_limit: usize,
 }
 
+/// Non-secret production policy for the SFM-4b3 evidence viewer.
+#[derive(Debug, Clone)]
+pub struct SorafsEvidenceViewer {
+    /// Private canonical checkpoint path.
+    pub checkpoint_path: PathBuf,
+    /// Maximum canonical checkpoint size.
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum session lifetime.
+    pub session_ttl: Duration,
+    /// Rotating grant lifetime.
+    pub grant_ttl: Duration,
+    /// WebAuthn challenge lifetime.
+    pub challenge_ttl: Duration,
+    /// Maximum authenticated plaintext range.
+    pub max_range_bytes: Bytes<u64>,
+    /// Maximum retained challenges.
+    pub max_challenges: usize,
+    /// Maximum retained sessions.
+    pub max_sessions: usize,
+    /// Maximum retained signed receipts.
+    pub max_receipts: usize,
+    /// Maximum retained idempotency tombstones.
+    pub max_idempotency_records: usize,
+    /// Retention interval after the last session expires.
+    pub retention_after_expiry: Duration,
+    /// WebAuthn relying-party identifier.
+    pub webauthn_rp_id: String,
+    /// Exact HTTPS origins accepted by WebAuthn.
+    pub webauthn_allowed_origins: Vec<String>,
+    /// Identity-pinned WebAuthn runtime handle.
+    pub webauthn_handle: String,
+    /// Identity-pinned rotating-grant runtime handle.
+    pub grant_handle: String,
+    /// Identity-pinned irreversible-erasure runtime handle.
+    pub erasure_handle: String,
+    /// Identity-pinned Ed25519 receipt signer handle.
+    pub receipt_signer_handle: String,
+    /// Exact receipt-verification key.
+    pub receipt_signer_public_key: [u8; 32],
+}
+
+/// Non-secret production policy for the committed SoraFS reputation runtime.
+#[derive(Debug, Clone)]
+pub struct SorafsReputationRuntime {
+    /// Private directory containing canonical projector/publication checkpoints.
+    pub state_dir: PathBuf,
+    /// Inclusive first finalized block in the governed scoring window.
+    pub window_start_height: u64,
+    /// Inclusive final block and mandatory signing-material target.
+    pub window_end_height: u64,
+    /// Identity-pinned finalized-query adapter handle.
+    pub finalized_query_handle: String,
+    /// Identity-pinned runtime-only journal transaction submitter handle.
+    pub journal_transaction_submitter_handle: String,
+    /// Identity-pinned external threshold-signer adapter handle.
+    pub threshold_signer_handle: String,
+    /// Identity-pinned Governance DAG publication/readback adapter handle.
+    pub governance_dag_handle: String,
+    /// Exact governed Governance DAG publisher peer identity.
+    pub governance_publisher_peer_id: Vec<u8>,
+    /// Exact governed Ed25519 Governance DAG publisher public key.
+    pub governance_publisher_public_key: [u8; 32],
+    /// Exact-anchor reconciliation cadence.
+    pub poll_interval: Duration,
+    /// Maximum items requested from one native finalized query page.
+    pub page_items: u32,
+    /// Maximum native pages accepted in one coherent ingest batch.
+    pub max_pages_per_batch: u32,
+    /// Maximum provider accumulators retained.
+    pub max_providers: u32,
+    /// Maximum typed events staged in one atomic projector batch.
+    pub max_pending_events: u32,
+    /// Maximum exact-replay receipts retained.
+    pub max_replay_receipts: u32,
+    /// Maximum external-delivery failures retained before dead-lettering.
+    pub max_material_delivery_failures: u32,
+    /// Maximum canonical projector checkpoint size.
+    pub ingest_checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical publication checkpoint size.
+    pub publication_checkpoint_max_bytes: Bytes<u64>,
+    /// Governed PoR-success weight.
+    pub por_success_bps: u16,
+    /// Governed PDP-success weight.
+    pub pdp_success_bps: u16,
+    /// Governed PoTR-success weight.
+    pub potr_success_bps: u16,
+    /// Governed latency-health weight.
+    pub latency_bps: u16,
+    /// Governed upheld-dispute penalty weight.
+    pub dispute_bps: u16,
+    /// Governed stream-token violation penalty weight.
+    pub token_violation_bps: u16,
+    /// Governed unresolved-repair penalty weight.
+    pub repair_breach_bps: u16,
+}
+
+/// Non-secret production policy for the supervised SoraFS hedging/billing runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsHedgingBillingRuntime {
+    /// Private directory containing the canonical projector checkpoint.
+    pub state_dir: PathBuf,
+    /// Absolute path to the canonical public deterministic service policy.
+    pub service_policy_path: PathBuf,
+    /// Reviewed digest returned by the canonical service policy.
+    pub service_policy_digest: [u8; 32],
+    /// Identity-pinned finalized billing query provider handle.
+    pub finalized_query_handle: String,
+    /// Identity-pinned consensus journal verifier handle.
+    pub journal_verifier_handle: String,
+    /// Identity-pinned statement HSM/KMS provider handle.
+    pub statement_signer_handle: String,
+    /// Identity-pinned immutable statement publisher handle.
+    pub statement_publisher_handle: String,
+    /// Identity-pinned acknowledgement authority handle.
+    pub acknowledgement_authority_handle: String,
+    /// Identity-pinned sealed monotonic epoch-witness store handle.
+    pub epoch_witness_store_handle: String,
+    /// Finalized reconciliation and delivery cadence.
+    pub poll_interval: Duration,
+    /// Maximum finalized journal pages consumed in one worker tick.
+    pub max_pages_per_tick: u32,
+    /// Maximum finalized period closes consumed in one worker tick.
+    pub max_period_closes_per_tick: u32,
+    /// Maximum signer/publication/reconciliation operations in one tick.
+    pub max_delivery_operations_per_tick: u32,
+    /// Maximum admitted finalized-head lag before readiness fails closed.
+    pub max_finalized_lag_blocks: u64,
+}
+
+/// Durable completion-outbox policy for supervised SoraFS provider ingest.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsProviderIngestOutbox {
+    /// Maximum non-terminal ingest jobs. Active work is never pruned.
+    pub max_active_entries: usize,
+    /// Maximum terminal tombstones retained for replay safety.
+    pub max_terminal_entries: usize,
+    /// Maximum failures or completion-delivery attempts.
+    pub max_attempts: u32,
+    /// Maximum canonical checkpoint size.
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Source-claim lease duration in milliseconds.
+    pub source_lease_ttl_ms: u64,
+    /// Initial retry delay in milliseconds.
+    pub retry_base_delay_ms: u64,
+    /// Maximum retry delay in milliseconds.
+    pub retry_max_delay_ms: u64,
+    /// Maximum finalized-block age of a terminal tombstone.
+    pub terminal_retention_blocks: u64,
+    /// Maximum canonical size of one signed completion transaction.
+    pub max_signed_transaction_bytes: Bytes<u64>,
+    /// Maximum payload-free rows returned by one status page.
+    pub max_status_page_size: usize,
+}
+
+/// Non-secret production policy for supervised SoraFS provider ingest.
+///
+/// The opaque handles identify runtime-registered providers. Credentials,
+/// bearer tokens, endpoint secrets, and signer material are never represented
+/// in configuration.
+#[derive(Debug, Clone)]
+pub struct SorafsProviderIngestRuntime {
+    /// Identity-pinned authenticated source-fetch provider handle.
+    pub authenticated_source_fetch_handle: String,
+    /// Identity-pinned completion HSM/KMS signer-resolver handle.
+    pub completion_signer_resolver_handle: String,
+    /// Delay between finalized assignment scans, in milliseconds.
+    pub scan_interval_ms: u64,
+    /// Maximum finalized assignment rows requested in one page.
+    pub max_page_rows: usize,
+    /// Maximum finalized pages reconciled in one tick.
+    pub max_pages_per_tick: usize,
+    /// Maximum source jobs performed in one tick.
+    pub max_source_jobs_per_tick: usize,
+    /// Maximum governed source providers passed to one authenticated fetch.
+    pub max_source_providers: usize,
+    /// Timeout for authenticated source fetch, verification, and storage.
+    pub source_operation_timeout_ms: u64,
+    /// Durable source-lease renewal cadence.
+    pub source_lease_renew_interval_ms: u64,
+    /// Timeout for completion payload construction and HSM/KMS signing.
+    pub signer_timeout_ms: u64,
+    /// Timeout for transaction preflight, submission, and observation.
+    pub ingress_timeout_ms: u64,
+    /// Time-to-live assigned to one completion transaction.
+    pub completion_transaction_ttl_ms: u64,
+    /// Maximum rows retained by one immutable finalized snapshot.
+    pub max_snapshot_rows: usize,
+    /// Maximum canonical bytes retained by one immutable finalized snapshot.
+    pub max_snapshot_bytes: Bytes<u64>,
+    /// Maximum authenticated finalized-head lag admitted by readiness.
+    pub max_finalized_lag_blocks: u64,
+    /// Durable payload-free completion-outbox policy.
+    pub outbox: SorafsProviderIngestOutbox,
+}
+
 /// Operational policy for the durable native orderbook transaction worker.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsOrderbookWorker {
@@ -8797,25 +9388,11 @@ pub struct SorafsEvidenceViewerAuditSchedule {
     pub publish_delay_seconds: u64,
 }
 
-/// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
-#[derive(Debug, Clone)]
-pub struct SorafsStoragePin {
-    /// Whether a bearer token is required to submit a pin request.
-    pub require_token: bool,
-    /// Static allow-list of bearer tokens accepted by the gateway.
-    pub tokens: BTreeSet<String>,
-    /// Optional CIDR allow-list limiting clients that may submit pin requests.
-    pub allow_cidrs: Vec<String>,
-    /// Per-client rate limits applied to pin submissions.
-    pub rate_limit: SorafsGatewayRateLimit,
-}
-
 impl Default for SorafsStorage {
     fn default() -> Self {
-        let governance_dag_signing_key_path =
-            defaults::sorafs::storage::governance_signing_key_path();
         Self {
             enabled: defaults::sorafs::storage::ENABLED,
+            provider_id: None,
             data_dir: defaults::sorafs::storage::data_dir(),
             max_capacity_bytes: defaults::sorafs::storage::MAX_CAPACITY_BYTES,
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
@@ -8828,6 +9405,10 @@ impl Default for SorafsStorage {
             moderation_screening_authority_bundle_digest: None,
             pop_credentials: None,
             moderation_orchestrator: None,
+            evidence_viewer: None,
+            reputation_runtime: None,
+            hedging_billing_runtime: None,
+            provider_ingest_runtime: None,
             pdp_provider: SorafsPdpProviderPolicy::default(),
             runtime: SorafsRuntimeRetention::default(),
             alias: defaults::sorafs::storage::alias(),
@@ -8837,16 +9418,15 @@ impl Default for SorafsStorage {
             orderbook_worker: SorafsOrderbookWorker::default(),
             reserve_worker: SorafsReserveWorker::default(),
             reputation_trust_policy_path: None,
-            pricing_trust_policy_path: None,
             hedging_feed_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
-            governance_dag_signing_key_path,
+            governance_dag_signer_handle: None,
+            governance_dag_publisher_public_key_hex: None,
             governance_dag_service: SorafsGovernanceDagService::default(),
-            pin: SorafsStoragePin::default(),
         }
     }
 }
@@ -8863,9 +9443,9 @@ impl Default for SorafsGovernanceDagService {
             signed_head_url: None,
             ipns_name: None,
             ipns_key_name: None,
-            ipfs_bearer_token_path: None,
-            head_bearer_token_path: None,
-            checkpoint_key_path: None,
+            ipfs_authenticator_handle: None,
+            head_authenticator_handle: None,
+            checkpoint_store_handle: None,
             publisher_public_key_hex: None,
             poll_interval: Duration::from_secs(service::POLL_INTERVAL_SECS),
             connect_timeout: Duration::from_millis(service::CONNECT_TIMEOUT_MS),
@@ -9000,17 +9580,6 @@ impl Default for SorafsEvidenceViewerAuditSchedule {
     }
 }
 
-impl Default for SorafsStoragePin {
-    fn default() -> Self {
-        Self {
-            require_token: false,
-            tokens: BTreeSet::new(),
-            allow_cidrs: Vec::new(),
-            rate_limit: SorafsGatewayRateLimit::disabled(),
-        }
-    }
-}
-
 /// Under-delivery penalty policy enforced for SoraFS providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SorafsPenaltyPolicy {
@@ -9123,8 +9692,10 @@ pub struct SorafsMeteringSmoothing {
 pub struct SorafsTokenConfig {
     /// Enable stream-token issuance.
     pub enabled: bool,
-    /// Filesystem path to the Ed25519 signing key.
-    pub signing_key_path: Option<PathBuf>,
+    /// Opaque runtime-only HSM/KMS signer handle.
+    pub signer_handle: Option<String>,
+    /// Exact Ed25519 public key bound to the runtime signer.
+    pub signer_public_key: Option<[u8; 32]>,
     /// Public-key version advertised in issued tokens.
     pub key_version: u32,
     /// Default TTL applied to tokens (seconds).
@@ -9141,7 +9712,8 @@ impl Default for SorafsTokenConfig {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
-            signing_key_path: defaults::sorafs::storage::tokens::signing_key_path(),
+            signer_handle: None,
+            signer_public_key: None,
             key_version: defaults::sorafs::storage::tokens::KEY_VERSION,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
@@ -9177,12 +9749,8 @@ pub struct SorafsQuota {
     pub capacity_declaration: SorafsQuotaWindow,
     /// Quota applied to capacity telemetry reports.
     pub capacity_telemetry: SorafsQuotaWindow,
-    /// Quota applied to deal telemetry submissions.
-    pub deal_telemetry: SorafsQuotaWindow,
     /// Quota applied to capacity disputes raised against providers.
     pub capacity_dispute: SorafsQuotaWindow,
-    /// Quota applied to manifest pin submissions.
-    pub storage_pin: SorafsQuotaWindow,
     /// Quota applied to proof-of-retrievability submissions.
     pub por_submission: SorafsQuotaWindow,
 }
@@ -9200,22 +9768,10 @@ impl Default for SorafsQuota {
                     .and_then(NonZeroU32::new),
                 window: Duration::from_secs(defaults::torii::SORAFS_QUOTA_TELEMETRY_WINDOW_SECS),
             },
-            deal_telemetry: SorafsQuotaWindow {
-                max_events: defaults::torii::SORAFS_QUOTA_DEAL_TELEMETRY_MAX_EVENTS
-                    .and_then(NonZeroU32::new),
-                window: Duration::from_secs(
-                    defaults::torii::SORAFS_QUOTA_DEAL_TELEMETRY_WINDOW_SECS,
-                ),
-            },
             capacity_dispute: SorafsQuotaWindow {
                 max_events: defaults::torii::SORAFS_QUOTA_DISPUTE_MAX_EVENTS
                     .and_then(NonZeroU32::new),
                 window: Duration::from_secs(defaults::torii::SORAFS_QUOTA_DISPUTE_WINDOW_SECS),
-            },
-            storage_pin: SorafsQuotaWindow {
-                max_events: defaults::torii::SORAFS_QUOTA_STORAGE_PIN_MAX_EVENTS
-                    .and_then(NonZeroU32::new),
-                window: Duration::from_secs(defaults::torii::SORAFS_QUOTA_STORAGE_PIN_WINDOW_SECS),
             },
             por_submission: SorafsQuotaWindow {
                 max_events: defaults::torii::SORAFS_QUOTA_POR_MAX_EVENTS.and_then(NonZeroU32::new),
@@ -9499,18 +10055,6 @@ impl Default for SorafsGatewayRateLimit {
                 .and_then(NonZeroU32::new),
             window: defaults::sorafs::gateway::rate_limit::WINDOW,
             ban: defaults::sorafs::gateway::rate_limit::BAN,
-        }
-    }
-}
-
-impl SorafsGatewayRateLimit {
-    /// Convenience helper returning a disabled rate limit.
-    #[must_use]
-    pub const fn disabled() -> Self {
-        Self {
-            max_requests: None,
-            window: Duration::from_secs(1),
-            ban: None,
         }
     }
 }

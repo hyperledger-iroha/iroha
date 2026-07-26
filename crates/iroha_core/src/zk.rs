@@ -412,14 +412,6 @@ pub(crate) fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
     hash_domain_separated_payload(b"iroha:zk:v1:vk", backend, bytes)
 }
 
-/// Returns `true` when `backend` names an exact cataloged privacy protocol
-/// family whose production verifier is not yet wired and audited.
-#[inline]
-#[must_use]
-pub fn is_pending_production_backend_label(backend: &str) -> bool {
-    iroha_data_model::zk::BackendTag::is_pending_production_backend_label(backend)
-}
-
 /// Returns `true` when `backend` denotes an explicitly admitted native
 /// STARK/FRI verifier profile.
 #[inline]
@@ -644,7 +636,6 @@ pub fn is_ivm_execution_backend(backend: &str) -> bool {
 #[must_use]
 pub fn production_verify_backend_tag(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
     if !production_verify_backend_label_is_portable(backend)
-        || is_pending_production_backend_label(backend)
         || is_production_claim_backend_label(backend)
         || is_trusted_setup_backend_label(backend)
         || is_developer_only_backend_label(backend)
@@ -6320,9 +6311,6 @@ pub fn preverify_with_budget(
     if proof.backend.is_empty() {
         return PreverifyResult::UnsupportedBackend;
     }
-    if is_pending_production_backend_label(proof.backend.as_str()) {
-        return PreverifyResult::UnsupportedBackend;
-    }
     if is_production_claim_backend_label(proof.backend.as_str()) {
         return PreverifyResult::UnsupportedBackend;
     }
@@ -6868,9 +6856,8 @@ mod debug_backend_tests {
 mod stark_backend_tag_tests {
     use super::{
         ZK_BACKEND_STARK_FRI_V1, is_developer_only_backend_label, is_ivm_execution_backend,
-        is_pending_production_backend_label, is_production_claim_backend_label,
-        is_production_verify_backend_label, is_stark_fri_v1_backend,
-        is_trusted_setup_backend_label, production_verify_backend_tag,
+        is_production_claim_backend_label, is_production_verify_backend_label,
+        is_stark_fri_v1_backend, is_trusted_setup_backend_label, production_verify_backend_tag,
         stark_open_verify_circuit_id_matches_backend, verify_backend,
     };
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
@@ -6949,30 +6936,6 @@ mod stark_backend_tag_tests {
         assert!(!is_stark_fri_v1_backend("stark/fri/post-quantum-masp"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
-    }
-
-    #[test]
-    fn pending_production_classifier_catches_prefix_shaped_labels() {
-        for backend in [
-            "halo2/ipa/orchard",
-            "stark/fri/miden",
-            "stark/fri/pq-masp-stark-fri",
-            "groth16/bls12-377",
-            "halo2/ipa/penumbra",
-            "halo2/ipa/masp",
-            "halo2/ipa/monero",
-            "halo2/ipa/curve-tree",
-            "anonymous-pgc",
-            "verange",
-            "zk-ams-recursive-admission-v0",
-            "zk-x509-onchain-identity-v0",
-            "sis-with-hints",
-        ] {
-            assert!(
-                is_pending_production_backend_label(backend),
-                "pending backend {backend} must be recognized before family allowlists"
-            );
-        }
     }
 
     #[test]
@@ -7215,7 +7178,7 @@ mod stark_backend_tag_tests {
     }
 
     #[test]
-    fn verify_backend_rejects_pending_production_labels_before_dispatch() {
+    fn verify_backend_rejects_protocol_names_before_dispatch() {
         for backend in [
             "halo2/ipa/orchard",
             "halo2/ipa/penumbra",
@@ -7229,7 +7192,7 @@ mod stark_backend_tag_tests {
             let vk = VerifyingKeyBox::new(backend.to_owned(), vec![5, 6, 7, 8]);
             assert!(
                 !verify_backend(backend, &proof, Some(&vk)),
-                "pending backend {backend} must not reach a native verifier"
+                "protocol name {backend} must not reach a native verifier"
             );
         }
     }
@@ -8544,16 +8507,6 @@ pub fn verify_backend_with_timing_guardrails(
     vk: Option<&VerifyingKeyBox>,
     guardrails: ZkVerifyGuardrails,
 ) -> VerifyReport {
-    if is_pending_production_backend_label(backend) {
-        iroha_logger::debug!(
-            backend,
-            "pending-production proof backends are not admitted by production guardrails"
-        );
-        return VerifyReport {
-            ok: false,
-            elapsed: Duration::ZERO,
-        };
-    }
     if is_production_claim_backend_label(backend) {
         iroha_logger::debug!(
             backend,
@@ -9017,7 +8970,7 @@ mod guardrails_tests {
     }
 
     #[test]
-    fn guardrails_reject_pending_production_backends_before_dispatch() {
+    fn guardrails_reject_protocol_names_before_dispatch() {
         for backend in [
             "halo2/ipa/orchard",
             "stark/fri/miden",
@@ -9276,10 +9229,7 @@ mod guardrails_tests {
 
     #[test]
     fn guardrails_reject_open_verify_shape_failures_before_dispatch() {
-        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 6] = [
-            ("unsupported backend tag", |env| {
-                env.backend = BackendTag::Unsupported;
-            }),
+        let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 5] = [
             ("empty circuit id", |env| env.circuit_id.clear()),
             ("zero verifier-key hash", |env| env.vk_hash = [0u8; 32]),
             ("empty public inputs", |env| env.public_inputs.clear()),
@@ -16211,7 +16161,6 @@ mod preverified_key_tests {
             let wrong_envelope_backend = match envelope_backend {
                 BackendTag::Halo2IpaPasta => BackendTag::Stark,
                 BackendTag::Stark => BackendTag::Halo2IpaPasta,
-                other => other,
             };
             let wrong_backend_proof = mutate_preverify_envelope(proof.clone(), |envelope| {
                 envelope.backend = wrong_envelope_backend;
@@ -16388,7 +16337,7 @@ mod preverified_key_tests {
     }
 
     #[test]
-    fn preverify_rejects_unknown_and_pending_production_backends_before_dedup() {
+    fn preverify_rejects_unknown_and_protocol_names_before_dedup() {
         for backend in [
             "not-a-production-backend",
             " halo2/ipa",

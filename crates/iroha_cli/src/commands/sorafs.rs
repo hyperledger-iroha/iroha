@@ -444,7 +444,7 @@ pub enum Command {
     /// List replication orders.
     #[command(subcommand)]
     Replication(ReplicationCommand),
-    /// Storage helpers (pin, etc.).
+    /// Storage token helpers.
     #[command(subcommand)]
     Storage(StorageCommand),
     /// Gateway policy and configuration helpers.
@@ -13288,12 +13288,12 @@ fn render_direct_mode_enable_snippet(plan: &DirectModePlanOutput) -> String {
 
     format!(
         r#"# Direct-mode configuration snippet (generated; enforcement remains enabled)
-[torii.sorafs_gateway]
+[sorafs.gateway]
 require_manifest_envelope = true
 enforce_admission = true
 enforce_capabilities = true
 
-[torii.sorafs_gateway.direct_mode]
+[sorafs.gateway.direct_mode]
 provider_id_hex = "{provider}"
 chain_id = "{chain}"
 canonical_host = "{canonical}"
@@ -13307,12 +13307,12 @@ manifest_digest_hex = "{digest}"
 
 fn render_direct_mode_rollback_snippet() -> &'static str {
     r"# Direct-mode rollback snippet
-[torii.sorafs_gateway]
+[sorafs.gateway]
 require_manifest_envelope = true
 enforce_admission = true
 enforce_capabilities = true
 
-# Remove the `torii.sorafs_gateway.direct_mode` table to disable overrides.
+# Remove the `sorafs.gateway.direct_mode` table to disable overrides.
 "
 }
 
@@ -13349,16 +13349,16 @@ impl Run for GatewayTemplateConfigArgs {
 
         let template = format!(
             r#"# Paste this snippet into your configuration (e.g. config.toml)
-[torii.sorafs_gateway]
+[sorafs.gateway]
 require_manifest_envelope = true
 enforce_admission = true
 
-[torii.sorafs_gateway.rate_limit]
+[sorafs.gateway.rate_limit]
 max_requests = 120
 window = "60s"
 ban = "30s"
 
-[torii.sorafs_gateway.acme]
+[sorafs.gateway.acme]
 enabled = true
 account_email = "ops@example.com"
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"
@@ -13368,7 +13368,7 @@ renewal_window = "30d"
 retry_backoff = "30m"
 retry_jitter = "5m"
 
-[torii.sorafs_gateway.acme.challenges]
+[sorafs.gateway.acme.challenges]
 dns01 = true
 tls_alpn_01 = true
 "#,
@@ -13701,7 +13701,7 @@ impl Run for GatewayCacheInvalidateArgs {
 
 #[cfg(test)]
 mod gateway_tests {
-    use super::tests::TestContext;
+    use super::tests::{TestContext, assert_sorafs_config_snippet_is_schema_valid};
     use super::*;
 
     #[test]
@@ -13716,6 +13716,9 @@ mod gateway_tests {
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("template command runs");
         let rendered = ctx.outputs().join("\n");
+        assert_sorafs_config_snippet_is_schema_valid(&rendered);
+        assert!(rendered.contains("[sorafs.gateway]"));
+        assert!(!rendered.contains("[torii.sorafs_gateway]"));
         assert!(rendered.contains("gateway-a.example.com"));
         assert!(rendered.contains("gateway-b.example.com"));
         assert!(!rendered.contains("denylist"));
@@ -13871,7 +13874,6 @@ impl Run for PinRegisterArgs {
             .map(|hex| parse_hex_array::<32>(hex, "successor_of"))
             .transpose()?;
 
-        let config = context.config();
         let client = context.client_from_config();
 
         let alias_ref = alias_inputs.as_ref().map(|alias| SorafsPinAlias {
@@ -13882,8 +13884,6 @@ impl Run for PinRegisterArgs {
 
         let response = client
             .post_sorafs_pin_register(SorafsPinRegisterArgs {
-                authority: &config.account,
-                private_key: config.key_pair.private_key(),
                 manifest_payload: &manifest_bytes,
                 submitted_epoch: self.submitted_epoch,
                 alias: alias_ref,
@@ -14036,8 +14036,6 @@ impl ReplicationListArgs {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum StorageCommand {
-    /// Submit a manifest + payload to local storage for pinning.
-    Pin(StoragePinArgs),
     /// Issue and inspect stream tokens for chunk-range gateways.
     #[command(subcommand)]
     Token(StorageTokenCommand),
@@ -14046,118 +14044,9 @@ pub enum StorageCommand {
 impl Run for StorageCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
-            StorageCommand::Pin(args) => args.run(context),
             StorageCommand::Token(cmd) => cmd.run(context),
         }
     }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct StoragePinArgs {
-    /// Path to the Norito-encoded manifest (`.to` file).
-    #[arg(long, value_name = "PATH")]
-    pub manifest: PathBuf,
-    /// Path to the raw payload bytes referenced by the manifest.
-    #[arg(long, value_name = "PATH")]
-    pub payload: PathBuf,
-}
-
-impl Run for StoragePinArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, |client, manifest, payload, files| {
-            client.post_sorafs_storage_pin(manifest, payload, files)
-        })
-    }
-}
-
-impl StoragePinArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(
-            &Client,
-            &[u8],
-            &[u8],
-            Option<&[iroha::client::SorafsStorageFileEntry<'_>]>,
-        ) -> Result<Response<Vec<u8>>>,
-    {
-        let manifest_bytes = fs::read(&self.manifest).wrap_err("failed to read manifest file")?;
-        let (payload_bytes, files) = load_storage_pin_payload(&self.payload, &manifest_bytes)?;
-        let borrowed_files = files.as_ref().map(|entries| {
-            entries
-                .iter()
-                .map(|entry| iroha::client::SorafsStorageFileEntry {
-                    path: entry.path.as_slice(),
-                    size: entry.size,
-                })
-                .collect::<Vec<_>>()
-        });
-
-        let client = context.client_from_config();
-        let response = submit(
-            &client,
-            &manifest_bytes,
-            &payload_bytes,
-            borrowed_files.as_deref(),
-        )?;
-        let status = response.status();
-        let body = response.into_body();
-        match status {
-            StatusCode::OK => render_json_body(context, &body),
-            status => Err(make_http_error(status, &body)),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct OwnedStorageFileEntry {
-    path: Vec<String>,
-    size: u64,
-}
-
-fn load_storage_pin_payload(
-    input: &Path,
-    manifest_bytes: &[u8],
-) -> Result<(Vec<u8>, Option<Vec<OwnedStorageFileEntry>>)> {
-    let metadata = fs::metadata(input)
-        .wrap_err_with(|| format!("failed to access payload `{}`", input.display()))?;
-
-    if metadata.is_dir() {
-        let manifest: ManifestV1 = norito::decode_from_bytes(manifest_bytes)
-            .wrap_err("failed to decode manifest payload")?;
-        let profile = chunk_profile_from_manifest(&manifest)?;
-        let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
-            .map_err(|err| eyre!("failed to build directory payload plan: {err}"))?;
-        let files = plan
-            .files
-            .iter()
-            .map(|file| OwnedStorageFileEntry {
-                path: file.path.clone(),
-                size: file.size,
-            })
-            .collect();
-        return Ok((payload, Some(files)));
-    }
-
-    if metadata.is_file() {
-        let payload = fs::read(input)
-            .wrap_err_with(|| format!("failed to read payload file `{}`", input.display()))?;
-        return Ok((payload, None));
-    }
-
-    Err(eyre!("payload input must be a file or directory"))
-}
-
-fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile> {
-    Ok(ChunkProfile {
-        min_size: usize::try_from(manifest.chunking.min_size)
-            .wrap_err("manifest chunking.min_size exceeds host limits")?,
-        target_size: usize::try_from(manifest.chunking.target_size)
-            .wrap_err("manifest chunking.target_size exceeds host limits")?,
-        max_size: usize::try_from(manifest.chunking.max_size)
-            .wrap_err("manifest chunking.max_size exceeds host limits")?,
-        break_mask: u64::from(manifest.chunking.break_mask),
-    })
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -18305,6 +18194,10 @@ mod tests {
             Metadata,
             prelude::{AccountId, ChainId},
         },
+    };
+    use iroha_config::{
+        base::{read::ConfigReader, toml::TomlSource},
+        parameters::user::Sorafs as UserSorafsConfig,
     };
     use iroha_crypto::{
         Algorithm, PublicKey,
@@ -24653,99 +24546,6 @@ mod tests {
     }
 
     #[test]
-    fn storage_pin_with_reads_files_and_prints_payload() {
-        let manifest = NamedTempFile::new().expect("temp manifest");
-        let payload = NamedTempFile::new().expect("temp payload");
-        std::fs::write(manifest.path(), b"manifest-bytes").unwrap();
-        std::fs::write(payload.path(), b"payload-bytes").unwrap();
-
-        let args = StoragePinArgs {
-            manifest: manifest.path().to_path_buf(),
-            payload: payload.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-
-        args.run_with(&mut ctx, |_client, manifest_bytes, payload_bytes, files| {
-            assert_eq!(manifest_bytes, b"manifest-bytes");
-            assert_eq!(payload_bytes, b"payload-bytes");
-            assert!(
-                files.is_none(),
-                "single-file payload should not include file table"
-            );
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"ok\":true"));
-    }
-
-    #[test]
-    fn storage_pin_with_directory_payload_emits_file_table() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let manifest = NamedTempFile::new().expect("temp manifest");
-        let payload_dir = temp_dir.path().join("site");
-        fs::create_dir_all(payload_dir.join("assets")).expect("create assets directory");
-        fs::write(payload_dir.join("index.html"), b"<html>SoraFS</html>").expect("write index");
-        fs::write(
-            payload_dir.join("assets").join("app.js"),
-            b"console.log('ok');",
-        )
-        .expect("write asset");
-
-        let manifest_value = ManifestBuilder::new()
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
-            .chunk_digest_sha3_256([0xCD; 32])
-            .por_root(sorafs_manifest::EMPTY_POR_ROOT_V1)
-            .content_length(0)
-            .car_digest([0x11; 32])
-            .car_size(0)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("build manifest");
-        fs::write(
-            manifest.path(),
-            to_bytes(&manifest_value).expect("encode manifest"),
-        )
-        .expect("write manifest");
-
-        let args = StoragePinArgs {
-            manifest: manifest.path().to_path_buf(),
-            payload: payload_dir.clone(),
-        };
-        let mut ctx = TestContext::new();
-
-        args.run_with(
-            &mut ctx,
-            |_client, _manifest_bytes, payload_bytes, files| {
-                let files = files.expect("directory payload must include file table");
-                assert_eq!(files.len(), 2);
-                assert_eq!(files[0].path, ["assets".to_owned(), "app.js".to_owned()]);
-                assert_eq!(files[1].path, ["index.html".to_owned()]);
-                assert_eq!(
-                    payload_bytes, b"console.log('ok');<html>SoraFS</html>",
-                    "payload must follow the deterministic sorted file order"
-                );
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                    .unwrap())
-            },
-        )
-        .expect("directory run should succeed");
-
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"ok\":true"));
-    }
-
-    #[test]
     fn direct_mode_plan_generates_summary() {
         let manifest = ManifestBuilder::new()
             .root_cid(vec![0x01, 0x02, 0x03])
@@ -24934,6 +24734,27 @@ mod tests {
         plan_file
     }
 
+    pub(super) fn assert_sorafs_config_snippet_is_schema_valid(snippet: &str) {
+        let mut root: toml::Table =
+            toml::from_str(snippet).expect("generated snippet must parse as TOML");
+        let sorafs = root
+            .remove("sorafs")
+            .expect("generated snippet must use the top-level `sorafs` table");
+        assert!(
+            root.is_empty(),
+            "generated snippet contains unexpected top-level keys: {root:?}"
+        );
+        let sorafs = sorafs
+            .as_table()
+            .expect("top-level `sorafs` value must be a table")
+            .clone();
+
+        ConfigReader::new()
+            .with_toml_source(TomlSource::inline(sorafs))
+            .read_and_complete::<UserSorafsConfig>()
+            .expect("generated snippet must satisfy the iroha_config SoraFS schema");
+    }
+
     #[test]
     fn direct_mode_enable_renders_snippet() {
         let plan = direct_mode_enable_test_plan(direct_mode_enable_capabilities());
@@ -24952,7 +24773,9 @@ mod tests {
         assert!(!snippet.contains(" = false"));
         assert!(snippet.contains("direct_car_canonical"));
         assert!(snippet.contains(&plan.provider_id_hex));
-        let _: toml::Value = toml::from_str(snippet).expect("snippet must parse as TOML");
+        assert!(snippet.contains("[sorafs.gateway.direct_mode]"));
+        assert!(!snippet.contains("[torii.sorafs_gateway]"));
+        assert_sorafs_config_snippet_is_schema_valid(snippet);
     }
 
     #[test]
@@ -25026,6 +24849,10 @@ mod tests {
             ctx.outputs(),
             &[render_direct_mode_rollback_snippet().to_owned()]
         );
+        let snippet = &ctx.outputs()[0];
+        assert!(snippet.contains("[sorafs.gateway]"));
+        assert!(!snippet.contains("[torii.sorafs_gateway]"));
+        assert_sorafs_config_snippet_is_schema_valid(snippet);
     }
 
     #[test]

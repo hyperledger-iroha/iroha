@@ -6,7 +6,9 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 
 import {isIsoTimestamp, verifyOpenApiVersions} from '../verify-openapi-versions.mjs';
+import {computeOpenApiBlake3Hex} from '../lib/openapi-manifest-v2.mjs';
 import {validateOpenApiGeneratorProvenance} from '../lib/openapi-provenance.mjs';
+import {attachOpenApiManifestSignature} from './helpers/openapi-signing.mjs';
 
 function releaseSpec(marker) {
   return JSON.stringify(
@@ -25,9 +27,10 @@ function releaseSpec(marker) {
   );
 }
 
-test('OpenAPI provenance accepts explicit dirty unsigned state and legacy clean state', () => {
+test('OpenAPI provenance accepts explicit V2 dirty and clean state', () => {
   assert.deepEqual(
     validateOpenApiGeneratorProvenance({
+      version: 2,
       generator_commit: null,
       generator_dirty: true,
       generator_source_sha256_hex: 'ab'.repeat(32),
@@ -39,7 +42,11 @@ test('OpenAPI provenance accepts explicit dirty unsigned state and legacy clean 
     },
   );
   assert.deepEqual(
-    validateOpenApiGeneratorProvenance({generator_commit: 'cd'.repeat(20)}),
+    validateOpenApiGeneratorProvenance({
+      version: 2,
+      generator_commit: 'cd'.repeat(20),
+      generator_dirty: false,
+    }),
     {
       dirty: false,
       commit: 'cd'.repeat(20),
@@ -128,7 +135,11 @@ test('OpenAPI provenance rejects dirty-state ambiguity and release smuggling', (
     ],
   ]) {
     assert.throws(
-      () => validateOpenApiGeneratorProvenance(manifest, options),
+      () =>
+        validateOpenApiGeneratorProvenance(
+          {version: 2, generator_dirty: false, ...manifest},
+          options,
+        ),
       pattern,
       name,
     );
@@ -170,6 +181,42 @@ test('verifyOpenApiVersions requires explicit unsigned opt-in for dirty provenan
 test('verifyOpenApiVersions validates recorded metadata', async () => {
   const context = await setupFixture();
   await verifyOpenApiVersions(context);
+});
+
+test('verifyOpenApiVersions rejects unknown root and entry fields', async () => {
+  for (const mutate of [
+    (manifest) => {
+      manifest.legacyVersions = [];
+    },
+    (manifest) => {
+      manifest.entries[0].legacyDigest = 'ab'.repeat(32);
+    },
+  ]) {
+    const context = await setupFixture(mutate);
+    await assert.rejects(
+      () => verifyOpenApiVersions(context),
+      /unknown field/i,
+    );
+  }
+});
+
+test('verifyOpenApiVersions requires explicit nullable entry metadata', async () => {
+  for (const field of [
+    'blake3',
+    'manifestPath',
+    'signatureAlgorithm',
+    'signaturePublicKeyHex',
+    'signatureHex',
+  ]) {
+    const context = await setupFixture((manifest) => {
+      const historical = manifest.entries.find((entry) => entry.label === '2025-q4');
+      delete historical[field];
+    });
+    await assert.rejects(
+      () => verifyOpenApiVersions(context),
+      new RegExp(`missing field.*${field}`, 'i'),
+    );
+  }
 });
 
 test('verifyOpenApiVersions rejects malformed manifest timestamps through its returned promise', async () => {
@@ -243,12 +290,12 @@ test('verifyOpenApiVersions rejects diverging latest/current aliases', async () 
   const divergentContent = releaseSpec('current-only');
   const divergentBuffer = Buffer.from(divergentContent, 'utf8');
   const divergentSha = createHash('sha256').update(divergentBuffer).digest('hex');
-  const divergentBlake3 = 'bb278ba70b4eeb85dc30fa2d0ef67d47';
+  const divergentBlake3 = computeOpenApiBlake3Hex(divergentBuffer);
 
   await writeFile(currentSpecPath, divergentContent, 'utf8');
   await writeManifest(
     join(context.outputDir, 'versions', 'current', 'manifest.json'),
-    'versions/current/torii.json',
+    'torii.json',
     {
       sha256: divergentSha,
       blake3: divergentBlake3,
@@ -342,27 +389,22 @@ async function setupFixture(manifestMutator) {
   const specBytes = Buffer.from(specContent, 'utf8');
   const sha256 = createHash('sha256').update(specBytes).digest('hex');
   const timestamp = '2025-11-10T04:39:40.260Z';
-  const signature = {
-    algorithm: 'ed25519',
-    public_key_hex: '00',
-    signature_hex: '11',
-  };
-  const blake3Hex = '66278ba70b4eeb85dc30fa2d0ef67d47';
+  const blake3Hex = computeOpenApiBlake3Hex(specBytes);
 
   await writeFile(join(outputDir, 'torii.json'), specContent, 'utf8');
   await writeFile(join(currentDir, 'torii.json'), specContent, 'utf8');
   await writeFile(join(archivedDir, 'torii.json'), specContent, 'utf8');
 
-  await writeManifest(join(outputDir, 'manifest.json'), 'torii.json', {
+  const signature = await writeManifest(join(outputDir, 'manifest.json'), 'torii.json', {
     sha256,
     blake3: blake3Hex,
-    signature,
+    artifactBytes: specBytes,
     bytes: specBytes.length,
   });
-  await writeManifest(join(currentDir, 'manifest.json'), 'versions/current/torii.json', {
+  await writeManifest(join(currentDir, 'manifest.json'), 'torii.json', {
     sha256,
     blake3: blake3Hex,
-    signature,
+    artifactBytes: specBytes,
     bytes: specBytes.length,
   });
 
@@ -380,8 +422,8 @@ async function setupFixture(manifestMutator) {
         signed: true,
         manifestPath: 'manifest.json',
         signatureAlgorithm: 'ed25519',
-        signaturePublicKeyHex: '00',
-        signatureHex: '11',
+        signaturePublicKeyHex: signature.public_key_hex,
+        signatureHex: signature.signature_hex,
       },
       {
         label: '2025-q4',
@@ -406,8 +448,8 @@ async function setupFixture(manifestMutator) {
         signed: true,
         manifestPath: 'versions/current/manifest.json',
         signatureAlgorithm: 'ed25519',
-        signaturePublicKeyHex: '00',
-        signatureHex: '11',
+        signaturePublicKeyHex: signature.public_key_hex,
+        signatureHex: signature.signature_hex,
       },
     ],
   };
@@ -431,22 +473,23 @@ async function setupFixture(manifestMutator) {
 
 async function writeManifest(manifestPath, artifactPath, options) {
   const payload = {
-    version: 1,
+    version: 2,
     generated_unix_ms: 123,
     generator_commit: options.generatorCommit ?? 'ab'.repeat(20),
+    generator_dirty: false,
     artifact: {
       path: artifactPath,
       bytes: options.bytes ?? 0,
       sha256_hex: options.sha256,
       blake3_hex: options.blake3,
-      signature: {
-        algorithm: options.signature.algorithm,
-        public_key_hex: options.signature.public_key_hex,
-        signature_hex: options.signature.signature_hex,
-      },
+      signature: options.signature ?? null,
     },
   };
+  if (options.artifactBytes) {
+    attachOpenApiManifestSignature(payload, options.artifactBytes);
+  }
   await writeFile(manifestPath, JSON.stringify(payload, null, 2), 'utf8');
+  return payload.artifact.signature;
 }
 
 async function corruptManifest(manifestPath, mutator) {

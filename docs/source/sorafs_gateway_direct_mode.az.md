@@ -4,11 +4,11 @@ direction: ltr
 source: docs/source/sorafs_gateway_direct_mode.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 574c7677144946ea5a8d4957933fe817e2be65061690d9f3e053bd28f85b900f
+source_hash: 4b300b43e15582f88834678d1c2d43b61a71f0de05be978133c80b98752cc767
 source_last_modified: "2026-01-22T14:35:37.556642+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway Direct-Mode Toolkit
-summary: CLI workflow and configuration knobs for the `torii.sorafs_gateway.direct_mode` overrides.
+summary: CLI workflow and configuration knobs for the `sorafs.gateway.direct_mode` overrides.
 ---
 
 # SoraFS Gateway Direct-Mode Toolkit
@@ -45,7 +45,7 @@ capability metadata, or pass `--provider-id` directly when running against local
 ## Enabling the Override
 
 Feed the JSON plan into the `enable` subcommand to produce a configuration snippet. The snippet
-targets the new `torii.sorafs_gateway.direct_mode` table alongside the standard gateway knobs:
+targets the new `sorafs.gateway.direct_mode` table alongside the standard gateway knobs:
 
 ```bash
 iroha app sorafs gateway direct-mode enable --plan direct-mode-plan.json
@@ -57,14 +57,14 @@ URLs must match the plan inputs, the manifest must require an envelope, and the 
 must advertise direct-CAR support.
 
 Apply the snippet to your Torii configuration (`config.toml`). The fields under
-`torii.sorafs_gateway.direct_mode` map 1:1 to the plan output:
+`sorafs.gateway.direct_mode` map 1:1 to the plan output:
 
 - `provider_id_hex`, `chain_id`
 - `canonical_host`, `vanity_host`
 - `direct_car_canonical`, `direct_car_vanity`
 - `manifest_digest_hex`
 
-While the direct-mode override is active, `torii.sorafs_gateway.require_manifest_envelope`,
+While the direct-mode override is active, `sorafs.gateway.require_manifest_envelope`,
 `enforce_admission`, and `enforce_capabilities` remain enabled. Direct mode only installs the
 deterministic provider/route mapping; it must not be used as a bypass for envelope, admission, or
 capability enforcement.

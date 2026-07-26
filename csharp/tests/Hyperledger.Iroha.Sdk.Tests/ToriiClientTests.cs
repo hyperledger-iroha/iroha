@@ -29,7 +29,6 @@ public sealed class ToriiClientTests
     private static readonly string MultisigFeeSponsorAccountId = TestAccountId(0x47);
     private static readonly string VerifyingKeyAuthorityAccountId = TestAccountId(0x48);
     private static readonly string SoraFsAuthorityAccountId = TestAccountId(0x49);
-    private static readonly string SoraFsTreasuryAccountId = TestAccountId(0x4A);
     private static readonly string ExplorerTransactionAuthorityAccountId = TestAccountId(0x4B);
     private static readonly string ExplorerInstructionAuthorityAccountId = TestAccountId(0x4C);
     private static readonly string ExplorerInstructionAccountId = TestAccountId(0x4D);
@@ -9002,349 +9001,59 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public async Task RegisterSoraFsPinManifestAsyncPostsNormalizedPayloadAndDeserializesResponse()
+    public async Task RegisterSoraFsPinManifestAsyncPostsOnlySignedNoritoAndReturnsAdmission()
     {
-        var manifestHex = new string('a', 64);
-        var successorHex = new string('c', 64);
-        var aliasProof = Convert.ToBase64String("alias-proof"u8.ToArray());
-        var manifestBytes = "manifest-norito"u8.ToArray();
-        var expectedManifestBytes = manifestBytes.ToArray();
-        var manifestBase64 = Convert.ToBase64String(expectedManifestBytes);
-
+        var transaction = ValidSignedTransactionEnvelope();
+        var transactionHashHex = new string('a', 64);
+        var manifestDigestHex = new string('b', 64);
         using var handler = new RecordingHandler(request =>
         {
-            var payload = ReadBodyAsJson(request);
-            var root = payload.RootElement;
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/v1/sorafs/pin/register", request.RequestUri!.AbsolutePath);
-            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
-            Assert.Equal(SoraFsAuthorityAccountId, root.GetProperty("authority").GetString());
-            Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
-            Assert.Equal(manifestBase64, root.GetProperty("manifest_payload").GetString());
-            Assert.Equal((ulong)42, root.GetProperty("submitted_epoch").GetUInt64());
-            Assert.Equal("docs", root.GetProperty("alias").GetProperty("namespace").GetString());
-            Assert.Equal("main", root.GetProperty("alias").GetProperty("name").GetString());
-            Assert.Equal(aliasProof, root.GetProperty("alias").GetProperty("proof_base64").GetString());
-            Assert.Equal(successorHex, root.GetProperty("successor_of_hex").GetString());
-            Assert.Equal(
-                [
-                    "authority",
-                    "private_key",
-                    "manifest_payload",
-                    "submitted_epoch",
-                    "alias",
-                    "successor_of_hex",
-                ],
-                root.EnumerateObject().Select(static property => property.Name));
-            foreach (var retired in new[]
-            {
-                "fee_payment", "feePayment", "gas_asset_id", "gasAssetId",
-                "chunker", "chunker_profile_id", "chunker_namespace", "chunker_name",
-                "chunker_semver", "chunker_multihash_code", "pin_policy",
-                "manifest_digest_hex", "manifest_b64", "chunk_digest_sha3_256_hex",
-                "content_length",
-            })
-            {
-                Assert.False(root.TryGetProperty(retired, out _));
-            }
-
-            return JsonResponse($$"""
-                {
-                  "manifest_digest_hex": "{{manifestHex}}",
-                  "chunker_handle": "sorafs.sf1@1.0.0",
-                  "submitted_epoch": 42,
-                  "content_length": 4096,
-                  "pin_fee_nano": 500000000,
-                  "pin_fee_asset_id": "xor#universal",
-                  "pin_fee_treasury_account_id": "{{SoraFsTreasuryAccountId}}",
-                  "alias": {
-                    "namespace": "docs",
-                    "name": "main",
-                    "proof_base64": "{{aliasProof}}"
-                  },
-                  "successor_of_hex": "{{successorHex}}"
-                }
-                """);
+            Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal("application/json", request.Headers.Accept.Single().MediaType);
+            Assert.Equal(transaction.NoritoBytes, request.Content.ReadAsByteArray());
+            return JsonResponse(
+                $$"""{"status":"submitted","tx_hash_hex":"{{transactionHashHex}}","manifest_digest_hex":"{{manifestDigestHex}}"}""",
+                HttpStatusCode.Accepted);
         });
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var request = ValidSoraFsPinRegisterRequest() with
-        {
-            ManifestBytes = manifestBytes,
-        };
-        manifestBytes[0] = (byte)'x';
-        var detachedManifestBytes = Assert.IsType<byte[]>(request.ManifestBytes);
-        detachedManifestBytes[1] = (byte)'x';
-        Assert.Equal(expectedManifestBytes, Assert.IsType<byte[]>(request.ManifestBytes));
+        var admission = await client.RegisterSoraFsPinManifestAsync(
+            transaction,
+            cancellationToken: TestContext.Current.CancellationToken);
 
-        var response = await client.RegisterSoraFsPinManifestAsync(request, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(manifestHex, response.ManifestDigestHex);
-        Assert.Equal("sorafs.sf1@1.0.0", response.ChunkerHandle);
-        Assert.Equal((ulong)42, response.SubmittedEpoch);
-        Assert.Equal((ulong)4096, response.ContentLength);
-        Assert.Equal((ulong)500000000, response.PinFeeNano);
-        Assert.Equal("xor#universal", response.PinFeeAssetId);
-        Assert.Equal(SoraFsTreasuryAccountId, response.PinFeeTreasuryAccountId);
-        Assert.Equal("docs", response.Alias!.Namespace);
-        Assert.Equal("main", response.Alias.Name);
-        Assert.Equal(aliasProof, response.Alias.ProofBase64);
-        Assert.Equal(successorHex, response.SuccessorOfHex);
-    }
-
-    [Fact]
-    public async Task RegisterSoraFsPinManifestAsyncAcceptsCanonicalManifestPayloadBase64()
-    {
-        var manifestBase64 = Convert.ToBase64String("explicit-manifest"u8.ToArray());
-        using var handler = new RecordingHandler(request =>
-        {
-            using var payload = ReadBodyAsJson(request);
-            Assert.Equal(manifestBase64, payload.RootElement.GetProperty("manifest_payload").GetString());
-            return JsonResponse($$"""
-                {
-                  "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                  "chunker_handle": "sorafs.sf1@1.0.0",
-                  "submitted_epoch": 42,
-                  "content_length": 4096,
-                  "pin_fee_nano": 500000000,
-                  "pin_fee_asset_id": "xor#universal",
-                  "pin_fee_treasury_account_id": "{{SoraFsTreasuryAccountId}}"
-                }
-                """);
-        });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        await client.RegisterSoraFsPinManifestAsync(ValidSoraFsPinRegisterRequest() with
-        {
-            ManifestPayloadBase64 = manifestBase64,
-            ManifestBytes = null,
-        }, cancellationToken: TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
-    public async Task RegisterSoraFsPinManifestAsyncRejectsMalformedInputsBeforeRequest()
-    {
-        var valid = ValidSoraFsPinRegisterRequest();
-        var invalidRequests = new[]
-        {
-            valid with { ManifestPayloadBase64 = "not base64!", ManifestBytes = null },
-            valid with { ManifestPayloadBase64 = Convert.ToBase64String("manifest"u8.ToArray()) },
-            valid with { ManifestPayloadBase64 = null, ManifestBytes = null },
-            valid with { ManifestBytes = Array.Empty<byte>() },
-            valid with { ManifestBytes = new byte[(512 * 1024) + 1] },
-            valid with
-            {
-                ManifestPayloadBase64 = Convert.ToBase64String(new byte[(512 * 1024) + 1]),
-                ManifestBytes = null,
-            },
-            valid with { SuccessorOfHex = new string('c', 63) },
-            valid with { SuccessorOfHex = new string('0', 64) },
-            valid with { SubmittedEpoch = null },
-            valid with { Alias = valid.Alias! with { Namespace = "" } },
-            valid with { Alias = valid.Alias! with { Namespace = new string('a', 129) } },
-            valid with { Alias = valid.Alias! with { Namespace = "Docs" } },
-            valid with { Alias = valid.Alias! with { Name = "main site" } },
-            valid with { Alias = valid.Alias! with { Name = "máin" } },
-            valid with { Alias = valid.Alias! with { ProofBase64 = null } },
-            valid with { Alias = valid.Alias! with { ProofBase64 = "not base64!" } },
-            valid with { Alias = valid.Alias! with { ProofBase64 = Convert.ToBase64String(Array.Empty<byte>()) } },
-            valid with
-            {
-                Alias = valid.Alias! with
-                {
-                    ProofBase64 = Convert.ToBase64String(new byte[(1024 * 1024) + 1]),
-                },
-            },
-        };
-
-        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request should not be sent"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        foreach (var request in invalidRequests)
-        {
-            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.RegisterSoraFsPinManifestAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-            Assert.Null(handler.LastRequest);
-        }
-    }
-
-    public static IEnumerable<object?[]> InvalidSoraFsPinRegisterExactTextRequests()
-    {
-        var valid = ValidSoraFsPinRegisterRequest();
-        var manifestBase64 = Convert.ToBase64String("manifest-norito"u8.ToArray());
-        var aliasProofBase64 = Convert.ToBase64String("alias-proof"u8.ToArray());
-
-        foreach (var (request, paramName, expectedMessage) in new (ToriiSoraFsPinRegisterRequest Request, string ParamName, string ExpectedMessage)[]
-        {
-            (valid with { Authority = " " + SoraFsAuthorityAccountId }, "Authority", "whitespace"),
-            (valid with { PrivateKey = "ed25519:dead beef" }, "PrivateKey", "whitespace"),
-            (valid with { ManifestPayloadBase64 = manifestBase64 + " ", ManifestBytes = null }, "ManifestPayloadBase64", "whitespace"),
-            (valid with { ManifestPayloadBase64 = "AR==", ManifestBytes = null }, "ManifestPayloadBase64", "canonical base64"),
-            (valid with { Alias = valid.Alias! with { Namespace = "docs " } }, "Alias.Namespace", "whitespace"),
-            (valid with { Alias = valid.Alias! with { Name = " main" } }, "Alias.Name", "whitespace"),
-            (valid with { Alias = valid.Alias! with { ProofBase64 = aliasProofBase64 + "\u0001" } }, "Alias.ProofBase64", "control characters"),
-            (valid with { Alias = valid.Alias! with { ProofBase64 = "AR==" } }, "Alias.ProofBase64", "canonical base64"),
-            (valid with { SuccessorOfHex = " " }, "SuccessorOfHex", "null or whitespace"),
-        })
-        {
-            yield return new object?[] { request, paramName, expectedMessage };
-        }
-
-        foreach (var request in new[]
-        {
-            valid with { Authority = "alice@boi" },
-            valid with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" },
-            valid with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" },
-        })
-        {
-            yield return new object?[] { request, "Authority", "canonical I105" };
-        }
+        Assert.Equal("submitted", admission.Status);
+        Assert.Equal(transactionHashHex, admission.TxHashHex);
+        Assert.Equal(manifestDigestHex, admission.ManifestDigestHex);
     }
 
     [Theory]
-    [MemberData(nameof(InvalidSoraFsPinRegisterExactTextRequests))]
-    public async Task RegisterSoraFsPinManifestAsyncRejectsNonExactTextBeforeDispatch(
-        ToriiSoraFsPinRegisterRequest request,
-        string expectedParamName,
-        string expectedMessage)
+    [InlineData("pin_fee")]
+    [InlineData("private_key")]
+    public async Task RegisterSoraFsPinManifestAsyncRejectsNonAdmissionFields(string field)
     {
+        var response = new JsonObject
+        {
+            ["status"] = "submitted",
+            ["tx_hash_hex"] = new string('a', 64),
+            ["manifest_digest_hex"] = new string('b', 64),
+            [field] = "[redacted]",
+        };
         using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed SoraFS pin registration reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterSoraFsPinManifestAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public async Task RegisterSoraFsPinManifestAsyncRejectsMalformedDigestResponse()
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse($$"""
-            {
-              "manifest_digest_hex": "abc123",
-              "chunker_handle": "sorafs.sf1@1.0.0",
-              "submitted_epoch": 42,
-              "content_length": 4096,
-              "pin_fee_nano": 500000000,
-              "pin_fee_asset_id": "xor#universal",
-              "pin_fee_treasury_account_id": "{{SoraFsTreasuryAccountId}}"
-            }
-            """));
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        await Assert.ThrowsAsync<JsonException>(() =>
-            client.RegisterSoraFsPinManifestAsync(ValidSoraFsPinRegisterRequest(), cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Equal("/v1/sorafs/pin/register", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    [Theory]
-    [InlineData("", "non-empty")]
-    [InlineData(" sorafs.sf1@1.0.0", "whitespace")]
-    [InlineData("sorafs.sf1@1.0.0 ", "whitespace")]
-    [InlineData("sorafs.sf1 @1.0.0", "whitespace")]
-    [InlineData("sorafs.sf1@\u00A01.0.0", "whitespace")]
-    [InlineData("sorafs.sf1@1.0.0\u0001", "control characters")]
-    public async Task RegisterSoraFsPinManifestAsyncRejectsNonExactChunkerHandleResponse(
-        string chunkerHandle,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => JsonResponse($$"""
-            {
-              "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "chunker_handle": {{JsonSerializer.Serialize(chunkerHandle)}},
-              "submitted_epoch": 42,
-              "content_length": 4096,
-              "pin_fee_nano": 500000000,
-              "pin_fee_asset_id": "xor#universal",
-              "pin_fee_treasury_account_id": "{{SoraFsTreasuryAccountId}}"
-            }
-            """));
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+            JsonResponse(response.ToJsonString(), HttpStatusCode.Accepted));
+        using var client = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
-            client.RegisterSoraFsPinManifestAsync(ValidSoraFsPinRegisterRequest(), cancellationToken: TestContext.Current.CancellationToken));
+            client.RegisterSoraFsPinManifestAsync(
+                ValidSignedTransactionEnvelope(),
+                cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Equal("/v1/sorafs/pin/register", handler.LastRequest!.RequestUri!.AbsolutePath);
-    }
-
-    public static IEnumerable<object[]> InvalidRawSoraFsPinAliases()
-    {
-        yield return new object[] { "SoraFS pin alias", "null", "must not be null" };
-        yield return new object[] { "SoraFS pin alias", "[]", "object" };
-        yield return new object[] { "namespace", SoraFsPinAliasDuplicatePropertyJson("namespace"), "must not appear more than once" };
-        yield return new object[] { "SoraFS pin alias.audit.nonce", SoraFsPinAliasUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "namespace", SoraFsPinAliasJson("namespace", null), "non-empty" };
-        yield return new object[] { "namespace", SoraFsPinAliasJson("namespace", " docs"), "surrounding whitespace" };
-        yield return new object[] { "name", SoraFsPinAliasJson("name", "main site"), "whitespace" };
-        yield return new object[] { "proof_base64", SoraFsPinAliasJson("proof_base64", ""), "non-empty" };
-        yield return new object[] { "proof_base64", SoraFsPinAliasJson("proof_base64", "YWxpYXM"), "base64" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawSoraFsPinAliases))]
-    public void RawSoraFsPinAliasRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiSoraFsPinAlias>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawSoraFsPinRegisterResponses()
-    {
-        yield return new object[] { "SoraFS pin register response", "null", "must not be null" };
-        yield return new object[] { "SoraFS pin register response", "[]", "object" };
-        yield return new object[] { "manifest_digest_hex", SoraFsPinRegisterDuplicatePropertyJson("manifest_digest_hex"), "must not appear more than once" };
-        yield return new object[] { "SoraFS pin register response.audit.nonce", SoraFsPinRegisterUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "manifest_digest_hex", SoraFsPinRegisterResponseJson("manifest_digest_hex", SoraFsManifestDigestHex.ToUpperInvariant()), "lowercase" };
-        yield return new object[] { "manifest_digest_hex", SoraFsPinRegisterResponseJson("manifest_digest_hex", "0x" + SoraFsManifestDigestHex), "32-byte hex string" };
-        yield return new object[] { "chunker_handle", SoraFsPinRegisterResponseJson("chunker_handle", 1), "string" };
-        yield return new object[] { "chunker_handle", SoraFsPinRegisterResponseJson("chunker_handle", "sorafs sf1@1.0.0"), "whitespace" };
-        yield return new object[] { "submitted_epoch", SoraFsPinRegisterResponseJson("submitted_epoch", "42"), "unsigned integer" };
-        yield return new object[] { "content_length", SoraFsPinRegisterResponseJson("content_length", -1L), "unsigned integer" };
-        yield return new object[] { "pin_fee_nano", SoraFsPinRegisterResponseJson("pin_fee_nano", null), "must not be null" };
-        yield return new object[] { "pin_fee_asset_id", SoraFsPinRegisterResponseJson("pin_fee_asset_id", "xor universal"), "whitespace" };
-        yield return new object[] { "pin_fee_treasury_account_id", SoraFsPinRegisterResponseJson("pin_fee_treasury_account_id", "treasury@boi"), "canonical I105" };
-        yield return new object[] { "pin_fee_treasury_account_id", SoraFsPinRegisterResponseJson("pin_fee_treasury_account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "pin_fee_treasury_account_id", SoraFsPinRegisterResponseJson("pin_fee_treasury_account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "alias", SoraFsPinRegisterResponseJson("alias", 1), "object" };
-        yield return new object[] { "SoraFS pin register response.alias.audit.nonce", SoraFsPinRegisterAliasUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "alias.proof_base64", SoraFsPinRegisterResponseJson("alias.proof_base64", "bad"), "base64" };
-        yield return new object[] { "successor_of_hex", SoraFsPinRegisterResponseJson("successor_of_hex", "0x" + SoraFsManifestDigestHex), "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawSoraFsPinRegisterResponses))]
-    public void RawSoraFsPinRegisterResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiSoraFsPinRegisterResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void RawSoraFsPinRegisterResponseWriteRejectsMalformedSuccessor()
-    {
-        var response = SoraFsPinRegisterResponseObject();
-        SetPrivateField(response, "successorOfHex", "0x" + SoraFsManifestDigestHex);
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("successor_of_hex", error.Message);
-        Assert.Contains("32-byte hex string", error.Message);
+        Assert.Contains("must contain only", error.Message);
     }
 
     [Fact]
@@ -9865,18 +9574,6 @@ public sealed class ToriiClientTests
         yield return new object?[] { "cid-lookup", "ContentCid", "Bafylookup" };
         yield return new object?[] { "cid-lookup", "ManifestDigestHex", "0x" + SoraFsManifestDigestHex };
         yield return new object?[] { "cid-lookup", "Files[0].Path[0]", "assets/app.js" };
-        yield return new object?[] { "pin-register", "ManifestDigestHex", null };
-        yield return new object?[] { "pin-register", "ManifestDigestHex", SoraFsManifestDigestHex.ToUpperInvariant() };
-        yield return new object?[] { "pin-register", "ChunkerHandle", null };
-        yield return new object?[] { "pin-register", "ChunkerHandle", "sorafs sf1@1.0.0" };
-        yield return new object?[] { "pin-register", "SubmittedEpoch", null };
-        yield return new object?[] { "pin-register", "ContentLength", null };
-        yield return new object?[] { "pin-register", "PinFeeNano", null };
-        yield return new object?[] { "pin-register", "PinFeeAssetId", null };
-        yield return new object?[] { "pin-register", "PinFeeTreasuryAccountId", null };
-        yield return new object?[] { "pin-register", "PinFeeTreasuryAccountId", "treasury@boi" };
-        yield return new object?[] { "pin-register", "Alias.ProofBase64", "bad" };
-        yield return new object?[] { "pin-register", "SuccessorOfHex", "0x" + SoraFsManifestDigestHex };
     }
 
     [Theory]
@@ -16420,8 +16117,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public static IEnumerable<object?[]> InvalidContractCallViewResponseFields()
     {
         yield return new object?[] { "contract-call", "dataspace", null, "must not be null" };
-        yield return new object?[] { "contract-call", "contract_id", null, "must not be null" };
-        yield return new object?[] { "contract-call", "contract_id", "router dex", "whitespace" };
         yield return new object?[] { "contract-call", "contract_address", " iroha1qqqq", "surrounding whitespace" };
         yield return new object?[] { "contract-call", "code_hash_hex", null, "must not be null" };
         yield return new object?[] { "contract-call", "abi_hash_hex", null, "must not be null" };
@@ -17142,26 +16837,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
             Assert.True(payload.RootElement.TryGetProperty("fee_payment", out _));
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent($$"""
-                {
-                  "ok": true,
-                  "submitted": false,
-                  "dataspace": "universal",
-                  "contract_id": "router::dex.universal",
-                  "contract_address": "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-                  "code_hash_hex": "{{ContractCodeHashHex}}",
-                  "abi_hash_hex": "{{ContractAbiHashHex}}",
-                  "creation_time_ms": 123456,
-                  "tx_hash_hex": null,
-                  "transaction_scaffold_b64": "c2NhZmZvbGQ=",
-                  "signed_transaction_b64": "c2lnbmVk",
-                  "signing_message_b64": "bWVzc2FnZQ==",
-                  "entrypoint": "main"
-                }
-                """),
-            };
+            return JsonResponse(ContractCallResponseJson(ContractCodeHashHex, ContractAbiHashHex));
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -17196,7 +16872,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                FeePayment = EmptyAuthorityFeePayment,
+                FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("contract call response.ok", error.Message);
@@ -17219,18 +16895,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent($$"""
-                {
-                  "ok": true,
-                  "submitted": false,
-                  "dataspace": "universal",
-                  "contract_id": "router::dex.universal",
-                  "code_hash_hex": "{{ContractCodeHashHex}}",
-                  "abi_hash_hex": "{{ContractAbiHashHex}}",
-                  "creation_time_ms": 123456,
-                  "{{responseField}}": {{JsonSerializer.Serialize(responseValue)}}
-                }
-                """),
+            Content = new StringContent(ContractCallRawResponseJson(responseField, responseValue)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -17240,7 +16905,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                FeePayment = EmptyAuthorityFeePayment,
+                FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains($"contract call response.{responseField}", error.Message);
@@ -17262,7 +16927,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 Authority = ContractAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
-                FeePayment = EmptyAuthorityFeePayment,
+                FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
             }, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("contract call response.creation_time_ms", error.Message);
@@ -17277,7 +16942,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[]
         {
             "ok",
-            "{\"ok\":true,\"ok\":true,\"dataspace\":\"universal\",\"contract_id\":\"router::dex.universal\",\"code_hash_hex\":\""
+            "{\"ok\":true,\"ok\":true,\"dataspace\":\"universal\",\"code_hash_hex\":\""
                 + ContractCodeHashHex
                 + "\",\"abi_hash_hex\":\""
                 + ContractAbiHashHex
@@ -17286,7 +16951,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            "contract call response.audit.nonce",
+            "audit.nonce",
             ContractCallUnknownExtensionDuplicateJson(),
             "must not appear more than once",
         };
@@ -17298,15 +16963,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "dataspace", RemoveTopLevelJsonField(ContractCallRawResponseJson("dataspace", "universal"), "dataspace"), "must not be null" };
         yield return new object[] { "dataspace", ContractCallRawResponseJson("dataspace", null), "must not be null" };
         yield return new object[] { "dataspace", ContractCallRawResponseJson("dataspace", " universal"), "surrounding whitespace" };
-        yield return new object[] { "contract_id", RemoveTopLevelJsonField(ContractCallRawResponseJson("contract_id", "router::dex.universal"), "contract_id"), "must not be null" };
-        yield return new object[] { "contract_id", ContractCallRawResponseJson("contract_id", null), "must not be null" };
-        yield return new object[] { "contract_id", ContractCallRawResponseJson("contract_id", 1), "string" };
-        yield return new object[] { "contract_id", ContractCallRawResponseJson("contract_id", "router dex"), "whitespace" };
         yield return new object[] { "contract_address", ContractCallRawResponseJson("contract_address", " iroha1qqqq"), "surrounding whitespace" };
         yield return new object[]
         {
             "code_hash_hex",
-            "{\"ok\":true,\"dataspace\":\"universal\",\"contract_id\":\"router::dex.universal\",\"code_hash_hex\":\""
+            "{\"ok\":true,\"dataspace\":\"universal\",\"code_hash_hex\":\""
                 + ContractCodeHashHex
                 + "\",\"code_hash_hex\":\""
                 + ContractCodeHashHex
@@ -17329,44 +16990,64 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "signed_transaction_b64", ContractCallRawResponseJson("signed_transaction_b64", "c2ln bmVk"), "whitespace" };
         yield return new object[] { "signing_message_b64", ContractCallRawResponseJson("signing_message_b64", "AR=="), "canonical base64" };
         yield return new object[] { "entrypoint", ContractCallRawResponseJson("entrypoint", " main"), "surrounding whitespace" };
+        yield return new object[]
+        {
+            "operation_receipt",
+            RemoveTopLevelJsonField(
+                ContractCallResponseJsonObject().ToJsonString(),
+                "operation_receipt"),
+            "must not be null",
+        };
+        yield return new object[] { "operation_receipt", ContractCallRawResponseJson("operation_receipt", null), "must not be null" };
+        yield return new object[]
+        {
+            "operation_receipt.gas_limit",
+            RemoveNestedJsonField(
+                ContractCallResponseJsonObject().ToJsonString(),
+                "operation_receipt",
+                "gas_limit"),
+            "must not be null",
+        };
+        yield return new object[]
+        {
+            "operation_receipt.fee_payment",
+            RemoveNestedJsonField(
+                ContractCallResponseJsonObject().ToJsonString(),
+                "operation_receipt",
+                "fee_payment"),
+            "must not be null",
+        };
+        yield return new object[]
+        {
+            "operation_receipt.payload_digest_hex",
+            ContractCallOperationReceiptResponseJson("payload_digest_hex", null),
+            "must not be null",
+        };
+        yield return new object[]
+        {
+            "operation_receipt.operation_kind",
+            ContractCallOperationReceiptResponseJson("operation_kind", 1),
+            "string",
+        };
     }
 
     [Theory]
     [MemberData(nameof(InvalidRawContractCallResponses))]
-    public void RawContractCallResponseRejectsMalformedPayloads(
+    public async Task ContractCallAsyncRejectsMalformedPayloads(
         string expectedField,
         string json,
         string expectedMessage)
     {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiContractCallResponse>(json));
+        using var handler = new RecordingHandler(_ => JsonResponse(json));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.CallContractAsync(
+                ValidContractCallRequest(),
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedField, error.Message);
         Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public void RawContractCallResponseWriteRejectsMalformedSigningMaterial()
-    {
-        var response = ValidContractCallResponse();
-        SetPrivateField(response, "signingMessageBase64", "AR==");
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("signing_message_b64", error.Message);
-        Assert.Contains("canonical base64", error.Message);
-    }
-
-    [Fact]
-    public void RawContractCallResponseWriteRejectsZeroCreationTime()
-    {
-        var response = ValidContractCallResponse();
-        SetPrivateField(response, "creationTimeMilliseconds", 0UL);
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("creation_time_ms", error.Message);
-        Assert.Contains("positive", error.Message);
     }
 
     public static IEnumerable<object[]> InvalidRawContractViewResponses()
@@ -17631,7 +17312,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         yield return new object?[] { "contract-call", "Ok", false };
         yield return new object?[] { "contract-call", "Dataspace", "uni versal" };
-        yield return new object?[] { "contract-call", "ContractId", "router dex" };
         yield return new object?[] { "contract-call", "ContractAddress", " iroha1qqqq" };
         yield return new object?[] { "contract-call", "CodeHashHex", "0x" + ContractCodeHashHex };
         yield return new object?[] { "contract-call", "AbiHashHex", new string('B', 64) };
@@ -18627,6 +18307,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = accountId,
             CreationTimeMilliseconds = 123,
+            FeePayment = EmptyAuthorityFeePayment,
             Instructions = [instructionBase64],
         }, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -18679,6 +18360,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountId = CanonicalMultisigAccountId,
             SignerAccountId = MultisigSignerAccountId,
+            FeePayment = EmptyAuthorityFeePayment,
             Instructions = instructions,
         };
 
@@ -18786,6 +18468,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MultisigAccountAlias = "ops@universal",
                 SignerAccountId = MultisigSignerAccountId,
+                FeePayment = EmptyAuthorityFeePayment,
                 Instructions = ["AQID"],
             }, cancellationToken: TestContext.Current.CancellationToken));
 
@@ -18815,6 +18498,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MultisigAccountAlias = "ops@universal",
                 SignerAccountId = MultisigSignerAccountId,
+                FeePayment = EmptyAuthorityFeePayment,
                 Instructions = ["AQID"],
             }, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -18839,6 +18523,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MultisigAccountAlias = "ops@universal",
                 SignerAccountId = MultisigSignerAccountId,
+                FeePayment = EmptyAuthorityFeePayment,
                 Instructions = ["AQID"],
             }, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -18864,6 +18549,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MultisigAccountAlias = "ops@universal",
                 SignerAccountId = MultisigSignerAccountId,
+                FeePayment = EmptyAuthorityFeePayment,
                 Instructions = ["AQID"],
             }, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -18896,6 +18582,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MultisigAccountAlias = "ops@universal",
                 SignerAccountId = MultisigSignerAccountId,
+                FeePayment = EmptyAuthorityFeePayment,
                 Instructions = ["AQID"],
             }, cancellationToken: TestContext.Current.CancellationToken));
 
@@ -18919,6 +18606,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MultisigAccountAlias = "ops@universal",
                 SignerAccountId = MultisigSignerAccountId,
+                FeePayment = EmptyAuthorityFeePayment,
                 Instructions = ["AQID"],
             }, cancellationToken: TestContext.Current.CancellationToken));
 
@@ -18947,6 +18635,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 MultisigAccountAlias = "ops@universal",
                 SignerAccountId = MultisigSignerAccountId,
+                FeePayment = EmptyAuthorityFeePayment,
                 Instructions = ["AQID"],
             }, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/v1/multisig/propose", handler.LastRequest!.RequestUri!.AbsolutePath);
@@ -18977,6 +18666,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             MultisigAccountAlias = "ops@universal",
             SignerAccountId = MultisigSignerAccountId,
+            FeePayment = EmptyAuthorityFeePayment,
             ProposalId = new string('a', 64),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -21026,10 +20716,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Dataspace = RequiredStringValue(value),
             },
-            ("contract-call", "ContractId") => ValidContractCallResponse() with
-            {
-                ContractId = RequiredStringValue(value),
-            },
             ("contract-call", "ContractAddress") => ValidContractCallResponse() with
             {
                 ContractAddress = RequiredStringValue(value),
@@ -21173,7 +20859,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Ok = true,
             Submitted = false,
             Dataspace = "universal",
-            ContractId = "router::dex.universal",
             ContractAddress = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
             CodeHashHex = ContractCodeHashHex,
             AbiHashHex = ContractAbiHashHex,
@@ -21183,6 +20868,26 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             SignedTransactionBase64 = "c2lnbmVk",
             SigningMessageBase64 = "bWVzc2FnZQ==",
             Entrypoint = "main",
+            OperationReceipt = ValidContractCallOperationReceipt(),
+        };
+    }
+
+    private static ToriiOperationReceipt ValidContractCallOperationReceipt()
+    {
+        return new ToriiOperationReceipt
+        {
+            OperationKind = "contract_call",
+            Status = "pending_signature",
+            Transport = "torii",
+            Dataspace = "universal",
+            ContractAlias = "router::dex.universal",
+            ContractAddress = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            CodeHashHex = ContractCodeHashHex,
+            AbiHashHex = ContractAbiHashHex,
+            Entrypoint = "main",
+            GasLimit = 500_000,
+            FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
+            PayloadDigestHex = new string('d', 64),
         };
     }
 
@@ -22565,47 +22270,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("cid-lookup", "Files[0].Path[0]") => ValidSoraFsCidLookupResponse() with
             {
                 Files = [SoraFsFileEntryWithPrivateField("path", new[] { RequiredStringValue(value) })],
-            },
-            ("pin-register", "ManifestDigestHex") => SoraFsPinRegisterResponseObject() with
-            {
-                ManifestDigestHex = (string?)value,
-            },
-            ("pin-register", "ChunkerHandle") => SoraFsPinRegisterResponseObject() with
-            {
-                ChunkerHandle = (string?)value,
-            },
-            ("pin-register", "SubmittedEpoch") => SoraFsPinRegisterResponseObject() with
-            {
-                SubmittedEpoch = (ulong?)value,
-            },
-            ("pin-register", "ContentLength") => SoraFsPinRegisterResponseObject() with
-            {
-                ContentLength = (ulong?)value,
-            },
-            ("pin-register", "PinFeeNano") => SoraFsPinRegisterResponseObject() with
-            {
-                PinFeeNano = (ulong?)value,
-            },
-            ("pin-register", "PinFeeAssetId") => SoraFsPinRegisterResponseObject() with
-            {
-                PinFeeAssetId = (string?)value,
-            },
-            ("pin-register", "PinFeeTreasuryAccountId") => SoraFsPinRegisterResponseObject() with
-            {
-                PinFeeTreasuryAccountId = (string?)value,
-            },
-            ("pin-register", "Alias.ProofBase64") => SoraFsPinRegisterResponseObject() with
-            {
-                Alias = new ToriiSoraFsPinAlias
-                {
-                    Namespace = "docs",
-                    Name = "main",
-                    ProofBase64 = (string?)value,
-                },
-            },
-            ("pin-register", "SuccessorOfHex") => SoraFsPinRegisterResponseObject() with
-            {
-                SuccessorOfHex = RequiredStringValue(value),
             },
             _ => throw new ArgumentOutOfRangeException(
                 nameof(propertyName),
@@ -27245,182 +26909,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static ToriiSoraFsPinRegisterResponse SoraFsPinRegisterResponseObject()
-    {
-        return new ToriiSoraFsPinRegisterResponse
-        {
-            ManifestDigestHex = SoraFsManifestDigestHex,
-            ChunkerHandle = "sorafs.sf1@1.0.0",
-            SubmittedEpoch = 42,
-            ContentLength = 4096,
-            PinFeeNano = 500000000,
-            PinFeeAssetId = "xor#universal",
-            PinFeeTreasuryAccountId = SoraFsTreasuryAccountId,
-            Alias = new ToriiSoraFsPinAlias
-            {
-                Namespace = "docs",
-                Name = "main",
-                ProofBase64 = Convert.ToBase64String("alias-proof"u8.ToArray()),
-            },
-            SuccessorOfHex = new string('c', 64),
-        };
-    }
-
-    private static string SoraFsPinAliasJson(string field, object? value)
-    {
-        var response = new JsonObject
-        {
-            ["namespace"] = "docs",
-            ["name"] = "main",
-            ["proof_base64"] = Convert.ToBase64String("alias-proof"u8.ToArray()),
-        };
-
-        switch (field)
-        {
-            case "namespace":
-                response["namespace"] = JsonValueForSoraFs(value);
-                break;
-            case "name":
-                response["name"] = JsonValueForSoraFs(value);
-                break;
-            case "proof_base64":
-                response["proof_base64"] = JsonValueForSoraFs(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown SoraFS pin alias field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string SoraFsPinAliasDuplicatePropertyJson(string propertyName)
-    {
-        var aliasProofBase64 = Convert.ToBase64String("alias-proof"u8.ToArray());
-
-        return $$"""
-            {
-              "namespace": "docs",
-              "name": "main",
-              "proof_base64": "{{aliasProofBase64}}",
-              "{{propertyName}}": "docs"
-            }
-            """;
-    }
-
-    private static string SoraFsPinAliasUnknownExtensionDuplicateJson()
-    {
-        return JsonWithIgnoredAuditDuplicate(SoraFsPinAliasJson("name", "main"));
-    }
-
-    private static string SoraFsPinRegisterResponseJson(string field, object? value)
-    {
-        var alias = new JsonObject
-        {
-            ["namespace"] = "docs",
-            ["name"] = "main",
-            ["proof_base64"] = Convert.ToBase64String("alias-proof"u8.ToArray()),
-        };
-        var response = new JsonObject
-        {
-            ["manifest_digest_hex"] = SoraFsManifestDigestHex,
-            ["chunker_handle"] = "sorafs.sf1@1.0.0",
-            ["submitted_epoch"] = 42,
-            ["content_length"] = 4096,
-            ["pin_fee_nano"] = 500000000,
-            ["pin_fee_asset_id"] = "xor#universal",
-            ["pin_fee_treasury_account_id"] = SoraFsTreasuryAccountId,
-            ["alias"] = alias,
-            ["successor_of_hex"] = new string('c', 64),
-        };
-
-        switch (field)
-        {
-            case "manifest_digest_hex":
-                response["manifest_digest_hex"] = JsonValueForSoraFs(value);
-                break;
-            case "chunker_handle":
-                response["chunker_handle"] = JsonValueForSoraFs(value);
-                break;
-            case "submitted_epoch":
-                response["submitted_epoch"] = JsonValueForSoraFs(value);
-                break;
-            case "content_length":
-                response["content_length"] = JsonValueForSoraFs(value);
-                break;
-            case "pin_fee_nano":
-                response["pin_fee_nano"] = JsonValueForSoraFs(value);
-                break;
-            case "pin_fee_asset_id":
-                response["pin_fee_asset_id"] = JsonValueForSoraFs(value);
-                break;
-            case "pin_fee_treasury_account_id":
-                response["pin_fee_treasury_account_id"] = JsonValueForSoraFs(value);
-                break;
-            case "alias":
-                response["alias"] = JsonValueForSoraFs(value);
-                break;
-            case "alias.namespace":
-                alias["namespace"] = JsonValueForSoraFs(value);
-                break;
-            case "alias.name":
-                alias["name"] = JsonValueForSoraFs(value);
-                break;
-            case "alias.proof_base64":
-                alias["proof_base64"] = JsonValueForSoraFs(value);
-                break;
-            case "successor_of_hex":
-                response["successor_of_hex"] = JsonValueForSoraFs(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown SoraFS pin register response field.");
-        }
-
-        return response.ToJsonString();
-    }
-
-    private static string SoraFsPinRegisterDuplicatePropertyJson(string propertyName)
-    {
-        var aliasProofBase64 = Convert.ToBase64String("alias-proof"u8.ToArray());
-        var successorHex = new string('c', 64);
-
-        return $$"""
-            {
-              "manifest_digest_hex": "{{SoraFsManifestDigestHex}}",
-              "chunker_handle": "sorafs.sf1@1.0.0",
-              "submitted_epoch": 42,
-              "content_length": 4096,
-              "pin_fee_nano": 500000000,
-              "pin_fee_asset_id": "xor#universal",
-              "pin_fee_treasury_account_id": "{{SoraFsTreasuryAccountId}}",
-              "alias": {
-                "namespace": "docs",
-                "name": "main",
-                "proof_base64": "{{aliasProofBase64}}"
-              },
-              "successor_of_hex": "{{successorHex}}",
-              "{{propertyName}}": "{{SoraFsManifestDigestHex}}"
-            }
-            """;
-    }
-
-    private static string SoraFsPinRegisterUnknownExtensionDuplicateJson()
-    {
-        return JsonWithIgnoredAuditDuplicate(SoraFsPinRegisterResponseJson("chunker_handle", "sorafs.sf1@1.0.0"));
-    }
-
-    private static string SoraFsPinRegisterAliasUnknownExtensionDuplicateJson()
-    {
-        var json = SoraFsPinRegisterResponseJson("chunker_handle", "sorafs.sf1@1.0.0");
-        var marker = $"\"proof_base64\":\"{Convert.ToBase64String("alias-proof"u8.ToArray())}\"";
-        var index = json.IndexOf(marker, StringComparison.Ordinal);
-        if (index < 0)
-        {
-            throw new InvalidOperationException("SoraFS pin register fixture is missing the nested alias proof.");
-        }
-
-        return json.Insert(index + marker.Length, ",\"audit\":{\"nonce\":1,\"nonce\":2}");
-    }
-
     private static JsonNode? JsonValueForSoraFs(object? value)
     {
         return value switch
@@ -27911,7 +27399,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["ok"] = true,
             ["submitted"] = false,
             ["dataspace"] = "universal",
-            ["contract_id"] = "router::dex.universal",
             ["contract_address"] = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
             ["code_hash_hex"] = ContractCodeHashHex,
             ["abi_hash_hex"] = ContractAbiHashHex,
@@ -27921,6 +27408,29 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["signed_transaction_b64"] = "c2lnbmVk",
             ["signing_message_b64"] = "bWVzc2FnZQ==",
             ["entrypoint"] = "main",
+            ["operation_receipt"] = ContractCallOperationReceiptJsonObject(),
+        };
+    }
+
+    private static JsonObject ContractCallOperationReceiptJsonObject()
+    {
+        return new JsonObject
+        {
+            ["operation_kind"] = "contract_call",
+            ["status"] = "pending_signature",
+            ["transport"] = "torii",
+            ["dataspace"] = "universal",
+            ["contract_alias"] = "router::dex.universal",
+            ["contract_address"] = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+            ["code_hash_hex"] = ContractCodeHashHex,
+            ["abi_hash_hex"] = ContractAbiHashHex,
+            ["tx_hash_hex"] = null,
+            ["entrypoint"] = "main",
+            ["gas_limit"] = 500_000,
+            ["gas_used"] = null,
+            ["fee_payment"] = JsonSerializer.SerializeToNode(
+                FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000)),
+            ["payload_digest_hex"] = new string('d', 64),
         };
     }
 
@@ -27928,6 +27438,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var response = ContractCallResponseJsonObject();
         response[field] = JsonValueForContractCallView(value);
+        return response.ToJsonString();
+    }
+
+    private static string ContractCallOperationReceiptResponseJson(
+        string field,
+        object? value)
+    {
+        var response = ContractCallResponseJsonObject();
+        var receipt = (JsonObject)response["operation_receipt"]!;
+        receipt[field] = JsonValueForContractCallView(value);
         return response.ToJsonString();
     }
 
@@ -28542,22 +28062,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     private static string ContractCallResponseJson(string codeHashHex, string abiHashHex)
     {
-        return new JsonObject
-        {
-            ["ok"] = true,
-            ["submitted"] = false,
-            ["dataspace"] = "universal",
-            ["contract_id"] = "router::dex.universal",
-            ["contract_address"] = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-            ["code_hash_hex"] = codeHashHex,
-            ["abi_hash_hex"] = abiHashHex,
-            ["creation_time_ms"] = 123456,
-            ["tx_hash_hex"] = null,
-            ["transaction_scaffold_b64"] = "c2NhZmZvbGQ=",
-            ["signed_transaction_b64"] = "c2lnbmVk",
-            ["signing_message_b64"] = "bWVzc2FnZQ==",
-            ["entrypoint"] = "main",
-        }.ToJsonString();
+        var response = ContractCallResponseJsonObject();
+        response["code_hash_hex"] = codeHashHex;
+        response["abi_hash_hex"] = abiHashHex;
+        return response.ToJsonString();
     }
 
     private static string ContractViewSuccessResponseJson(string codeHashHex, string abiHashHex)
@@ -28972,7 +28480,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["resolved_multisig_account_id"] = CanonicalAccountId,
             ["submitted"] = false,
             ["dataspace"] = "universal",
-            ["contract_id"] = "router::dex.universal",
             ["contract_address"] = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
             ["code_hash_hex"] = ContractCodeHashHex,
             ["abi_hash_hex"] = ContractAbiHashHex,
@@ -28981,6 +28488,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["executed_tx_hash_hex"] = field == "executed_tx_hash_hex" ? value : null,
             ["signing_message_b64"] = "bXVsdGlzaWc=",
             ["entrypoint"] = "main",
+            ["operation_receipt"] = ContractCallOperationReceiptJsonObject(),
         }.ToJsonString();
     }
 
@@ -30236,22 +29744,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static ToriiSoraFsPinRegisterRequest ValidSoraFsPinRegisterRequest()
+    private static SignedTransactionEnvelope ValidSignedTransactionEnvelope()
     {
-        return new ToriiSoraFsPinRegisterRequest
-        {
-            Authority = SoraFsAuthorityAccountId,
-            PrivateKey = "ed25519:deadbeef",
-            ManifestBytes = "manifest-norito"u8.ToArray(),
-            SubmittedEpoch = 42,
-            Alias = new ToriiSoraFsPinAlias
-            {
-                Namespace = "docs",
-                Name = "main",
-                ProofBase64 = Convert.ToBase64String("alias-proof"u8.ToArray()),
-            },
-            SuccessorOfHex = new string('C', 64),
-        };
+        return new TransactionBuilder(
+            "00000042",
+            CanonicalAccountId,
+            EmptyAuthorityFeePayment)
+            .TransferAsset(
+                "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                "15.75",
+                CanonicalAccountId)
+            .SetCreationTimeMilliseconds(1736000000000)
+            .SetTimeToLiveMilliseconds(3500)
+            .SetNonce(17)
+            .BuildSigned(CanonicalPrivateKeySeed);
     }
 
     private static ToriiVerifyingKeyRegisterRequest ValidVerifyingKeyRegisterRequest()

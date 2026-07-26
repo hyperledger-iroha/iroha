@@ -289,6 +289,7 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "ToriiClient",
     "ToriiBrowserClient",
     "buildTransaction",
+    "buildCancelAssetLockInstruction",
     "noritoEncodeInstruction",
     "privacyCapabilitiesV1",
   ]) {
@@ -332,6 +333,30 @@ test("package dist quantity builders reject numbers and noncanonical strings", (
   assert.equal(
     packageExports.buildMintAssetInstruction({ assetId, quantity: "1.25" }).Mint.Asset.object,
     "1.25",
+  );
+});
+
+test("package dist exposes strict CancelAssetLock V1 construction", () => {
+  assert.deepEqual(
+    packageExports.buildCancelAssetLockInstruction({
+      lockId: "merchant-lock-001",
+      expectedRemainingAmount: "1500",
+    }),
+    {
+      CancelAssetLock: {
+        escrow_id:
+          "hash:996264C84790C64086AAB0EF693A1D33EC18FC0B1C1229774C461A00939A6687#F2BD",
+        expected_remaining_amount: "1500",
+      },
+    },
+  );
+  assert.throws(
+    () =>
+      packageExports.buildCancelAssetLockInstruction({
+        lockId: "merchant-lock-001",
+        expectedRemainingAmount: 1500,
+      }),
+    /JavaScript numbers/u,
   );
 });
 

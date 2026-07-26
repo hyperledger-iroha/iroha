@@ -4,6 +4,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added strict JavaScript/TypeScript `CancelAssetLock` parity. The new builder
+  derives the native escrow id, requires a positive canonical
+  `expected_remaining_amount`, and the native and pure-JavaScript codecs reject
+  the retired one-field cancellation shape.
 - Made transaction finality polling global-only and state-authoritative across
   the Node, browser, and Nexus clients. Raw status reads retain only explicit
   `local`/`global` diagnostics, while the pre-release `auto` mode, configurable

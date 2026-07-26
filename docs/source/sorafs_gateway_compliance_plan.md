@@ -131,14 +131,23 @@ evidence and cannot mark gateway compliance ready.
   regional deployment boundaries.
   Every acknowledgement must name the promoted catalog digest; split-gateway
   catalog evidence fails closed.
-  Controller evidence carries bounded, signed `source_anchors` and proves
+  Controller and gateway-reload evidence carry both
+  `predecessor_catalog_digest_hex` and `predecessor_catalog_sequence`; those
+  fields must match the promotion's complete current/predecessor catalog
+  history, and the reload rollback digest must name that same predecessor.
+  Controller evidence also carries bounded, signed `source_anchors` and proves
   predecessor validation, durable history reconciliation, last-known-good
   recovery, and atomic replacement. Enforcement and adversarial probe rows must
   record exact HTTP 451 responses with
   `error = "gateway_compliance_denied"`, a recognized `source` of `baseline` or
   `legal_safety_hold`, the lowercase promoted catalog digest, and the canonical
-  private no-store cache policy. Old status codes, response codes, headers, and
-  local-policy fields are rejected.
+  private no-store cache policy. Enforcement source coverage is derived from
+  `routes[].source` and must include both recognized denial paths. Adversarial
+  coverage is derived from `probes[].attack` and must include exactly
+  `stale_catalog`, `wrong_predecessor`, `invalid_signature`, and
+  `split_gateway_catalog`; separate declared coverage counts or inventories are
+  not accepted. Old status codes, response codes, headers, and local-policy
+  fields are rejected.
   Precedence evidence must demonstrate
   `legal_safety_hold > accepted_appeal > baseline` from a finalized-chain
   projection. Governance approval must match the promotion's
@@ -167,18 +176,25 @@ evidence and cannot mark gateway compliance ready.
   those fields to match the observability artifact fingerprint before final
   promotion can report ready. Aggregate promotion also rechecks the
   lane-proven digest relationships: catalog-bound artifact fingerprints must
-  match `valid_catalog_digests`, and policy-bound artifact fingerprints must
+  match `valid_catalog_digests`, predecessor-bound controller and reload
+  fingerprints must match the single atomic current/predecessor object in
+  `valid_catalog_history_bindings`, and policy-bound artifact fingerprints must
   match `valid_policy_digests`. Gateway compliance rollout summaries must
-  expose exactly one active promoted catalog digest and exactly one active
-  policy digest; mixed catalog or policy anchors fail closed before final
-  promotion can report ready.
+  expose exactly one active promoted catalog digest, exactly one complete
+  catalog-history binding, and exactly one active policy digest; mixed catalog,
+  predecessor, or policy anchors fail closed before final promotion can report
+  ready.
 - `scripts/build_sorafs_gateway_compliance_canary.py` is a payload-free
   canonicalizer, not an evidence generator. It requires a bounded
   `--probe-artifact` produced by a real authenticated probe, validates every
-  observed field through the release checker, and atomically writes canonical
-  JSON without following symlinks. It never creates positive verification
-  claims. `--non-production-fixture` changes `status` and `evidence_scope` so
-  fixture output is explicit and cannot satisfy the release gate.
+  observed field through the release checker, and requires explicit
+  `--deployment-id`, `--environment`, and `--generated-at-unix` values that
+  exactly match the probe before atomically writing canonical JSON without
+  following symlinks. It never creates positive verification claims.
+  `--non-production-fixture` changes `status` and `evidence_scope` so fixture
+  output is explicit and cannot satisfy the release gate. The checked-in
+  examples use only those marked non-production fixtures; operators must
+  replace the fixture path and remove the flag for genuine evidence.
 
 ## Operator Commands
 
@@ -234,14 +250,16 @@ probe response bodies, accepted-appeal records, signed transactions, tokens,
 private keys, and other raw payloads. Every downstream artifact binds to the
 single promoted signed catalog with `catalog_digest_hex`; governance approval
 also binds `policy_digest_hex`. The gate records mismatches on the offending
-artifact. The runner's dry-run `evidence_contract` exposes the exact schema but
-marks its plan `non_production_dry_run`; a dry-run is never promotion evidence.
+artifact. The runner's dry-run `evidence_contract` exposes the exact schema and
+command plan; the plan itself is never promotion evidence.
 The canonicalizer only accepts already observed probe artifacts and cannot
 replace authenticated source collection, finalized appeal/hold publication,
 threshold signing, or independently administered gateway deployment.
 Gateway compliance readiness schemas are exact. Removed local payload flags,
 local catalog/report fields, legacy response headers, and unknown fields are
 rejected rather than represented as false booleans.
+Moderation-toggle evidence also records a successful
+`control_api_status_code`; non-2xx control responses fail the lane.
 
 ## Enforcement Semantics
 

@@ -2367,7 +2367,6 @@ fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
         GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order",
-        GovernanceLogPayloadV1::PorChallenge(_) => "por_challenge",
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
         GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
@@ -2381,6 +2380,8 @@ fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
         }
         GovernanceLogPayloadV1::OrderbookSettlementReceipt(_) => "orderbook_settlement_receipt",
         GovernanceLogPayloadV1::ExternalPayload(_) => "external_payload",
+        GovernanceLogPayloadV1::PorChallengePublication(_) => "por_challenge_publication",
+        GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report",
     }
 }
 
@@ -2401,7 +2402,6 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         GovernanceLogValidationError::ReplicationOrder(error) => {
             replication_order_validation_code(error)
         }
-        GovernanceLogValidationError::PorChallenge(error) => por_challenge_validation_code(error),
         GovernanceLogValidationError::PorProof(error) => por_proof_validation_code(error),
         GovernanceLogValidationError::PdpArchive(_)
         | GovernanceLogValidationError::PdpArchiveDecisionAfterNode { .. }
@@ -2414,6 +2414,8 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         | GovernanceLogValidationError::AppealFinanceSettlementReceipt(_)
         | GovernanceLogValidationError::OrderbookSettlementReceipt(_)
         | GovernanceLogValidationError::ExternalPayload(_)
+        | GovernanceLogValidationError::PorChallengePublication(_)
+        | GovernanceLogValidationError::PorWeeklyReport(_)
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId
@@ -2430,9 +2432,6 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         GovernanceLogValidationError::ReplicationOrder(error) => {
             replication_order_validation_category(error)
         }
-        GovernanceLogValidationError::PorChallenge(error) => {
-            por_challenge_validation_category(error)
-        }
         GovernanceLogValidationError::PorProof(_) => CATEGORY_VALIDATION,
         GovernanceLogValidationError::PdpArchive(_)
         | GovernanceLogValidationError::PdpArchiveDecisionAfterNode { .. }
@@ -2445,6 +2444,8 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
         | GovernanceLogValidationError::AppealFinanceSettlementReceipt(_)
         | GovernanceLogValidationError::OrderbookSettlementReceipt(_)
         | GovernanceLogValidationError::ExternalPayload(_)
+        | GovernanceLogValidationError::PorChallengePublication(_)
+        | GovernanceLogValidationError::PorWeeklyReport(_)
         | GovernanceLogValidationError::InvalidNodeCidLength { .. }
         | GovernanceLogValidationError::InvalidPrevCidLength { .. }
         | GovernanceLogValidationError::MissingPublisherPeerId

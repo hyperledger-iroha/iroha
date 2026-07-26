@@ -5,9 +5,11 @@
 
 mod legacy_note;
 mod receiver_snapshot;
+mod status;
 
 pub use legacy_note::*;
 pub use receiver_snapshot::*;
+pub use status::*;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, SignatureOf};

@@ -1,0 +1,86 @@
+{
+  "status": "Error",
+  "code": "SFS-BND-001",
+  "category": "signature",
+  "message": "fixture bundle payload validation failed",
+  "action": "Fix the invalid payload named in the bundle outcome before rerunning cross-link validation.",
+  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "telemetry_tags": [
+    "sorafs.reference.bundle",
+    "sorafs.reference.code.SFS-BND-001"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "PdpProofV1"
+    },
+    {
+      "key": "version",
+      "value": "1"
+    },
+    {
+      "key": "challenge_id_hex",
+      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+    },
+    {
+      "key": "manifest_digest_hex",
+      "value": "4242424242424242424242424242424242424242424242424242424242424242"
+    },
+    {
+      "key": "provider_id_hex",
+      "value": "1010101010101010101010101010101010101010101010101010101010101010"
+    },
+    {
+      "key": "epoch_id",
+      "value": "1700000"
+    },
+    {
+      "key": "proof_leaf_count",
+      "value": "2"
+    },
+    {
+      "key": "hot_leaf_proof_count",
+      "value": "5"
+    },
+    {
+      "key": "signature_len",
+      "value": "64"
+    },
+    {
+      "key": "issued_at_unix",
+      "value": "1700000050"
+    },
+    {
+      "key": "proof_error",
+      "value": "invalid PDP proof signature: invalid PDP Ed25519 signature: signature payload must not be all zero"
+    },
+    {
+      "key": "payload_code",
+      "value": "SFS-SIG-008"
+    },
+    {
+      "key": "payload_message",
+      "value": "PDP proof validation failed: invalid PDP proof signature: invalid PDP Ed25519 signature: signature payload must not be all zero"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "replication_order",
+      "path": "replication_order/order_v1.to"
+    },
+    {
+      "kind": "pdp_commitment",
+      "path": "pdp/commitment_v1.to"
+    },
+    {
+      "kind": "pdp_challenge",
+      "path": "pdp/challenge_v1.to"
+    },
+    {
+      "kind": "pdp_proof",
+      "path": "pdp/negative/missing_signature_proof_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 1700001234
+}

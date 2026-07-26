@@ -21,7 +21,6 @@ workspace = true
 norito.workspace = true
 iroha_crypto = { workspace = true, default-features = false, features = [] }
 iroha_data_model = { workspace = true, default-features = false, features = ["governance", "json"] }
-iroha_schema.workspace = true
 blake3.workspace = true
 rand.workspace = true
 hex.workspace = true

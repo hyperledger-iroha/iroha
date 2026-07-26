@@ -5,7 +5,7 @@ summary: Default pricing tiers, collateral policy, and credit settlement rules f
 
 # SoraFS Pricing Schedule
 
-This document captures the launch configuration for the SoraFS deal engine (roadmap item SF-8a).
+This document captures the launch configuration for the ledger-authoritative SoraFS orderbook, reserve/rent, and hedging-billing services (roadmap item SF-8a).
 It describes the default pricing schedule pushed by governance, how collateral is derived, and
 how provider credit balances are monitored. All values are encoded on-chain via
 `PricingScheduleRecord` and can be updated atomically using the `SetPricingSchedule` instruction.
@@ -30,7 +30,7 @@ Capacity declarations may override the tier by adding the metadata entry `sorafs
 this entry into the `CapacityDeclarationRecord` and rejects mismatched out-of-band overrides.
 Telemetry rejects unknown values and falls back to the schedule
 default when the metadata is absent. Capacity telemetry submissions also include an `egress_bytes`
-counter so the deal engine can apply the corresponding egress fees alongside storage charges.
+counter so the ledger-authoritative economics services can apply the corresponding egress fees alongside storage charges.
 
 ### Storage charge calculation
 
@@ -79,8 +79,8 @@ encoded in `CreditPolicy`:
 - Low balance alert threshold: 20 % of the expected settlement fee (2 000 bps).
 
 When telemetry is recorded the expected settlement charge for the next window is computed from the
-pricing schedule and stored in both the fee ledger and the provider credit record. The deal engine
-tracks `low_balance_since_epoch` when balances fall under the threshold so operators can top up
+pricing schedule and stored in both the fee ledger and the provider credit record. The ledger-authoritative economics services
+track `low_balance_since_epoch` when balances fall under the threshold so operators can top up
 credit before settlement failure. A debit larger than the available balance is rejected atomically;
 the runtime does not convert an unpayable debit into a zero balance and discard the remainder.
 
@@ -93,31 +93,20 @@ points are bounded; commitment thresholds are strictly increasing, discounts are
 stacked discounts cannot exceed 100%. Commitment tiers (64 maximum) and canonical control-free
 governance notes (4 KiB maximum) are resource bounded. Settlement plus grace must fit in `u64`.
 
-The manifest crate also provides a separate threshold-governed admission
-foundation for future pricing services. `PricingTrustPolicyV1` binds strong
-Ed25519 signer keys, threshold, revocations, currency, policy validity, and the
-maximum future activation window. `GovernedPricingManifestV1` binds every
-signature to the exact policy digest, pricing payload, and predecessor id.
-`GovernedPricingSeriesV1` retains that exact chain in a bounded canonical
-checkpoint, rejects replay, forks, clock rollback, policy substitution,
-non-monotonic activation, and retroactive activation before admission, and
-selects the active schedule deterministically by observation time. This library
-state machine is also integrated into `sorafs_node`: operators may configure a
-canonical `pricing_trust_policy_path`, after which the node admits only bounded
-exact-canonical governed envelopes and persists the replay-validated series in
-`economics/governed-pricing.to`. Mutations roll back on pre-commit persistence
-failure and uncertain post-rename durability forces the node's durable mutation
-surface fail-closed. Restart rejects missing, oversized, noncanonical, tampered,
-or policy-substituted checkpoints, and the runtime exposes deterministic
-active-price lookup. This local trusted boundary is not yet a replacement for
-the on-chain `SetPricingSchedule` instruction and does not provide a daemon that
-forwards accepted schedules on-chain. Torii exposes the boundary through
-canonical-request-authenticated `POST /v1/sorafs/economics/pricing/manifests`,
-`GET /v1/sorafs/economics/status`, and
-`GET /v1/sorafs/economics/pricing/active`; every route additionally requires the
-`sorafs_economics_operator` role, signs the exact method/URI/body, returns
-private no-store responses, and rejects malformed, noncanonical, replayed,
-forked, policy-substituted, or clock-rollback admissions without mutation.
+The V1 production admission path is exclusively the typed, authority-checked
+`SetPricingSchedule` transaction and its committed query/event projection.
+The pre-release `sorafs_node` governed-pricing checkpoint and Torii economics
+operator endpoints have been removed; there is no local pricing trust-policy
+configuration, compatibility alias, or process-local active-price authority.
+Clients submit transactions and reconcile the finalized ledger instead of
+publishing schedules into an embedded node database.
+
+Development nodes that previously enabled the local prototype must discard and
+reseed that state. Archive or delete
+`economics/governed-pricing.to` and
+`economics/signed-hedging-feeds.to` before reusing the data directory; V1 does
+not migrate those files, and backup/restore procedures must not treat them as
+authoritative.
 
 ## Provider Credit Ledger Fields
 
@@ -167,7 +156,7 @@ Governance (or authorised operations tooling) manages the schedule and credit ac
 following instructions:
 
 - `SetPricingSchedule` replaces the on-chain `PricingScheduleRecord` after validation. The new
-  schedule applies to the next telemetry window processed by the deal engine.
+  schedule applies to the next telemetry window processed by the ledger-authoritative economics services.
 - `RecordCapacityTelemetry` consumes provider telemetry, calculates storage fees using the current
   schedule, applies uptime/PoR multipliers, updates the fee ledger, and debits provider credit
   accounts when present.

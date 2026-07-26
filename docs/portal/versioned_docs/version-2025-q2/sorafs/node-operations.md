@@ -71,7 +71,7 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
 2. Submit the manifest with base64 encoding:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -133,7 +133,7 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
   which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
 - Dashboards should track:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` and `torii_sorafs_storage_fetch_inflight`
   - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
   - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
 

@@ -249,7 +249,7 @@ cargo run -p xtask --bin xtask -- soradns-acme-plan \
 
 Commit the JSON alongside the release bundle (or upload it with the change
 ticket) so operators can paste the SAN values into Torii’s
-`torii.sorafs_gateway.acme` configuration and GAR reviewers can confirm the
+`sorafs.gateway.acme` configuration and GAR reviewers can confirm the
 canonical/pretty mappings without re-running host derivations. Add additional
 `--name` arguments for each suffix promoted in the same release.
 

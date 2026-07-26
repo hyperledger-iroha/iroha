@@ -20,9 +20,10 @@ signing helpers, C FFI validation, cookbook fixtures, and manifest/CAR replay.
 Remaining SF-11 work is release evidence and SDK distribution: per-target
 published archives, signed release manifests, published downstream binding
 packages, and live operator smoke records.
-The still-open fixture work is the full cross-domain signed inventory and
-native runtime replay on every supported SDK toolchain; the checked-in signed
-Governance subset does not satisfy that release-wide requirement.
+The canonical cross-domain fixture inventory is complete. It binds 82 payload
+artifacts, 30 `ValidationOutcomeV1` outcomes, and 38 negative payload vectors
+across ten exact parity profiles. Native artifact rebuilds and unskipped runtime
+replay on every supported SDK toolchain remain open release requirements.
 `scripts/check_sorafs_reference_sdk_release_evidence.py` now provides the
 fail-closed SF-11 release evidence gate for those artifacts, including
 cross-artifact `release_manifest_digest_hex` binding from release archives,
@@ -59,21 +60,22 @@ sequence; longer histories use the newest checkpoint-anchored tail. Positive
 block and chain validation plus CID-mismatch and block-reordering negatives
 share the deterministic
 `fixtures/sorafs_manifest/governance/dag_*_v1.to` inventory.
-All six SDK families now compare the complete canonical results for eight
-Governance DAG positive and negative vectors, including block success,
-expected-CID mismatch, noncanonical trailing bytes, bad block/head signatures,
-valid head-chain order, reordered blocks, and bad predecessor linkage.
-`sdk_validation_inventory_v1.json` is a test-only Ed25519-signed, schema-closed
-Governance subset inventory covering nine Norito payloads, eight canonical JSON
-sidecars, and eight `ValidationOutcomeV1` files. Its offline checker pins the
-exact sorted path set, byte lengths, SHA-256 digests, canonical JSON bytes, key
-fingerprint, and signature, and rejects duplicate/nonfinite JSON, path
+`reference_sdk_validation_inventory_v1.json` is the test-only Ed25519-signed,
+schema-closed release-wide inventory for appeal finance, routing/provider
+admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. It binds the exact
+sorted path set, byte lengths, SHA-256 digests, and canonical JSON/Norito bytes
+for 82 payload artifacts, including 38 negative payload vectors, and 30
+`ValidationOutcomeV1` files. Its offline checker verifies the trusted
+fingerprint and signature and rejects duplicate or nonfinite JSON, path
 traversal, missing/extra/substituted files, symlinks, hardlinks, and parent
-directory replacement. The existing deterministic fixture generator emits the
-inventory and all 25 signed artifacts, and its integration test regenerates
-twice and compares all 26 files byte-for-byte. This is the Governance subset,
-not yet the required release-wide routing/orderbook/PDP/PoR/PoTR/repair/
-moderation inventory.
+directory replacement. The ten cross-SDK profiles comprise nine
+fixture-bundle outcomes plus a dedicated moderation governance-log-node
+outcome. JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java
+Android, and C# expose the native bundle and governance-log-node validation
+surfaces with byte-exact fixture tests checked in. Those source and fixture
+assets do not constitute a native release run: capability-gated tests that skip
+because a checked-in native artifact lacks the current symbols remain open and
+must be rerun against rebuilt artifacts.
 
 The existing `sorafs_manifest` crate exposes `ValidationOutcomeV1`,
 `validate_provider_advert_bytes`, `validate_provider_admission_envelope_bytes`,
@@ -150,14 +152,14 @@ Current implementation slice: `cargo run -p sorafs_manifest --bin sorafs-validat
 | `sorafs-validate advert` | Validate `ProviderAdvertV1` payloads (signature, TTL, capability set). | Implemented: `--input <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>`. Governed policy overrides belong to a signed release-wrapper policy document; the current local validator uses deterministic defaults. | Norito bytes. |
 | `sorafs-validate admission` | Verify `ProviderAdmissionEnvelopeV1` onboarding, renewal, and revocation payloads (schema, digest bindings, retention epoch, council signatures). | Implemented: `--input <file>` (or `--envelope <file>` alias), optional `--renewal <file>` or `--revocation <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. External governance keyset selection remains a signed deployment-policy concern; the local validator verifies the key material encoded in the governed envelope. | Norito bytes. |
 | `sorafs-validate order` | Check `ReplicationOrderV1` payloads (schema, manifest digest presence, chunk profile, provider assignments, SLA/deadline policy). | Implemented: `--order <file>` (or `--input <file>` alias) for bare orders, `--signed-order <file>` for `SignedReplicationOrderV1` envelopes, `--format table\|json\|yaml`, `--telemetry-out <path>`. Manifest/CAR replay is handled by `soranet_trustless_verifier --validation-outcome` to keep CAR parsing in `sorafs_car`. | Norito bytes. |
-| `sorafs-validate orderbook` | Validate orderbook and streaming-settlement payloads (`OrderRequestV1`, `OrderCancelV1`, `TradeEventV1`, `SettlementChannelV1`, `SettlementReceiptV1`). | Implemented: `--kind <payload-kind> --input <file>` or aliases `--order <file>`, `--cancel <file>`, `--trade <file>`, `--channel <file>`, `--receipt <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. Pure Rust helpers cover pair and full-book matching, fees, escrow, channels, receipts, and canonical signatures. The authoritative native ledger and supervised worker now own bounded price-time matching, atomic custody mutation, and authority/signature enforcement. Remaining SF-11 gaps are the release-wide signed fixture inventory, byte-identical native replay on every supported SDK toolchain, published per-target archives and binding packages, and genuine downstream install/smoke evidence. | Norito bytes. |
+| `sorafs-validate orderbook` | Validate orderbook and streaming-settlement payloads (`OrderRequestV1`, `OrderCancelV1`, `TradeEventV1`, `SettlementChannelV1`, `SettlementReceiptV1`). | Implemented: `--kind <payload-kind> --input <file>` or aliases `--order <file>`, `--cancel <file>`, `--trade <file>`, `--channel <file>`, `--receipt <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. Pure Rust helpers cover pair and full-book matching, fees, escrow, channels, receipts, and canonical signatures. The authoritative native ledger and supervised worker now own bounded price-time matching, atomic custody mutation, and authority/signature enforcement. Remaining SF-11 gaps are rebuilt native artifacts and byte-identical replay on every supported SDK toolchain, published per-target archives and binding packages, and genuine downstream install/smoke evidence. | Norito bytes. |
 | `sorafs-validate por` | Validate `PorChallengeV1` and `PorProofV1` pairs (typed payloads, challenge/manifest/provider binding, deadline, sample coverage). | Implemented: `--challenge <file>`, `--proof <file>`, `--format table\|json\|yaml`, `--telemetry-out <path>`. Manifest/CAR replay is implemented by `soranet_trustless_verifier --validation-outcome`; governed epoch overrides belong to signed release-wrapper policy. | Norito bytes. |
 | `sorafs-validate pdp` | Validate `PdpCommitmentV1`, `PdpChallengeV1`, and `PdpProofV1` payloads plus commitment/challenge/proof binding. | Implemented: `--commitment <file>`, `--challenge <file>`, `--proof <file>`, with pair or single-payload validation accepted where useful, `--format table\|json\|yaml`, `--telemetry-out <path>`. Bundle validation discovers committed PDP fixtures and enforces manifest/provider/sample binding. | Norito bytes. |
 | `sorafs-validate potr` | Validate `PotrReceiptV1` receipts (deadline/latency consistency, tier profile, range bounds, timestamps, signatures). | Implemented: `--receipt <file>`, optional `--profile hot\|warm\|archive\|cold`, `--format table\|json\|yaml`, `--telemetry-out <path>`. Committed PoTR receipt fixtures are covered by bundle validation; live probe-bundle and orchestrator metric cross-checks are rollout evidence. | Norito bytes. |
 | `sorafs-validate repair` | Validate bounded reference/publication payloads (`RepairEvidenceV1`, `RepairReportV1`, `RepairTaskRecordV1`, slash proposals, escalation policy/approval, and task/audit events). | Implemented: `--kind <payload-kind> --input <file>` or aliases such as `--task <file>`, `--evidence <file>`, `--report <file>`, `--event <file>`, and `--audit-event <file>`, plus `--format table\|json\|yaml` and `--telemetry-out <path>`. Retired signed-auditor and worker-envelope kinds/flags are rejected; command authentication belongs to the canonical Iroha `SignedTransaction` path. | Norito bytes. |
 | `sorafs-validate governance` | Validate `GovernanceLogNodeV1` payloads, `GovernanceDagBlockV1` blocks, and signed `GovernanceDagHeadV1` chains. | Implemented: `--node <file>` (or `--input <file>` alias) with required `--cid <node-cid>`; `--block <file>` with optional `--cid <block-cid\|hex:HEX>`; or `--head <file> --block <file> [--block <file>...]`, plus `--format table\|json\|yaml` and `--telemetry-out <path>`. Node validation covers embedded payload policy, publisher metadata, Ed25519 and Dilithium3/ML-DSA publisher signatures, and required node-CID binding. Block/head validation covers canonical block-CID derivation, embedded node policy, block signatures, parent linkage, signed head binding, and block-count binding. | Norito bytes. |
 | `sorafs-validate bundle` | Run a composite check on a fixture bundle (admission artifacts plus order/proofs/receipts/repair payloads and orderbook fixtures). | Implemented: `--bundle <dir>`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>`. Manifest/CAR policy replay is implemented by `soranet_trustless_verifier --validation-outcome`. | Directory matching fixture layout. |
-| `sorafs-validate release-manifest` | Verify a detached release-manifest signature or create one in the explicit development-only path. | Verification requires `--manifest <file>`, `--public-key <raw-32-byte-file>`, `--public-key-fingerprint <lowercase-sha256-hex>`, and `--signature <raw-64-byte-file>`. Development signing replaces `--signature` with `--signing-seed <raw-32-byte-file> --signature-out <new-file> --development-local-signing`. Inputs are bounded direct regular files; signatures use strict Ed25519 verification and output is no-clobber. | Exact release-manifest bytes plus raw Ed25519 material. |
+| `sorafs-validate release-manifest` | Verify the canonical aggregate release-manifest signature. | Verification requires `--manifest <file>`, `--public-key <raw-32-byte-file>`, `--public-key-fingerprint <lowercase-sha256-hex>`, and `--signature <raw-64-byte-file>`. Inputs are bounded direct regular files and signatures use strict Ed25519 verification. Release signing remains external to this validator. | Exact aggregate release-manifest bytes plus raw Ed25519 verification material. |
 | `soranet_trustless_verifier --validation-outcome` | Replay `ManifestV1` policy and a full CARv2 stream into the reference outcome contract. | Implemented: `--manifest <manifest.to>`, `--car <payload.car>`, optional `--config <toml>`, `--json-out <path>`, `--quiet`, `--generated-at <unix-seconds>`. | Manifest Norito or JSON plus CAR bytes. |
 | `sorafs-validate sign` | Produce signed reference payloads using operator or governance keys. | Implemented: `--kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> \| --key <path>)`, `--kind order --input <order.to> --out <signed-order.to> (--key-hex <hex> \| --key <path>)`, `--kind orderbook --payload-kind order-request\|order-cancel\|settlement-receipt --input <payload.to> --out <signed-payload.to> (--key-hex <hex> \| --key <path>)`, `--kind governance --input <node.to> --out <signed-node.to> (--key-hex <hex> \| --key <path>)`, `--format table\|json\|yaml`, `--telemetry-out <path>`, `--now <unix-seconds>` for adverts. | Norito bytes -> Norito bytes. |
 
@@ -374,32 +376,33 @@ convert decoded or raw Norito payloads into the shared validation functions.
 - **Cookbook smoke:** `docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh`
   runs the committed validator, signing, bundle, and manifest/CAR replay
   scenarios.
-- **Cross-SDK governance fixtures:** `generate_por_fixtures` deterministically
-  regenerates the signed two-block governance DAG and head under
-  `fixtures/sorafs_manifest/governance/`; JavaScript/TypeScript, Python, Swift,
-  Kotlin/JVM, mirrored Java Android, and C# tests consume those exact Norito
-  bytes and all eight exact outcome JSON files. The signed inventory and
-  `scripts/check_sorafs_governance_sdk_fixtures.py` bind the Norito, JSON
-  sidecar, and outcome bytes without network access. Local JavaScript,
-  Kotlin/JVM, and mirrored Java tests are green. The checked-in Swift
-  XCFramework is still ABI 19 and must be rebuilt at ABI 21 before its four
-  native-dependent tests can run; supported Python and .NET runtimes are also
-  required for the final replay.
+- **Cross-SDK canonical fixtures:** `generate_por_fixtures` deterministically
+  regenerates the release-wide signed inventory under
+  `fixtures/sorafs_manifest/`. The inventory binds 82 payload artifacts, 30
+  exact outcome files, and 38 negative payload vectors. The typed
+  `cancel_asset_lock_fixtures` generator freezes the appeal-finance
+  `CancelAssetLock { escrow_id, expected_remaining_amount }` hard cut and its
+  missing-field, zero, noncanonical-quantity, and trailing-byte negatives.
+  Nine fixture-bundle
+  profiles cover routing/provider admission, orderbook, PDP, PoR, PoTR, and
+  repair; a tenth profile exercises moderation through the dedicated
+  governance-log-node validator, alongside the Governance DAG block/head
+  vectors in the same closed inventory.
+  `scripts/check_sorafs_reference_sdk_fixtures.py` verifies the inventory
+  without network access. JavaScript/TypeScript, Python, Swift, Kotlin/JVM,
+  mirrored Java Android, and C# have native wrapper and byte-exact fixture test
+  coverage checked in. Current native-dependent tests remain capability-gated;
+  any run skipped because its checked-in native artifact lacks current symbols
+  is not release evidence and must be repeated after the native artifacts are
+  rebuilt.
 - **Release packaging:** `scripts/package_sorafs_validate_release.sh` builds or
   packages `sorafs-validate`, stages `include/sorafs_reference.h`, runs fixture
   smoke checks, records per-file, binary, FFI-header, archive, and manifest
-  digests under an untracked output directory, and can emit a detached manifest
-  signature. The production path uses `--manifest-signature-in`; an owner-only
-  raw 32-byte Ed25519 seed is admitted only with the explicit
-  `--development-local-signing` mode. Both paths require the separate raw
-  32-byte Ed25519 public key and reviewed SHA-256 fingerprint of those exact
-  public-key bytes. The helper pins every signing input into an owner-private
-  ephemeral snapshot, delegates signing and strict verification to the native
-  `sorafs-validate release-manifest` command, accepts only a nonzero 64-byte
-  signature, and publishes to a new collision-free output. For the reference
-  production release, `--manifest-signature-in` admits the raw signature
-  produced by a PKCS#11/HSM over an earlier byte-identical manifest run, so the
-  private key never leaves hardware custody.
+  digests under an untracked output directory. It emits no signature or public
+  key. The release coordinator adds every target manifest and checksum to the
+  final aggregate `release_manifest.json`; the governed PKCS#11/HSM signs that
+  one evidence-complete inventory externally, and the pinned native validator
+  verifies the raw Ed25519 signature and reviewed public-key fingerprint.
 - **CI guard:** PR checks can run `sorafs-validate bundle` and the cookbook
   script against committed fixtures; `ci/check_sorafs_reference_ffi_header.sh`
   fails if Rust FFI exports, selector constants, or C signatures drift from the
@@ -419,9 +422,15 @@ convert decoded or raw Norito payloads into the shared validation functions.
   discovery from `sorafs-validate bundle --bundle fixtures/sorafs_manifest`.
 - The cookbook replays committed fixtures for adverts, admission, orders,
   orderbook settlement receipts, PoR, PDP, PoTR, repair, governance nodes,
-  bundle cross-links, and manifest/CAR replay; focused Rust and CLI tests cover
-  governance DAG block and signed-head validation until committed DAG fixtures
-  are added.
+  bundle cross-links, and manifest/CAR replay. The canonical signed reference
+  SDK inventory covers routing/provider admission, orderbook, PDP, PoR, PoTR,
+  repair, Governance DAG, and moderation, while its strict offline checker and
+  deterministic-regeneration test bind every artifact and outcome byte.
+- Cross-SDK fixture tests compare nine bundle profiles and the dedicated
+  moderation governance-log-node outcome against exact
+  `ValidationOutcomeV1` bytes. Release completion still requires running the
+  Rust regeneration test and every native-dependent SDK parity suite against
+  rebuilt current-ABI artifacts without capability skips.
 - Release smoke checks run through `scripts/package_sorafs_validate_release.sh`.
 - Cross-target release evidence is still a production gate; archive published
   checksums and smoke outputs for each supported release target and require the
@@ -445,15 +454,10 @@ convert decoded or raw Norito payloads into the shared validation functions.
    an untracked `dist/sorafs-validate-release/<target>/` directory. Commit only
    `dist/.gitkeep`.
 2. For each supported target, archive the helper-generated binary, release
-   archive, `.sha256` files, manifest JSON, manifest signature, FFI
-   header copy, and smoke-output hash. Do not persist runtime signing seeds,
-   release private keys, public-key files, tokens, or raw payload fixtures in
-   release evidence. For a signed local package, keep the development seed file
-   current-user-owned with exactly one hard link and mode `0400` or `0600`,
-   supply the corresponding
-   public key with `--manifest-public-key`, and pass its independently reviewed
-   lowercase raw-public-key SHA-256 fingerprint through
-   `--manifest-public-key-fingerprint`.
+   archive, `.sha256` files, unsigned manifest JSON, FFI header copy, and
+   smoke-output hash. Add those paths and digests to the canonical aggregate
+   release manifest. Do not persist runtime signing material, tokens, or raw
+   payload fixtures in per-target release evidence.
 3. Run `docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh` against
    the staged binaries by setting `SORAFS_VALIDATE_BIN` and
    `SORANET_TRUSTLESS_VERIFIER_BIN`. Attach only the outcome digests and
@@ -497,24 +501,35 @@ and the `release_manifest_digest_hex` it was built against.
 - Rust APIs currently ship through `sorafs_manifest::reference` and
   `sorafs_car`; a standalone Rust reference SDK package is not present in this
   workspace.
-- `scripts/package_sorafs_validate_release.sh` builds or packages `sorafs-validate` for the selected target, stages the checked `include/sorafs_reference.h` C header, runs committed-fixture smoke checks, writes binary, archive, and manifest SHA256 files, records staged-file, FFI-header, and smoke-output hashes in the manifest, normalizes tar/gzip metadata for reproducible archive hashes, and can sign/verify that manifest with strict raw Ed25519 semantics. Signed runs require exactly one of the production `--manifest-signature-in` path or the explicit development-only `--development-local-signing --manifest-signing-key` path, plus `--manifest-public-key` and an independently reviewed `--manifest-public-key-fingerprint`. Inputs are pinned before build work, signature output is no-clobber and collision-checked, and incompatible or mismatched keys, unsafe permissions, malformed signatures, stale outputs, and fingerprint mismatches fail closed.
-- The reference production path uses `--manifest-signature-in` with a raw
-  Ed25519 signature produced by the governed PKCS#11/HSM signer over an earlier
-  byte-identical manifest run. This mode is mutually exclusive with the local
-  raw-seed signing option and still requires the reviewed raw public key and
-  fingerprint.
+- `scripts/package_sorafs_validate_release.sh` builds or packages
+  `sorafs-validate` for the selected target, stages the checked
+  `include/sorafs_reference.h` C header, runs committed-fixture smoke checks,
+  writes binary, archive, and manifest SHA256 files, records staged-file,
+  FFI-header, and smoke-output hashes in the manifest, and normalizes tar/gzip
+  metadata for reproducible archive hashes. This helper is an unsigned
+  artifact/checksum producer; it does not own a production signer or publish
+  detached package-manifest signatures.
+- The reference production path adds the package manifest and checksums to the
+  canonical aggregate `release_manifest.json` after every target and rollout
+  evidence input is final. The governed PKCS#11/HSM signer signs only those
+  final aggregate bytes through `scripts/release_manifest_signing.py`; the
+  SHA256-pinned native `sorafs-validate release-manifest` verifier authenticates
+  the raw signature and independently reviewed raw-key fingerprint.
 - The mandatory native release matrix is
   `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
   `x86_64-apple-darwin`, and `aarch64-apple-darwin`; the additional Windows
   artifact is `x86_64-pc-windows-msvc`. The release workflow builds and
   smoke-tests each binary on a runner whose Rust host exactly matches the target
-  and refuses to sign unless exactly one checksum manifest exists for every
-  target.
+  and refuses aggregate-manifest assembly unless exactly one checksum manifest
+  exists for every target.
 - Every remote GitHub Action in workflows and composite actions is pinned to a
   full 40-character commit SHA. `scripts/check_workflow_action_pins.py` enforces
   that repository-wide contract in both the dedicated workflow and the SoraFS
   release gate.
-- Sign published archives or binaries in the release pipeline after the helper records deterministic digests; when the release signer is available, sign the helper-generated manifest in the same run and archive the `.manifest.json.sig` file beside the hashes. Keep generated `dist/*` artifacts untracked and commit only `dist/.gitkeep`.
+- Add every published archive or binary and its deterministic digest manifest
+  to the final aggregate release inventory. Archive only the one authenticated
+  aggregate-manifest signature tuple beside the hashes. Keep generated
+  `dist/*` artifacts untracked and commit only `dist/.gitkeep`.
 - Release notes template references new/changed validations and error codes.
 
 ## Release Evidence Gate
@@ -625,6 +640,11 @@ Implemented locally:
   PDP fixture members, with `crates/sorafs_manifest/include/sorafs_reference.h`
   and `ci/check_sorafs_reference_ffi_header.sh` providing the local binding
   contract guard.
+- The test-only signed, schema-closed reference SDK inventory with 82 payload
+  artifacts, 30 outcomes, 38 negative payload vectors, and ten exact profiles,
+  including the dedicated moderation governance-log-node validator and
+  source-level coverage across JavaScript/TypeScript, Python, Swift,
+  Kotlin/JVM, mirrored Java Android, and C#.
 - Cookbook fixtures and smoke scripts under `docs/examples/sorafs_reference_sdk/`.
 - Release-packaging helper that stages binary/archive/manifest digests and
   optional detached manifest signatures under untracked
@@ -642,6 +662,9 @@ Implemented locally:
   algorithm labels.
 
 Remaining production gates:
+- Regenerate the fixtures, rebuild every checked-in and published native
+  artifact at the current ABI, and run all six SDK families' exact parity
+  suites without capability-gated skips.
 - Run the packaging helper for the supported release targets and publish signed
   release manifests outside the repository using governed release keys, then
   require those artifacts to pass the SF-11 release evidence gate.

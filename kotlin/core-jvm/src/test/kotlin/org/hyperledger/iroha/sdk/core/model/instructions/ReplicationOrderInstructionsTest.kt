@@ -71,14 +71,18 @@ class ReplicationOrderInstructionsTest {
 
     @Test
     fun `complete and expire roundtrip and reject malformed epochs`() {
-        val complete = CompleteReplicationOrderInstruction(orderId, 28)
+        val providerId = "11".repeat(32)
+        val complete = CompleteReplicationOrderInstruction(orderId, providerId, 28)
         assertEquals(complete, CompleteReplicationOrderInstruction.fromArguments(complete.arguments))
         val expire = ExpireReplicationOrderInstruction(orderId, 29)
         assertEquals("ExpireReplicationOrder", expire.arguments["action"])
         assertEquals(expire, ExpireReplicationOrderInstruction.fromArguments(expire.arguments))
 
         assertFailsWith<IllegalArgumentException> {
-            CompleteReplicationOrderInstruction(orderId, -1)
+            CompleteReplicationOrderInstruction(orderId, providerId, -1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CompleteReplicationOrderInstruction(orderId, "00".repeat(32), 28)
         }
         assertFailsWith<IllegalArgumentException> {
             ExpireReplicationOrderInstruction(orderId, -1)

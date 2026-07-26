@@ -59,7 +59,6 @@ PLAN_FIELDS = frozenset(
         "verifier_summary_schema",
         "required_kinds",
         "thresholds",
-        "execution_scope",
         "external_evidence",
         "evidence_contract",
         "steps",
@@ -250,11 +249,6 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "verifier_summary_schema": SUMMARY_SCHEMA,
         "required_kinds": list(args.required_kinds),
         "thresholds": threshold_values(args),
-        "execution_scope": (
-            "non_production_dry_run"
-            if args.dry_run
-            else "production_verification"
-        ),
         "external_evidence": external_evidence(args),
         "evidence_contract": evidence_contract(args),
         "steps": [
@@ -275,7 +269,7 @@ def validate_plan_json(
 ) -> list[str]:
     """Validate the gateway-compliance collection-plan envelope before use."""
 
-    errors = validate_runner_evidence_plan(
+    return validate_runner_evidence_plan(
         rendered,
         plan,
         diagnostic_prefix="gateway compliance rollout runner plan",
@@ -292,19 +286,6 @@ def validate_plan_json(
         evidence_contract=evidence_contract(args),
         evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
     )
-    expected_scope = (
-        "non_production_dry_run"
-        if args.dry_run
-        else "production_verification"
-    )
-    if (
-        not isinstance(rendered, dict)
-        or rendered.get("execution_scope") != expected_scope
-    ):
-        errors.append(
-            "gateway compliance rollout runner plan execution_scope is invalid"
-        )
-    return errors
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:

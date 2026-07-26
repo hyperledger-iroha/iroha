@@ -4061,9 +4061,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if !Self::verifying_key_record_metadata_is_portable(&rec) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            if rec.backend.is_pending_production_backend() {
-                return Err(ivm::VMError::NoritoInvalid);
-            }
             if rec.circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
                 || !iroha_data_model::zk::open_verify_circuit_id_is_portable(&rec.circuit_id)
             {
@@ -4193,18 +4190,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         match rec.backend {
             BackendTag::Halo2IpaPasta => "halo2/ipa",
-            BackendTag::Halo2Bn254 => "halo2/bn254",
-            BackendTag::Groth16 => "groth16",
             BackendTag::Stark => "stark",
-            BackendTag::Unsupported => "unsupported",
-            BackendTag::Halo2IpaOrchard
-            | BackendTag::Groth16Bls12377
-            | BackendTag::FcmpPlusPlusCurveTree
-            | BackendTag::LatticePcsSis
-            | BackendTag::MidenStark
-            | BackendTag::AztecPlonkishPrivateKernel
-            | BackendTag::PqMaspStarkFri => rec.backend.canonical_label(),
-            _ => rec.backend.canonical_label(),
         }
         .to_string()
     }
@@ -4248,7 +4234,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     return Err(ivm::host::ERR_DISABLED);
                 }
             }
-            _ => return Err(ivm::host::ERR_BACKEND),
         }
         Ok(())
     }
@@ -26788,7 +26773,7 @@ seiyaku DurableOwner {
     }
 
     #[test]
-    fn set_verifying_keys_rejects_pending_production_backend_labels() {
+    fn set_verifying_keys_rejects_protocol_names_as_backend_labels() {
         crate::test_alias::ensure();
         for backend in [
             "halo2/ipa/orchard",
@@ -26853,49 +26838,6 @@ seiyaku DurableOwner {
             assert!(
                 host.set_verifying_keys(map).is_err(),
                 "case {backend} must be rejected before reaching IVM verification"
-            );
-        }
-    }
-
-    #[test]
-    fn set_verifying_keys_rejects_pending_production_record_tags() {
-        crate::test_alias::ensure();
-        for backend_tag in [
-            BackendTag::Halo2IpaOrchard,
-            BackendTag::Groth16Bls12377,
-            BackendTag::FcmpPlusPlusCurveTree,
-            BackendTag::LatticePcsSis,
-            BackendTag::MidenStark,
-            BackendTag::AztecPlonkishPrivateKernel,
-            BackendTag::PqMaspStarkFri,
-            BackendTag::AnonymousPgc,
-            BackendTag::VeRange,
-            BackendTag::ZkAt,
-            BackendTag::RecursiveAnonymousAdmission,
-            BackendTag::VegaExistingCredentialZk,
-            BackendTag::SilentThresholdAnoncred,
-            BackendTag::ZkX509,
-            BackendTag::SisWithHints,
-        ] {
-            let mut host = CoreHost::new(fixture_account("alice"));
-            let backend = "halo2/ipa";
-            let vk_bytes = vec![1, 2, 3, 4];
-            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-            let mut rec = active_vk_record(
-                commitment,
-                [0x42; 32],
-                backend,
-                "halo2/ipa:test-circuit",
-                "core",
-                vk_bytes,
-            );
-            rec.backend = backend_tag;
-            let mut map = BTreeMap::new();
-            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
-            assert!(
-                host.set_verifying_keys(map).is_err(),
-                "case {} must be rejected",
-                backend_tag.canonical_label()
             );
         }
     }

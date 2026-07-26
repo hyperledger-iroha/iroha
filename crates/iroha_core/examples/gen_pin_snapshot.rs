@@ -80,11 +80,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     .execute(&alice(), &mut tx)?;
 
-    CompleteReplicationOrder {
-        order_id,
-        completion_epoch: 25,
+    for provider_id in providers {
+        CompleteReplicationOrder {
+            order_id,
+            provider_id,
+            completion_epoch: 25,
+        }
+        .execute(&alice(), &mut tx)?;
     }
-    .execute(&alice(), &mut tx)?;
 
     tx.apply();
     block.commit()?;
@@ -371,6 +374,30 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     order_obj.insert(
         "status_epoch".into(),
         status_epoch.map_or(Value::Null, Value::from),
+    );
+    let provider_completions = order
+        .provider_completions
+        .iter()
+        .map(|completion| {
+            let mut map = json::Map::new();
+            map.insert(
+                "provider_id_hex".into(),
+                Value::String(hex::encode(completion.provider_id.as_bytes())),
+            );
+            map.insert(
+                "completed_by".into(),
+                Value::String(completion.completed_by.to_string()),
+            );
+            map.insert(
+                "completion_epoch".into(),
+                Value::from(completion.completion_epoch),
+            );
+            Value::Object(map)
+        })
+        .collect();
+    order_obj.insert(
+        "provider_completions".into(),
+        Value::Array(provider_completions),
     );
     order_obj.insert(
         "target_replicas".into(),

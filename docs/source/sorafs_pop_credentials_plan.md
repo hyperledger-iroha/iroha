@@ -37,7 +37,7 @@ The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard
 `irohad` entrypoint does not yet construct and inject the governed production
 provider bundle, and the repository has no deployable shared external-runtime
 or sidecar adapter for those providers. Enabling
-`torii.sorafs.storage.pop_credentials` without that injected runtime fails
+`sorafs.storage.pop_credentials` without that injected runtime fails
 startup; no file-key, environment-key, software-signing, or process-clock
 fallback is permitted. The native registry remains available through signed
 transactions and typed queries. The authoritative moderation intake now pins
@@ -205,8 +205,13 @@ registry, juror client, or deployed verifier service.
   and issuer transitions in both the default executor and native execution.
   Typed `FindSorafsPop*` queries expose the policy, payload-free commitment and
   revocation records, signed publications, audit links, and registry status as
-  public transparency state through the existing generic query API. There are
-  no dedicated PoP Torii routes or operator CLI commands yet.
+  public transparency state through the existing generic query API. The
+  canonical authenticated fourteen-route PoP Torii family now covers
+  enrollment, dual-control approval, issuance, registry reconciliation,
+  revocation, wallet custody, proof generation, and verification. Packaging
+  the external runtime/sidecar provider bundle into the standard daemon remains
+  deployment work; there is deliberately no local-key or process-authoritative
+  fallback.
 - `prove_pop_membership_v1` creates a zero-knowledge Halo2/IPA proof from the
   signed credential plus fixed-depth private credential and sparse-revocation
   paths. `verify_pop_membership_proof_v1` verifies the signed active root and
@@ -356,7 +361,7 @@ startup test with PoP enabled, provider-unavailable and config/runtime-mismatch
 negatives, HSM/KMS/authenticator and finalized-time rotation/rollback tests,
 restart reconciliation, and a four-validator reference deployment run. Until
 those checks pass, operators must leave
-`torii.sorafs.storage.pop_credentials.enabled = false`; the intentional
+`sorafs.storage.pop_credentials.enabled = false`; the intentional
 enabled-without-runtime startup failure must not be bypassed.
 
 ## Remaining Production Gates

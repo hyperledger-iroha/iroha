@@ -51,10 +51,31 @@ extern "C" {
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_COMMITMENT 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_CHALLENGE 2
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_PROOF 3
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_PROVIDER_ADVERT 1
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_PROVIDER_ADMISSION_ENVELOPE 2
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_REPLICATION_ORDER 3
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_POR_CHALLENGE 4
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_POR_PROOF 5
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_POTR_RECEIPT 6
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_REPAIR_EVIDENCE 7
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_REPAIR_REPORT 8
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_REPAIR_TASK_RECORD 9
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_REPAIR_SLASH_PROPOSAL 10
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_REPAIR_TASK_EVENT 11
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_ORDER_REQUEST 12
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_ORDER_CANCEL 13
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_TRADE_EVENT 14
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_SETTLEMENT_CHANNEL 15
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_ORDERBOOK_SETTLEMENT_RECEIPT 16
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_PDP_COMMITMENT 17
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_PDP_CHALLENGE 18
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_KIND_PDP_PROOF 19
 #define CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 64
 #define CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 32
 #define CONNECT_NORITO_SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 67108864
 #define CONNECT_NORITO_SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 1024
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_PAYLOADS_V1 64
+#define CONNECT_NORITO_SORAFS_REFERENCE_BUNDLE_MAX_TOTAL_BYTES_V1 67108864
 
 typedef struct ConnectNoritoSorafsReferenceInput {
   const uint8_t* bytes_ptr;
@@ -62,6 +83,14 @@ typedef struct ConnectNoritoSorafsReferenceInput {
   const uint8_t* label_ptr;
   size_t label_len;
 } ConnectNoritoSorafsReferenceInput;
+
+typedef struct ConnectNoritoSorafsReferenceBundlePayload {
+  uint32_t kind;
+  const uint8_t* bytes_ptr;
+  size_t bytes_len;
+  const uint8_t* label_ptr;
+  size_t label_len;
+} ConnectNoritoSorafsReferenceBundlePayload;
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -987,6 +1016,31 @@ int32_t connect_norito_sorafs_reference_validate_hedging_json(
     uint64_t generated_at,
     uint8_t** out_json_ptr,
     unsigned long* out_json_len);
+
+// Validates a bounded heterogeneous fixture bundle and all supported
+// manifest/provider/proof/orderbook cross-links. The output must be released
+// with connect_norito_free.
+int32_t connect_norito_sorafs_reference_validate_bundle_json(
+    const ConnectNoritoSorafsReferenceBundlePayload* payloads_ptr,
+    size_t payloads_len,
+    uint64_t now,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    size_t* out_json_len);
+
+// Validates one GovernanceLogNodeV1 against its required exact 32-byte CID and
+// returns ValidationOutcomeV1 JSON. The output must be released with
+// connect_norito_free.
+int32_t connect_norito_sorafs_reference_validate_governance_json(
+    const uint8_t* bytes_ptr,
+    size_t bytes_len,
+    const uint8_t* label_ptr,
+    size_t label_len,
+    const uint8_t* expected_node_cid_ptr,
+    size_t expected_node_cid_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    size_t* out_json_len);
 
 // Validates one GovernanceDagBlockV1 and returns ValidationOutcomeV1 JSON.
 // expected_block_cid must be empty or exactly 32 bytes.

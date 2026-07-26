@@ -87,6 +87,32 @@ export const SORAFS_PDP_PAYLOAD_KINDS = Object.freeze({
   PROOF: "proof",
 });
 
+/** Canonical heterogeneous fixture-bundle payload selectors. */
+export const SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS = Object.freeze({
+  PROVIDER_ADVERT: "provider-advert",
+  PROVIDER_ADMISSION_ENVELOPE: "provider-admission-envelope",
+  REPLICATION_ORDER: "replication-order",
+  POR_CHALLENGE: "por-challenge",
+  POR_PROOF: "por-proof",
+  POTR_RECEIPT: "potr-receipt",
+  REPAIR_EVIDENCE: "repair-evidence",
+  REPAIR_REPORT: "repair-report",
+  REPAIR_TASK_RECORD: "repair-task-record",
+  REPAIR_SLASH_PROPOSAL: "repair-slash-proposal",
+  REPAIR_TASK_EVENT: "repair-task-event",
+  ORDERBOOK_ORDER_REQUEST: "orderbook-order-request",
+  ORDERBOOK_ORDER_CANCEL: "orderbook-order-cancel",
+  ORDERBOOK_TRADE_EVENT: "orderbook-trade-event",
+  ORDERBOOK_SETTLEMENT_CHANNEL: "orderbook-settlement-channel",
+  ORDERBOOK_SETTLEMENT_RECEIPT: "orderbook-settlement-receipt",
+  PDP_COMMITMENT: "pdp-commitment",
+  PDP_CHALLENGE: "pdp-challenge",
+  PDP_PROOF: "pdp-proof",
+});
+
+/** Maximum payload count accepted by one fixture-bundle validation call. */
+export const SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1 = 64;
+
 /** Maximum ordered block count accepted by governance DAG head validation. */
 export const SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64;
 /** Exact byte length of a canonical Governance DAG block CID. */
@@ -97,6 +123,9 @@ export const SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864;
 export const SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 = 1_024;
 
 const PDP_PAYLOAD_KIND_SET = new Set(Object.values(SORAFS_PDP_PAYLOAD_KINDS));
+const FIXTURE_BUNDLE_PAYLOAD_KIND_SET = new Set(
+  Object.values(SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS),
+);
 
 function normalizePdpPayloadKind(kind) {
   if (typeof kind !== "string") {
@@ -104,6 +133,16 @@ function normalizePdpPayloadKind(kind) {
   }
   if (!PDP_PAYLOAD_KIND_SET.has(kind)) {
     throw new TypeError(`unsupported SoraFS PDP payload kind: ${kind}`);
+  }
+  return kind;
+}
+
+function normalizeFixtureBundlePayloadKind(kind) {
+  if (typeof kind !== "string") {
+    throw new TypeError("payload kind must be a string");
+  }
+  if (!FIXTURE_BUNDLE_PAYLOAD_KIND_SET.has(kind)) {
+    throw new TypeError(`unsupported SoraFS fixture-bundle payload kind: ${kind}`);
   }
   return kind;
 }
@@ -695,6 +734,22 @@ function governanceReferenceLabel(value, fallback, field) {
   if (typeof label !== "string") {
     throw new TypeError(`${field} must be a string`);
   }
+  for (let index = 0; index < label.length; index += 1) {
+    const codeUnit = label.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = label.charCodeAt(index + 1);
+      if (
+        index + 1 >= label.length ||
+        next < 0xdc00 ||
+        next > 0xdfff
+      ) {
+        throw new TypeError(`${field} must be valid Unicode text`);
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      throw new TypeError(`${field} must be valid Unicode text`);
+    }
+  }
   if (label.length === 0 || label.trim().length === 0) {
     throw new TypeError(`${field} must not be blank`);
   }
@@ -920,6 +975,145 @@ export function validatePdpBundle(
       generatedAtUnix,
     ),
     "PDP bundle validation",
+  );
+}
+
+/**
+ * Validate a bounded heterogeneous fixture bundle and its canonical cross-links.
+ * @param {Array<{ kind: string, bytes?: ArrayBufferView | ArrayBuffer | Buffer, payload?: ArrayBufferView | ArrayBuffer | Buffer, noritoBytes?: ArrayBufferView | ArrayBuffer | Buffer, norito_bytes?: ArrayBufferView | ArrayBuffer | Buffer, label?: string }>} payloads
+ * @param {{ nowUnix?: number | bigint, now_unix?: number | bigint, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validateFixtureBundle(payloads, options = {}) {
+  if (!Array.isArray(payloads)) {
+    throw new TypeError("payloads must be an array");
+  }
+  if (
+    payloads.length === 0 ||
+    payloads.length > SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1
+  ) {
+    throw new TypeError(
+      `payloads must contain 1..=${SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1} entries`,
+    );
+  }
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  let aggregateBytes = 0;
+  const normalizedPayloads = payloads.map((payload, index) => {
+    if (!isPlainObject(payload)) {
+      throw new TypeError(`payloads[${index}] must be an object`);
+    }
+    const kind = normalizeFixtureBundlePayloadKind(payload.kind);
+    const rawBytes = readPayloadField(
+      payload,
+      "bytes",
+      "payload",
+      "noritoBytes",
+      "norito_bytes",
+    );
+    if (rawBytes === undefined) {
+      throw new TypeError(`payloads[${index}].bytes is required`);
+    }
+    const bytes = Buffer.from(toBuffer(rawBytes));
+    const label = governanceReferenceLabel(
+      payload.label,
+      `${kind}.to`,
+      `payloads[${index}].label`,
+    );
+    aggregateBytes += bytes.length + Buffer.byteLength(label, "utf8");
+    if (aggregateBytes > SORAFS_REFERENCE_MAX_INPUT_BYTES_V1) {
+      throw new TypeError(
+        `fixture-bundle inputs exceed ${SORAFS_REFERENCE_MAX_INPUT_BYTES_V1} aggregate bytes`,
+      );
+    }
+    return { kind, bytes, label };
+  });
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const nowUnix = normalizeReferenceUnix(
+    readPayloadField(options, "nowUnix", "now_unix") ??
+      generatedAtUnix,
+    "options.nowUnix",
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidateFixtureBundleJson",
+    "fixture-bundle validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidateFixtureBundleJson(
+      normalizedPayloads,
+      nowUnix,
+      generatedAtUnix,
+    ),
+    "fixture-bundle validation",
+  );
+}
+
+/**
+ * Validate one canonical GovernanceLogNodeV1 and bind it to its expected CID.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {{ label?: string, expectedNodeCid?: ArrayBufferView | ArrayBuffer | Buffer, expected_node_cid?: ArrayBufferView | ArrayBuffer | Buffer, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} options
+ * @returns {Record<string, any>}
+ */
+export function validateGovernanceLogNode(bytes, options) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const payload = Buffer.from(toBuffer(bytes));
+  const label = governanceReferenceLabel(
+    readPayloadField(options, "label"),
+    "governance.to",
+    "options.label",
+  );
+  if (
+    Object.prototype.hasOwnProperty.call(options, "expectedNodeCid") &&
+    Object.prototype.hasOwnProperty.call(options, "expected_node_cid")
+  ) {
+    throw new TypeError(
+      "options must provide exactly one of expectedNodeCid or expected_node_cid",
+    );
+  }
+  const expectedValue = readPayloadField(
+    options,
+    "expectedNodeCid",
+    "expected_node_cid",
+  );
+  if (expectedValue === undefined || expectedValue === null) {
+    throw new TypeError("options.expectedNodeCid is required");
+  }
+  const expectedNodeCid = Buffer.from(toBuffer(expectedValue));
+  if (expectedNodeCid.length !== SORAFS_GOVERNANCE_DAG_CID_BYTES_V1) {
+    throw new TypeError(
+      `options.expectedNodeCid must contain exactly ${SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes`,
+    );
+  }
+  if (
+    payload.length +
+      Buffer.byteLength(label, "utf8") +
+      expectedNodeCid.length >
+    SORAFS_REFERENCE_MAX_INPUT_BYTES_V1
+  ) {
+    throw new TypeError(
+      `governance log-node validation inputs exceed ${SORAFS_REFERENCE_MAX_INPUT_BYTES_V1} aggregate bytes`,
+    );
+  }
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidateGovernanceLogNodeJson",
+    "governance log-node validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidateGovernanceLogNodeJson(
+      payload,
+      label,
+      expectedNodeCid,
+      generatedAtUnix,
+    ),
+    "governance log-node validation",
   );
 }
 
@@ -1429,16 +1623,22 @@ function normalizeOrderbookFeeBps(value, label) {
   return Number(numeric);
 }
 
-function normalizeGeneratedAtUnix(value) {
-  const raw = value ?? Math.floor(Date.now() / 1000);
-  const normalized = assertNonNegativeIntegerLike(raw, "options.generatedAtUnix");
+function normalizeReferenceUnix(value, label) {
+  const normalized = assertNonNegativeIntegerLike(value, label);
   if (typeof normalized === "bigint") {
     if (normalized > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new TypeError("options.generatedAtUnix must be a safe integer");
+      throw new TypeError(`${label} must be a safe integer`);
     }
     return Number(normalized);
   }
   return normalized;
+}
+
+function normalizeGeneratedAtUnix(value) {
+  return normalizeReferenceUnix(
+    value ?? Math.floor(Date.now() / 1000),
+    "options.generatedAtUnix",
+  );
 }
 
 function toSafeNumber(value) {

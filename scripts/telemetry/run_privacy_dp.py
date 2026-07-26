@@ -19,12 +19,19 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
-# Directories relative to repo root.
-ARTIFACT_ROOT = Path("artifacts/soranet_privacy_dp")
+# Release automation supplies an absolute fresh directory. Local/CI invocations
+# retain the conventional repository-relative path.
+ARTIFACT_ROOT = Path(
+    os.environ.get(
+        "SORANET_PRIVACY_DP_ARTIFACT_DIR",
+        "artifacts/soranet_privacy_dp",
+    )
+)
 ARTIFACT_ROOT.mkdir(parents=True, exist_ok=True)
 
 @dataclass(frozen=True)

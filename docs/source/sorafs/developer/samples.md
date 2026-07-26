@@ -60,44 +60,37 @@ through the governed Ed25519/HSM path. Pair the fixtures with
 `docs/examples/sorafs_ci_sample/` when you need a ready-to-clone repository
 layout or moustache template for release notes.
 
-## TypeScript — manifest validation stub
+## TypeScript — reference payload validation
 
-Until the dedicated SDKs ship, front-end tooling can shell out to the CLI while
-validating artefacts using Norito JSON summaries. The snippet below performs
-basic checks in Node.js:
+The JavaScript/TypeScript SDK exposes the native SoraFS reference validator from
+`@iroha/iroha-js/sorafs`. Build or install the checksum-pinned native module,
+then validate the canonical Norito bytes directly:
 
 ```ts
 import { readFileSync } from "node:fs";
+import {
+  SORAFS_ORDERBOOK_PAYLOAD_KINDS,
+  validateOrderbookPayload,
+} from "@iroha/iroha-js/sorafs";
 
-interface ManifestSummary {
-  manifest_blake3_hex: string;
-  chunk_digest_sha3_hex: string;
-  pin_policy: { min_replicas: number; storage_class: string };
-}
-
-const summaryPath = process.argv[2];
-if (!summaryPath) {
-  throw new Error("usage: ts-node validate-manifest.ts <summary.json>");
-}
-
-const summary = JSON.parse(
-  readFileSync(summaryPath, { encoding: "utf8" })
-) as ManifestSummary;
-
-if (summary.pin_policy.min_replicas < 3) {
-  throw new Error("pin policy must require at least 3 replicas");
-}
-if (summary.pin_policy.storage_class !== "warm") {
-  throw new Error("storage class must be warm for production artefacts");
-}
-
-console.log(
-  `manifest ${summary.manifest_blake3_hex} with chunk digest ${summary.chunk_digest_sha3_hex} looks good`,
+const payload = readFileSync(
+  "fixtures/sorafs_manifest/orderbook/order_request_v1.to",
 );
+const outcome = validateOrderbookPayload(
+  SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
+  payload,
+  { generatedAtUnix: 1_700_001_234 },
+);
+
+if (outcome.status !== "Ok") {
+  throw new Error(`${outcome.code}: ${outcome.message}`);
+}
 ```
 
-Pair this helper with `sorafs_cli manifest build --manifest-json-out` to gate
-PRs on policy defaults without pulling in the full Rust toolchain.
+The wrapper returns the byte-for-byte `ValidationOutcomeV1` JSON contract used
+by the committed positive and negative fixtures. It fails closed when the
+authenticated native module or required validation export is unavailable; it
+does not replace production ledger admission.
 
 ## Where to go next
 

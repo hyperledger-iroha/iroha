@@ -4334,12 +4334,6 @@ fn sorafs_event_summary(event: &sorafs::SorafsGatewayEvent) -> (String, String) 
         sorafs::SorafsGatewayEvent::GarViolation(payload) => {
             ("SoraFS GAR violation".to_owned(), format!("{payload:?}"))
         }
-        sorafs::SorafsGatewayEvent::DealUsage(payload) => {
-            ("SoraFS deal usage".to_owned(), format!("{payload:?}"))
-        }
-        sorafs::SorafsGatewayEvent::DealSettlement(payload) => {
-            ("SoraFS deal settlement".to_owned(), format!("{payload:?}"))
-        }
         sorafs::SorafsGatewayEvent::ProofHealth(alert) => {
             ("SoraFS proof health alert".to_owned(), format!("{alert:?}"))
         }
@@ -4357,6 +4351,10 @@ fn sorafs_event_summary(event: &sorafs::SorafsGatewayEvent) -> (String, String) 
         ),
         sorafs::SorafsGatewayEvent::ReserveLedger(payload) => (
             "SoraFS reserve ledger event".to_owned(),
+            format!("{payload:?}"),
+        ),
+        sorafs::SorafsGatewayEvent::ReputationJournal(payload) => (
+            "SoraFS reputation journal event".to_owned(),
             format!("{payload:?}"),
         ),
     }

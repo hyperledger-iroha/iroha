@@ -22,7 +22,12 @@ use iroha_data_model::{
     },
     name::Name,
     permission::Permission,
-    query::{error::QueryExecutionFail, sorafs::prelude::FindSorafsReputationJournalEvents},
+    query::{
+        error::{FindError, QueryExecutionFail},
+        sorafs::prelude::{
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEvents,
+        },
+    },
     sorafs::{
         capacity::{
             CapacityDisputeRecord, CapacityDisputeResolution, CapacityDisputeStatus, ProviderId,
@@ -427,7 +432,7 @@ fn validate_event_successor(
             "reputation journal sequence is not globally contiguous",
         ));
     }
-    if current.entry.recorded_at_unix_ms < previous.entry.recorded_at_unix_ms {
+    if current.recorded_at_unix_ms < previous.recorded_at_unix_ms {
         return Err(corrupt_state(
             "reputation journal committing timestamps are reordered",
         ));
@@ -457,14 +462,14 @@ fn validate_event_indexes(
             corrupt_state("reputation event references missing immutable recorder-policy history")
         })?;
     validate_policy_predecessor(world, &policy)?;
-    if policy.activated_at_unix_ms > record.entry.recorded_at_unix_ms {
+    if policy.activated_at_unix_ms > record.entry.source_time_unix_ms {
         return Err(corrupt_state(
-            "reputation event predates its recorder-policy activation",
+            "reputation source observation predates its recorder-policy activation",
         ));
     }
     record
         .entry
-        .validate_against_policy(&policy.policy)
+        .validate_at_commit(&policy.policy, record.recorded_at_unix_ms)
         .map_err(|error| {
             corrupt_state(format!(
                 "reputation event violates its immutable recorder policy: {error}"
@@ -681,10 +686,38 @@ fn validate_new_source_revision(
     }
 }
 
+fn validate_entry_commit_context(
+    world: &impl WorldReadOnly,
+    entry: &ReputationJournalEntryV1,
+    recorded_at_unix_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    let policy = read_active_policy(world)?
+        .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
+    if policy.activated_at_unix_ms > recorded_at_unix_ms {
+        return Err(corrupt_state(
+            "active reputation policy activation is later than the executing block",
+        ));
+    }
+    if entry.source_time_unix_ms < policy.activated_at_unix_ms {
+        return Err(invalid_parameter(
+            "reputation source observation predates the active recorder policy",
+        ));
+    }
+    entry
+        .validate_at_commit(&policy.policy, recorded_at_unix_ms)
+        .map_err(|error| {
+            invalid_parameter(format!(
+                "reputation entry does not match the active recorder policy: {error}"
+            ))
+        })
+}
+
 fn append_validated_entry(
     state_transaction: &mut StateTransaction<'_, '_>,
     entry: ReputationJournalEntryV1,
 ) -> Result<u64, InstructionExecutionError> {
+    let recorded_at_unix_ms = block_time_ms(state_transaction)?;
+    validate_entry_commit_context(state_transaction.world(), &entry, recorded_at_unix_ms)?;
     validate_new_source_revision(state_transaction.world(), &entry)?;
     let head = validate_journal_head(state_transaction.world())?;
 
@@ -730,6 +763,7 @@ fn append_validated_entry(
         sequence,
         target_block_height,
         event_index,
+        recorded_at_unix_ms,
         entry: entry.clone(),
     };
     record
@@ -797,7 +831,8 @@ fn append_validated_entry(
         provider_id: entry.provider_id,
         policy_digest: entry.authority_policy_digest,
         authority: entry.recorded_by,
-        occurred_at_unix_ms: entry.recorded_at_unix_ms,
+        source_time_unix_ms: entry.source_time_unix_ms,
+        recorded_at_unix_ms,
     };
     state_transaction
         .world
@@ -814,33 +849,15 @@ fn validate_new_entry(
     expected_kind: ReputationJournalSourceKindV1,
 ) -> Result<(), InstructionExecutionError> {
     let now = block_time_ms(state_transaction)?;
-    let policy = read_active_policy(state_transaction.world())?
-        .ok_or_else(|| invalid_parameter("SoraFS reputation recorder policy is not configured"))?;
-    if policy.activated_at_unix_ms > now {
-        return Err(corrupt_state(
-            "active reputation policy activation is later than the executing block",
-        ));
-    }
     if entry.source_kind() != expected_kind {
         return Err(invalid_parameter(format!(
             "reputation instruction accepts only {expected_kind:?} entries"
         )));
     }
-    entry
-        .validate_against_policy(&policy.policy)
-        .map_err(|error| {
-            invalid_parameter(format!(
-                "reputation entry does not match the active recorder policy: {error}"
-            ))
-        })?;
+    validate_entry_commit_context(state_transaction.world(), entry, now)?;
     if &entry.recorded_by != authority {
         return Err(invalid_parameter(
             "reputation entry recorded_by must equal the transaction authority",
-        ));
-    }
-    if entry.recorded_at_unix_ms != now {
-        return Err(invalid_parameter(
-            "reputation entry timestamp must equal the exact committing block timestamp",
         ));
     }
     validate_provider_binding(state_transaction.world(), entry.provider_id)
@@ -1427,6 +1444,7 @@ fn resolve_finalized_event(
         block_height: record.target_block_height,
         block_hash,
         event_index: record.event_index,
+        recorded_at_unix_ms: record.recorded_at_unix_ms,
         entry: record.entry.clone(),
     })
 }
@@ -1595,6 +1613,19 @@ fn query_event_page(
     Ok(page)
 }
 
+impl ValidSingularQuery for FindSorafsReputationJournalAuthorityPolicy {
+    fn execute(
+        &self,
+        state_ro: &impl StateReadOnly,
+    ) -> Result<ReputationJournalAuthorityPolicyRecordV1, QueryExecutionFail> {
+        read_active_policy(state_ro.world())
+            .map_err(query_failure)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Find(FindError::SorafsReputationJournalAuthorityPolicy)
+            })
+    }
+}
+
 impl ValidSingularQuery for FindSorafsReputationJournalEvents {
     fn execute(
         &self,
@@ -1613,6 +1644,7 @@ mod tests {
         IntoKeyValue, Registrable,
         account::Account,
         block::{BlockHeader, BlockSignature, SignedBlock},
+        events::data::DataEvent,
         metadata::Metadata,
         permission::Permissions,
         sorafs::{
@@ -1655,6 +1687,7 @@ mod tests {
             por_recorder_authority: authority.clone(),
             dispute_recorder_authority: authority.clone(),
             token_recorder_authority: authority.clone(),
+            max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
 
@@ -1664,18 +1697,28 @@ mod tests {
         policy_digest: [u8; 32],
         unique: u8,
     ) -> ReputationJournalEntryV1 {
+        token_entry_at(authority, provider_id, policy_digest, unique, TEST_NOW_MS)
+    }
+
+    fn token_entry_at(
+        authority: &AccountId,
+        provider_id: ProviderId,
+        policy_digest: [u8; 32],
+        unique: u8,
+        source_time_unix_ms: u64,
+    ) -> ReputationJournalEntryV1 {
         ReputationJournalEntryV1::try_new(
             provider_id,
             policy_digest,
             authority.clone(),
-            TEST_NOW_MS,
+            source_time_unix_ms,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
                 validation_id: [unique; 32],
                 request_digest: [unique.wrapping_add(1); 32],
                 token_body_digest: Some([unique.wrapping_add(2); 32]),
                 token_key_version: Some(1),
-                validated_at_unix_ms: TEST_NOW_MS,
+                validated_at_unix_ms: source_time_unix_ms,
                 status: StreamTokenValidationStatusV1::Accepted,
             }),
         )
@@ -1786,6 +1829,18 @@ mod tests {
     }
 
     #[test]
+    fn authority_policy_query_returns_precise_absence_error() {
+        let (state, _authority, _other, _provider_id) = state_with_reputation_accounts();
+        let view = state.view();
+        assert_eq!(
+            FindSorafsReputationJournalAuthorityPolicy.execute(&view),
+            Err(QueryExecutionFail::Find(
+                FindError::SorafsReputationJournalAuthorityPolicy
+            ))
+        );
+    }
+
+    #[test]
     fn recorder_policy_rotation_is_strict_and_historical_replay_is_idempotent() {
         let (state, authority, _other, _provider_id) = state_with_reputation_accounts();
         let header = BlockHeader::new(
@@ -1803,6 +1858,13 @@ mod tests {
         SetSorafsReputationJournalAuthorityPolicy::new(first.clone())
             .execute(&authority, &mut transaction)
             .expect("activate first recorder policy");
+        let first_record = FindSorafsReputationJournalAuthorityPolicy
+            .execute(&transaction)
+            .expect("query first active recorder policy");
+        assert_eq!(first_record.policy, first);
+        assert_eq!(first_record.policy_digest, first_digest);
+        assert_eq!(first_record.activated_by, authority);
+        assert_eq!(first_record.activated_at_unix_ms, TEST_NOW_MS);
 
         let mut second = first.clone();
         second.revision = 2;
@@ -1811,12 +1873,14 @@ mod tests {
         SetSorafsReputationJournalAuthorityPolicy::new(second)
             .execute(&authority, &mut transaction)
             .expect("activate exact successor policy");
+        let second_record = FindSorafsReputationJournalAuthorityPolicy
+            .execute(&transaction)
+            .expect("query rotated active recorder policy");
+        assert_eq!(second_record.policy.revision, 2);
+        assert_eq!(second_record.policy_digest, second_digest);
         assert_eq!(
-            read_active_policy(transaction.world())
-                .expect("read active policy")
-                .expect("active policy")
-                .policy_digest,
-            second_digest
+            second_record.policy.predecessor_policy_digest,
+            Some(first_digest)
         );
 
         SetSorafsReputationJournalAuthorityPolicy::new(first)
@@ -1866,6 +1930,7 @@ mod tests {
             por_recorder_authority: account.clone(),
             dispute_recorder_authority: account.clone(),
             token_recorder_authority: account.clone(),
+            max_source_age_ms: 24 * 60 * 60 * 1_000,
         };
         let digest = policy.canonical_digest().expect("policy digest");
         let payload = ReputationJournalPayloadV1::StreamTokenValidation(
@@ -1892,6 +1957,7 @@ mod tests {
             sequence: 1,
             target_block_height: 2,
             event_index: 0,
+            recorded_at_unix_ms: 1_100,
             entry: entry.clone(),
         };
         assert!(validate_event_successor(None, &first).is_ok());
@@ -2079,6 +2145,95 @@ mod tests {
     }
 
     #[test]
+    fn asynchronous_source_time_is_bound_while_commit_time_is_authoritative() {
+        let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
+        let mut journal_policy = policy(&authority);
+        journal_policy.max_source_age_ms = 1_500;
+        let policy_digest = journal_policy
+            .canonical_digest()
+            .expect("canonical recorder policy");
+        transact_test(&mut state, 1, TEST_NOW_MS, |transaction| {
+            SetSorafsReputationJournalAuthorityPolicy::new(journal_policy)
+                .execute(&authority, transaction)
+        })
+        .expect("activate recorder policy");
+
+        let source_time_unix_ms = TEST_NOW_MS + 250;
+        let recorded_at_unix_ms = TEST_NOW_MS + 1_000;
+        let entry = token_entry_at(
+            &authority,
+            provider_id,
+            policy_digest,
+            0x81,
+            source_time_unix_ms,
+        );
+        transact_test(&mut state, 2, recorded_at_unix_ms, |transaction| {
+            AppendSorafsStreamTokenReputationJournalEntry::new(entry.clone())
+                .execute(&authority, transaction)?;
+            let record = read_event(transaction.world(), 1)?
+                .ok_or_else(|| corrupt_state("missing asynchronous reputation event"))?;
+            assert_eq!(record.entry.source_time_unix_ms, source_time_unix_ms);
+            assert_eq!(record.recorded_at_unix_ms, recorded_at_unix_ms);
+            let emitted = transaction
+                .world
+                .internal_event_buf
+                .iter()
+                .find_map(|event| match event.as_ref() {
+                    DataEvent::Sorafs(SorafsGatewayEvent::ReputationJournal(
+                        SorafsReputationJournalEvent::EntryCommitted(committed),
+                    )) if committed.event_id == entry.event_id => Some(committed),
+                    _ => None,
+                })
+                .expect("typed committed event");
+            assert_eq!(emitted.source_time_unix_ms, source_time_unix_ms);
+            assert_eq!(emitted.recorded_at_unix_ms, recorded_at_unix_ms);
+            Ok(())
+        })
+        .expect("commit delayed but fresh source observation");
+
+        let future = token_entry_at(
+            &authority,
+            provider_id,
+            policy_digest,
+            0x82,
+            TEST_NOW_MS + 2_001,
+        );
+        transact_test(&mut state, 3, TEST_NOW_MS + 2_000, |transaction| {
+            let error = AppendSorafsStreamTokenReputationJournalEntry::new(future)
+                .execute(&authority, transaction)
+                .expect_err("future source observation must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("after authoritative commit time")
+            );
+            Ok(())
+        })
+        .expect("commit block after rejecting future source observation");
+
+        let stale = token_entry_at(&authority, provider_id, policy_digest, 0x83, TEST_NOW_MS);
+        transact_test(&mut state, 4, TEST_NOW_MS + 3_000, |transaction| {
+            let error = AppendSorafsStreamTokenReputationJournalEntry::new(stale)
+                .execute(&authority, transaction)
+                .expect_err("stale source observation must fail closed");
+            assert!(error.to_string().contains("exceeds 1500ms"));
+            Ok(())
+        })
+        .expect("commit block after rejecting stale source observation");
+
+        let view = state.view();
+        let page = FindSorafsReputationJournalEvents::new(None, None, 8)
+            .execute(&view)
+            .expect("query finalized reputation event");
+        assert_eq!(page.events.len(), 1);
+        assert_eq!(
+            page.events[0].entry.source_time_unix_ms,
+            source_time_unix_ms
+        );
+        assert_eq!(page.events[0].recorded_at_unix_ms, recorded_at_unix_ms);
+    }
+
+    #[test]
     fn capacity_dispute_resolution_is_atomic_terminal_and_replay_safe() {
         let (mut state, authority, _other, provider_id) = state_with_reputation_accounts();
         let policy = policy(&authority);
@@ -2108,7 +2263,7 @@ mod tests {
                 .expect_err("an existing dispute without its opened journal must fail closed");
             assert!(
                 read_journal_head(transaction.world())
-                    .expect("read journal after rejected legacy replay")
+                    .expect("read journal after rejected incomplete replay")
                     .is_none(),
                 "replay validation must not backfill missing authoritative state"
             );
@@ -2181,6 +2336,7 @@ mod tests {
             por_recorder_authority: authority.clone(),
             dispute_recorder_authority: authority.clone(),
             token_recorder_authority: authority.clone(),
+            max_source_age_ms: 24 * 60 * 60 * 1_000,
         };
         SetSorafsReputationJournalAuthorityPolicy::new(rotated_policy)
             .execute(&authority, &mut transaction)

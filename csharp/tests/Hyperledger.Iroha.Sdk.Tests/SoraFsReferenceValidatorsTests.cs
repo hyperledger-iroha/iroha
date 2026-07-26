@@ -16,11 +16,15 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.Equal(1_024, SoraFsReferenceValidators.MaxLabelBytesV1);
         Assert.Equal(64, SoraFsReferenceValidators.GovernanceDagMaxBlocksV1);
         Assert.Equal(32, SoraFsReferenceValidators.GovernanceDagCidBytesV1);
+        Assert.Equal(64, SoraFsReferenceValidators.FixtureBundleMaxPayloadsV1);
         Assert.Equal(1, SoraFsReferenceValidators.ValidationOutcomeVersionV1);
+        Assert.Equal(
+            Enumerable.Range(1, 19).Select(value => (uint)value),
+            Enum.GetValues<SoraFsFixtureBundlePayloadKind>().Select(value => (uint)value));
     }
 
     [Fact]
-    public void AvailabilityRequiresAbiAndBothGovernanceSymbols()
+    public void AvailabilityRequiresAbiAndCompleteGovernanceSurface()
     {
         Assert.True(SoraFsReferenceValidators.IsAvailable(new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
@@ -44,6 +48,22 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { OrderbookPdpSymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary
+            {
+                AbiError = new DllNotFoundException("bridge missing"),
+            }));
+    }
+
+    [Fact]
+    public void FixtureBundleAvailabilityRequiresAbiAndSymbol()
+    {
+        Assert.True(SoraFsReferenceValidators.IsFixtureBundleAvailable(
+            new FakeNativeBoundary()));
+        Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
+            new FakeNativeBoundary { Abi = 20 }));
+        Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
+            new FakeNativeBoundary { FixtureBundleSymbolsAvailable = false }));
+        Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary
             {
                 AbiError = new DllNotFoundException("bridge missing"),
@@ -108,6 +128,89 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.Equal(4, commitment[0]);
         Assert.Equal(5, challenge[0]);
         Assert.Equal(6, proof[0]);
+    }
+
+    [Fact]
+    public void FixtureBundleValidationCopiesInputsAndFreeOutputs()
+    {
+        var native = new FakeNativeBoundary();
+        var order = new byte[] { 1, 2, 3 };
+        var proof = new byte[] { 4, 5, 6 };
+        var json = SoraFsReferenceValidators.ValidateFixtureBundleJson(
+            new[]
+            {
+                new SoraFsFixtureBundlePayloadInput(
+                    SoraFsFixtureBundlePayloadKind.ReplicationOrder,
+                    order,
+                    "replication-order.to"),
+                new SoraFsFixtureBundlePayloadInput(
+                    SoraFsFixtureBundlePayloadKind.PorProof,
+                    proof,
+                    "por-proof.to"),
+            },
+            122,
+            123,
+            native);
+
+        Assert.Equal(1, native.FixtureBundleCalls);
+        Assert.Equal(122ul, native.LastNowUnix);
+        Assert.Equal(123ul, native.LastGeneratedAt);
+        var snapshots = Assert.IsType<NativeFixtureBundleInput[]>(
+            native.LastFixtureBundlePayloads);
+        Assert.Equal(2, snapshots.Length);
+        Assert.Equal(
+            (uint)SoraFsFixtureBundlePayloadKind.ReplicationOrder,
+            snapshots[0].Kind);
+        Assert.NotSame(order, snapshots[0].Bytes);
+        Assert.NotSame(proof, snapshots[1].Bytes);
+        Assert.Equal(order, snapshots[0].Bytes);
+        Assert.Equal(proof, snapshots[1].Bytes);
+        Assert.Equal(
+            "replication-order.to",
+            Encoding.UTF8.GetString(snapshots[0].LabelBytes));
+        Assert.Contains("\"generated_at\":123", json, StringComparison.Ordinal);
+        Assert.Equal(1, native.FreeCalls);
+
+        snapshots[0].Bytes[0] = 0x7f;
+        snapshots[1].Bytes[0] = 0x7f;
+        Assert.Equal(1, order[0]);
+        Assert.Equal(4, proof[0]);
+    }
+
+    [Fact]
+    public void FixtureBundleValidationRejectsAliasesBoundsAndNullsBeforeNativeDispatch()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new SoraFsFixtureBundlePayloadInput(
+                (SoraFsFixtureBundlePayloadKind)0,
+                new byte[] { 1 }));
+
+        var native = new FakeNativeBoundary();
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.ValidateFixtureBundleJson(
+                Array.Empty<SoraFsFixtureBundlePayloadInput>(),
+                1,
+                1,
+                native));
+        var item = new SoraFsFixtureBundlePayloadInput(
+            SoraFsFixtureBundlePayloadKind.PorProof,
+            new byte[] { 1 });
+        Assert.Throws<ArgumentException>(() =>
+            SoraFsReferenceValidators.ValidateFixtureBundleJson(
+                Enumerable.Repeat(
+                    item,
+                    SoraFsReferenceValidators.FixtureBundleMaxPayloadsV1 + 1)
+                    .ToArray(),
+                1,
+                1,
+                native));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            SoraFsReferenceValidators.ValidateFixtureBundleJson(
+                new[] { item },
+                -1,
+                1,
+                native));
+        Assert.Equal(0, native.FixtureBundleCalls);
     }
 
     [Fact]
@@ -266,6 +369,36 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
+    public void GovernanceLogNodeValidationCopiesInputsAndFreesOutput()
+    {
+        var native = new FakeNativeBoundary();
+        var payload = new byte[] { 1, 2, 3 };
+        var expectedCid = Enumerable.Repeat((byte)4, 32).ToArray();
+
+        var json = SoraFsReferenceValidators.ValidateGovernanceLogNode(
+            payload,
+            expectedCid,
+            "治理.to",
+            123,
+            native);
+
+        Assert.Equal(1, native.LogNodeCalls);
+        Assert.NotSame(payload, native.LastLogNodeBytes);
+        Assert.NotSame(expectedCid, native.LastLogNodeExpectedCid);
+        Assert.Equal(payload, native.LastLogNodeBytes!);
+        Assert.Equal(expectedCid, native.LastLogNodeExpectedCid!);
+        Assert.Equal("治理.to", Encoding.UTF8.GetString(native.LastLogNodeLabel!));
+        Assert.Equal(123ul, native.LastGeneratedAt);
+        Assert.Equal(1, native.FreeCalls);
+        Assert.Contains("\"generated_at\":123", json, StringComparison.Ordinal);
+
+        native.LastLogNodeBytes![0] = 0x7f;
+        native.LastLogNodeExpectedCid![0] = 0x7f;
+        Assert.Equal(1, payload[0]);
+        Assert.Equal(4, expectedCid[0]);
+    }
+
+    [Fact]
     public void GovernanceBlockValidationCopiesInputsAndFreesOutput()
     {
         var native = new FakeNativeBoundary();
@@ -410,7 +543,7 @@ public sealed class SoraFsReferenceValidatorsTests
                 null,
                 0,
                 native));
-        Assert.Contains("Governance DAG reference symbols", symbolError.Message);
+        Assert.Contains("governance reference symbols", symbolError.Message);
         Assert.Equal(0, native.BlockCalls);
     }
 
@@ -503,6 +636,84 @@ public sealed class SoraFsReferenceValidatorsTests
             Assert.Contains("exactly 32 bytes", error.Message);
         }
         Assert.Equal(0, native.BlockCalls);
+    }
+
+    [Fact]
+    public void GovernanceLogNodeRequiresAnExactCidBeforeNativeDispatch()
+    {
+        var native = new FakeNativeBoundary();
+        Assert.Throws<ArgumentNullException>(() =>
+            SoraFsReferenceValidators.ValidateGovernanceLogNode(
+                new byte[] { 1 },
+                null!,
+                "governance.to",
+                1,
+                native));
+        foreach (var length in new[] { 0, 31, 33 })
+        {
+            var error = Assert.Throws<ArgumentException>(() =>
+                SoraFsReferenceValidators.ValidateGovernanceLogNode(
+                    new byte[] { 1 },
+                    new byte[length],
+                    "governance.to",
+                    1,
+                    native));
+            Assert.Contains("exactly 32 bytes", error.Message);
+        }
+        Assert.Equal(0, native.LogNodeCalls);
+    }
+
+    [Fact]
+    public void LinkedFixtureBundleMatchesNativeReferenceWhenAvailable()
+    {
+        if (!SoraFsReferenceValidators.IsFixtureBundleAvailable())
+        {
+            Assert.False(
+                string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
+                    "1",
+                    StringComparison.Ordinal),
+                "ABI-21 connect_norito_bridge with fixture-bundle symbol is required.");
+            return;
+        }
+
+        var fixtureRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "sorafs_manifest");
+        var json = SoraFsReferenceValidators.ValidateFixtureBundleJson(
+            new[]
+            {
+                new SoraFsFixtureBundlePayloadInput(
+                    SoraFsFixtureBundlePayloadKind.ReplicationOrder,
+                    File.ReadAllBytes(
+                        Path.Combine(
+                            fixtureRoot,
+                            "replication_order",
+                            "order_v1.to")),
+                    "replication-order.to"),
+                new SoraFsFixtureBundlePayloadInput(
+                    SoraFsFixtureBundlePayloadKind.PorProof,
+                    File.ReadAllBytes(
+                        Path.Combine(fixtureRoot, "por", "proof_v1.to")),
+                    "por-proof.to"),
+            },
+            1_700_000_001,
+            1_700_001_238);
+        using var outcome = JsonDocument.Parse(json);
+        Assert.Equal("Ok", outcome.RootElement.GetProperty("status").GetString());
+        Assert.Equal("SFS-OK-000", outcome.RootElement.GetProperty("code").GetString());
+        Assert.Equal(
+            1_700_001_238ul,
+            outcome.RootElement.GetProperty("generated_at").GetUInt64());
+        Assert.Equal(
+            new[] { "replication_order", "por_proof" },
+            outcome.RootElement
+                .GetProperty("inputs")
+                .EnumerateArray()
+                .Select(input => input.GetProperty("kind").GetString())
+                .ToArray());
     }
 
     [Fact]
@@ -724,6 +935,49 @@ public sealed class SoraFsReferenceValidatorsTests
             receipt,
             null,
             123));
+    }
+
+    [Fact]
+    public void GovernanceLogNodeMatchesModerationGoldenByteForByteWhenAvailable()
+    {
+        if (!SoraFsReferenceValidators.IsAvailable())
+        {
+            Assert.False(
+                string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
+                    "1",
+                    StringComparison.Ordinal),
+                "ABI-21 connect_norito_bridge with governance reference symbols is required.");
+            return;
+        }
+
+        var fixtureRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "sorafs_manifest",
+            "moderation");
+        using var node = JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(fixtureRoot, "governance_node_v1.json"),
+                Encoding.UTF8));
+        var expectedCid = Convert.FromHexString(
+            node.RootElement.GetProperty("node_cid_hex").GetString()
+            ?? throw new InvalidOperationException(
+                "Moderation governance fixture is missing node_cid_hex."));
+
+        var actual = SoraFsReferenceValidators.ValidateGovernanceLogNode(
+            File.ReadAllBytes(Path.Combine(fixtureRoot, "governance_node_v1.to")),
+            expectedCid,
+            "moderation/governance_node_v1.to",
+            1_700_001_234);
+
+        Assert.Equal(
+            File.ReadAllBytes(
+                Path.Combine(
+                    fixtureRoot,
+                    "governance_node_validation_outcome_v1.json")),
+            Encoding.UTF8.GetBytes(actual));
     }
 
     [Fact]
@@ -1031,10 +1285,14 @@ public sealed class SoraFsReferenceValidatorsTests
 
         internal bool OrderbookPdpSymbolsAvailable { get; set; } = true;
 
+        internal bool FixtureBundleSymbolsAvailable { get; set; } = true;
+
         internal int ReturnCode { get; set; }
 
         internal Func<ulong, byte[]> OutputFactory { get; set; } =
             generatedAt => Encoding.UTF8.GetBytes(ValidOutcomeJson(generatedAt));
+
+        internal int LogNodeCalls { get; private set; }
 
         internal int BlockCalls { get; private set; }
 
@@ -1043,6 +1301,8 @@ public sealed class SoraFsReferenceValidatorsTests
         internal int OrderbookCalls { get; private set; }
 
         internal int PdpBundleCalls { get; private set; }
+
+        internal int FixtureBundleCalls { get; private set; }
 
         internal int FreeCalls { get; private set; }
 
@@ -1064,6 +1324,12 @@ public sealed class SoraFsReferenceValidatorsTests
 
         internal byte[]? LastPdpProofLabel { get; private set; }
 
+        internal byte[]? LastLogNodeBytes { get; private set; }
+
+        internal byte[]? LastLogNodeLabel { get; private set; }
+
+        internal byte[]? LastLogNodeExpectedCid { get; private set; }
+
         internal byte[]? LastBlockBytes { get; private set; }
 
         internal byte[]? LastBlockLabel { get; private set; }
@@ -1075,6 +1341,10 @@ public sealed class SoraFsReferenceValidatorsTests
         internal byte[]? LastHeadLabel { get; private set; }
 
         internal NativeGovernanceInput[]? LastBlocks { get; private set; }
+
+        internal NativeFixtureBundleInput[]? LastFixtureBundlePayloads { get; private set; }
+
+        internal ulong LastNowUnix { get; private set; }
 
         internal ulong LastGeneratedAt { get; private set; }
 
@@ -1095,6 +1365,11 @@ public sealed class SoraFsReferenceValidatorsTests
         public bool HasOrderbookPdpSymbols()
         {
             return OrderbookPdpSymbolsAvailable;
+        }
+
+        public bool HasFixtureBundleSymbols()
+        {
+            return FixtureBundleSymbolsAvailable;
         }
 
         public NativeValidationResult ValidateOrderbookPayload(
@@ -1225,6 +1500,18 @@ public sealed class SoraFsReferenceValidatorsTests
             return AllocateResult(generatedAt);
         }
 
+        public NativeValidationResult ValidateFixtureBundle(
+            NativeFixtureBundleInput[] payloads,
+            ulong nowUnix,
+            ulong generatedAt)
+        {
+            FixtureBundleCalls++;
+            LastFixtureBundlePayloads = payloads;
+            LastNowUnix = nowUnix;
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
+        }
+
         public NativeValidationResult ValidateGovernanceDagBlock(
             byte[] bytes,
             byte[] label,
@@ -1235,6 +1522,20 @@ public sealed class SoraFsReferenceValidatorsTests
             LastBlockBytes = bytes;
             LastBlockLabel = label;
             LastExpectedCid = expectedBlockCid;
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
+        }
+
+        public NativeValidationResult ValidateGovernanceLogNode(
+            byte[] bytes,
+            byte[] label,
+            byte[] expectedNodeCid,
+            ulong generatedAt)
+        {
+            LogNodeCalls++;
+            LastLogNodeBytes = bytes;
+            LastLogNodeLabel = label;
+            LastLogNodeExpectedCid = expectedNodeCid;
             LastGeneratedAt = generatedAt;
             return AllocateResult(generatedAt);
         }

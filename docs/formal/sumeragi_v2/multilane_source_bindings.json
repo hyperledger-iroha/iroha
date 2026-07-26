@@ -292,7 +292,7 @@
           "path": "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
           "required_tokens": [
             "\"rust_owner\": \"iroha_data_model::block::consensus\"",
-            "pub(super) fn write_fixture(check_only: bool)"
+            "pub fn write_fixture(check_only: bool)"
           ]
         },
         {
@@ -693,13 +693,14 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "persist_native_amx_participant_application_evidence",
+          "symbol": "validate_native_amx_post_apply_metadata_under_publication_guard",
           "required_tokens": [
-            "prune_lock.lock",
-            "ensure_prune_recovery_not_required",
-            "native_amx_participant_application_evidence_for_block_under_publication_guard",
-            "block, false",
-            "persist_native_amx_participant_application_evidence_under_publication_guard"
+            "commit_manifest",
+            "wsv_checkpoint",
+            "checkpoint.commit_manifest_hash",
+            "execution.parent_state_root",
+            "execution.post_state_root",
+            "v2_commit_authority_hash"
           ]
         },
         {
@@ -1348,7 +1349,7 @@
         {
           "path": "crates/iroha_core/src/kura/lane_geometry.rs",
           "kind": "fn",
-          "symbol": "ensure_first_release_lane_retirement_admissible_locked",
+          "symbol": "ensure_first_release_lane_retirement_admissible_with_certified_locked",
           "required_tokens": [
             "read_geometry_native_amx_per_height_evidence",
             "require_active_lane_incarnation",
@@ -1383,9 +1384,21 @@
             "execution_commitment_from_witness",
             "store_block",
             "store_v2_finality_artifact",
-            "persist_native_amx_participant_application_evidence",
             "apply_without_execution_with_verified_v2_finality",
             "state_block.commit"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "method",
+          "symbol": "V2ApplyService::execute",
+          "required_tokens": [
+            "validate_and_apply",
+            "store_v2_finality_artifact",
+            "persist_post_apply_metadata",
+            "repair_native_amx_participant_application_evidence",
+            "publish_committed_block_merge_entry",
+            "finalize_committed_block_merge_reservations"
           ]
         },
         {
@@ -1767,7 +1780,7 @@
           "symbol": "rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup",
           "required_tokens": [
             "MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
-            "MAX_PENDING_CERTIFIED_MERGE_BYTES",
+            "AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES",
             "write_autonomous_lane_block_view_state_record_locked",
             "publish_autonomous_lane_block_latest_attempt_locked",
             "publish_autonomous_lane_route_latest_attempt_locked",
@@ -1789,7 +1802,7 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "fn",
-          "symbol": "write_certified_lane_block_artifact",
+          "symbol": "write_certified_lane_block_artifact_with_authority",
           "required_tokens": [
             "validate_certified_lane_block_artifact",
             "require_active_lane_artifact",
@@ -2225,7 +2238,8 @@
             "has_bundle",
             "has_merge",
             "has_carrier",
-            "geometry_matches",
+            "AutonomousLaneEvidenceGeometry::from_presence",
+            "expected_evidence_geometry",
             "KuraWsvApplicationReceiptDurable",
             "QueueFinalized",
             "Conflict"
@@ -2340,11 +2354,11 @@
         },
         {
           "path": "crates/iroha_core/src/kura.rs",
-          "kind": "fn",
-          "symbol": "pending_control_sidecar_bytes_within_limit",
+          "kind": "method",
+          "symbol": "PendingControlSidecarLimits::combined_bytes_within_limit",
           "required_tokens": [
             "pending_merge_bytes.checked_add",
-            "MAX_PENDING_CERTIFIED_MERGE_BYTES",
+            "total <= self.aggregate_bytes",
             "None => false"
           ]
         },
@@ -2353,13 +2367,13 @@
           "kind": "fn",
           "symbol": "pending_queue_plan_admission_paths_unlocked",
           "required_tokens": [
-            "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES",
+            "self.pending_control_sidecar_limits.queue_plan_admissions",
             "std::fs::read_dir",
             "symlink_metadata",
             "is_symlink",
             "sidecar_is_single_link",
             "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES",
-            "pending_merge_bytes_within_limit",
+            "merge_bytes_within_limit(total_bytes)",
             "paths.sort"
           ]
         },
@@ -2418,8 +2432,8 @@
             "ensure_prune_recovery_not_required",
             "pending_merge_entry_paths_unlocked",
             "pending_queue_plan_admission_paths_unlocked",
-            "pending_control_sidecar_bytes_within_limit",
-            "limit.min(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES)",
+            "combined_bytes_within_limit(merge_bytes, admission_bytes)",
+            "limit.min(self.pending_control_sidecar_limits.queue_plan_admissions)",
             "read_pending_queue_plan_admission_path"
           ]
         },
@@ -2431,7 +2445,7 @@
             "begin_total_disk_usage_mutation",
             "reconcile_pending_merge_temp_files_unlocked",
             "reconcile_pending_queue_plan_admission_temp_files_unlocked",
-            "pending_control_sidecar_bytes_within_limit",
+            "combined_bytes_within_limit",
             "create_exclusive_pending_queue_plan_admission_temp",
             "std::fs::hard_link",
             "sync_all",
@@ -2447,7 +2461,7 @@
             "begin_total_disk_usage_mutation",
             "path_bytes_before",
             "sidecar_has_link_count",
-            "stable_count == MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES",
+            "stable_count == self.pending_control_sidecar_limits.queue_plan_admissions",
             "pending_queue_plan_admission_paths_unlocked",
             "update_disk_usage_delta",
             "accounting_mutation.finish"

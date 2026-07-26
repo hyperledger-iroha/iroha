@@ -56,7 +56,6 @@ Verify that a public Taira node exposes the required SoraFS routes and, unless
 The check fails unless:
   - POST /v1/sorafs/pin/register returns HTTP 400 for an empty JSON body
   - POST /v1/sorafs/capacity/declare returns HTTP 400 for an empty JSON body
-  - POST /v1/sorafs/capacity/schedule returns HTTP 400 for an empty JSON body
   - GET /v1/sorafs/capacity/state returns HTTP 200
   - GET /v1/pipeline/transactions/status reaches the canonical typed status
     handler (the no-hash probe returns HTTP 400), while the retired
@@ -469,7 +468,6 @@ probe_surface() {
   echo "==> SoraFS route surface: ${root_url}"
   expect_status "pin/register" POST "${root_url}/v1/sorafs/pin/register" 400 '{}'
   expect_status "capacity/declare" POST "${root_url}/v1/sorafs/capacity/declare" 400 '{}'
-  expect_status "capacity/schedule" POST "${root_url}/v1/sorafs/capacity/schedule" 400 '{}'
   expect_status "capacity/state" GET "${root_url}/v1/sorafs/capacity/state" 200
   expect_status \
     "pipeline transaction status" \
@@ -1087,26 +1085,6 @@ PY
   rm -f "$output_file"
 }
 
-resolve_canary_private_key() {
-  local config_path="$1"
-  python3 - "$config_path" <<'PY'
-import sys
-
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
-
-with open(sys.argv[1], "rb") as handle:
-    source = tomllib.load(handle)
-
-private_key = (source.get("account") or {}).get("private_key")
-if not isinstance(private_key, str) or not private_key:
-    raise SystemExit("write canary config is missing `account.private_key`")
-print(private_key)
-PY
-}
-
 claim_faucet_for_canary() {
   local target_url="$1"
   local account_id="$2"
@@ -1228,12 +1206,11 @@ run_write_canary() {
   ensure_sorafs_tx_stdin_builder_bin
   prepare_write_canary_config "$target_url"
 
-  local temp_config work_dir request_path tx_stdin_path spec_path output_file private_key_file account_id private_key current_blocks provider_id_hex
+  local temp_config work_dir summary_path tx_stdin_path spec_path output_file account_id current_blocks provider_id_hex
   temp_config="$(physical_path "$(mktemp)")"
   work_dir="$(physical_path "$(mktemp -d)")"
   output_file="$(physical_path "$(mktemp)")"
-  private_key_file="$(physical_path "$(mktemp)")"
-  trap 'rm -f "${temp_config:-}" "${private_key_file:-}" "${output_file:-}"; rm -rf "${work_dir:-}"; cleanup' EXIT
+  trap 'rm -f "${temp_config:-}" "${output_file:-}"; rm -rf "${work_dir:-}"; cleanup' EXIT
   build_write_canary_config \
     "$WRITE_CONFIG" \
     "$target_url" \
@@ -1241,13 +1218,6 @@ run_write_canary() {
     "$ROLLOUT_CANARY_TIME_TO_LIVE_MS" \
     "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
   account_id="$(resolve_canary_account_id "$temp_config")"
-  private_key="$(resolve_canary_private_key "$temp_config")"
-  local previous_umask
-  previous_umask="$(umask)"
-  umask 077
-  printf '%s\n' "$private_key" >"$private_key_file"
-  umask "$previous_umask"
-  unset private_key
   current_blocks="$(current_block_height "$target_url")"
   spec_path="${work_dir}/capacity_canary.spec.json"
   provider_id_hex="$(
@@ -1260,20 +1230,18 @@ run_write_canary() {
       "$DECLARATION_VALID_BLOCKS" \
       "$spec_path"
   )"
-  request_path="${work_dir}/capacity_canary.request.json"
+  summary_path="${work_dir}/capacity_canary.summary.json"
   tx_stdin_path="${work_dir}/capacity_canary.tx.stdin.json"
 
   echo "==> SoraFS capacity canary: ${target_url} (provider ${provider_id_hex})"
   "${SORAFS_MANIFEST_BUILDER_RUNNER[@]}" \
     capacity declaration \
     "--spec=${spec_path}" \
-    "--request-out=${request_path}" \
-    "--authority=${account_id}" \
-    "--private-key-file=${private_key_file}" \
+    "--json-out=${summary_path}" \
     --quiet
   "${SORAFS_TX_STDIN_BUILDER_RUNNER[@]}" \
-    capacity-declaration-request \
-    "--request=${request_path}" \
+    capacity-declaration \
+    "--summary=${summary_path}" \
     >"$tx_stdin_path"
 
   if ! submit_capacity_canary "$temp_config" "$tx_stdin_path" "$output_file"; then

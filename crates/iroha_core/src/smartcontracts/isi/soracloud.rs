@@ -31224,7 +31224,7 @@ mod tests {
                         .verifying_keys
                         .get_mut(&vk_id)
                         .expect("registered full-bootstrap material verifier")
-                        .backend = BackendTag::Groth16;
+                        .backend = BackendTag::Halo2IpaPasta;
                 }
                 VerifierTamper::Curve => {
                     stx.world
@@ -32821,7 +32821,7 @@ mod tests {
                         .verifying_keys
                         .get_mut(&vk_id)
                         .expect("registered full-bootstrap execution verifier")
-                        .backend = BackendTag::Groth16;
+                        .backend = BackendTag::Halo2IpaPasta;
                 }
                 VerifierTamper::Curve => {
                     stx.world
@@ -38060,7 +38060,7 @@ mod tests {
                         .verifying_keys
                         .get_mut(&vk_id)
                         .expect("registered bootstrap verifier")
-                        .backend = BackendTag::Groth16;
+                        .backend = BackendTag::Halo2IpaPasta;
                 }
                 VerifierTamper::Curve => {
                     stx.world

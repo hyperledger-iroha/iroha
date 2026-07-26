@@ -3736,38 +3736,39 @@ def test_get_sumeragi_status_rejects_invalid_native_manifest(
         _get_sumeragi_status(payload)
 
 
-def test_get_sumeragi_status_preserves_carried_proposal_origins() -> None:
+def test_get_sumeragi_status_preserves_exact_proposal_rounds() -> None:
     payload = _sumeragi_v2_status_payload()
     commit_quorum = copy.deepcopy(payload["liveness"]["prepare_quorums"][0])
     commit_quorum["round"]["view"] = 2
-    commit_quorum["proposal_round"]["view"] = 1
+    commit_quorum["proposal_round"]["view"] = 2
     payload["liveness"]["commit_quorums"] = [commit_quorum]
 
     commit_intent = copy.deepcopy(payload["liveness"]["outbound_intents"][0])
     commit_intent["kind"]["kind"] = "commit_vote"
     commit_intent["round"]["view"] = 2
-    commit_intent["proposal_round"]["view"] = 1
+    commit_intent["proposal_round"]["view"] = 2
     commit_intent["execution_commitment"] = copy.deepcopy(
         commit_quorum["execution_commitment"]
     )
     payload["liveness"]["outbound_intents"] = [commit_intent]
     payload["last_commit_qc"]["certificate"]["round"]["view"] = 2
-    payload["last_commit_qc"]["certificate"]["proposal_round"]["view"] = 1
+    payload["last_commit_qc"]["certificate"]["proposal_round"]["view"] = 2
 
     status = _get_sumeragi_status(payload)
 
     assert status.liveness.commit_quorums[0].round.view == 2
-    assert status.liveness.commit_quorums[0].proposal_round.view == 1
+    assert status.liveness.commit_quorums[0].proposal_round.view == 2
     assert status.liveness.outbound_intents[0].round.view == 2
     assert status.liveness.outbound_intents[0].proposal_round is not None
-    assert status.liveness.outbound_intents[0].proposal_round.view == 1
+    assert status.liveness.outbound_intents[0].proposal_round.view == 2
     assert status.last_commit_qc is not None
-    assert status.last_commit_qc.certificate.proposal_round.view == 1
+    assert status.last_commit_qc.certificate.proposal_round.view == 2
 
     later_commit_payload = _sumeragi_v2_status_payload()
     later_commit_intent = later_commit_payload["liveness"]["outbound_intents"][0]
     later_commit_intent["kind"]["kind"] = "commit_qc"
     later_commit_intent["round"]["view"] = 3
+    later_commit_intent["proposal_round"]["view"] = 3
     later_commit_intent["execution_commitment"] = copy.deepcopy(
         later_commit_payload["last_commit_qc"]["certificate"][
             "execution_commitment"
@@ -3776,7 +3777,7 @@ def test_get_sumeragi_status_preserves_carried_proposal_origins() -> None:
     later_commit_status = _get_sumeragi_status(later_commit_payload)
     assert later_commit_status.liveness.outbound_intents[0].round.view == 3
     assert (
-        later_commit_status.liveness.outbound_intents[0].proposal_round.view == 1
+        later_commit_status.liveness.outbound_intents[0].proposal_round.view == 3
     )
 
     timeout_payload = _sumeragi_v2_status_payload()
@@ -3807,7 +3808,7 @@ def test_get_sumeragi_status_enforces_vote_quorum_proposal_geometry() -> None:
     )
     commit_quorum["proposal_round"]["view"] = 2
     future_commit_origin["liveness"]["commit_quorums"] = [commit_quorum]
-    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
         _get_sumeragi_status(future_commit_origin)
 
     foreign_origin = _sumeragi_v2_status_payload()
@@ -3857,7 +3858,7 @@ def test_get_sumeragi_status_enforces_outbound_intent_proposal_geometry() -> Non
         ]
     )
     commit_intent["proposal_round"]["view"] = 2
-    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
         _get_sumeragi_status(future_commit_origin)
 
     foreign_origin = _sumeragi_v2_status_payload()
@@ -4800,7 +4801,7 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     future_proposal_round["last_commit_qc"]["certificate"]["proposal_round"][
         "view"
     ] = 2
-    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
         _get_sumeragi_status(future_proposal_round)
 
     underpowered = _sumeragi_v2_status_payload()

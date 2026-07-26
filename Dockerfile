@@ -1,13 +1,20 @@
-# syntax=docker/dockerfile:1.7
+ARG IROHA_RUST_BUILDER_IMAGE
+ARG IROHA_RUNTIME_IMAGE
 
 # builder stage
-FROM rust:slim-bookworm AS builder
+FROM ${IROHA_RUST_BUILDER_IMAGE} AS builder
 
 WORKDIR /app
 
-# install required packages
-RUN apt-get update -y && \
-    apt-get install -y build-essential mold
+ARG IROHA_RELEASE_PREPROVISIONED_BASES="0"
+RUN set -eu; \
+    if [ "${IROHA_RELEASE_PREPROVISIONED_BASES}" = "1" ]; then \
+        command -v cc >/dev/null; \
+        command -v mold >/dev/null; \
+    else \
+        apt-get update -y; \
+        apt-get install -y build-essential mold; \
+    fi
 
 COPY . .
 COPY dist/ /prebuilt-dist/
@@ -80,10 +87,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     fi
 
 # final image
-FROM debian:bookworm-slim
+FROM ${IROHA_RUNTIME_IMAGE}
 
 ARG PROFILE="deploy"
 ARG CONFIG_PROFILE="single"
+ARG IROHA_RELEASE_PREPROVISIONED_BASES="0"
+ARG IROHA_GIT_COMMIT_HASH=""
+ARG SOURCE_DATE_EPOCH=""
 ARG VALIDATOR_LOCK_SHA256=""
 ARG VALIDATOR_SOURCE_TREE_SHA256=""
 ARG APP_DIR=/opt/iroha
@@ -100,13 +110,27 @@ ENV  UID=1001
 ENV  GID=1001
 LABEL org.soramitsu.iroha.validator-lock-sha256=$VALIDATOR_LOCK_SHA256
 LABEL org.soramitsu.iroha.validator-source-tree-sha256=$VALIDATOR_SOURCE_TREE_SHA256
+LABEL org.opencontainers.image.revision=$IROHA_GIT_COMMIT_HASH
+LABEL org.soramitsu.iroha.source-date-epoch=$SOURCE_DATE_EPOCH
 
 RUN <<EOT
   set -ex
-  apt-get update -y && \
+  if [ "$IROHA_RELEASE_PREPROVISIONED_BASES" = "1" ]; then
+    command -v curl >/dev/null
+    command -v jq >/dev/null
+    test -f /etc/ssl/certs/ca-certificates.crt
+    if [ "$CONFIG_PROFILE" = "taira" ]; then
+      command -v qemu-img >/dev/null
+      command -v mkfs.ext4 >/dev/null
+      command -v ip >/dev/null
+      command -v iptables >/dev/null
+    fi
+  else
+    apt-get update -y
     apt-get install -y curl ca-certificates jq
-  if [ "$CONFIG_PROFILE" = "taira" ]; then
-    apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
+    if [ "$CONFIG_PROFILE" = "taira" ]; then
+      apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
+    fi
   fi
   addgroup --gid $GID $USER &&
   adduser \

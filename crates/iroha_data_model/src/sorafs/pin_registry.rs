@@ -7,6 +7,7 @@ use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata};
+use super::capacity::ProviderId;
 
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
@@ -705,6 +706,19 @@ impl ReplicationOrderStatus {
     }
 }
 
+/// Provider-scoped completion recorded for a replication assignment.
+#[allow(missing_copy_implementations)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReplicationOrderCompletionRecord {
+    /// Provider assignment that completed ingestion.
+    pub provider_id: ProviderId,
+    /// Registered provider owner that authorized the completion transaction.
+    pub completed_by: AccountId,
+    /// Epoch (inclusive) when this provider completed ingestion.
+    pub completion_epoch: u64,
+}
+
 /// Record stored for each issued replication order.
 #[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -725,14 +739,22 @@ pub struct ReplicationOrderRecord {
     /// Canonical Norito payload describing the replication order.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
     pub canonical_order: Vec<u8>,
+    /// Provider-scoped completions in authoritative transaction order.
+    pub provider_completions: Vec<ReplicationOrderCompletionRecord>,
     /// Current lifecycle status for the order.
     pub status: ReplicationOrderStatus,
 }
 
 impl ReplicationOrderRecord {
-    /// Mark the order as completed at the supplied epoch.
-    pub fn complete(&mut self, completion_epoch: u64) {
-        self.status = ReplicationOrderStatus::Completed(completion_epoch);
+    /// Return the completion recorded for `provider_id`, if any.
+    #[must_use]
+    pub fn provider_completion(
+        &self,
+        provider_id: ProviderId,
+    ) -> Option<&ReplicationOrderCompletionRecord> {
+        self.provider_completions
+            .iter()
+            .find(|completion| completion.provider_id == provider_id)
     }
 
     /// Mark the order as expired at the supplied epoch.
@@ -949,16 +971,31 @@ mod tests {
             issued_epoch: 10,
             deadline_epoch: 20,
             canonical_order: payload.clone(),
+            provider_completions: Vec::new(),
             status: ReplicationOrderStatus::Pending,
         };
 
         assert!(record.status.is_pending());
         assert_eq!(record.canonical_order, payload);
 
-        record.complete(42);
+        let provider_id = ProviderId::new([0x66; 32]);
+        record
+            .provider_completions
+            .push(ReplicationOrderCompletionRecord {
+                provider_id,
+                completed_by: record.issued_by.clone(),
+                completion_epoch: 20,
+            });
+        record.status = ReplicationOrderStatus::Completed(20);
+        assert_eq!(
+            record
+                .provider_completion(provider_id)
+                .map(|completion| completion.completion_epoch),
+            Some(20)
+        );
         assert!(matches!(
             record.status,
-            ReplicationOrderStatus::Completed(epoch) if epoch == 42
+            ReplicationOrderStatus::Completed(epoch) if epoch == 20
         ));
         record.expire(43);
         assert!(matches!(

@@ -3975,7 +3975,7 @@ fn authentication_failed(quarantine_id: [u8; 16]) -> ModerationQuarantineObjectE
     }
 }
 
-fn evidence_viewer_session_record_from_input(
+pub(crate) fn evidence_viewer_session_record_from_input(
     input: ModerationEvidenceViewerSessionInput,
     object: &ModerationQuarantineObjectRecord,
 ) -> Result<ModerationEvidenceViewerSessionRecord, ModerationEvidenceViewerError> {
@@ -4132,7 +4132,7 @@ fn evidence_viewer_access_event_record_from_input(
     Ok(record)
 }
 
-fn validate_evidence_viewer_session_record(
+pub(crate) fn validate_evidence_viewer_session_record(
     record: &ModerationEvidenceViewerSessionRecord,
 ) -> Result<(), String> {
     for (field, value) in [

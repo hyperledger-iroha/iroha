@@ -26,13 +26,13 @@ use sorafs_manifest::{
 use tempfile::tempdir;
 
 #[test]
-fn tx_stdin_builder_wraps_capacity_declaration_requests() {
+fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
     let temp = tempdir().expect("tempdir");
-    let request_path = temp.path().join("declaration_request.json");
+    let summary_path = temp.path().join("declaration_summary.json");
     let declaration_b64 =
         BASE64_STD.encode(to_bytes(&sample_declaration()).expect("serialize declaration"));
     fs::write(
-        &request_path,
+        &summary_path,
         format!(
             concat!(
                 "{{\n",
@@ -40,19 +40,19 @@ fn tx_stdin_builder_wraps_capacity_declaration_requests() {
                 "  \"registered_epoch\": 580,\n",
                 "  \"valid_from_epoch\": 580,\n",
                 "  \"valid_until_epoch\": 10580,\n",
-                "  \"metadata\": [\n",
-                "    {{ \"key\": \"sorafs.owner_account_id\", \"value\": \"testuExampleCanary\" }}\n",
-                "  ]\n",
+                "  \"metadata\": {{\n",
+                "    \"sorafs.owner_account_id\": \"testuExampleCanary\"\n",
+                "  }}\n",
                 "}}\n"
             ),
-            declaration_b64 = declaration_b64,
+            declaration_b64 = declaration_b64
         ),
     )
-    .expect("write declaration request");
+    .expect("write declaration summary");
 
     let payload = run_builder([
-        "capacity-declaration-request".to_owned(),
-        format!("--request={}", request_path.display()),
+        "capacity-declaration".to_owned(),
+        format!("--summary={}", summary_path.display()),
     ]);
     let instruction = decode_single_instruction(payload);
     let declaration = instruction
@@ -65,20 +65,20 @@ fn tx_stdin_builder_wraps_capacity_declaration_requests() {
 }
 
 #[test]
-fn tx_stdin_builder_wraps_replication_order_requests() {
+fn tx_stdin_builder_wraps_replication_order_summaries() {
     let temp = tempdir().expect("tempdir");
-    let request_path = temp.path().join("order_request.json");
+    let summary_path = temp.path().join("order_summary.json");
     let order_b64 =
         BASE64_STD.encode(to_bytes(&sample_replication_order()).expect("serialize order"));
     fs::write(
-        &request_path,
-        format!("{{\n  \"order_b64\": \"{order_b64}\"\n}}\n"),
+        &summary_path,
+        format!("{{\n  \"replication_order_b64\": \"{order_b64}\"\n}}\n"),
     )
-    .expect("write order request");
+    .expect("write order summary");
 
     let payload = run_builder([
-        "replication-order-request".to_owned(),
-        format!("--request={}", request_path.display()),
+        "replication-order".to_owned(),
+        format!("--summary={}", summary_path.display()),
         "--issued-epoch=580".to_owned(),
         "--deadline-epoch=2580".to_owned(),
     ]);
@@ -98,6 +98,8 @@ fn tx_stdin_builder_emits_completion_instruction() {
         "complete-order".to_owned(),
         "--order-id-hex=5555555555555555555555555555555555555555555555555555555555555555"
             .to_owned(),
+        "--provider-id-hex=6666666666666666666666666666666666666666666666666666666666666666"
+            .to_owned(),
         "--completion-epoch=777".to_owned(),
     ]);
     let instruction = decode_single_instruction(payload);
@@ -107,6 +109,7 @@ fn tx_stdin_builder_emits_completion_instruction() {
         .expect("complete replication order");
     assert_eq!(completion.completion_epoch, 777);
     assert_eq!(completion.order_id.as_bytes(), &[0x55; 32]);
+    assert_eq!(completion.provider_id.as_bytes(), &[0x66; 32]);
 }
 
 #[test]
@@ -131,8 +134,8 @@ fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
     for (args, expected) in [
         (
             vec![
-                "replication-order-request",
-                "--request=unused.json",
+                "replication-order",
+                "--summary=unused.json",
                 "--issued-epoch=0580",
                 "--deadline-epoch=2580",
             ],
@@ -140,8 +143,8 @@ fn tx_stdin_builder_rejects_noncanonical_epoch_flags() {
         ),
         (
             vec![
-                "replication-order-request",
-                "--request=unused.json",
+                "replication-order",
+                "--summary=unused.json",
                 "--issued-epoch=580",
                 "--deadline-epoch=+2580",
             ],
@@ -197,16 +200,16 @@ fn tx_stdin_builder_rejects_duplicate_options() {
     for (args, expected) in [
         (
             vec![
-                "capacity-declaration-request",
-                "--request=one.json",
-                "--request=two.json",
+                "capacity-declaration",
+                "--summary=one.json",
+                "--summary=two.json",
             ],
-            "--request",
+            "--summary",
         ),
         (
             vec![
-                "replication-order-request",
-                "--request=unused.json",
+                "replication-order",
+                "--summary=unused.json",
                 "--issued-epoch=580",
                 "--issued-epoch=581",
             ],

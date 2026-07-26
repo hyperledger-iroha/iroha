@@ -55,10 +55,32 @@ Logs:
 
 ## Token Signing & Rotation
 
-- **Key storage.** Torii loads a 32-byte Ed25519 seed from
-  `sorafs.storage.stream_tokens.signing_key_path`. The file is runtime secret
-  material and must be readable only by the gateway service account. All-zero
-  seeds are rejected.
+- **Configuration and custody.** Enable issuance only in the node TOML and pin
+  the runtime signer by a non-secret handle and its exact Ed25519 public key:
+
+  ```toml
+  [sorafs.storage.stream_tokens]
+  enabled = true
+  signer_handle = "pkcs11:prod/stream-token/v4"
+  signer_public_key_hex = "<64-lowercase-hex-characters>"
+  key_version = 4
+  ```
+
+  There is no environment-variable enablement or signing-seed path. The private
+  key remains non-exportable in the HSM/KMS, and its credentials, session, and
+  PIN are supplied only to the runtime-injected signer adapter. They must never
+  appear in configuration, files, logs, or readiness artefacts.
+- **Startup binding.** An enabled issuer requires both configured values and an
+  injected signer. Startup fails closed unless the adapter reports the exact
+  configured handle and public key, and also rejects malformed or weak Ed25519
+  keys. A handle is an identifier, not a place to embed credentials. Disabling
+  issuance in TOML does not permit an injected signer to activate it.
+- **Signing boundary.** Torii sends the canonical domain-separated payload to
+  the injected signer and accepts only a raw 64-byte Ed25519 signature. It
+  assembles `StreamTokenV1` and strictly verifies the returned signature against
+  `signer_public_key_hex` before releasing the token. An unavailable/refusing
+  signer or any malformed, wrong-key, or non-verifying output fails closed and
+  must produce only a bounded, payload-free failure class.
 - **Distribution.** Orchestrators receive the corresponding 32-byte public key
   through authenticated provider deployment inventory and pass its 64-character
   hex encoding as `gateway-key`. The issuance response also reports
@@ -67,14 +89,20 @@ Logs:
 - **Pinning.** Each provider descriptor pins exactly one key. The client rejects
   malformed/weak Ed25519 keys and verifies the token before making an HTTP
   request. It never falls back to a key embedded in an untrusted response.
-- **Rotation.** Generate a new key, increment `key_version`, publish the new
-  public key through the authenticated inventory, and atomically deploy a new
-  `gateway-key` plus a token signed by that key. For overlap, use separately
-  named old/new provider descriptors; remove the old descriptor by its final
-  token expiry. There is no implicit multi-key acceptance window.
+- **Rotation.** Create the replacement key inside the approved HSM/KMS without
+  exporting it. In one controlled rollout, inject the adapter for its new
+  non-secret handle, update `signer_handle`, `signer_public_key_hex`, and
+  `key_version`, and restart the issuer. Require the startup binding check and a
+  strictly verified probe token before publishing the new public key through
+  authenticated inventory. Atomically deploy a matching `gateway-key` and token.
+  For overlap, use separately named old/new provider descriptors; remove the old
+  descriptor by its final token expiry, then revoke the old HSM/KMS key. There
+  is no implicit multi-key acceptance window or path-based fallback.
 - **Audit trail.** Record old/new public-key fingerprints, key versions,
-  activation and final-expiry times, approver identity, and negative-test
-  evidence showing that old-key and cross-key tokens fail after cutover.
+  non-secret signer handles, activation and final-expiry times, approver
+  identity, and negative-test evidence showing that old-key, cross-key, and
+  wrong-handle tokens fail after cutover. Never record signing material or
+  signer credentials.
 
 ## Canonical Token Schema
 
@@ -98,8 +126,9 @@ Logs:
   provider/profile/manifest binding mismatch.
 - **Scoreboard alignment.** Orchestrator scoreboard ingests the above fields directly, mapping `max_streams`, `ttl_epoch`, and `rate_limit_bytes` into availability and penalty factors. Additional scoreboard signals (e.g., token health) derive from issuance telemetry using `token_id`.
 - **Validation helpers.** Use `sorafs_manifest::{StreamTokenBodyV1,
-  StreamTokenV1}` for signing and verification. Do not implement a second token
-  codec or signature preimage in clients.
+  StreamTokenV1}` to construct the canonical signing payload, assemble the
+  externally returned signature, and verify the result. Do not implement a
+  second token codec or signature preimage in clients or signer adapters.
 
 ## Secure Token Issuance API
 

@@ -57,7 +57,7 @@ PLAN_FIELDS = frozenset(
         "steps",
     }
 )
-EXTERNAL_EVIDENCE_FIELDS = frozenset({"metrics", "transport", "consumption"})
+EXTERNAL_EVIDENCE_FIELDS = frozenset({"publish", "metrics", "transport", "consumption"})
 
 
 @dataclass(frozen=True)
@@ -120,6 +120,13 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors.extend(require_existing_files([args.snapshot], "--snapshot", seen=seen_input_files))
     errors.extend(
         require_existing_files(
+            [args.publish_evidence],
+            "--publish-evidence",
+            seen=seen_input_files,
+        )
+    )
+    errors.extend(
+        require_existing_files(
             list(proof_specs.values()),
             "--provider-proof",
             seen=seen_input_files,
@@ -148,24 +155,11 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     out_dir = args.out_dir
     summary_out = args.summary_out or out_dir / "rollout-summary.json"
     latest_out = out_dir / "latest.json"
-    publish_out = out_dir / "publish.json"
     events_out = out_dir / "events.json"
     cli = args.sorafs_cli_bin
     torii_url = args.torii_url
 
     plan = [
-        CommandPlan(
-            "publish_snapshot",
-            publish_out,
-            [
-                cli,
-                "reputation",
-                "publish",
-                f"--torii-url={torii_url}",
-                f"--snapshot={args.snapshot}",
-                f"--summary-out={publish_out}",
-            ],
-        ),
         CommandPlan(
             "fetch_latest_snapshot",
             latest_out,
@@ -238,6 +232,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         "--evidence-dir",
         str(out_dir),
         "--evidence",
+        f"publish={args.publish_evidence}",
+        "--evidence",
         f"metrics={args.metrics_evidence}",
         "--evidence",
         f"transport={args.transport_evidence}",
@@ -262,6 +258,7 @@ def external_evidence(args: argparse.Namespace) -> dict[str, str]:
     """Return reviewed external evidence paths rendered in dry-run plans."""
 
     return {
+        "publish": str(args.publish_evidence),
         "metrics": str(args.metrics_evidence),
         "transport": str(args.transport_evidence),
         "consumption": str(args.consumption_evidence),
@@ -339,7 +336,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--snapshot",
         type=Path,
         required=True,
-        help="Canonical Norito ReputationSnapshotV1 bytes to publish and verify.",
+        help="Canonical Norito ReputationSnapshotV1 bytes to verify.",
+    )
+    parser.add_argument(
+        "--publish-evidence",
+        type=Path,
+        required=True,
+        help="Reviewed payload-free external threshold-signing/publication evidence JSON.",
     )
     parser.add_argument(
         "--provider-id",

@@ -206,6 +206,52 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.ExecuteTrigger(triggerId, args));
     }
 
+    public TransactionBuilder IssueReplicationOrder(
+        string orderId,
+        ReadOnlySpan<byte> orderPayload,
+        ulong issuedEpoch,
+        ulong deadlineEpoch)
+    {
+        return AddInstruction(TransactionInstruction.IssueReplicationOrder(
+            orderId,
+            orderPayload,
+            issuedEpoch,
+            deadlineEpoch));
+    }
+
+    public TransactionBuilder IssueReplicationOrder(
+        string orderId,
+        string orderPayloadBase64,
+        ulong issuedEpoch,
+        ulong deadlineEpoch)
+    {
+        return AddInstruction(TransactionInstruction.IssueReplicationOrder(
+            orderId,
+            orderPayloadBase64,
+            issuedEpoch,
+            deadlineEpoch));
+    }
+
+    public TransactionBuilder CompleteReplicationOrder(
+        string orderId,
+        string providerId,
+        ulong completionEpoch)
+    {
+        return AddInstruction(TransactionInstruction.CompleteReplicationOrder(
+            orderId,
+            providerId,
+            completionEpoch));
+    }
+
+    public TransactionBuilder ExpireReplicationOrder(
+        string orderId,
+        ulong expirationEpoch)
+    {
+        return AddInstruction(TransactionInstruction.ExpireReplicationOrder(
+            orderId,
+            expirationEpoch));
+    }
+
     public TransactionBuilder SetCreationTimeMilliseconds(ulong creationTimeMilliseconds)
     {
         if (creationTimeMilliseconds == 0)

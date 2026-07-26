@@ -26,8 +26,8 @@ import argparse
 import datetime as dt
 import json
 import os
-import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -43,6 +43,17 @@ from publish_plan import (
     validate_publish_plan,
     write_plan_files,
 )
+from release_artifact_contract import (
+    ReleaseArtifactError,
+    canonical_json_bytes,
+    create_fresh_directory,
+    exclusive_write_bytes,
+    format_artifact_spec,
+    format_source_date_epoch,
+    parse_source_date_epoch,
+    scan_inventory_paths,
+    stable_hash_relative,
+)
 from release_manifest_signing import (
     ReleaseManifestSignatureError,
     sign_release_manifest,
@@ -50,6 +61,19 @@ from release_manifest_signing import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROFILES = ("iroha2=single", "iroha3=nexus")
+RELEASE_TARGETS = {
+    "x86_64-unknown-linux-gnu": ("linux", "x86_64"),
+    "aarch64-unknown-linux-gnu": ("linux", "aarch64"),
+    "x86_64-apple-darwin": ("mac", "x86_64"),
+    "aarch64-apple-darwin": ("mac", "aarch64"),
+    "x86_64-pc-windows-msvc": ("win", "x86_64"),
+}
+IMAGE_PLATFORM_TARGETS = {
+    "linux/amd64": ("linux", "amd64", "x86_64-unknown-linux-gnu"),
+    "linux/arm64": ("linux", "arm64", "aarch64-unknown-linux-gnu"),
+}
+REQUIRED_IMAGE_PLATFORMS = tuple(IMAGE_PLATFORM_TARGETS)
+AGGREGATE_TARGET = "multi-target"
 
 
 class PipelineError(RuntimeError):
@@ -61,8 +85,40 @@ def ensure_tool(name: str) -> None:
         raise PipelineError(f"Required tool '{name}' not found in PATH")
 
 
+def render_command(cmd: Iterable[str]) -> str:
+    """Render one payload-free, one-line command for release logs."""
+
+    rendered: List[str] = []
+    redact_next = False
+    for raw in cmd:
+        value = str(raw)
+        if redact_next:
+            value = "<redacted>"
+            redact_next = False
+        elif value.startswith("--") and "=" in value:
+            option, option_value = value.split("=", 1)
+            if any(
+                marker in option.casefold()
+                for marker in ("password", "token", "secret", "credential")
+            ):
+                value = f"{option}=<redacted>"
+        elif value.startswith("--") and any(
+            marker in value.casefold()
+            for marker in ("password", "token", "secret", "credential")
+        ):
+            redact_next = True
+        safe = "".join(
+            character
+            if ord(character) >= 0x20 and ord(character) != 0x7F
+            else f"\\x{ord(character):02x}"
+            for character in value
+        )
+        rendered.append(shlex.quote(safe))
+    return " ".join(rendered)
+
+
 def run(cmd: List[str], *, cwd: Path | None = None, env: Dict[str, str] | None = None) -> None:
-    display = " ".join(cmd)
+    display = render_command(cmd)
     print(f"[release-pipeline] $ {display}", flush=True)
     subprocess.run(cmd, check=True, cwd=cwd or REPO_ROOT, env=env)
 
@@ -77,6 +133,7 @@ def repo_version() -> str:
 
 def parse_profiles(specs: Iterable[str]) -> List[Tuple[str, str]]:
     pairs: List[Tuple[str, str]] = []
+    seen: set[str] = set()
     for spec in specs:
         if "=" not in spec:
             raise PipelineError(f"Invalid profile spec '{spec}'. Expected format <name>=<config>.")
@@ -85,8 +142,70 @@ def parse_profiles(specs: Iterable[str]) -> List[Tuple[str, str]]:
         config = config.strip()
         if not name or not config:
             raise PipelineError(f"Invalid profile spec '{spec}'.")
+        if name not in {"iroha2", "iroha3"}:
+            raise PipelineError(f"Unsupported release profile '{name}'.")
+        if config not in {"single", "nexus"}:
+            raise PipelineError(f"Unsupported release config '{config}'.")
+        if name in seen:
+            raise PipelineError(f"Duplicate release profile '{name}'.")
+        seen.add(name)
         pairs.append((name, config))
     return pairs
+
+
+def _parse_prebuilt_matrix(
+    specs: Iterable[str] | None,
+    *,
+    option: str,
+    dimensions: set[str],
+) -> Dict[tuple[str, str], str]:
+    result: Dict[tuple[str, str], str] = {}
+    for spec in specs or ():
+        if "=" not in spec:
+            raise PipelineError(
+                f"Invalid {option} value; expected profile:dimension=path"
+            )
+        identity, path = spec.split("=", 1)
+        if ":" not in identity:
+            raise PipelineError(
+                f"Invalid {option} value; expected profile:dimension=path"
+            )
+        profile, dimension = identity.split(":", 1)
+        if (
+            profile not in {"iroha2", "iroha3"}
+            or dimension not in dimensions
+            or not path
+        ):
+            raise PipelineError(
+                f"Invalid {option} profile or release dimension"
+            )
+        key = (profile, dimension)
+        if key in result:
+            raise PipelineError(f"Duplicate {option} identity '{identity}'")
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in path):
+            raise PipelineError(f"{option} paths must not contain controls")
+        result[key] = path
+    return result
+
+
+def parse_bundle_prebuilt_dirs(
+    specs: Iterable[str] | None,
+) -> Dict[tuple[str, str], str]:
+    return _parse_prebuilt_matrix(
+        specs,
+        option="--bundle-prebuilt-bin-dir",
+        dimensions=set(RELEASE_TARGETS),
+    )
+
+
+def parse_image_prebuilt_dirs(
+    specs: Iterable[str] | None,
+) -> Dict[tuple[str, str], str]:
+    return _parse_prebuilt_matrix(
+        specs,
+        option="--image-prebuilt-bin-dir",
+        dimensions=set(IMAGE_PLATFORM_TARGETS),
+    )
 
 
 def release_signing_cli_args(
@@ -123,77 +242,169 @@ def release_signing_cli_args(
     ]
 
 
-def detect_os_tag() -> str:
-    sysname = platform.system().lower()
-    if sysname.startswith("darwin"):
-        return "mac"
-    if sysname.startswith(("cygwin", "mingw", "msys", "windows")):
-        return "win"
-    return "linux"
+def artifact_spec(
+    profile: str,
+    target: str,
+    kind: str,
+    artifact_format: str,
+    path: str,
+) -> str:
+    try:
+        return format_artifact_spec(
+            {
+                "profile": profile,
+                "target": target,
+                "kind": kind,
+                "format": artifact_format,
+                "path": path,
+            }
+        )
+    except ReleaseArtifactError as exc:
+        raise PipelineError(f"Invalid release artifact contract: {exc}") from exc
 
 
-def collect_sha256(artifact_dir: Path) -> Dict[str, str]:
-    hashes: Dict[str, str] = {}
-    for sha_file in sorted(artifact_dir.glob("*.sha256")):
-        content = sha_file.read_text(encoding="utf-8").strip()
-        if not content:
-            continue
-        parts = content.split()
-        if len(parts) < 2:
-            raise PipelineError(f"Malformed sha256 file: {sha_file}")
-        sha = parts[0]
-        filename = parts[-1]
-        # sha256sum writes "./file", strip leading "./"
-        filename = filename.lstrip("./")
-        hashes[filename] = sha
-    return hashes
+def copy_closed_tree(
+    source: Path,
+    output_root: Path,
+    destination_prefix: str,
+    *,
+    dry_run: bool,
+) -> None:
+    """Copy one explicit evidence tree through the shared closed-tree contract."""
 
-
-def write_sha256sums(hashes: Dict[str, str], output: Path) -> None:
-    with output.open("w", encoding="utf-8") as fh:
-        for filename, sha in sorted(hashes.items()):
-            fh.write(f"{sha}  {filename}\n")
-
-
-def copytree_clean(src: Path, dest: Path) -> None:
-    if not src.exists():
-        return
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest)
-
-
-def archive_android_release_artifacts(version: str, release_root: Path, dry_run: bool) -> None:
-    archive_root = REPO_ROOT / "artifacts" / "android" / "releases" / version
-    if dry_run:
-        print(f"[release-pipeline] (dry-run) archive Android checklist artifacts -> {archive_root}")
-        return
-
-    archive_root.mkdir(parents=True, exist_ok=True)
-
-    lint_src = REPO_ROOT / "artifacts" / "android" / "lint" / "latest"
-    copytree_clean(lint_src, archive_root / "lint")
-
-    telemetry_src = REPO_ROOT / "artifacts" / "android" / "telemetry" / "latest"
-    copytree_clean(telemetry_src, archive_root / "telemetry")
-
-    attestation_src = REPO_ROOT / "artifacts" / "android" / "attestation" / "latest"
-    copytree_clean(attestation_src, archive_root / "attestation")
-
-    docs_to_copy = [
-        (REPO_ROOT / "docs" / "source" / "android_release_checklist.md", archive_root / "android_release_checklist.md"),
-        (REPO_ROOT / "docs" / "source" / "compliance" / "android" / "evidence_log.csv", archive_root / "evidence_log.csv"),
+    command = [
+        str(REPO_ROOT / "scripts" / "copy_release_tree.py"),
+        "--source-root",
+        str(source),
+        "--output-root",
+        str(output_root),
+        "--destination-prefix",
+        destination_prefix,
     ]
-    for src, dest in docs_to_copy:
-        if src.exists():
-            shutil.copy2(src, dest)
+    if dry_run:
+        print(f"[release-pipeline] (dry-run) {render_command(command)}")
+    else:
+        run(command)
 
-    summary_src = release_root / "android" / "maven" / "publish_summary.json"
-    if summary_src.exists():
-        shutil.copy2(summary_src, archive_root / "publish_summary.json")
-    checksum_src = release_root / "android" / "maven" / "checksums.txt"
-    if checksum_src.exists():
-        shutil.copy2(checksum_src, archive_root / "checksums.txt")
+
+def build_evidence_artifacts(
+    *,
+    evidence_stage: Path,
+    release_root: Path,
+    artifact_dir: Path,
+    version: str,
+    commit: str,
+    source_date_epoch: int,
+    zstd_path: str,
+    trusted_zstd_sha256: str,
+    dry_run: bool,
+) -> list[str]:
+    """Normalize and archive all generated evidence before aggregate closure."""
+
+    archive_name = f"release-evidence-{version}.tar.zst"
+    inventory_name = f"release-evidence-{version}.json"
+    normalized_root = release_root / ".evidence-normalized"
+    archive_path = artifact_dir / archive_name
+    checksum_path = artifact_dir / f"{archive_name}.sha256"
+    inventory_path = artifact_dir / inventory_name
+    specs = [
+        artifact_spec(
+            "shared",
+            AGGREGATE_TARGET,
+            "release-evidence",
+            "tar.zst",
+            archive_name,
+        ),
+        artifact_spec(
+            "shared",
+            AGGREGATE_TARGET,
+            "checksum",
+            "sha256",
+            f"{archive_name}.sha256",
+        ),
+        artifact_spec(
+            "shared",
+            AGGREGATE_TARGET,
+            "release-evidence",
+            "json",
+            inventory_name,
+        ),
+    ]
+    if dry_run:
+        print(
+            "[release-pipeline] (dry-run) normalize the exact evidence staging "
+            f"inventory, build {archive_name}, and write {inventory_name}"
+        )
+        return specs
+
+    source_paths = scan_inventory_paths(evidence_stage)
+    if not source_paths:
+        raise PipelineError("release evidence staging inventory is empty")
+    create_fresh_directory(normalized_root, mode=0o700)
+    copy_closed_tree(
+        evidence_stage,
+        normalized_root,
+        "evidence",
+        dry_run=False,
+    )
+    normalized_paths = scan_inventory_paths(normalized_root)
+    rows = []
+    for relative in normalized_paths:
+        info = stable_hash_relative(normalized_root, relative)
+        rows.append(
+            {
+                "path": relative,
+                "sha256": info.sha256,
+                "size": info.size,
+            }
+        )
+    inventory = {
+        "schema": "iroha.release_evidence_inventory",
+        "schema_version": 1,
+        "version": version,
+        "commit": commit,
+        "source_date_epoch": source_date_epoch,
+        "built_at": format_source_date_epoch(source_date_epoch),
+        "file_count": len(rows),
+        "files": rows,
+    }
+    exclusive_write_bytes(
+        inventory_path,
+        canonical_json_bytes(inventory),
+        mode=0o644,
+    )
+    archive_command = [
+        str(REPO_ROOT / "scripts" / "build_release_tar_zst.py"),
+        "--stage-root",
+        str(normalized_root),
+        "--output",
+        str(archive_path),
+        "--prefix",
+        f"release-evidence-{version}",
+        "--source-date-epoch",
+        str(source_date_epoch),
+        "--zstd",
+        zstd_path,
+        "--trusted-zstd-sha256",
+        trusted_zstd_sha256,
+    ]
+    for relative in normalized_paths:
+        archive_command.extend(["--file", relative])
+    run(archive_command)
+    run(
+        [
+            str(REPO_ROOT / "scripts" / "write_release_checksum.py"),
+            "--artifact",
+            str(archive_path),
+            "--output",
+            str(checksum_path),
+            "--listed-name",
+            archive_name,
+        ]
+    )
+    shutil.rmtree(normalized_root)
+    shutil.rmtree(evidence_stage)
+    return specs
 
 
 def export_fastpq_dashboard(grafana_url: str, token: str, destination: Path) -> None:
@@ -267,44 +478,17 @@ def summarize_fastpq_rollout_bundle(bundle_dir: Path, *, dry_run: bool) -> List[
     return summaries
 
 
-def update_release_manifest_evidence(
-    manifest_path: Path,
-    *,
-    fastpq_grafana_rel: str | None,
-    archived_fastpq: List[Dict[str, object]],
-    cbdc_validation_rel: str | None,
-) -> None:
-    """Attach archived rollout evidence paths to the release manifest."""
-
-    with manifest_path.open("r", encoding="utf-8") as fh:
-        manifest = json.load(fh)
-
-    evidence = manifest.get("evidence")
-    if not isinstance(evidence, dict):
-        evidence = {}
-
-    if fastpq_grafana_rel or archived_fastpq:
-        fastpq_evidence: Dict[str, object] = {}
-        if fastpq_grafana_rel:
-            fastpq_evidence["grafana_export"] = fastpq_grafana_rel
-        if archived_fastpq:
-            fastpq_evidence["rollout_bundles"] = archived_fastpq
-        evidence["fastpq"] = fastpq_evidence
-
-    if cbdc_validation_rel:
-        evidence["cbdc"] = {"validated_bundle": cbdc_validation_rel}
-
-    if evidence:
-        manifest["evidence"] = evidence
-
-    with manifest_path.open("w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Target release version (e.g., 2.0.0-rc.3 or v2.0.0-rc.3)")
+    parser.add_argument(
+        "--source-commit",
+        help="Reviewed full 40- or 64-hex source commit.",
+    )
+    parser.add_argument(
+        "--source-date-epoch",
+        help="Canonical shared SOURCE_DATE_EPOCH for every release builder.",
+    )
     parser.add_argument(
         "--previous-tag",
         help="Previous release tag for changelog generation (optional; should match the release line being prepared).",
@@ -315,6 +499,14 @@ def main() -> int:
         help="Base directory for release artifacts (default: artifacts/releases)",
     )
     parser.add_argument(
+        "--git-cliff",
+        help="Absolute path to the reviewed git-cliff executable.",
+    )
+    parser.add_argument(
+        "--trusted-git-cliff-sha256",
+        help="Reviewed lowercase SHA256 of the exact git-cliff executable.",
+    )
+    parser.add_argument(
         "--profile",
         action="append",
         dest="profiles",
@@ -323,8 +515,8 @@ def main() -> int:
     parser.add_argument(
         "--external-signer",
         help=(
-            "Reviewed PKCS#11/HSM Ed25519 wrapper invoked with the artifact path "
-            "and a new raw-signature output path."
+            "Reviewed PKCS#11/HSM Ed25519 wrapper invoked only with the final "
+            "canonical aggregate-manifest path and a new raw-signature output path."
         ),
     )
     parser.add_argument(
@@ -345,6 +537,79 @@ def main() -> int:
     )
     parser.add_argument("--skip-bundles", action="store_true", help="Skip building tar.zst bundles.")
     parser.add_argument("--skip-images", action="store_true", help="Skip building Docker images.")
+    parser.add_argument(
+        "--bundle-prebuilt-bin-dir",
+        action="append",
+        help=(
+            "Reviewed bundle binary directory as profile:target=path; required "
+            "exactly once for each profile and mandatory Linux/macOS/Windows target."
+        ),
+    )
+    parser.add_argument(
+        "--zstd",
+        help="Absolute path to the reviewed zstd executable.",
+    )
+    parser.add_argument(
+        "--trusted-zstd-sha256",
+        help=(
+            "Reviewed SHA256 of the exact zstd executable used by bundle "
+            "and evidence builders."
+        ),
+    )
+    parser.add_argument(
+        "--image-platform",
+        action="append",
+        choices=tuple(IMAGE_PLATFORM_TARGETS),
+        dest="image_platforms",
+        help=(
+            "Exact OCI image platform; both linux/amd64 and linux/arm64 are "
+            "required unless images are skipped."
+        ),
+    )
+    parser.add_argument(
+        "--image-builder-base-image",
+        help="Reviewed preprovisioned builder image ref@sha256 digest.",
+    )
+    parser.add_argument(
+        "--image-runtime-base-image",
+        help="Reviewed preprovisioned runtime image ref@sha256 digest.",
+    )
+    parser.add_argument(
+        "--image-docker",
+        help="Absolute path to the reviewed Docker CLI executable.",
+    )
+    parser.add_argument(
+        "--trusted-docker-sha256",
+        help="Reviewed lowercase SHA256 of the exact Docker CLI.",
+    )
+    parser.add_argument(
+        "--image-buildx-plugin",
+        help="Absolute path to the reviewed docker-buildx plugin.",
+    )
+    parser.add_argument(
+        "--trusted-buildx-sha256",
+        help="Reviewed lowercase SHA256 of the exact docker-buildx plugin.",
+    )
+    parser.add_argument(
+        "--trusted-buildx-version",
+        help="Exact reviewed one-line `docker buildx version` output.",
+    )
+    parser.add_argument(
+        "--image-buildx-builder",
+        help="Reviewed bounded buildx builder instance name.",
+    )
+    parser.add_argument(
+        "--trusted-buildx-builder-inspect-sha256",
+        help="Reviewed SHA256 of the exact buildx builder inspection output.",
+    )
+    parser.add_argument(
+        "--image-prebuilt-bin-dir",
+        action="append",
+        help=(
+            "Reviewed image binary directory as profile:platform=path; required "
+            "once for every profile and required Linux image platform."
+        ),
+    )
     parser.add_argument(
         "--skip-privacy-dp",
         action="store_true",
@@ -426,8 +691,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--cbdc-rollout-dir",
-        default="artifacts/nexus/cbdc_rollouts",
-        help="Base directory for CBDC rollout artefacts validated via ci/check_cbdc_rollout.sh (default: artifacts/nexus/cbdc_rollouts).",
+        help=(
+            "Explicit reviewed CBDC rollout directory validated and archived "
+            "via ci/check_cbdc_rollout.sh."
+        ),
     )
     parser.add_argument(
         "--skip-cbdc-rollout-check",
@@ -458,6 +725,7 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    profiles = parse_profiles(args.profiles or DEFAULT_PROFILES)
     signing_cli_args = release_signing_cli_args(
         args.external_signer,
         args.signing_public_key,
@@ -509,6 +777,185 @@ def main() -> int:
             "--signing-public-key, and --trusted-signing-fingerprint; use "
             "--development-allow-unsigned-publish-plan only for tests/development"
         )
+    if not args.skip_cbdc_rollout_check and args.cbdc_rollout_dir is None:
+        raise PipelineError(
+            "--cbdc-rollout-dir is required unless "
+            "--skip-cbdc-rollout-check is supplied"
+        )
+    evidence_requested = any(
+        (
+            not args.skip_privacy_dp,
+            not args.skip_nexus_lane_smoke,
+            not args.skip_nexus_cross_dataspace_proof,
+            args.publish_android_sdk,
+            args.export_fastpq_grafana,
+            bool(args.fastpq_bundles),
+            not args.skip_cbdc_rollout_check,
+        )
+    )
+    if (
+        (not args.skip_bundles or evidence_requested)
+        and (
+            args.zstd is None
+            or not Path(args.zstd).is_absolute()
+            or args.trusted_zstd_sha256 is None
+            or re.fullmatch(r"[0-9a-f]{64}", args.trusted_zstd_sha256) is None
+        )
+    ):
+        raise PipelineError(
+            "bundle/evidence lanes require absolute --zstd and "
+            "--trusted-zstd-sha256 as 64 lowercase hex"
+        )
+    bundle_prebuilt_dirs: Dict[tuple[str, str], str] = {}
+    if not args.skip_bundles:
+        bundle_prebuilt_dirs = parse_bundle_prebuilt_dirs(
+            args.bundle_prebuilt_bin_dir
+        )
+        expected_bundle_inputs = {
+            (profile, target)
+            for profile, _config in profiles
+            for target in RELEASE_TARGETS
+        }
+        if set(bundle_prebuilt_dirs) != expected_bundle_inputs:
+            raise PipelineError(
+                "--bundle-prebuilt-bin-dir identities must be exactly the "
+                "profile × mandatory Linux/macOS/Windows target matrix"
+            )
+    elif args.bundle_prebuilt_bin_dir:
+        raise PipelineError(
+            "--bundle-prebuilt-bin-dir cannot be supplied with --skip-bundles"
+        )
+    if args.skip_bundles and args.skip_images:
+        raise PipelineError(
+            "at least one bundle or image release lane must be enabled"
+        )
+    image_prebuilt_dirs: Dict[tuple[str, str], str] = {}
+    image_platforms = tuple(args.image_platforms or ())
+    if not args.skip_images:
+        image_required = {
+            "--image-platform": image_platforms,
+            "--image-builder-base-image": args.image_builder_base_image,
+            "--image-runtime-base-image": args.image_runtime_base_image,
+            "--image-docker": args.image_docker,
+            "--trusted-docker-sha256": args.trusted_docker_sha256,
+            "--image-buildx-plugin": args.image_buildx_plugin,
+            "--trusted-buildx-sha256": args.trusted_buildx_sha256,
+            "--trusted-buildx-version": args.trusted_buildx_version,
+            "--image-buildx-builder": args.image_buildx_builder,
+            "--trusted-buildx-builder-inspect-sha256": (
+                args.trusted_buildx_builder_inspect_sha256
+            ),
+        }
+        missing_image_controls = [
+            option for option, value in image_required.items() if value is None
+        ]
+        if missing_image_controls:
+            raise PipelineError(
+                "image lanes require explicit reviewed controls: "
+                + ", ".join(missing_image_controls)
+            )
+        if (
+            len(image_platforms) != len(REQUIRED_IMAGE_PLATFORMS)
+            or set(image_platforms) != set(REQUIRED_IMAGE_PLATFORMS)
+        ):
+            raise PipelineError(
+                "image lanes require each of linux/amd64 and linux/arm64 "
+                "exactly once"
+            )
+        for option, value in (
+            ("--trusted-docker-sha256", args.trusted_docker_sha256),
+            ("--trusted-buildx-sha256", args.trusted_buildx_sha256),
+            (
+                "--trusted-buildx-builder-inspect-sha256",
+                args.trusted_buildx_builder_inspect_sha256,
+            ),
+        ):
+            assert value is not None
+            if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise PipelineError(
+                    f"{option} must be exactly 64 lowercase hexadecimal characters"
+                )
+        digest_reference = re.compile(
+            r"[a-z0-9][a-z0-9._:/-]{0,200}@sha256:[0-9a-f]{64}"
+        )
+        for option, value in (
+            ("--image-builder-base-image", args.image_builder_base_image),
+            ("--image-runtime-base-image", args.image_runtime_base_image),
+        ):
+            assert value is not None
+            if digest_reference.fullmatch(value) is None:
+                raise PipelineError(
+                    f"{option} must be a bounded lowercase ref@sha256 digest"
+                )
+        for option, value in (
+            ("--image-docker", args.image_docker),
+            ("--image-buildx-plugin", args.image_buildx_plugin),
+        ):
+            assert value is not None
+            if not Path(value).is_absolute():
+                raise PipelineError(f"{option} must be an absolute path")
+        assert args.trusted_buildx_version is not None
+        if (
+            not args.trusted_buildx_version
+            or len(args.trusted_buildx_version.encode("utf-8")) > 512
+            or any(
+                ord(character) < 0x20 or ord(character) == 0x7F
+                for character in args.trusted_buildx_version
+            )
+        ):
+            raise PipelineError(
+                "--trusted-buildx-version must be one bounded control-free line"
+            )
+        assert args.image_buildx_builder is not None
+        if re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}",
+            args.image_buildx_builder,
+        ) is None:
+            raise PipelineError(
+                "--image-buildx-builder must be a bounded safe token"
+            )
+        image_prebuilt_dirs = parse_image_prebuilt_dirs(
+            args.image_prebuilt_bin_dir
+        )
+        expected_prebuilt_profiles = {
+            (profile, platform_name)
+            for profile, _config in profiles
+            for platform_name in REQUIRED_IMAGE_PLATFORMS
+        }
+        if set(image_prebuilt_dirs) != expected_prebuilt_profiles:
+            raise PipelineError(
+                "--image-prebuilt-bin-dir identities must be exactly the "
+                "profile × required Linux image-platform matrix"
+            )
+    elif args.image_platforms or args.image_prebuilt_bin_dir:
+        raise PipelineError(
+            "image platform/prebuilt controls cannot be supplied with --skip-images"
+        )
+    if args.git_cliff is None or args.trusted_git_cliff_sha256 is None:
+        raise PipelineError(
+            "release changelog generation requires --git-cliff and "
+            "--trusted-git-cliff-sha256"
+        )
+    if not Path(args.git_cliff).is_absolute():
+        raise PipelineError("--git-cliff must be an absolute path")
+    if re.fullmatch(r"[0-9a-f]{64}", args.trusted_git_cliff_sha256) is None:
+        raise PipelineError(
+            "--trusted-git-cliff-sha256 must be exactly 64 lowercase "
+            "hexadecimal characters"
+        )
+    if args.source_commit is None or re.fullmatch(
+        r"(?:[0-9a-f]{40}|[0-9a-f]{64})",
+        args.source_commit,
+    ) is None:
+        raise PipelineError(
+            "--source-commit is required as a full 40- or 64-hex identifier"
+        )
+    if args.source_date_epoch is None:
+        raise PipelineError("--source-date-epoch is required")
+    try:
+        source_date_epoch = parse_source_date_epoch(args.source_date_epoch)
+    except ReleaseArtifactError as exc:
+        raise PipelineError(f"Invalid --source-date-epoch: {exc}") from exc
     try:
         publish_target_map = (
             parse_target_map(args.publish_target) if args.publish_target else None
@@ -522,160 +969,315 @@ def main() -> int:
         raise PipelineError(
             f"Version mismatch: repository declares {repo_ver} but --version {provided_version} was provided."
         )
-
-    profiles = parse_profiles(args.profiles or DEFAULT_PROFILES)
-    release_root = Path(args.output_dir).expanduser().resolve() / provided_version
-    artifact_dir = release_root / "artifacts"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-
     ensure_tool("git")
-    ensure_tool("git-cliff")
-    if not args.skip_images:
-        ensure_tool("docker")
+    actual_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        text=True,
+    ).strip()
+    commit = args.source_commit
+    assert commit is not None
+    if actual_commit != commit:
+        raise PipelineError(
+            "--source-commit does not match the repository HEAD"
+        )
+
+    release_root = (
+        Path(os.path.abspath(Path(args.output_dir).expanduser()))
+        / provided_version
+    )
+    artifact_dir = release_root / "artifacts"
+    evidence_stage = release_root / ".evidence-staging"
+    if release_root.exists() or release_root.is_symlink():
+        raise PipelineError(
+            f"Release output must be a fresh path; refusing stale reuse: {release_root}"
+        )
+    if not args.dry_run:
+        try:
+            create_fresh_directory(release_root, mode=0o755)
+            create_fresh_directory(artifact_dir, mode=0o755)
+            if evidence_requested:
+                create_fresh_directory(evidence_stage, mode=0o700)
+        except ReleaseArtifactError as exc:
+            raise PipelineError(
+                f"Failed to create fresh release output: {exc}"
+            ) from exc
+    release_env = os.environ.copy()
+    release_env["SOURCE_DATE_EPOCH"] = str(source_date_epoch)
 
     dp_script = REPO_ROOT / "scripts" / "telemetry" / "run_privacy_dp_notebook.sh"
     if not args.skip_privacy_dp:
         if not dp_script.is_file():
             raise PipelineError(f"Privacy DP script missing: {dp_script}")
         dp_cmd = [str(dp_script)]
+        privacy_source = evidence_stage / "privacy_dp"
+        dp_env = release_env.copy()
+        dp_env["SORANET_PRIVACY_DP_ARTIFACT_DIR"] = str(privacy_source)
         if args.dry_run:
-            print(f"[release-pipeline] (dry-run) {' '.join(dp_cmd)}")
+            print(f"[release-pipeline] (dry-run) {render_command(dp_cmd)}")
         else:
-            run(dp_cmd)
+            run(dp_cmd, env=dp_env)
+        if not args.dry_run and not privacy_source.is_dir():
+            raise PipelineError(
+                "privacy DP evidence directory was not created"
+            )
 
     if args.skip_nexus_lane_smoke:
         print("[release-pipeline] skipping Nexus lane smoke evidence step")
     else:
         smoke_cmd = ["bash", str(REPO_ROOT / "ci" / "check_nexus_lane_smoke.sh")]
+        nx_source = evidence_stage / "nx18"
+        smoke_env = release_env.copy()
+        smoke_env["NEXUS_LANE_SMOKE_EVIDENCE_DIR"] = str(nx_source)
         if args.dry_run:
-            print(f"[release-pipeline] (dry-run) {' '.join(smoke_cmd)}")
+            print(f"[release-pipeline] (dry-run) {render_command(smoke_cmd)}")
         else:
-            run(smoke_cmd)
-        nx_source = REPO_ROOT / "artifacts" / "nx18"
-        if not nx_source.exists():
-            raise PipelineError("NX-18 evidence directory artifacts/nx18 was not created")
-        nx_dest = release_root / "nx18"
-        if args.dry_run:
-            print(f"[release-pipeline] (dry-run) copy {nx_source} -> {nx_dest}")
-        else:
-            copytree_clean(nx_source, nx_dest)
+            run(smoke_cmd, env=smoke_env)
+        if not args.dry_run and not nx_source.is_dir():
+            raise PipelineError("NX-18 evidence directory was not created")
 
     if args.skip_nexus_cross_dataspace_proof:
         print("[release-pipeline] skipping Nexus cross-dataspace proof gate")
     else:
         cross_ds_cmd = ["bash", str(REPO_ROOT / "ci" / "check_nexus_cross_dataspace_localnet.sh")]
+        cross_ds_env = release_env.copy()
+        cross_ds_env["NEXUS_CROSS_DATASPACE_EVIDENCE_DIR"] = str(
+            evidence_stage / "nexus_cross_dataspace"
+        )
         if args.dry_run:
-            print(f"[release-pipeline] (dry-run) {' '.join(cross_ds_cmd)}")
+            print(f"[release-pipeline] (dry-run) {render_command(cross_ds_cmd)}")
         else:
-            run(cross_ds_cmd)
+            run(cross_ds_cmd, env=cross_ds_env)
 
-    built_at = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT, text=True
-    ).strip()
-    os_tag = detect_os_tag()
-    arch = platform.machine()
+    built_at = format_source_date_epoch(source_date_epoch)
 
-    changelog_path = release_root / f"CHANGELOG-{provided_version}.md"
-    cliff_cmd = [
-        "git",
-        "cliff",
+    changelog_path = artifact_dir / f"CHANGELOG-{provided_version}.md"
+    cliff_args = [
         "-c",
         str(REPO_ROOT / "cliff.toml"),
         "--tag",
         f"v{provided_version}",
-        "--output",
-        str(changelog_path),
     ]
     if args.previous_tag:
-        cliff_cmd.extend(["--previous-tag", args.previous_tag])
+        cliff_args.extend(["--previous-tag", args.previous_tag])
+    cliff_cmd = [
+        str(REPO_ROOT / "scripts" / "capture_release_command.py"),
+        "--output",
+        str(changelog_path),
+        "--executable-root",
+        str(Path(args.git_cliff).parent),
+        "--executable-relative",
+        Path(args.git_cliff).name,
+        "--trusted-executable-sha256",
+        args.trusted_git_cliff_sha256,
+        "--",
+        *cliff_args,
+    ]
 
     if args.dry_run:
-        print(f"[release-pipeline] (dry-run) {' '.join(cliff_cmd)}")
+        print(f"[release-pipeline] (dry-run) {render_command(cliff_cmd)}")
     else:
         run(cliff_cmd)
 
-    bundle_paths: List[Path] = []
+    aggregate_specs: List[str] = [
+        artifact_spec(
+            "shared",
+            AGGREGATE_TARGET,
+            "changelog",
+            "markdown",
+            changelog_path.name,
+        )
+    ]
+    bundle_paths: Dict[str, Dict[str, Path]] = {
+        target: {} for target in RELEASE_TARGETS
+    }
     for profile, config in profiles:
         if not args.skip_bundles:
-            bundle_cmd = [
-                str(REPO_ROOT / "scripts" / "build_release_bundle.sh"),
-                "--profile",
-                profile,
-                "--config",
-                config,
-                "--artifacts-dir",
-                str(artifact_dir),
-            ]
-            bundle_cmd.extend(signing_cli_args)
-            if args.dry_run:
-                print(f"[release-pipeline] (dry-run) {' '.join(bundle_cmd)}")
-            else:
-                run(bundle_cmd)
-            bundle_paths.append(
-                artifact_dir / f"{profile}-{provided_version}-{os_tag}.tar.zst"
-            )
+            for target_triple, (os_tag, target_arch) in RELEASE_TARGETS.items():
+                bundle_cmd = [
+                    str(REPO_ROOT / "scripts" / "build_release_bundle.sh"),
+                    "--profile",
+                    profile,
+                    "--config",
+                    config,
+                    "--artifacts-dir",
+                    str(artifact_dir),
+                    "--target",
+                    target_triple,
+                    "--source-commit",
+                    commit,
+                    "--source-date-epoch",
+                    str(source_date_epoch),
+                    "--trusted-zstd-sha256",
+                    str(args.trusted_zstd_sha256),
+                    "--zstd",
+                    str(args.zstd),
+                    "--prebuilt-bin-dir",
+                    bundle_prebuilt_dirs[(profile, target_triple)],
+                ]
+                if args.dry_run:
+                    print(
+                        f"[release-pipeline] (dry-run) "
+                        f"{render_command(bundle_cmd)}"
+                    )
+                else:
+                    run(bundle_cmd, env=release_env)
+                bundle_name = (
+                    f"{profile}-{provided_version}-{os_tag}-{target_arch}.tar.zst"
+                )
+                builder_manifest_name = (
+                    f"{profile}-{provided_version}-{os_tag}-{target_arch}"
+                    "-manifest.json"
+                )
+                bundle_paths[target_triple][profile] = artifact_dir / bundle_name
+                aggregate_specs.extend(
+                    [
+                        artifact_spec(
+                            profile,
+                            target_triple,
+                            "bundle",
+                            "tar.zst",
+                            bundle_name,
+                        ),
+                        artifact_spec(
+                            profile,
+                            target_triple,
+                            "checksum",
+                            "sha256",
+                            f"{bundle_name}.sha256",
+                        ),
+                        artifact_spec(
+                            profile,
+                            target_triple,
+                            "builder-manifest",
+                            "json",
+                            builder_manifest_name,
+                        ),
+                    ]
+                )
 
         if not args.skip_images:
-            image_cmd = [
-                str(REPO_ROOT / "scripts" / "build_release_image.sh"),
-                "--profile",
-                profile,
-                "--config",
-                config,
-                "--artifacts-dir",
-                str(artifact_dir),
+            assert args.image_builder_base_image is not None
+            assert args.image_runtime_base_image is not None
+            assert args.image_docker is not None
+            assert args.trusted_docker_sha256 is not None
+            assert args.image_buildx_plugin is not None
+            assert args.trusted_buildx_sha256 is not None
+            assert args.trusted_buildx_version is not None
+            assert args.image_buildx_builder is not None
+            assert args.trusted_buildx_builder_inspect_sha256 is not None
+            for image_platform in REQUIRED_IMAGE_PLATFORMS:
+                image_os_tag, image_arch, image_target_triple = (
+                    IMAGE_PLATFORM_TARGETS[image_platform]
+                )
+                image_cmd = [
+                    str(REPO_ROOT / "scripts" / "build_release_image.sh"),
+                    "--profile",
+                    profile,
+                    "--config",
+                    config,
+                    "--source-commit",
+                    commit,
+                    "--source-date-epoch",
+                    str(source_date_epoch),
+                    "--platform",
+                    image_platform,
+                    "--builder-base-image",
+                    args.image_builder_base_image,
+                    "--runtime-base-image",
+                    args.image_runtime_base_image,
+                    "--docker",
+                    args.image_docker,
+                    "--trusted-docker-sha256",
+                    args.trusted_docker_sha256,
+                    "--buildx-plugin",
+                    args.image_buildx_plugin,
+                    "--trusted-buildx-sha256",
+                    args.trusted_buildx_sha256,
+                    "--trusted-buildx-version",
+                    args.trusted_buildx_version,
+                    "--buildx-builder",
+                    args.image_buildx_builder,
+                    "--trusted-buildx-builder-inspect-sha256",
+                    args.trusted_buildx_builder_inspect_sha256,
+                    "--artifacts-dir",
+                    str(artifact_dir),
+                    "--prebuilt-bin-dir",
+                    image_prebuilt_dirs[(profile, image_platform)],
+                ]
+                if args.dry_run:
+                    print(
+                        f"[release-pipeline] (dry-run) "
+                        f"{render_command(image_cmd)}"
+                    )
+                else:
+                    run(image_cmd, env=release_env)
+                image_name = (
+                    f"{profile}-{provided_version}-{image_os_tag}-{image_arch}"
+                    "-image.oci.tar"
+                )
+                aggregate_specs.extend(
+                    [
+                        artifact_spec(
+                            profile,
+                            image_target_triple,
+                            "image",
+                            "oci-archive",
+                            image_name,
+                        ),
+                        artifact_spec(
+                            profile,
+                            image_target_triple,
+                            "checksum",
+                            "sha256",
+                            f"{image_name}.sha256",
+                        ),
+                        artifact_spec(
+                            profile,
+                            image_target_triple,
+                            "builder-manifest",
+                            "json",
+                            (
+                                f"{profile}-{provided_version}-{image_os_tag}-"
+                                f"{image_arch}-image.json"
+                            ),
+                        ),
+                    ]
+                )
+
+    if not args.skip_bundles:
+        for target_triple, (os_tag, target_arch) in RELEASE_TARGETS.items():
+            matrix_name = f"dual_profile_matrix-{os_tag}-{target_arch}.json"
+            matrix_output = artifact_dir / matrix_name
+            matrix_cmd = [
+                str(REPO_ROOT / "ci" / "dual_profile_matrix.sh"),
+                "--output",
+                str(matrix_output),
+                "--expect-version",
+                provided_version,
+                *[
+                    str(bundle_paths[target_triple][profile])
+                    for profile, _config in profiles
+                ],
             ]
-            image_cmd.extend(signing_cli_args)
             if args.dry_run:
-                print(f"[release-pipeline] (dry-run) {' '.join(image_cmd)}")
+                print(
+                    f"[release-pipeline] (dry-run) {render_command(matrix_cmd)}"
+                )
             else:
-                run(image_cmd)
-
-    if not args.skip_bundles and bundle_paths:
-        matrix_output = artifact_dir / "dual_profile_matrix.json"
-        matrix_cmd = [
-            str(REPO_ROOT / "ci" / "dual_profile_matrix.sh"),
-            "--output",
-            str(matrix_output),
-            "--expect-version",
-            provided_version,
-            *[str(path) for path in bundle_paths],
-        ]
-        if args.dry_run:
-            print(f"[release-pipeline] (dry-run) {' '.join(matrix_cmd)}")
-        else:
-            run(matrix_cmd)
-
-    hashes = collect_sha256(artifact_dir)
-    sha_path = artifact_dir / "SHA256SUMS"
-    write_sha256sums(hashes, sha_path)
-
-    manifest_args = [
-        str(REPO_ROOT / "scripts" / "generate_release_manifest.py"),
-        "--artifacts-dir",
-        str(artifact_dir),
-        "--version",
-        provided_version,
-        "--commit",
-        commit,
-        "--built-at",
-        built_at,
-        "--os-tag",
-        os_tag,
-        "--arch",
-        arch,
-        "--output",
-        str(release_root / "release_manifest.json"),
-    ]
-
-    if args.dry_run:
-        print(f"[release-pipeline] (dry-run) {' '.join(manifest_args)}")
-    else:
-        run(manifest_args)
+                run(matrix_cmd)
+            aggregate_specs.append(
+                artifact_spec(
+                    "shared",
+                    target_triple,
+                    "profile-matrix",
+                    "json",
+                    matrix_name,
+                )
+            )
 
     if args.publish_android_sdk:
-        android_dir = release_root / "android"
+        android_dir = evidence_stage / "android"
         android_repo_dir = android_dir / "maven"
         publish_cmd = [
             str(REPO_ROOT / "scripts" / "publish_android_sdk.sh"),
@@ -693,7 +1295,7 @@ def main() -> int:
         if args.android_sdk_skip_sbom:
             publish_cmd.append("--skip-sbom")
         if args.dry_run:
-            print(f"[release-pipeline] (dry-run) {' '.join(publish_cmd)}")
+            print(f"[release-pipeline] (dry-run) {render_command(publish_cmd)}")
         else:
             run(publish_cmd)
 
@@ -702,37 +1304,46 @@ def main() -> int:
         if args.dry_run:
             print(f"[release-pipeline] (dry-run) copy Android SBOM bundle {sbom_src} -> {sbom_dest}")
         elif sbom_src.is_dir():
-            if sbom_dest.exists():
-                shutil.rmtree(sbom_dest)
-            shutil.copytree(sbom_src, sbom_dest)
+            copy_closed_tree(
+                sbom_src,
+                android_dir,
+                "sbom",
+                dry_run=False,
+            )
         else:
-            print(f"[release-pipeline] warning: Android SBOM bundle not found at {sbom_src}")
+            raise PipelineError(
+                f"Android SBOM bundle not found at {sbom_src}"
+            )
 
         readme_path = android_dir / "README.txt"
         summary_path = android_repo_dir / "publish_summary.json"
         checksum_path = android_repo_dir / "checksums.txt"
         if not args.dry_run:
-            android_dir.mkdir(parents=True, exist_ok=True)
-            with readme_path.open("w", encoding="utf-8") as fh:
-                fh.write("Android SDK release bundle\n")
-                fh.write(f"Version: {provided_version}\n")
-                fh.write(f"Generated: {built_at}\n")
-                fh.write(f"Local Maven repo: {android_repo_dir}\n")
-                if args.android_sdk_repo_url:
-                    fh.write(f"Remote Maven repo: {args.android_sdk_repo_url}\n")
-                if sbom_dest.is_dir():
-                    fh.write(f"SBOM bundle: {sbom_dest}\n")
-                if summary_path.is_file():
-                    fh.write(f"Summary: {summary_path}\n")
-                if checksum_path.is_file():
-                    fh.write(f"Checksums: {checksum_path}\n")
+            lines = [
+                "Android SDK release bundle",
+                f"Version: {provided_version}",
+                f"Generated: {built_at}",
+                "Local Maven repo: maven",
+                "SBOM bundle: sbom",
+            ]
+            if args.android_sdk_repo_url:
+                lines.append("Remote Maven publication: completed")
+            if summary_path.is_file():
+                lines.append("Summary: maven/publish_summary.json")
+            if checksum_path.is_file():
+                lines.append("Checksums: maven/checksums.txt")
+            exclusive_write_bytes(
+                readme_path,
+                ("\n".join(lines) + "\n").encode("utf-8"),
+                mode=0o644,
+            )
         else:
             print(f"[release-pipeline] (dry-run) write Android README to {readme_path}")
 
-        archive_android_release_artifacts(provided_version, release_root, args.dry_run)
-
     fastpq_grafana_rel: str | None = None
-    fastpq_rollout_base = Path(args.fastpq_rollout_dir).expanduser().resolve()
+    fastpq_rollout_base = Path(
+        os.path.abspath(Path(args.fastpq_rollout_dir).expanduser())
+    )
     if args.export_fastpq_grafana:
         grafana_url = args.grafana_url or os.environ.get("GRAFANA_URL")
         if not grafana_url:
@@ -742,9 +1353,11 @@ def main() -> int:
             raise PipelineError(
                 f"Grafana token not found in environment variable {args.grafana_token_env}."
             )
-        stamp = args.fastpq_rollout_stamp or f"{dt.datetime.utcnow():%Y%m%dT%H%MZ}_{provided_version}"
-        rollout_dir = fastpq_rollout_base / stamp / "release_pipeline"
-        rollout_dir.mkdir(parents=True, exist_ok=True)
+        stamp = args.fastpq_rollout_stamp or (
+            f"{dt.datetime.fromtimestamp(source_date_epoch, tz=dt.timezone.utc):%Y%m%dT%H%MZ}_"
+            f"{provided_version}"
+        )
+        rollout_dir = evidence_stage / "fastpq_grafana" / stamp
         dashboard_path = rollout_dir / "grafana_fastpq_acceleration.json"
         alerts_dst = rollout_dir / "alerts"
         tests_dst = alerts_dst / "tests"
@@ -762,13 +1375,31 @@ def main() -> int:
                 f"and copy alert pack into {alerts_dst}"
             )
         else:
+            rollout_dir.mkdir(parents=True, exist_ok=False)
             export_fastpq_dashboard(grafana_url, token, dashboard_path)
             alerts_dst.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(repo_alert, alerts_dst / "fastpq_acceleration_rules.yml")
+            run(
+                [
+                    str(REPO_ROOT / "scripts" / "copy_release_file.py"),
+                    "--source",
+                    str(repo_alert),
+                    "--output",
+                    str(alerts_dst / "fastpq_acceleration_rules.yml"),
+                    "--mode",
+                    "0644",
+                ]
+            )
             tests_dst.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(
-                repo_test,
-                tests_dst / "fastpq_acceleration_rules.test.yml",
+            run(
+                [
+                    str(REPO_ROOT / "scripts" / "copy_release_file.py"),
+                    "--source",
+                    str(repo_test),
+                    "--output",
+                    str(tests_dst / "fastpq_acceleration_rules.test.yml"),
+                    "--mode",
+                    "0644",
+                ]
             )
         try:
             fastpq_grafana_rel = str(rollout_dir.relative_to(REPO_ROOT))
@@ -778,12 +1409,13 @@ def main() -> int:
     archived_fastpq: List[Dict[str, object]] = []
     if args.fastpq_bundles:
         script = REPO_ROOT / "ci" / "check_fastpq_rollout.sh"
-        release_rollout_root = release_root / "fastpq_rollouts"
-        release_rollout_root.mkdir(parents=True, exist_ok=True)
+        release_rollout_root = evidence_stage / "fastpq_rollouts"
         for bundle in args.fastpq_bundles:
-            bundle_path = Path(bundle).expanduser().resolve()
+            bundle_path = Path(os.path.abspath(Path(bundle).expanduser()))
             if not bundle_path.exists():
                 raise PipelineError(f"FASTPQ rollout bundle not found: {bundle_path}")
+            if not args.dry_run:
+                scan_inventory_paths(bundle_path)
             if not args.skip_fastpq_rollout_check and not args.dry_run:
                 env = os.environ.copy()
                 env["FASTPQ_ROLLOUT_BUNDLE"] = str(bundle_path)
@@ -798,10 +1430,12 @@ def main() -> int:
                     f"[release-pipeline] (dry-run) archive FASTPQ rollout bundle {bundle_path} -> {dest_dir}"
                 )
             else:
-                if dest_dir.exists():
-                    shutil.rmtree(dest_dir)
-                dest_dir.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(bundle_path, dest_dir)
+                copy_closed_tree(
+                    bundle_path,
+                    evidence_stage,
+                    (Path("fastpq_rollouts") / rel_bundle).as_posix(),
+                    dry_run=False,
+                )
             summary_paths = summarize_fastpq_rollout_bundle(dest_dir, dry_run=args.dry_run)
             try:
                 bundle_label = str(dest_dir.relative_to(REPO_ROOT))
@@ -816,10 +1450,20 @@ def main() -> int:
 
     cbdc_validation_rel: str | None = None
     if not args.skip_cbdc_rollout_check:
-        cbdc_dir = Path(args.cbdc_rollout_dir).expanduser().resolve()
-        manifests = (
-            list(cbdc_dir.rglob("cbdc.manifest.json")) if cbdc_dir.exists() else []
+        assert args.cbdc_rollout_dir is not None
+        cbdc_dir = Path(
+            os.path.abspath(Path(args.cbdc_rollout_dir).expanduser())
         )
+        cbdc_inventory = (
+            scan_inventory_paths(cbdc_dir) if not args.dry_run else []
+        )
+        manifests = [
+            relative
+            for relative in cbdc_inventory
+            if Path(relative).name == "cbdc.manifest.json"
+        ]
+        if args.dry_run:
+            manifests = ["<reviewed-cbdc-manifest>"]
         if manifests:
             script = REPO_ROOT / "ci" / "check_cbdc_rollout.sh"
             if args.dry_run:
@@ -830,18 +1474,77 @@ def main() -> int:
                 env = os.environ.copy()
                 env["CBDC_ROLLOUT_BUNDLE"] = str(cbdc_dir)
                 run([str(script)], env=env)
+                copy_closed_tree(
+                    cbdc_dir,
+                    evidence_stage,
+                    "cbdc_rollouts",
+                    dry_run=False,
+                )
             try:
                 cbdc_validation_rel = str(cbdc_dir.relative_to(REPO_ROOT))
             except ValueError:
                 cbdc_validation_rel = str(cbdc_dir)
+        else:
+            raise PipelineError(
+                f"CBDC rollout directory has no cbdc.manifest.json: {cbdc_dir}"
+            )
 
-    if not args.dry_run:
-        update_release_manifest_evidence(
-            release_root / "release_manifest.json",
-            fastpq_grafana_rel=fastpq_grafana_rel,
-            archived_fastpq=archived_fastpq,
-            cbdc_validation_rel=cbdc_validation_rel,
+    if evidence_requested:
+        assert args.trusted_zstd_sha256 is not None
+        aggregate_specs.extend(
+            build_evidence_artifacts(
+                evidence_stage=evidence_stage,
+                release_root=release_root,
+                artifact_dir=artifact_dir,
+                version=provided_version,
+                commit=commit,
+                source_date_epoch=source_date_epoch,
+                zstd_path=str(args.zstd),
+                trusted_zstd_sha256=args.trusted_zstd_sha256,
+                dry_run=args.dry_run,
+            )
         )
+
+    aggregate_paths = [spec.split(":", 4)[4] for spec in aggregate_specs]
+    sha_path = artifact_dir / "SHA256SUMS"
+    checksum_args = [
+        str(REPO_ROOT / "scripts" / "write_release_sha256sums.py"),
+        "--artifacts-dir",
+        str(artifact_dir),
+        "--output",
+        str(sha_path),
+    ]
+    for relative_path in aggregate_paths:
+        checksum_args.extend(["--file", relative_path])
+    if args.dry_run:
+        print(f"[release-pipeline] (dry-run) {render_command(checksum_args)}")
+    else:
+        run(checksum_args)
+
+    manifest_args = [
+        str(REPO_ROOT / "scripts" / "generate_release_manifest.py"),
+        "--artifacts-dir",
+        str(artifact_dir),
+        "--version",
+        provided_version,
+        "--commit",
+        commit,
+        "--source-date-epoch",
+        str(source_date_epoch),
+        "--os-tag",
+        "multi",
+        "--arch",
+        "multi",
+        "--output",
+        str(release_root / "release_manifest.json"),
+    ]
+    for spec in aggregate_specs:
+        manifest_args.extend(["--artifact", spec])
+
+    if args.dry_run:
+        print(f"[release-pipeline] (dry-run) {render_command(manifest_args)}")
+    else:
+        run(manifest_args)
 
     manifest_path = release_root / "release_manifest.json"
     aggregate_signature_path = release_root / "release_manifest.json.sig"
@@ -928,6 +1631,15 @@ def main() -> int:
                     else None,
                     probe_remote=args.publish_probe_remote,
                     probe_command=args.publish_probe_command,
+                    manifest_path=manifest_path,
+                    artifacts_dir=artifact_dir,
+                    target_map=publish_target_map,
+                    manifest_signature_path=aggregate_signature_path
+                    if signing_cli_args
+                    else None,
+                    manifest_public_key_path=aggregate_public_key_path
+                    if signing_cli_args
+                    else None,
                     trusted_signing_fingerprint=(
                         args.trusted_signing_fingerprint
                         if signing_cli_args
@@ -950,9 +1662,16 @@ def main() -> int:
             except (PublishPlanError, OSError, json.JSONDecodeError) as exc:
                 raise PipelineError(f"Publish plan generation failed: {exc}") from exc
             report_path = release_root / "publish_plan_report.json"
-            with report_path.open("w", encoding="utf-8") as fh:
-                json.dump(report, fh, indent=2, sort_keys=True)
-                fh.write("\n")
+            try:
+                exclusive_write_bytes(
+                    report_path,
+                    canonical_json_bytes(report),
+                    mode=0o644,
+                )
+            except ReleaseArtifactError as exc:
+                raise PipelineError(
+                    f"Publish plan report write failed: {exc}"
+                ) from exc
             report_txt = release_root / "publish_plan_report.txt"
             report_lines = [
                 f"status: {report.get('status')}",
@@ -960,7 +1679,16 @@ def main() -> int:
                 f"remote failures: {len(report.get('remote_failures', []))}",
                 f"diff: {report.get('diff') or {}}",
             ]
-            report_txt.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+            try:
+                exclusive_write_bytes(
+                    report_txt,
+                    ("\n".join(report_lines) + "\n").encode("utf-8"),
+                    mode=0o644,
+                )
+            except ReleaseArtifactError as exc:
+                raise PipelineError(
+                    f"Publish plan text report write failed: {exc}"
+                ) from exc
             if report.get("status") != "ok":
                 raise PipelineError(
                     "Publish plan validation failed; see publish_plan_report.json"
@@ -1031,7 +1759,17 @@ def main() -> int:
                         lines.append(f"    Summary: {markdown_path}")
     if cbdc_validation_rel:
         lines.append(f"CBDC rollout bundles validated: {cbdc_validation_rel}")
-    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if args.dry_run:
+        print(f"[release-pipeline] (dry-run) write release summary {summary}")
+    else:
+        try:
+            exclusive_write_bytes(
+                summary,
+                ("\n".join(lines) + "\n").encode("utf-8"),
+                mode=0o644,
+            )
+        except ReleaseArtifactError as exc:
+            raise PipelineError(f"Release summary write failed: {exc}") from exc
 
     print("[release-pipeline] Completed. Artifacts staged under", release_root)
     return 0
@@ -1040,6 +1778,9 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
+    except ReleaseArtifactError as exc:
+        print(f"[release-pipeline] release artifact error: {exc}", file=sys.stderr)
+        sys.exit(1)
     except PipelineError as exc:
         print(f"[release-pipeline] error: {exc}", file=sys.stderr)
         sys.exit(1)

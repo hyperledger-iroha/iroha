@@ -820,6 +820,33 @@ static FAULT_INJECTION_METADATA_NAME: LazyLock<Name> = LazyLock::new(|| {
         .expect("fault_injection_overlay is a valid metadata key")
 });
 
+impl TransactionPayload {
+    /// Return transaction instructions.
+    #[inline]
+    pub fn instructions(&self) -> &Executable {
+        &self.instructions
+    }
+
+    /// Return transaction authority.
+    #[inline]
+    pub fn authority(&self) -> &AccountId {
+        &self.authority
+    }
+
+    /// If the transaction is not committed by this time it will be dropped.
+    #[inline]
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.time_to_live_ms
+            .map(|ttl| Duration::from_millis(ttl.into()))
+    }
+
+    /// Return transaction chain id.
+    #[inline]
+    pub fn chain(&self) -> &ChainId {
+        &self.chain
+    }
+}
+
 impl SignedTransaction {
     /// Transaction payload. Used for tests
     pub fn payload(&self) -> &TransactionPayload {
@@ -829,13 +856,13 @@ impl SignedTransaction {
     /// Return transaction instructions
     #[inline]
     pub fn instructions(&self) -> &Executable {
-        &self.payload.instructions
+        self.payload.instructions()
     }
 
     /// Return transaction authority
     #[inline]
     pub fn authority(&self) -> &AccountId {
-        &self.payload.authority
+        self.payload.authority()
     }
 
     /// Return transaction metadata.
@@ -876,9 +903,7 @@ impl SignedTransaction {
     /// If transaction is not committed by this time it will be dropped.
     #[inline]
     pub fn time_to_live(&self) -> Option<Duration> {
-        self.payload
-            .time_to_live_ms
-            .map(|ttl| Duration::from_millis(ttl.into()))
+        self.payload.time_to_live()
     }
 
     /// Transaction nonce
@@ -890,7 +915,7 @@ impl SignedTransaction {
     /// Transaction chain id
     #[inline]
     pub fn chain(&self) -> &ChainId {
-        &self.payload.chain
+        self.payload.chain()
     }
 
     /// Return the transaction signature
@@ -1941,6 +1966,35 @@ mod tests {
             DomainId::try_new("fees", "universal").expect("valid fee domain"),
             "xor".parse().expect("valid fee asset name"),
         )
+    }
+
+    #[test]
+    fn transaction_payload_exposes_execution_identity_ttl_and_chain() {
+        let chain: ChainId = "payload-accessors".parse().expect("chain id");
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key");
+        let authority = AccountId::new(public_key);
+        let instructions: Executable = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "payload".into(),
+        ))]
+        .into();
+        let time_to_live = Duration::from_secs(42);
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(instructions.clone());
+        builder.set_ttl(time_to_live);
+
+        let payload = builder.payload();
+        assert_eq!(payload.instructions(), &instructions);
+        assert_eq!(payload.authority(), &authority);
+        assert_eq!(payload.time_to_live(), Some(time_to_live));
+        assert_eq!(payload.chain(), &chain);
     }
 
     #[test]

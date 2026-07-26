@@ -2,20 +2,16 @@
 
 use std::{
     collections::BTreeMap,
-    fs::{self, OpenOptions},
-    io::Read,
-    path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::Engine as _;
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::VerifyingKey;
 use iroha_config::parameters::actual;
-use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -25,9 +21,6 @@ use sorafs_manifest::{
     StreamTokenBodyV1, StreamTokenError, StreamTokenV1,
 };
 use thiserror::Error;
-
-#[cfg(unix)]
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
 /// Fixed rolling window applied to per-client issuance quotas.
 const CLIENT_QUOTA_WINDOW: Duration = Duration::from_mins(1);
@@ -55,14 +48,42 @@ const MAX_TOKEN_RATE_LIMIT_BYTES: u64 = 1_073_741_824;
 const MAX_TOKEN_REQUESTS_PER_MINUTE: u32 = 10_000;
 /// Maximum tolerated positive clock skew for an otherwise valid token.
 pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
-/// Maximum supported signing-key file size (canonical lowercase hex seed).
-const MAX_SIGNING_KEY_FILE_BYTES: u64 = 64;
+
+/// Payload-free failure categories exposed by a runtime-only stream-token
+/// signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum StreamTokenSigningError {
+    /// The HSM/KMS provider could not complete the bounded signing operation.
+    #[error("stream-token runtime signer unavailable")]
+    Unavailable,
+    /// The HSM/KMS provider refused the canonical signing request.
+    #[error("stream-token runtime signer refused request")]
+    Refused,
+}
+
+/// Runtime-only pure-Ed25519 signing boundary for stream-token issuance.
+///
+/// Implementations own their credentials, sessions, and bounded provider
+/// timeout. They must sign the supplied bytes exactly and return the canonical
+/// 64-byte `R || S` signature without exposing private key material.
+pub trait StreamTokenRuntimeSigner: Send + Sync {
+    /// Return the exact opaque runtime handle bound by configuration.
+    fn handle(&self) -> &str;
+
+    /// Return the exact Ed25519 public key bound by configuration.
+    fn public_key(&self) -> [u8; 32];
+
+    /// Sign one canonical, domain-separated stream-token payload.
+    fn sign(
+        &self,
+        signing_payload: &[u8],
+    ) -> Result<[u8; ed25519_dalek::SIGNATURE_LENGTH], StreamTokenSigningError>;
+}
 
 /// Issuer used to sign stream tokens with configured defaults.
 pub struct StreamTokenIssuer {
-    signing_key: SigningKey,
+    signer: Arc<dyn StreamTokenRuntimeSigner>,
     verifying_key: VerifyingKey,
-    potr_provider_signing_key: KeyPair,
     defaults: TokenDefaults,
     client_budgets: Mutex<BTreeMap<String, ClientBudget>>,
     max_client_budgets: usize,
@@ -120,22 +141,40 @@ impl StreamTokenIssuer {
     ///
     /// # Errors
     ///
-    /// Returns [`StreamTokenIssuerError`] if the signing key is not configured or fails to load.
+    /// Returns [`StreamTokenIssuerError`] if configuration and the injected
+    /// runtime signer do not form one exact, safe binding.
     pub fn from_config(
         config: &actual::SorafsTokenConfig,
+        signer: Option<Arc<dyn StreamTokenRuntimeSigner>>,
     ) -> Result<Option<Self>, StreamTokenIssuerError> {
         if !config.enabled {
+            if signer.is_some() {
+                return Err(StreamTokenIssuerError::UnexpectedRuntimeSigner);
+            }
             return Ok(None);
         }
 
-        let path = config
-            .signing_key_path
+        let signer = signer.ok_or(StreamTokenIssuerError::MissingRuntimeSigner)?;
+        let configured_handle = config
+            .signer_handle
             .as_ref()
-            .ok_or(StreamTokenIssuerError::MissingSigningKeyPath)?;
-        let signing_key = load_signing_key(path)?;
-        let verifying_key = signing_key.verifying_key();
+            .ok_or(StreamTokenIssuerError::MissingRuntimeSignerHandle)?;
+        if !is_production_runtime_handle(configured_handle) {
+            return Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle);
+        }
+        let configured_public_key = config
+            .signer_public_key
+            .ok_or(StreamTokenIssuerError::MissingRuntimeSignerPublicKey)?;
+        let verifying_key = VerifyingKey::from_bytes(&configured_public_key)
+            .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerPublicKey)?;
         if verifying_key.is_weak() {
-            return Err(StreamTokenIssuerError::WeakSigningKey { path: path.clone() });
+            return Err(StreamTokenIssuerError::WeakRuntimeSignerPublicKey);
+        }
+        if signer.handle() != configured_handle {
+            return Err(StreamTokenIssuerError::RuntimeSignerHandleMismatch);
+        }
+        if signer.public_key() != configured_public_key {
+            return Err(StreamTokenIssuerError::RuntimeSignerPublicKeyMismatch);
         }
         let defaults = TokenDefaults {
             key_version: config.key_version,
@@ -145,14 +184,9 @@ impl StreamTokenIssuer {
             requests_per_minute: config.default_requests_per_minute,
         };
         defaults.validate()?;
-        let potr_provider_signing_key =
-            KeyPair::try_from_seed(signing_key.to_bytes().to_vec(), Algorithm::MlDsa)
-                .map_err(|error| StreamTokenIssuerError::PotrProviderSigning(error.to_string()))?;
-
         Ok(Some(Self {
-            signing_key,
+            signer,
             verifying_key,
-            potr_provider_signing_key,
             defaults,
             client_budgets: Mutex::new(BTreeMap::new()),
             max_client_budgets: MAX_ISSUANCE_CLIENTS,
@@ -164,8 +198,9 @@ impl StreamTokenIssuer {
     ///
     /// # Errors
     ///
-    /// Returns [`StreamTokenIssuerError`] when system time overflows, key material is invalid,
-    /// or the request violates the configured issuance quotas.
+    /// Returns [`StreamTokenIssuerError`] when system time overflows, the
+    /// runtime signer fails, or the request violates the configured issuance
+    /// quotas.
     pub fn issue_token(
         &self,
         client_id: &str,
@@ -215,9 +250,22 @@ impl StreamTokenIssuer {
         };
         validate_token_body(&body)?;
 
-        let token = StreamTokenV1::sign(body, &self.signing_key)
-            .map_err(StreamTokenIssuerError::StreamToken)?;
         let remaining_quota = self.reserve_client_budget(client_id, Instant::now())?;
+        let signing_payload = body
+            .signing_payload_bytes()
+            .map_err(StreamTokenError::from)
+            .map_err(StreamTokenIssuerError::StreamToken)?;
+        let signature = self
+            .signer
+            .sign(&signing_payload)
+            .map_err(|error| match error {
+                StreamTokenSigningError::Unavailable => {
+                    StreamTokenIssuerError::RuntimeSignerUnavailable
+                }
+                StreamTokenSigningError::Refused => StreamTokenIssuerError::RuntimeSignerRefused,
+            })?;
+        let token = StreamTokenV1::from_external_signature(body, signature, &self.verifying_key)
+            .map_err(|_| StreamTokenIssuerError::RuntimeSignerOutputInvalid)?;
 
         Ok(TokenIssue {
             token,
@@ -234,38 +282,6 @@ impl StreamTokenIssuer {
     #[must_use]
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying_key
-    }
-
-    /// Sign an arbitrary payload with the gateway's Ed25519 signing key.
-    ///
-    /// PoTR receipts reuse this helper until dedicated key rotation lands.
-    pub fn sign_bytes(&self, message: &[u8]) -> ed25519_dalek::Signature {
-        self.signing_key.sign(message)
-    }
-
-    /// Return the ML-DSA-65 provider key governed for PoTR receipts.
-    pub fn potr_provider_public_key_bytes(&self) -> Result<Vec<u8>, StreamTokenIssuerError> {
-        let (algorithm, public_key) = self
-            .potr_provider_signing_key
-            .public_key()
-            .try_to_bytes()
-            .map_err(|error| StreamTokenIssuerError::PotrProviderSigning(error.to_string()))?;
-        if algorithm != Algorithm::MlDsa {
-            return Err(StreamTokenIssuerError::PotrProviderSigning(
-                "configured PoTR provider key is not ML-DSA-65".to_owned(),
-            ));
-        }
-        Ok(public_key.to_vec())
-    }
-
-    /// Sign a PoTR receipt payload with the governed ML-DSA-65 provider key.
-    pub fn sign_potr_provider_bytes(
-        &self,
-        message: &[u8],
-    ) -> Result<Vec<u8>, StreamTokenIssuerError> {
-        IrohaSignature::try_new(self.potr_provider_signing_key.private_key(), message)
-            .map(|signature| signature.payload().to_vec())
-            .map_err(|error| StreamTokenIssuerError::PotrProviderSigning(error.to_string()))
     }
 
     /// Return the default key version embedded in issued tokens.
@@ -401,6 +417,27 @@ fn validate_client_id(client_id: &str) -> Result<(), StreamTokenIssuerError> {
     Ok(())
 }
 
+fn is_production_runtime_handle(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 256
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return false;
+    }
+    let lowercase = value.to_ascii_lowercase();
+    !lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+            )
+        })
+}
+
 /// Validate the context-free, canonical v1 stream-token body policy.
 pub(crate) fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBodyError> {
     if body.token_id.len() != TOKEN_ID_HEX_LEN
@@ -461,288 +498,46 @@ fn new_token_id_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<String, StreamT
     Ok(hex::encode(bytes))
 }
 
-fn load_signing_key(path: &Path) -> Result<SigningKey, StreamTokenIssuerError> {
-    let path = path.to_path_buf();
-    let path_metadata =
-        fs::symlink_metadata(&path).map_err(|source| StreamTokenIssuerError::SigningKeyIo {
-            path: path.clone(),
-            source,
-        })?;
-    validate_signing_key_metadata(&path, &path_metadata)?;
-
-    let mut options = OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    let mut file = options
-        .open(&path)
-        .map_err(|source| StreamTokenIssuerError::SigningKeyIo {
-            path: path.clone(),
-            source,
-        })?;
-    let opened_metadata =
-        file.metadata()
-            .map_err(|source| StreamTokenIssuerError::SigningKeyIo {
-                path: path.clone(),
-                source,
-            })?;
-    validate_signing_key_metadata(&path, &opened_metadata)?;
-    if !metadata_identifies_same_file(&path_metadata, &opened_metadata) {
-        return Err(StreamTokenIssuerError::SigningKeyChanged { path });
-    }
-
-    let mut raw = Vec::with_capacity(MAX_SIGNING_KEY_FILE_BYTES as usize);
-    if let Err(source) = (&mut file)
-        .take(MAX_SIGNING_KEY_FILE_BYTES + 1)
-        .read_to_end(&mut raw)
-    {
-        raw.fill(0);
-        return Err(StreamTokenIssuerError::SigningKeyIo {
-            path: path.clone(),
-            source,
-        });
-    }
-    if raw.len() as u64 > MAX_SIGNING_KEY_FILE_BYTES {
-        raw.fill(0);
-        return Err(StreamTokenIssuerError::SigningKeyTooLarge {
-            path,
-            maximum: MAX_SIGNING_KEY_FILE_BYTES,
-        });
-    }
-
-    let post_read_validation = (|| {
-        let final_opened_metadata =
-            file.metadata()
-                .map_err(|source| StreamTokenIssuerError::SigningKeyIo {
-                    path: path.clone(),
-                    source,
-                })?;
-        let final_path_metadata =
-            fs::symlink_metadata(&path).map_err(|source| StreamTokenIssuerError::SigningKeyIo {
-                path: path.clone(),
-                source,
-            })?;
-        validate_signing_key_metadata(&path, &final_path_metadata)?;
-        if opened_metadata.len() != raw.len() as u64
-            || !metadata_stable_during_read(&opened_metadata, &final_opened_metadata)
-            || !metadata_identifies_same_file(&opened_metadata, &final_path_metadata)
-        {
-            return Err(StreamTokenIssuerError::SigningKeyChanged { path: path.clone() });
-        }
-        Ok(())
-    })();
-    if let Err(err) = post_read_validation {
-        raw.fill(0);
-        return Err(err);
-    }
-
-    let parsed = if raw.len() == 64
-        && raw
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
-    {
-        hex::decode(&raw).map_err(|source| StreamTokenIssuerError::SigningKeyDecode {
-            path: path.clone(),
-            source,
-        })
-    } else if raw.len() == 32 {
-        Ok(raw.clone())
-    } else {
-        Err(StreamTokenIssuerError::SigningKeyLength {
-            path: path.clone(),
-            len: raw.len(),
-        })
-    };
-    raw.fill(0);
-    let mut key_bytes = parsed?;
-
-    if key_bytes.len() != 32 {
-        let len = key_bytes.len();
-        key_bytes.fill(0);
-        return Err(StreamTokenIssuerError::SigningKeyLength {
-            path: path.clone(),
-            len,
-        });
-    }
-    if key_bytes.iter().all(|byte| *byte == 0) {
-        key_bytes.fill(0);
-        return Err(StreamTokenIssuerError::SigningKeyMaterial { path: path.clone() });
-    }
-
-    let mut array = [0u8; 32];
-    array.copy_from_slice(&key_bytes);
-    key_bytes.fill(0);
-    let signing_key = SigningKey::from_bytes(&array);
-    array.fill(0);
-    Ok(signing_key)
-}
-
-fn validate_signing_key_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), StreamTokenIssuerError> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(StreamTokenIssuerError::SigningKeyNotRegular {
-            path: path.to_path_buf(),
-        });
-    }
-    if metadata.len() > MAX_SIGNING_KEY_FILE_BYTES {
-        return Err(StreamTokenIssuerError::SigningKeyTooLarge {
-            path: path.to_path_buf(),
-            maximum: MAX_SIGNING_KEY_FILE_BYTES,
-        });
-    }
-    #[cfg(unix)]
-    {
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(StreamTokenIssuerError::SigningKeyPermissions {
-                path: path.to_path_buf(),
-                mode: metadata.permissions().mode() & 0o777,
-            });
-        }
-        if metadata.nlink() != 1 {
-            return Err(StreamTokenIssuerError::SigningKeyLinkCount {
-                path: path.to_path_buf(),
-                links: metadata.nlink(),
-            });
-        }
-        let effective_uid = rustix::process::geteuid().as_raw();
-        if metadata.uid() != effective_uid {
-            return Err(StreamTokenIssuerError::SigningKeyOwner {
-                path: path.to_path_buf(),
-                owner: metadata.uid(),
-                effective_uid,
-            });
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(unix)]
-fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    metadata_identifies_same_file(left, right)
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
-#[cfg(not(unix))]
-fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    metadata_identifies_same_file(left, right)
-}
-
-#[cfg(not(unix))]
-fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
-}
-
-#[cfg(unix)]
-fn set_no_follow_flag(options: &mut OpenOptions) {
-    options.custom_flags(libc::O_NOFOLLOW);
-}
-
-#[cfg(not(unix))]
-fn set_no_follow_flag(_options: &mut OpenOptions) {}
-
 /// Errors encountered while configuring or issuing stream tokens.
 #[derive(Debug, Error)]
 pub enum StreamTokenIssuerError {
-    /// Stream tokens are enabled in configuration but no signing key path was supplied.
-    #[error("stream tokens enabled but signing key path not configured")]
-    MissingSigningKeyPath,
-    /// Reading the configured signing key file failed.
-    #[error("failed to read signing key from {path:?}: {source}")]
-    SigningKeyIo {
-        /// Path to the Ed25519 signing key file.
-        path: PathBuf,
-        /// Underlying I/O error raised while reading the file.
-        source: std::io::Error,
-    },
-    /// The configured key path did not name one regular, non-symlink file.
-    #[error("stream-token signing key at {path:?} must be a regular non-symlink file")]
-    SigningKeyNotRegular {
-        /// Configured signing-key path.
-        path: PathBuf,
-    },
-    /// The key file exceeded the bounded canonical representation.
-    #[error("stream-token signing key at {path:?} exceeds {maximum} bytes")]
-    SigningKeyTooLarge {
-        /// Configured signing-key path.
-        path: PathBuf,
-        /// Maximum accepted file length.
-        maximum: u64,
-    },
-    /// The key file grants access to group or other users.
-    #[error("stream-token signing key at {path:?} has insecure mode {mode:o}")]
-    SigningKeyPermissions {
-        /// Configured signing-key path.
-        path: PathBuf,
-        /// Observed Unix permission mode.
-        mode: u32,
-    },
-    /// The key file has another hard-link name and cannot be trusted as an isolated secret.
-    #[error("stream-token signing key at {path:?} must have one link, found {links}")]
-    SigningKeyLinkCount {
-        /// Configured signing-key path.
-        path: PathBuf,
-        /// Observed hard-link count.
-        links: u64,
-    },
-    /// The key file is not owned by the process effective user.
-    #[error(
-        "stream-token signing key at {path:?} is owned by uid {owner}, expected effective uid {effective_uid}"
-    )]
-    SigningKeyOwner {
-        /// Configured signing-key path.
-        path: PathBuf,
-        /// Observed file owner.
-        owner: u32,
-        /// Process effective user.
-        effective_uid: u32,
-    },
-    /// The key file changed while it was being read.
-    #[error("stream-token signing key at {path:?} changed while being read")]
-    SigningKeyChanged {
-        /// Configured signing-key path.
-        path: PathBuf,
-    },
-    /// The signing key file contents could not be decoded as hex.
-    #[error("failed to decode signing key from {path:?}: {source}")]
-    SigningKeyDecode {
-        /// Path to the Ed25519 signing key file.
-        path: PathBuf,
-        /// Hex decoding error describing the failure.
-        source: hex::FromHexError,
-    },
-    /// The signing key file did not have the expected length in bytes.
-    #[error("signing key at {path:?} must be 32 bytes, found {len}")]
-    SigningKeyLength {
-        /// Path to the Ed25519 signing key file.
-        path: PathBuf,
-        /// Actual byte length present in the file.
-        len: usize,
-    },
-    /// The signing key file contained inert all-zero seed material.
-    #[error("signing key at {path:?} must not be all zero")]
-    SigningKeyMaterial {
-        /// Path to the Ed25519 signing key file.
-        path: PathBuf,
-    },
-    /// The seed resolved to a weak Ed25519 public key.
-    #[error("stream-token signing key at {path:?} resolves to a weak public key")]
-    WeakSigningKey {
-        /// Configured signing-key path.
-        path: PathBuf,
-    },
-    /// Deriving, encoding, or using the ML-DSA-65 PoTR provider key failed.
-    #[error("failed to use PoTR provider signing key: {0}")]
-    PotrProviderSigning(String),
+    /// A signer was injected while stream-token issuance is disabled.
+    #[error("stream-token runtime signer injected while issuance is disabled")]
+    UnexpectedRuntimeSigner,
+    /// Stream-token issuance is enabled without a runtime signer.
+    #[error("stream-token issuance requires an injected runtime signer")]
+    MissingRuntimeSigner,
+    /// The enabled configuration omitted the non-secret runtime handle.
+    #[error("stream-token issuance requires a configured runtime signer handle")]
+    MissingRuntimeSignerHandle,
+    /// The enabled configuration omitted the public verification key.
+    #[error("stream-token issuance requires a configured runtime signer public key")]
+    MissingRuntimeSignerPublicKey,
+    /// The configured handle was non-canonical or marked for development use.
+    #[error("invalid production stream-token runtime signer handle")]
+    InvalidRuntimeSignerHandle,
+    /// The configured bytes were not a valid Ed25519 public key.
+    #[error("invalid stream-token runtime signer public key")]
+    InvalidRuntimeSignerPublicKey,
+    /// The configured Ed25519 public key was weak.
+    #[error("weak stream-token runtime signer public key")]
+    WeakRuntimeSignerPublicKey,
+    /// The injected provider did not expose the exact configured handle.
+    #[error("stream-token runtime signer handle does not match configuration")]
+    RuntimeSignerHandleMismatch,
+    /// The injected provider did not expose the exact configured public key.
+    #[error("stream-token runtime signer public key does not match configuration")]
+    RuntimeSignerPublicKeyMismatch,
+    /// The bounded HSM/KMS signing operation was unavailable.
+    #[error("stream-token runtime signer unavailable")]
+    RuntimeSignerUnavailable,
+    /// The HSM/KMS provider refused the canonical signing request.
+    #[error("stream-token runtime signer refused request")]
+    RuntimeSignerRefused,
+    /// The HSM/KMS output was malformed or did not verify under the configured
+    /// public key.
+    #[error("stream-token runtime signer produced invalid output")]
+    RuntimeSignerOutputInvalid,
     /// A configured or requested token policy was zero, unsafe, or above its ceiling.
     #[error("invalid stream-token policy {field}: {reason}")]
     InvalidPolicy {
@@ -768,7 +563,7 @@ pub enum StreamTokenIssuerError {
         /// Epoch observed for the current issuance attempt.
         current_epoch: u64,
     },
-    /// Serialising or signing the stream token body failed.
+    /// Serialising the canonical stream-token body failed.
     #[error("failed to create stream token: {0}")]
     StreamToken(#[from] StreamTokenError),
     /// Random byte generation failed during stream token issuance.
@@ -913,7 +708,6 @@ pub fn decode_token_base64(value: &str) -> Result<StreamTokenV1, StreamTokenHead
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
-    use tempfile::NamedTempFile;
 
     use super::*;
 
@@ -945,6 +739,98 @@ mod tests {
     }
 
     impl TryCryptoRng for FailingTryRng {}
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestSignerMode {
+        Sign,
+        Unavailable,
+        Refused,
+        WrongKey,
+        Malformed,
+    }
+
+    struct TestStreamTokenRuntimeSigner {
+        handle: String,
+        signing_key: SigningKey,
+        advertised_public_key: [u8; 32],
+        mode: TestSignerMode,
+        signing_payloads: Mutex<Vec<Vec<u8>>>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl TestStreamTokenRuntimeSigner {
+        fn new(handle: &str, seed: [u8; 32], mode: TestSignerMode) -> Self {
+            let signing_key = SigningKey::from_bytes(&seed);
+            Self {
+                handle: handle.to_owned(),
+                advertised_public_key: signing_key.verifying_key().to_bytes(),
+                signing_key,
+                mode,
+                signing_payloads: Mutex::new(Vec::new()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.advertised_public_key
+        }
+
+        fn sign(
+            &self,
+            signing_payload: &[u8],
+        ) -> Result<[u8; ed25519_dalek::SIGNATURE_LENGTH], StreamTokenSigningError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.signing_payloads
+                .lock()
+                .expect("test signing payloads")
+                .push(signing_payload.to_vec());
+            match self.mode {
+                TestSignerMode::Sign => Ok(self.signing_key.sign(signing_payload).to_bytes()),
+                TestSignerMode::Unavailable => Err(StreamTokenSigningError::Unavailable),
+                TestSignerMode::Refused => Err(StreamTokenSigningError::Refused),
+                TestSignerMode::WrongKey => Ok(SigningKey::from_bytes(&[0x7a; 32])
+                    .sign(signing_payload)
+                    .to_bytes()),
+                TestSignerMode::Malformed => Ok([0; ed25519_dalek::SIGNATURE_LENGTH]),
+            }
+        }
+    }
+
+    fn token_config(public_key: [u8; 32], requests_per_minute: u32) -> actual::SorafsTokenConfig {
+        actual::SorafsTokenConfig {
+            enabled: true,
+            signer_handle: Some("pkcs11:prod/stream-token/v1".to_owned()),
+            signer_public_key: Some(public_key),
+            key_version: 1,
+            default_ttl_secs: 900,
+            default_max_streams: 2,
+            default_rate_limit_bytes: 512 * 1024,
+            default_requests_per_minute: requests_per_minute,
+        }
+    }
+
+    fn issuer_and_signer(
+        limit: u32,
+        mode: TestSignerMode,
+    ) -> (StreamTokenIssuer, Arc<TestStreamTokenRuntimeSigner>) {
+        let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
+            "pkcs11:prod/stream-token/v1",
+            [0x33; 32],
+            mode,
+        ));
+        let config = token_config(signer.public_key(), limit);
+        let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
+        let issuer = StreamTokenIssuer::from_config(&config, Some(runtime_signer))
+            .expect("valid runtime signer binding")
+            .expect("enabled issuer");
+        (issuer, signer)
+    }
 
     fn sample_body() -> StreamTokenBodyV1 {
         StreamTokenBodyV1 {
@@ -988,33 +874,69 @@ mod tests {
     }
 
     #[test]
-    fn load_signing_key_rejects_all_zero_raw_seed_material() {
-        let key_file = NamedTempFile::new().expect("create key file");
-        std::fs::write(key_file.path(), [0u8; 32]).expect("write key file");
-        let path = key_file.path().to_path_buf();
+    fn runtime_signer_binding_fails_closed() {
+        let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
+            "pkcs11:prod/stream-token/v1",
+            [0x33; 32],
+            TestSignerMode::Sign,
+        ));
+        let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
+        let mut config = token_config(signer.public_key(), 2);
 
-        match load_signing_key(&path) {
-            Err(StreamTokenIssuerError::SigningKeyMaterial { path: err_path }) => {
-                assert_eq!(err_path, path);
-            }
-            Ok(_) => panic!("all-zero raw signing key must fail"),
-            Err(other) => panic!("expected all-zero signing key error, got {other:?}"),
-        }
-    }
+        config.enabled = false;
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            Err(StreamTokenIssuerError::UnexpectedRuntimeSigner)
+        ));
 
-    #[test]
-    fn load_signing_key_rejects_all_zero_hex_seed_material() {
-        let key_file = NamedTempFile::new().expect("create key file");
-        std::fs::write(key_file.path(), "00".repeat(32)).expect("write key file");
-        let path = key_file.path().to_path_buf();
+        config.enabled = true;
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, None),
+            Err(StreamTokenIssuerError::MissingRuntimeSigner)
+        ));
 
-        match load_signing_key(&path) {
-            Err(StreamTokenIssuerError::SigningKeyMaterial { path: err_path }) => {
-                assert_eq!(err_path, path);
-            }
-            Ok(_) => panic!("all-zero hex signing key must fail"),
-            Err(other) => panic!("expected all-zero signing key error, got {other:?}"),
-        }
+        config.signer_handle = None;
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            Err(StreamTokenIssuerError::MissingRuntimeSignerHandle)
+        ));
+
+        config.signer_handle = Some("mock-stream-token".to_owned());
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
+        ));
+
+        config.signer_handle = Some("pkcs11:prod/other-token/v1".to_owned());
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            Err(StreamTokenIssuerError::RuntimeSignerHandleMismatch)
+        ));
+
+        config.signer_handle = Some("pkcs11:prod/stream-token/v1".to_owned());
+        config.signer_public_key = None;
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            Err(StreamTokenIssuerError::MissingRuntimeSignerPublicKey)
+        ));
+
+        let mut weak_public_key = [0; 32];
+        weak_public_key[0] = 1;
+        config.signer_public_key = Some(weak_public_key);
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            Err(StreamTokenIssuerError::WeakRuntimeSignerPublicKey)
+        ));
+
+        config.signer_public_key = Some(
+            SigningKey::from_bytes(&[0x34; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer)),
+            Err(StreamTokenIssuerError::RuntimeSignerPublicKeyMismatch)
+        ));
     }
 
     #[test]
@@ -1033,25 +955,104 @@ mod tests {
     }
 
     fn issuer_with_capacity(limit: u32, max_client_budgets: usize) -> StreamTokenIssuer {
-        let signing_key = SigningKey::from_bytes(&[0x33; 32]);
-        StreamTokenIssuer {
-            verifying_key: signing_key.verifying_key(),
-            potr_provider_signing_key: KeyPair::try_from_seed(
-                signing_key.to_bytes().to_vec(),
-                Algorithm::MlDsa,
+        let (mut issuer, _) = issuer_and_signer(limit, TestSignerMode::Sign);
+        issuer.max_client_budgets = max_client_budgets;
+        issuer
+    }
+
+    #[test]
+    fn issuer_signs_exact_payload_and_verifies_before_release() {
+        let (issuer, signer) = issuer_and_signer(2, TestSignerMode::Sign);
+        let issue = issuer
+            .issue_token(
+                "client-exact",
+                vec![0xAA],
+                [0x11; 32],
+                "sorafs.sf1@1.0.0".to_owned(),
+                TokenOverrides::default(),
             )
-            .expect("deterministic PoTR provider key"),
-            signing_key,
-            defaults: TokenDefaults {
-                key_version: 1,
-                ttl_secs: 900,
-                max_streams: 2,
-                rate_limit_bytes: 512 * 1024,
-                requests_per_minute: limit,
-            },
-            client_budgets: Mutex::new(BTreeMap::new()),
-            max_client_budgets,
-            max_seen_epoch: AtomicU64::new(0),
+            .expect("issue verified token");
+
+        let payloads = signer
+            .signing_payloads
+            .lock()
+            .expect("captured signing payloads");
+        assert_eq!(
+            payloads.as_slice(),
+            [issue
+                .token
+                .body
+                .signing_payload_bytes()
+                .expect("canonical signing payload")]
+        );
+        issue
+            .token
+            .verify(issuer.verifying_key())
+            .expect("issuer must release only a strictly verified token");
+    }
+
+    #[test]
+    fn runtime_signer_failures_are_payload_free_and_consume_reserved_quota() {
+        for (mode, expected) in [
+            (
+                TestSignerMode::Unavailable,
+                StreamTokenIssuerError::RuntimeSignerUnavailable,
+            ),
+            (
+                TestSignerMode::Refused,
+                StreamTokenIssuerError::RuntimeSignerRefused,
+            ),
+        ] {
+            let (issuer, signer) = issuer_and_signer(1, mode);
+            let error = issuer
+                .issue_token(
+                    "client-hsm",
+                    vec![0xAA],
+                    [0x11; 32],
+                    "sorafs.sf1@1.0.0".to_owned(),
+                    TokenOverrides::default(),
+                )
+                .expect_err("runtime signer failure must fail issuance");
+            assert_eq!(
+                std::mem::discriminant(&error),
+                std::mem::discriminant(&expected)
+            );
+            assert_eq!(error.to_string(), expected.to_string());
+            assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
+
+            assert!(matches!(
+                issuer.issue_token(
+                    "client-hsm",
+                    vec![0xAA],
+                    [0x11; 32],
+                    "sorafs.sf1@1.0.0".to_owned(),
+                    TokenOverrides::default(),
+                ),
+                Err(StreamTokenIssuerError::ClientQuotaExceeded { .. })
+            ));
+            assert_eq!(
+                signer.calls.load(Ordering::Relaxed),
+                1,
+                "quota must be reserved before calling the external signer"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_runtime_signer_output_never_releases_a_token() {
+        for mode in [TestSignerMode::WrongKey, TestSignerMode::Malformed] {
+            let (issuer, signer) = issuer_and_signer(2, mode);
+            assert!(matches!(
+                issuer.issue_token(
+                    "client-invalid-output",
+                    vec![0xAA],
+                    [0x11; 32],
+                    "sorafs.sf1@1.0.0".to_owned(),
+                    TokenOverrides::default(),
+                ),
+                Err(StreamTokenIssuerError::RuntimeSignerOutputInvalid)
+            ));
+            assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
         }
     }
 
@@ -1382,61 +1383,6 @@ mod tests {
         assert!(matches!(
             decode_token_base64(&short_encoded),
             Err(StreamTokenHeaderError::InvalidSignatureLength)
-        ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn signing_key_loader_rejects_symlinks_hardlinks_and_permissive_modes() {
-        use std::os::unix::fs::{PermissionsExt as _, symlink};
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join("target.sk");
-        fs::write(&target, [0x11; 32]).expect("write target");
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("chmod target");
-        let link = dir.path().join("link.sk");
-        symlink(&target, &link).expect("create symlink");
-        assert!(matches!(
-            load_signing_key(&link),
-            Err(StreamTokenIssuerError::SigningKeyNotRegular { .. })
-        ));
-
-        let hardlink = dir.path().join("hardlink.sk");
-        fs::hard_link(&target, &hardlink).expect("create hardlink");
-        assert!(matches!(
-            load_signing_key(&target),
-            Err(StreamTokenIssuerError::SigningKeyLinkCount { links: 2, .. })
-        ));
-        fs::remove_file(hardlink).expect("remove hardlink");
-
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).expect("chmod target");
-        assert!(matches!(
-            load_signing_key(&target),
-            Err(StreamTokenIssuerError::SigningKeyPermissions { .. })
-        ));
-    }
-
-    #[test]
-    fn signing_key_loader_accepts_canonical_hex_and_rejects_noncanonical_text() {
-        let key_file = NamedTempFile::new().expect("create key file");
-        fs::write(key_file.path(), "11".repeat(32)).expect("write hex key");
-        let key = load_signing_key(key_file.path()).expect("canonical hex key");
-        assert_eq!(key.to_bytes(), [0x11; 32]);
-
-        fs::write(key_file.path(), [0x12; 32]).expect("write raw key");
-        let key = load_signing_key(key_file.path()).expect("exact raw key");
-        assert_eq!(key.to_bytes(), [0x12; 32]);
-
-        fs::write(key_file.path(), format!("{}\n", "11".repeat(32))).expect("write newline key");
-        assert!(matches!(
-            load_signing_key(key_file.path()),
-            Err(StreamTokenIssuerError::SigningKeyTooLarge { .. })
-        ));
-
-        fs::write(key_file.path(), "AB".repeat(32)).expect("write uppercase hex key");
-        assert!(matches!(
-            load_signing_key(key_file.path()),
-            Err(StreamTokenIssuerError::SigningKeyLength { len: 64, .. })
         ));
     }
 }

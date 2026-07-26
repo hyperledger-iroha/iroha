@@ -29,10 +29,6 @@ mod model {
     pub enum SorafsGatewayEvent {
         /// The gateway rejected a request due to a GAR policy violation.
         GarViolation(SorafsGarViolation),
-        /// Torii recorded deal usage telemetry for the provided window.
-        DealUsage(SorafsDealUsage),
-        /// Torii finalised a deal settlement and published the DAG artefact.
-        DealSettlement(SorafsDealSettlement),
         /// The runtime recorded a PDP/PoTR proof-health violation.
         ProofHealth(SorafsProofHealthAlert),
         /// Consensus committed a repair-task lifecycle transition.
@@ -139,56 +135,6 @@ mod model {
         pub rate_ceiling_rps: Option<u64>,
         /// Timestamp when the violation occurred (seconds since UNIX epoch).
         pub occurred_at_unix: u64,
-    }
-
-    /// Usage telemetry emitted after Torii records a deal usage report.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct SorafsDealUsage {
-        /// Deal identifier.
-        pub deal_id: crate::sorafs::deal::DealId,
-        /// Provider that services the deal.
-        pub provider_id: crate::sorafs::prelude::ProviderId,
-        /// Client responsible for the deal.
-        pub client_id: crate::sorafs::deal::ClientId,
-        /// Epoch attributed to the usage sample.
-        pub epoch: u64,
-        /// Storage GiB-hours recorded for the sample.
-        pub storage_gib_hours: u64,
-        /// Egress bytes recorded for the sample.
-        pub egress_bytes: u64,
-        /// Deterministic charge accumulated during the sample.
-        pub deterministic_charge: Quantity,
-        /// Micropayment credit generated during the sample.
-        pub micropayment_credit_generated: Quantity,
-        /// Micropayment credit applied immediately against the charge.
-        pub micropayment_credit_applied: Quantity,
-        /// Micropayment credit carried forward to future windows.
-        pub micropayment_credit_carry: Quantity,
-        /// Outstanding balance after applying credit.
-        pub outstanding: Quantity,
-        /// Total tickets processed in the sample.
-        pub tickets_processed: u64,
-        /// Tickets that resulted in a payout.
-        pub tickets_won: u64,
-        /// Tickets discarded as duplicates.
-        pub tickets_duplicate: u64,
-    }
-
-    /// Settlement summary emitted after Torii finalises a deal window.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
-    pub struct SorafsDealSettlement {
-        /// Deterministic settlement ledger record.
-        pub record: crate::sorafs::deal::DealSettlementRecord,
-        /// BLAKE3 digest of the encoded governance payload.
-        pub governance_encoded_blake3: [u8; 32],
-        /// Length of the encoded governance payload in bytes.
-        pub governance_encoded_len: u64,
-        /// Base64-encoded governance payload as published to the DAG.
-        pub governance_encoded_b64: String,
     }
 
     /// Payload describing a PDP/PoTR proof failure alert emitted by the runtime.
@@ -607,8 +553,10 @@ mod model {
         pub policy_digest: [u8; 32],
         /// Exact governed recorder authority.
         pub authority: crate::account::AccountId,
-        /// Exact committing block timestamp.
-        pub occurred_at_unix_ms: u64,
+        /// Authenticated source decision or observation time.
+        pub source_time_unix_ms: u64,
+        /// Authoritative committing-block timestamp.
+        pub recorded_at_unix_ms: u64,
     }
 }
 

@@ -6,9 +6,10 @@ use std::time::{Duration, Instant};
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{client::Client, crypto::KeyPair, data_model::prelude::*};
+use iroha_data_model::alias_setup::{AccountAliasRoleV1, AccountProvisionV1};
 use iroha_executor_data_model::permission::{
-    account::CanUnregisterAccount,
-    asset::CanTransferAsset,
+    account::{AccountAliasPermissionScope, CanManageAccountAlias, CanUnregisterAccount},
+    asset::{CanTransferAsset, CanTransferAssetWithDefinition},
     asset_definition::CanUnregisterAssetDefinition,
     domain::CanUnregisterDomain,
     nft::{CanRegisterNft, CanUnregisterNft},
@@ -343,7 +344,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
     // Domain ownership still covers mint/burn, but asset transfers require the source owner or an explicit grant.
     let bob_coin_id = AssetId::new(coin_id, bob_id.clone());
     test_client.submit_blocking(
-        Mint::asset_quantity(10u32, bob_coin_id.clone()),
+        Mint::asset_quantity(20u32, bob_coin_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     test_client.submit_blocking(
@@ -362,16 +363,149 @@ fn domain_owner_asset_permissions() -> Result<()> {
             .contains("source asset owner must sign the transaction")
     }));
 
-    // check that the canonical ALICE account as owner of domain can grant and revoke asset related permissions in her domain
-    let permission = CanTransferAsset { asset: bob_coin_id };
+    let alice_id = ALICE_ID.clone();
+    let exact_permission = CanTransferAsset {
+        asset: bob_coin_id.clone(),
+    };
+    let grant_exact = TransactionBuilder::new(
+        network.chain_id(),
+        bob_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Grant::account_permission(
+        exact_permission.clone(),
+        alice_id.clone(),
+    )])
+    .sign(bob_keypair.private_key());
+    test_client.submit_transaction_blocking(&grant_exact)?;
     test_client.submit_blocking(
-        Grant::account_permission(permission.clone(), bob_id.clone()),
+        Transfer::asset_quantity(bob_coin_id.clone(), 5u32, alice_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+
+    let revoke_exact = TransactionBuilder::new(
+        network.chain_id(),
+        bob_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Revoke::account_permission(
+        exact_permission,
+        alice_id.clone(),
+    )])
+    .sign(bob_keypair.private_key());
+    test_client.submit_transaction_blocking(&revoke_exact)?;
+    test_client
+        .submit_blocking(
+            Transfer::asset_quantity(bob_coin_id.clone(), 1u32, alice_id.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("revoking the asset-specific permission must immediately close access");
+
+    let definition_permission = CanTransferAssetWithDefinition {
+        asset_definition: bob_coin_id.definition().clone(),
+    };
+    let grant_definition = TransactionBuilder::new(
+        network.chain_id(),
+        bob_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Grant::account_permission(
+        definition_permission,
+        alice_id.clone(),
+    )])
+    .sign(bob_keypair.private_key());
+    test_client.submit_transaction_blocking(&grant_definition)?;
     test_client.submit_blocking(
-        RevokeBox::from(Revoke::account_permission(permission, bob_id)),
+        Transfer::asset_quantity(bob_coin_id, 5u32, alice_id),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+
+    Ok(())
+}
+
+#[test]
+fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Result<()> {
+    let manage_aliases: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        ),
+    }
+    .into();
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_genesis_instruction(Grant::account_permission(manage_aliases, ALICE_ID.clone()));
+    let Some((network, _rt)) = start_network(
+        builder,
+        stringify!(active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets),
+    )?
+    else {
+        return Ok(());
+    };
+    let client = network.client();
+    let alias_owner = ALICE_ID.clone();
+    let (definition_owner, definition_owner_keypair) = gen_account_in("assets");
+    let (source, _source_keypair) = gen_account_in("fi");
+    let destination = checked_random_account_id();
+    let alias_domain = DomainId::try_new("fi", "universal")?;
+    let asset_domain = DomainId::try_new("assets", "universal")?;
+    let asset_definition = AssetDefinitionId::new(asset_domain.clone(), "alias_safe_coin".parse()?);
+    let source_asset = AssetId::new(asset_definition.clone(), source.clone());
+
+    client.submit_all_blocking::<InstructionBox>(
+        [
+            domain_setup_instruction(&alias_domain, &alias_owner)?,
+            domain_setup_instruction(&asset_domain, &alias_owner)?,
+            Register::account(Account::new(definition_owner.clone())).into(),
+            Register::account(Account::new(source.clone())).into(),
+            Register::account(Account::new(destination.clone())).into(),
+        ],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    client.submit_blocking(
+        Transfer::domain(alias_owner.clone(), asset_domain, definition_owner.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    client.submit_blocking(
+        account_alias_setup_instruction(
+            "customer@fi.universal",
+            &source,
+            AccountProvisionV1::Existing,
+            AccountAliasRoleV1::Primary,
+        )?,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+
+    let issue = TransactionBuilder::new(
+        network.chain_id(),
+        definition_owner.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition).with_name("alias-safe coin".to_owned()),
+        )
+        .into(),
+        Mint::asset_quantity(10_u32, source_asset.clone()).into(),
+    ])
+    .sign(definition_owner_keypair.private_key());
+    client.submit_transaction_blocking(&issue)?;
+
+    let error = client
+        .submit_blocking(
+            Transfer::asset_quantity(source_asset, 1_u32, destination),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err(
+            "owning an active alias domain must not authorize transfers from the aliased account",
+        );
+    assert!(
+        error.chain().any(|cause| {
+            cause
+                .to_string()
+                .contains("source asset owner must sign the transaction")
+        }),
+        "unexpected alias-domain transfer rejection: {error:?}"
+    );
 
     Ok(())
 }

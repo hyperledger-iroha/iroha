@@ -76,7 +76,7 @@ use iroha_crypto::{
 #[cfg(test)]
 use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
-    ChainId,
+    ChainId, HasMetadata,
     account::{
         Account, AccountId, NewAccount,
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
@@ -93,6 +93,7 @@ use iroha_data_model::{
     consensus::{CertPhase, Qc, QcAggregate, default_chain_order_hash},
     da::manifest::DaManifestV1,
     domain::{Domain, DomainId, NewDomain},
+    escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     governance::types::{ProposalKind, ValidationFeePolicyProposal},
     isi::{
@@ -102,6 +103,7 @@ use iroha_data_model::{
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
         Unregister, UnregisterBox,
+        escrow::CancelAssetLock,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
@@ -156,10 +158,10 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, IvmProved,
-        PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
-        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
-        TransactionPayload, TransactionSubmissionReceipt,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, PrivateCreateKaigi,
+        PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
+        PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
+        TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
@@ -183,6 +185,7 @@ use kaigi_zk::{
     compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
     roster_root_limbs,
 };
+use kotodama_lang::{encoding, instruction, metadata::ProgramMetadata, syscalls};
 use napi::{
     ValueType,
     bindgen_prelude::{
@@ -213,9 +216,10 @@ use sorafs_car::{
     },
 };
 use sorafs_manifest::{
-    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
-    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
-    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, XorQuantity,
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
+    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
+    OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{
         AliasCachePolicy, AliasProofEvaluation, AliasProofState, decode_alias_proof, unix_now_secs,
     },
@@ -228,12 +232,14 @@ use sorafs_manifest::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
     reference_ffi::{
-        SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1,
-        SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
+        SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1,
+        SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1,
+        SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1, SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_governance_dag_block_bytes,
-    validate_governance_dag_head_chain_bytes, validate_orderbook_payload_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
+    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
+    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
     validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
     validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
     validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
@@ -810,6 +816,17 @@ pub struct JsReplicationOrder {
 #[napi(object)]
 pub struct JsSorafsGovernanceDagBlockInput {
     /// Canonical `GovernanceDagBlockV1` Norito bytes.
+    pub bytes: Buffer,
+    /// UTF-8 diagnostic label preserved in `ValidationOutcomeV1.inputs`.
+    pub label: String,
+}
+
+/// One typed canonical payload supplied to heterogeneous fixture-bundle validation.
+#[napi(object)]
+pub struct JsSorafsReferenceBundlePayload {
+    /// Canonical V1 payload selector such as `replication-order` or `por-proof`.
+    pub kind: String,
+    /// Canonical Norito payload bytes.
     pub bytes: Buffer,
     /// UTF-8 diagnostic label preserved in `ValidationOutcomeV1.inputs`.
     pub label: String,
@@ -1975,13 +1992,12 @@ fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> V
     let opcode = u8::try_from(syscall).expect("subscription syscall opcode fits in u8");
     let mut code = Vec::new();
     code.extend_from_slice(
-        &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, opcode)
-            .to_le_bytes(),
+        &encoding::wide::encode_sys(instruction::wide::system::SCALL, opcode).to_le_bytes(),
     );
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut artifact = ivm::ProgramMetadata {
+    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let mut artifact = ProgramMetadata {
         max_cycles: max_cycles.get(),
-        ..ivm::ProgramMetadata::default()
+        ..ProgramMetadata::default()
     }
     .encode();
     artifact.extend_from_slice(&code);
@@ -2012,7 +2028,7 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
             "subscription trigger executable must be exact IVM bytecode",
         ));
     };
-    let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref()).map_err(norito_to_napi)?;
+    let parsed = ProgramMetadata::parse(bytecode.as_ref()).map_err(norito_to_napi)?;
     let max_cycles = NonZeroU64::new(parsed.metadata.max_cycles).ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -2020,12 +2036,12 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
         )
     })?;
     let program_kind = if bytecode.as_ref()
-        == subscription_syscall_program_bytes(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, max_cycles)
+        == subscription_syscall_program_bytes(syscalls::SYSCALL_SUBSCRIPTION_BILL, max_cycles)
     {
         "billing"
     } else if bytecode.as_ref()
         == subscription_syscall_program_bytes(
-            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             max_cycles,
         )
     {
@@ -2123,7 +2139,7 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
                     "usage subscription trigger must use an execute-trigger filter",
                 ));
             };
-            let trigger_id = filter.trigger_id().as_ref().ok_or_else(|| {
+            let trigger_id = filter.trigger_id().ok_or_else(|| {
                 napi::Error::new(
                     napi::Status::InvalidArg,
                     "usage subscription trigger filter must bind a trigger id",
@@ -3742,7 +3758,6 @@ pub struct JsDaProofOptions {
 }
 
 /// Single proof-of-retrievability record returned to JavaScript callers.
-/// Single proof-of-retrievability record returned to JavaScript callers.
 #[derive(Clone)]
 #[napi(object)]
 pub struct JsDaProofRecord {
@@ -3783,7 +3798,7 @@ pub struct JsDaProofRecord {
     #[doc = "Hex digests for each segment-level branch."]
     pub chunk_segments_hex: Vec<String>,
     #[doc = "Total number of chunks committed by the PoR root."]
-    pub chunk_count: u64,
+    pub chunk_count: JsU64,
     #[doc = "Hex digests in the chunk-level Merkle authentication path."]
     pub chunk_merkle_path_hex: Vec<String>,
     #[doc = "Whether the proof verified against the supplied root."]
@@ -3985,7 +4000,7 @@ fn proof_to_js_record(report: &ProofReport) -> JsDaProofRecord {
         leaf_bytes_b64: STANDARD.encode(&report.proof.leaf_bytes),
         segment_leaves_hex: hex_list(&report.proof.segment_leaves),
         chunk_segments_hex: hex_list(&report.proof.chunk_segments),
-        chunk_count: report.proof.chunk_count,
+        chunk_count: JsU64(report.proof.chunk_count),
         chunk_merkle_path_hex: hex_list(&report.proof.chunk_merkle_path),
         verified: report.verified,
     }
@@ -5913,7 +5928,7 @@ fn parse_da_proof_record(value: &Value, index: usize) -> napi::Result<JsDaProofR
         leaf_bytes_b64: string_field_ctx(map, "leaf_bytes_b64", &ctx)?,
         segment_leaves_hex: string_list_field_ctx(map, "segment_leaves", &ctx)?,
         chunk_segments_hex: string_list_field_ctx(map, "chunk_segments", &ctx)?,
-        chunk_count: u64_field_ctx(map, "chunk_count", &ctx)?,
+        chunk_count: JsU64(u64_field_ctx(map, "chunk_count", &ctx)?),
         chunk_merkle_path_hex: string_list_field_ctx(map, "chunk_merkle_path", &ctx)?,
         verified: bool_field_ctx(map, "verified", &ctx)?,
     })
@@ -6819,6 +6834,40 @@ fn parse_sorafs_pdp_payload_kind(kind: &str) -> napi::Result<SorafsPdpPayloadKin
     }
 }
 
+fn parse_sorafs_fixture_bundle_payload_kind(
+    kind: &str,
+) -> napi::Result<FixtureBundlePayloadKindV1> {
+    match kind {
+        "provider-advert" => Ok(FixtureBundlePayloadKindV1::ProviderAdvert),
+        "provider-admission-envelope" => Ok(FixtureBundlePayloadKindV1::ProviderAdmissionEnvelope),
+        "replication-order" => Ok(FixtureBundlePayloadKindV1::ReplicationOrder),
+        "por-challenge" => Ok(FixtureBundlePayloadKindV1::PorChallenge),
+        "por-proof" => Ok(FixtureBundlePayloadKindV1::PorProof),
+        "potr-receipt" => Ok(FixtureBundlePayloadKindV1::PotrReceipt),
+        "repair-evidence" => Ok(FixtureBundlePayloadKindV1::RepairEvidence),
+        "repair-report" => Ok(FixtureBundlePayloadKindV1::RepairReport),
+        "repair-task-record" => Ok(FixtureBundlePayloadKindV1::RepairTaskRecord),
+        "repair-slash-proposal" => Ok(FixtureBundlePayloadKindV1::RepairSlashProposal),
+        "repair-task-event" => Ok(FixtureBundlePayloadKindV1::RepairTaskEvent),
+        "orderbook-order-request" => Ok(FixtureBundlePayloadKindV1::OrderbookOrderRequest),
+        "orderbook-order-cancel" => Ok(FixtureBundlePayloadKindV1::OrderbookOrderCancel),
+        "orderbook-trade-event" => Ok(FixtureBundlePayloadKindV1::OrderbookTradeEvent),
+        "orderbook-settlement-channel" => {
+            Ok(FixtureBundlePayloadKindV1::OrderbookSettlementChannel)
+        }
+        "orderbook-settlement-receipt" => {
+            Ok(FixtureBundlePayloadKindV1::OrderbookSettlementReceipt)
+        }
+        "pdp-commitment" => Ok(FixtureBundlePayloadKindV1::PdpCommitment),
+        "pdp-challenge" => Ok(FixtureBundlePayloadKindV1::PdpChallenge),
+        "pdp-proof" => Ok(FixtureBundlePayloadKindV1::PdpProof),
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported SoraFS fixture-bundle payload kind `{kind}`"),
+        )),
+    }
+}
+
 /// Validate a Norito-encoded PDP payload and return canonical outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6906,6 +6955,86 @@ pub fn sorafs_validate_pdp_bundle_json(
         commitment_label,
         challenge_label,
         proof_label,
+        generated_at,
+    );
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+/// Validate a bounded heterogeneous SoraFS fixture bundle and its canonical
+/// cross-links, returning `ValidationOutcomeV1` JSON.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // N-API boundary requires owned inputs
+pub fn sorafs_validate_fixture_bundle_json(
+    payloads: Vec<JsSorafsReferenceBundlePayload>,
+    now_unix: i64,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let maximum_payloads = SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1 as usize;
+    if payloads.is_empty() || payloads.len() > maximum_payloads {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("payloads must contain 1..={maximum_payloads} entries"),
+        ));
+    }
+    let now = js_number_to_u64(now_unix, "now_unix")?;
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let mut kinds = Vec::with_capacity(payloads.len());
+    let mut total_bytes = 0usize;
+    for (index, payload) in payloads.iter().enumerate() {
+        kinds.push(parse_sorafs_fixture_bundle_payload_kind(&payload.kind)?);
+        validate_sorafs_reference_label(&payload.label, &format!("payloads[{index}].label"))?;
+        total_bytes = total_bytes
+            .checked_add(payload.bytes.len())
+            .and_then(|total| total.checked_add(payload.label.len()))
+            .ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "fixture-bundle aggregate byte length overflowed",
+                )
+            })?;
+        let maximum_bytes = SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1 as usize;
+        if total_bytes > maximum_bytes {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("fixture-bundle inputs exceed {maximum_bytes} aggregate bytes"),
+            ));
+        }
+    }
+    let borrowed = payloads
+        .iter()
+        .zip(kinds)
+        .map(|(payload, kind)| {
+            FixtureBundlePayloadV1::new(kind, payload.label.clone(), payload.bytes.as_ref())
+        })
+        .collect::<Vec<_>>();
+    let outcome = validate_fixture_bundle_payloads(&borrowed, now, generated_at);
+    json::to_string(&outcome).map_err(norito_to_napi)
+}
+
+/// Validate one canonical governance log node against its required expected CID.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+pub fn sorafs_validate_governance_log_node_json(
+    bytes: Uint8Array,
+    label: String,
+    expected_node_cid: Uint8Array,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    validate_sorafs_reference_label(&label, "label")?;
+    let expected_node_cid = validate_sorafs_reference_governance_cid(
+        Some(expected_node_cid.as_ref()),
+        "expected_node_cid",
+    )?
+    .expect("required CID was supplied");
+    validate_sorafs_reference_aggregate_bytes(
+        "governance log-node validation",
+        [bytes.len(), label.len(), expected_node_cid.len()],
+    )?;
+    let outcome = validate_governance_log_node_bytes(
+        bytes.as_ref(),
+        label,
+        Some(expected_node_cid),
         generated_at,
     );
     json::to_string(&outcome).map_err(norito_to_napi)
@@ -7045,6 +7174,47 @@ mod sorafs_orderbook_validation_tests {
     }
 
     #[test]
+    fn fixture_bundle_selector_and_cross_links_are_exact() {
+        assert_eq!(
+            parse_sorafs_fixture_bundle_payload_kind("potr-receipt").unwrap(),
+            FixtureBundlePayloadKindV1::PotrReceipt
+        );
+        for retired in ["potr_receipt", "PoR-proof", "proof", " repair-report"] {
+            assert!(parse_sorafs_fixture_bundle_payload_kind(retired).is_err());
+        }
+
+        let order =
+            include_bytes!("../../../fixtures/sorafs_manifest/replication_order/order_v1.to");
+        let proof = include_bytes!("../../../fixtures/sorafs_manifest/por/proof_v1.to");
+        let outcome_json = sorafs_validate_fixture_bundle_json(
+            vec![
+                JsSorafsReferenceBundlePayload {
+                    kind: "replication-order".to_owned(),
+                    bytes: Buffer::from(order.to_vec()),
+                    label: "replication-order.to".to_owned(),
+                },
+                JsSorafsReferenceBundlePayload {
+                    kind: "por-proof".to_owned(),
+                    bytes: Buffer::from(proof.to_vec()),
+                    label: "por-proof.to".to_owned(),
+                },
+            ],
+            1_700_000_001,
+            1_700_001_237,
+        )
+        .expect("validate fixture bundle");
+        let outcome: json::Value = json::from_json(&outcome_json).expect("outcome JSON");
+        assert_eq!(
+            outcome.get("status").and_then(json::Value::as_str),
+            Some("Ok")
+        );
+        assert_eq!(
+            outcome.get("generated_at").and_then(json::Value::as_u64),
+            Some(1_700_001_237)
+        );
+    }
+
+    #[test]
     fn parse_sorafs_xor_quantity_preserves_the_exact_signed_512_boundary() {
         const MAX_SCALED: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
         assert_eq!(MAX_SCALED.len(), 155);
@@ -7084,6 +7254,24 @@ mod sorafs_orderbook_validation_tests {
                 validate_sorafs_reference_governance_cid(Some(&invalid), "expected CID").is_err()
             );
         }
+    }
+
+    #[test]
+    fn governance_log_node_reference_fixture_has_stable_outcome() {
+        let node =
+            include_bytes!("../../../fixtures/sorafs_manifest/moderation/governance_node_v1.to");
+        let expected_node_cid =
+            hex::decode("9a2dc9a930494cbc70f0e4cab25df893fb607e83f1fa52520ed62dabca918d5a")
+                .expect("fixture node CID");
+        let outcome = validate_governance_log_node_bytes(
+            node,
+            "moderation/governance_node_v1.to",
+            Some(expected_node_cid.as_slice()),
+            1_700_001_234,
+        );
+        assert_eq!(outcome.status.as_str(), "Ok");
+        assert_eq!(outcome.code, "SFS-OK-000");
+        assert_eq!(outcome.generated_at, 1_700_001_234);
     }
 
     #[test]
@@ -8315,6 +8503,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             if map.contains_key("Register")
                 || map.contains_key("Settlement")
                 || map.contains_key("CancelSmartContractCodeUpload")
+                || map.contains_key("CancelAssetLock")
                 || map.contains_key("ProposeValidationFeePolicy")
     );
     if !requires_explicit_parser {
@@ -8392,6 +8581,40 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
             if let Some(batch_value) = map.remove("TransferAssetBatch") {
                 return transfer_asset_batch_from_json(batch_value);
+            }
+            if let Some(cancel_value) = map.remove("CancelAssetLock") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "CancelAssetLock instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                exact_json_object_fields(
+                    &cancel_value,
+                    &["escrow_id", "expected_remaining_amount"],
+                    "CancelAssetLock",
+                )?;
+                let json::Value::Object(mut fields) = cancel_value else {
+                    unreachable!("exact_json_object_fields accepted an object");
+                };
+                let escrow_id = EscrowId::new(parse_hash_value(
+                    required_value(&mut fields, "escrow_id", "CancelAssetLock")?,
+                    "CancelAssetLock.escrow_id",
+                )?);
+                let expected_remaining_amount = parse_canonical_quantity_value(
+                    required_value(&mut fields, "expected_remaining_amount", "CancelAssetLock")?,
+                    "CancelAssetLock.expected_remaining_amount",
+                )?;
+                if expected_remaining_amount.is_zero() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "CancelAssetLock.expected_remaining_amount must be positive",
+                    ));
+                }
+                return Ok(CancelAssetLock::new(escrow_id, expected_remaining_amount).into());
             }
             if let Some(cancel_value) = map.remove("CancelSmartContractCodeUpload") {
                 if !map.is_empty() {
@@ -10099,6 +10322,26 @@ fn exact_json_object_fields(
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(cancel) = instruction_ref.as_any().downcast_ref::<CancelAssetLock>() {
+        if cancel.expected_remaining_amount.is_zero() {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "CancelAssetLock.expected_remaining_amount must be positive",
+            ));
+        }
+        let mut inner = json::Map::new();
+        inner.insert(
+            "escrow_id".to_owned(),
+            json::to_value(&cancel.escrow_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "expected_remaining_amount".to_owned(),
+            json::Value::String(cancel.expected_remaining_amount.to_string()),
+        );
+        let mut outer = json::Map::new();
+        outer.insert("CancelAssetLock".to_owned(), json::Value::Object(inner));
+        return Ok(json::Value::Object(outer));
+    }
     if let Some(deploy) = instruction_ref
         .as_any()
         .downcast_ref::<iroha_data_model::isi::soracloud::DeploySoracloudService>(
@@ -16714,7 +16957,7 @@ mod tests {
         let billing_action = Action::new(
             Executable::Ivm(IvmBytecode::from_compiled(
                 subscription_syscall_program_bytes(
-                    ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                    kotodama_lang::syscalls::SYSCALL_SUBSCRIPTION_BILL,
                     max_cycles,
                 ),
             )),
@@ -16751,7 +16994,7 @@ mod tests {
         let usage_action = Action::new(
             Executable::Ivm(IvmBytecode::from_compiled(
                 subscription_syscall_program_bytes(
-                    ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+                    kotodama_lang::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
                     max_cycles,
                 ),
             )),
@@ -21451,7 +21694,7 @@ seiyaku Privacy {
         let mut provider_id = [0u8; 32];
         provider_id
             .copy_from_slice(&hex::decode(provider_id_hex).expect("decode provider identifier"));
-        let token = StreamTokenV1::sign_with_seed(
+        let token = StreamTokenV1::sign(
             StreamTokenBodyV1 {
                 token_id: "01TESTTOKEN0000000000000000".to_string(),
                 manifest_cid: hex::decode(manifest_id_hex).expect("decode manifest id"),
@@ -21464,7 +21707,7 @@ seiyaku Privacy {
                 requests_per_minute: 120,
                 token_pk_version: 1,
             },
-            [0x42; 32],
+            &ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]),
         )
         .expect("sign stream token");
         let bytes = norito::to_bytes(&token).expect("encode stream token");
@@ -22005,13 +22248,19 @@ seiyaku Privacy {
         )
         .expect("multi-fetch succeeds");
 
-        assert_eq!(result.chunk_count as usize, plan.chunk_fetch_specs().len());
+        assert_eq!(
+            result.chunk_count as usize,
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+        );
         assert_eq!(result.provider_reports.len(), 1);
         assert_eq!(result.provider_reports[0].provider, "alpha");
         assert_eq!(result.provider_reports[0].failures, 0);
         assert!(!result.provider_reports[0].disabled);
 
-        assert_eq!(result.chunk_receipts.len(), plan.chunk_fetch_specs().len());
+        assert_eq!(
+            result.chunk_receipts.len(),
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+        );
         assert!(
             result
                 .chunk_receipts
@@ -22147,7 +22396,9 @@ seiyaku Privacy {
         let override_guard = set_fetch_via_gateway_override(move |_, plan_override, _, _, _, _| {
             let provider = Arc::new(FetchProvider::new("alpha"));
 
-            let chunk_specs = plan_override.chunk_fetch_specs();
+            let chunk_specs = plan_override
+                .try_chunk_fetch_specs()
+                .expect("valid CAR plan");
             let mut chunks = Vec::with_capacity(chunk_specs.len());
             let mut receipts = Vec::with_capacity(chunk_specs.len());
             for spec in &chunk_specs {
@@ -22530,7 +22781,10 @@ seiyaku Privacy {
         )
         .expect("multi-fetch succeeds with scoreboard");
 
-        assert_eq!(result.chunk_count as usize, plan.chunk_fetch_specs().len());
+        assert_eq!(
+            result.chunk_count as usize,
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+        );
         assert_eq!(result.provider_reports.len(), 1);
         let beta_report = &result.provider_reports[0];
         assert_eq!(beta_report.provider, "beta");
@@ -22611,7 +22865,7 @@ seiyaku Privacy {
             .expect("beta report present");
         assert_eq!(
             beta_report.successes as usize,
-            plan.chunk_fetch_specs().len()
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
         );
         assert!(!beta_report.disabled);
         assert!(
@@ -25474,6 +25728,109 @@ seiyaku Privacy {
         assert_eq!(first.len(), 32);
         assert_eq!(second.len(), 32);
         assert_ne!(first.as_ref(), second.as_ref());
+    }
+
+    #[test]
+    fn cancel_asset_lock_json_uses_exact_compare_and_cancel_shape() {
+        let cancel = CancelAssetLock::new(
+            EscrowId::new(Hash::new(b"js-host-cancel-asset-lock")),
+            Quantity::from(15_u32),
+        );
+        let input = norito_json!({
+            "CancelAssetLock": json::to_value(&cancel).expect("cancel JSON")
+        });
+        let instruction = value_to_instruction(input.clone()).expect("parse CancelAssetLock");
+        assert_eq!(
+            instruction
+                .as_any()
+                .downcast_ref::<CancelAssetLock>()
+                .expect("typed CancelAssetLock"),
+            &cancel
+        );
+        assert_eq!(
+            instruction_to_json_value(&instruction).expect("render CancelAssetLock"),
+            input
+        );
+
+        let bytes = norito::to_bytes(&InstructionBox::from(cancel))
+            .expect("encode CancelAssetLock instruction");
+        let decoded =
+            decode_instruction_aligned(&bytes).expect("decode CancelAssetLock instruction");
+        assert!(
+            decoded.as_any().downcast_ref::<CancelAssetLock>().is_some(),
+            "native decoder must preserve the typed CancelAssetLock"
+        );
+    }
+
+    #[test]
+    fn cancel_asset_lock_json_rejects_legacy_zero_and_noncanonical_inputs() {
+        let cancel = CancelAssetLock::new(
+            EscrowId::new(Hash::new(b"js-host-cancel-asset-lock-strict")),
+            Quantity::from(15_u32),
+        );
+        let canonical_payload = json::to_value(&cancel).expect("cancel JSON");
+
+        for missing in ["escrow_id", "expected_remaining_amount"] {
+            let mut payload = canonical_payload.clone();
+            payload
+                .as_object_mut()
+                .expect("cancel payload object")
+                .remove(missing);
+            let error = value_to_instruction(norito_json!({
+                "CancelAssetLock": payload
+            }))
+            .expect_err("missing CancelAssetLock field must be rejected");
+            assert!(
+                error.reason.contains("missing field"),
+                "unexpected missing-{missing} error: {}",
+                error.reason
+            );
+        }
+
+        for amount in [
+            json::Value::String("0".to_owned()),
+            json::Value::String("-1".to_owned()),
+            json::Value::String("01".to_owned()),
+            json::Value::String("1.0".to_owned()),
+            json::Value::Number(json::Number::from(1_u32)),
+        ] {
+            let mut payload = canonical_payload.clone();
+            payload
+                .as_object_mut()
+                .expect("cancel payload object")
+                .insert("expected_remaining_amount".to_owned(), amount);
+            value_to_instruction(norito_json!({
+                "CancelAssetLock": payload
+            }))
+            .expect_err("invalid CancelAssetLock quantity must be rejected");
+        }
+
+        let mut payload = canonical_payload.clone();
+        payload
+            .as_object_mut()
+            .expect("cancel payload object")
+            .insert("compatibility".to_owned(), json::Value::Bool(true));
+        let error = value_to_instruction(norito_json!({
+            "CancelAssetLock": payload
+        }))
+        .expect_err("CancelAssetLock must reject compatibility fields");
+        assert!(error.reason.contains("unexpected field"));
+
+        let error = value_to_instruction(norito_json!({
+            "CancelAssetLock": canonical_payload,
+            "compatibility": true
+        }))
+        .expect_err("CancelAssetLock envelope must contain one instruction");
+        assert!(error.reason.contains("envelope contains unexpected field"));
+
+        let zero: InstructionBox = CancelAssetLock::new(
+            EscrowId::new(Hash::new(b"js-host-zero-cancel-asset-lock")),
+            Quantity::from(0_u32),
+        )
+        .into();
+        let error = instruction_to_json_value(&zero)
+            .expect_err("native renderer must reject a zero precondition");
+        assert!(error.reason.contains("must be positive"));
     }
 
     #[test]

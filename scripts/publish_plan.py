@@ -1,144 +1,279 @@
 #!/usr/bin/env python3
-"""
-Generate and validate publish plans for Iroha dual-track releases.
+"""Generate and independently replay canonical release publication plans."""
 
-Targets are storage-agnostic: pass one or more base URIs (e.g.,
-`sorafs://cluster/releases/iroha2/v<ver>` or `https://gateway/sorafs/iroha3/v<ver>`)
-and the tool will:
-- read the release manifest,
-- verify local hash/size for each artifact,
-- emit `publish_plan.{json,sh,txt}` with fully qualified destinations.
-
-Validation can optionally probe HTTP(S) destinations via HEAD requests; other
-schemes are skipped, keeping the tool compatible with SoraFS/SoraNet gateways
-or offline flows.
-"""
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Iterable, Mapping
+from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
 if __package__:
+    from .release_artifact_contract import (
+        ALLOWED_PROFILES,
+        MAX_RELEASE_MANIFEST_SIZE,
+        ReleaseArtifactError,
+        canonical_json_bytes,
+        canonical_relative_path,
+        exclusive_write_bytes,
+        format_source_date_epoch,
+        load_canonical_release_manifest,
+        load_json_object,
+        parse_sha256sums,
+        scan_inventory_paths,
+        stable_hash_path,
+        stable_hash_relative,
+        stable_read_path,
+        validate_artifact_descriptor,
+    )
     from .release_manifest_signing import (
-        MAX_MANIFEST_SIZE,
         ReleaseManifestSignatureError,
         verify_release_manifest,
     )
 else:
+    from release_artifact_contract import (
+        ALLOWED_PROFILES,
+        MAX_RELEASE_MANIFEST_SIZE,
+        ReleaseArtifactError,
+        canonical_json_bytes,
+        canonical_relative_path,
+        exclusive_write_bytes,
+        format_source_date_epoch,
+        load_canonical_release_manifest,
+        load_json_object,
+        parse_sha256sums,
+        scan_inventory_paths,
+        stable_hash_path,
+        stable_hash_relative,
+        stable_read_path,
+        validate_artifact_descriptor,
+    )
     from release_manifest_signing import (
-        MAX_MANIFEST_SIZE,
         ReleaseManifestSignatureError,
         verify_release_manifest,
     )
 
 
+PUBLISH_PLAN_SCHEMA = "iroha.publish_plan"
+PUBLISH_PLAN_SCHEMA_VERSION = 1
+MAX_PUBLISH_PLAN_SIZE = 16 * 1024 * 1024
+MAX_TARGET_URI_BYTES = 2048
+_HEX_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_URI_SCHEME_RE = re.compile(r"[a-z][a-z0-9+.-]{0,31}")
+_PLAN_FIELDS = {
+    "schema",
+    "schema_version",
+    "generated_at",
+    "source_date_epoch",
+    "manifest",
+    "manifest_sha256",
+    "manifest_signature",
+    "manifest_public_key",
+    "manifest_signature_algorithm",
+    "manifest_public_key_format",
+    "manifest_signer_fingerprint_sha256",
+    "manifest_signature_verified",
+    "manifest_verification_mode",
+    "manifest_native_verifier_protocol",
+    "manifest_native_verifier",
+    "manifest_native_verifier_sha256",
+    "artifacts_root",
+    "target_map",
+    "version",
+    "commit",
+    "os",
+    "arch",
+    "artifacts",
+}
+_PLAN_ARTIFACT_FIELDS = {
+    "profile",
+    "target",
+    "kind",
+    "format",
+    "relative_path",
+    "source",
+    "destination",
+    "sha256",
+    "size",
+}
+
+
 class PublishPlanError(RuntimeError):
-    """Raised when plan generation or validation fails."""
+    """Raised when a plan violates the closed publication contract."""
 
 
 @dataclass(frozen=True)
 class Artifact:
     profile: str
+    target: str
     kind: str
     format: str
     relative_path: str
-    source: Path
+    source: str
     destination: str
     sha256: str
     size: int
 
 
-def parse_target_map(values: Iterable[str]) -> Dict[str, str]:
-    """
-    Accepts either a single base URI or per-profile mappings in the form
-    `profile=uri`. When only a single URI is supplied it is used for both
-    `iroha2` and `iroha3`.
-    """
-    target_map: Dict[str, str] = {}
-    default_target: Optional[str] = None
-    for raw in values:
-        if raw is None:
-            continue
-        raw = raw.strip()
-        if not raw:
-            continue
-        if "=" in raw:
-            profile, uri = raw.split("=", 1)
-            profile = profile.strip()
-            if not profile or not uri.strip():
-                raise PublishPlanError(f"Invalid target mapping '{raw}'")
-            target_map[profile] = uri.strip().rstrip("/")
-        else:
-            if default_target is not None and default_target != raw:
-                raise PublishPlanError("Multiple default targets provided; use profile=uri form")
-            default_target = raw.rstrip("/")
-
-    if not target_map and not default_target:
-        raise PublishPlanError("At least one publish target URI is required")
-
-    for profile in ("iroha2", "iroha3"):
-        if profile not in target_map:
-            if default_target is None:
-                raise PublishPlanError(f"Missing publish target for profile {profile}")
-            target_map[profile] = default_target
-    return target_map
+def _contains_control(value: str) -> bool:
+    return any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 16), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _safe_absolute_path(path: Path, label: str) -> Path:
+    absolute = Path(os.path.abspath(path))
+    rendered = str(absolute)
+    if _contains_control(rendered):
+        raise PublishPlanError(f"{label} must not contain control characters")
+    return absolute
 
 
-def _read_manifest_payload(path: Path) -> bytes:
+def _canonical_target_uri(raw: str) -> str:
+    if (
+        not isinstance(raw, str)
+        or not raw
+        or raw != raw.strip()
+        or len(raw.encode("utf-8")) > MAX_TARGET_URI_BYTES
+        or _contains_control(raw)
+        or "\\" in raw
+    ):
+        raise PublishPlanError("publish target must be a bounded canonical URI")
     try:
-        payload = path.read_bytes()
-    except OSError as exc:
-        raise PublishPlanError(f"Cannot read release manifest {path}: {exc}") from exc
-    if len(payload) > MAX_MANIFEST_SIZE:
+        parsed = urllib_parse.urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise PublishPlanError(f"publish target URI is malformed: {raw!r}") from exc
+    if (
+        _URI_SCHEME_RE.fullmatch(parsed.scheme) is None
+        or parsed.scheme not in {"https", "sorafs"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or port is not None
+        and not (1 <= port <= 65535)
+        or raw.endswith("/")
+    ):
         raise PublishPlanError(
-            f"Release manifest exceeds the {MAX_MANIFEST_SIZE}-byte size limit"
+            "publish target must be a canonical HTTPS or SoraFS base URI "
+            "without credentials, query, fragment, or trailing slash"
         )
-    return payload
-
-
-def _load_manifest_payload(payload: bytes) -> Dict[str, object]:
     try:
-        manifest = json.loads(payload)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise PublishPlanError(f"Release manifest is not valid UTF-8 JSON: {exc}") from exc
-    if not isinstance(manifest, dict):
-        raise PublishPlanError("Release manifest root must be an object")
-    if "artifacts" not in manifest or not isinstance(manifest["artifacts"], list):
-        raise PublishPlanError("Release manifest is missing an 'artifacts' array")
-    return manifest
+        raw.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise PublishPlanError("publish target URI must be ASCII") from exc
+    decoded_path = urllib_parse.unquote(parsed.path)
+    if (
+        _contains_control(decoded_path)
+        or "\\" in decoded_path
+        or any(part in {".", ".."} for part in decoded_path.split("/"))
+        or re.search(r"%(?:2[fF]|5[cC])", parsed.path) is not None
+    ):
+        raise PublishPlanError("publish target URI path is not canonical")
+    canonical_path = urllib_parse.quote(
+        decoded_path,
+        safe="/-._~",
+        encoding="utf-8",
+        errors="strict",
+    )
+    if canonical_path != parsed.path:
+        raise PublishPlanError("publish target URI uses a noncanonical path encoding")
+    canonical = urllib_parse.urlunsplit(parsed)
+    if canonical != raw:
+        raise PublishPlanError("publish target URI is not in canonical form")
+    return canonical
 
 
-def build_publish_plan(
+def _destination(base_uri: str, relative_path: str) -> str:
+    encoded = "/".join(
+        urllib_parse.quote(part, safe="-._~")
+        for part in canonical_relative_path(relative_path).split("/")
+    )
+    return f"{base_uri}/{encoded}"
+
+
+def parse_target_map(values: Iterable[str]) -> dict[str, str]:
+    """Parse a default URI or exact per-profile URI mappings."""
+
+    target_map: dict[str, str] = {}
+    default_target: str | None = None
+    saw_value = False
+    for supplied in values:
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str) or not supplied:
+            raise PublishPlanError("publish target values must be non-empty strings")
+        saw_value = True
+        if "=" in supplied:
+            profile, uri = supplied.split("=", 1)
+            if profile not in ALLOWED_PROFILES:
+                raise PublishPlanError(f"unsupported publish target profile: {profile!r}")
+            if profile in target_map:
+                raise PublishPlanError(
+                    f"duplicate publish target mapping for profile {profile}"
+                )
+            target_map[profile] = _canonical_target_uri(uri)
+        else:
+            if default_target is not None:
+                raise PublishPlanError("multiple default publish targets are not allowed")
+            default_target = _canonical_target_uri(supplied)
+    if not saw_value:
+        raise PublishPlanError("at least one publish target URI is required")
+    if default_target is not None:
+        for profile in sorted(ALLOWED_PROFILES):
+            target_map.setdefault(profile, default_target)
+    return dict(sorted(target_map.items()))
+
+
+def _normalize_target_map(
+    target_map: Mapping[str, str],
+    required_profiles: set[str],
+) -> dict[str, str]:
+    if not isinstance(target_map, Mapping):
+        raise PublishPlanError("publish target map must be a mapping")
+    normalized: dict[str, str] = {}
+    for profile, uri in target_map.items():
+        if profile not in ALLOWED_PROFILES:
+            raise PublishPlanError(f"unsupported publish target profile: {profile!r}")
+        normalized[profile] = _canonical_target_uri(uri)
+    if set(normalized) != required_profiles:
+        missing = sorted(required_profiles - set(normalized))
+        extra = sorted(set(normalized) - required_profiles)
+        raise PublishPlanError(
+            f"publish target map must exactly cover manifest profiles: "
+            f"missing={missing}, extra={extra}"
+        )
+    return dict(sorted(normalized.items()))
+
+
+def _stable_payload(path: Path, label: str, max_size: int) -> tuple[object, bytes]:
+    try:
+        info, payload = stable_read_path(path, max_size=max_size)
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"{label} is unsafe or unstable: {exc}") from exc
+    return info, payload
+
+
+def _manifest_inputs(
     manifest_path: Path,
-    artifacts_dir: Path,
-    target_map: Dict[str, str],
     *,
-    manifest_signature_path: Optional[Path] = None,
-    manifest_public_key_path: Optional[Path] = None,
-    trusted_signing_fingerprint: Optional[str] = None,
-    release_manifest_verifier_path: Optional[Path] = None,
-    trusted_release_manifest_verifier_sha256: Optional[str] = None,
-    development_allow_unsigned_manifest: bool = False,
-) -> Dict[str, object]:
+    manifest_signature_path: Path | None,
+    manifest_public_key_path: Path | None,
+    trusted_signing_fingerprint: str | None,
+    release_manifest_verifier_path: Path | None,
+    trusted_release_manifest_verifier_sha256: str | None,
+    development_allow_unsigned_manifest: bool,
+) -> tuple[dict[str, object], bytes, dict[str, object]]:
     signed_values = (
         manifest_signature_path,
         manifest_public_key_path,
@@ -146,14 +281,14 @@ def build_publish_plan(
         release_manifest_verifier_path,
         trusted_release_manifest_verifier_sha256,
     )
-    signed_value_count = sum(value is not None for value in signed_values)
-    if development_allow_unsigned_manifest and signed_value_count:
+    supplied = sum(value is not None for value in signed_values)
+    if development_allow_unsigned_manifest and supplied:
         raise PublishPlanError(
             "signed manifest inputs cannot be combined with "
             "development_allow_unsigned_manifest"
         )
-    if not development_allow_unsigned_manifest and signed_value_count != len(signed_values):
-        if signed_value_count:
+    if not development_allow_unsigned_manifest and supplied != len(signed_values):
+        if supplied:
             raise PublishPlanError(
                 "manifest signature, raw public key, trusted fingerprint, native "
                 "verifier path, and reviewed verifier SHA256 must be supplied together"
@@ -163,11 +298,15 @@ def build_publish_plan(
             "release-manifest signature"
         )
 
-    manifest_path = manifest_path.absolute()
+    manifest_path = _safe_absolute_path(manifest_path, "release manifest path")
     if development_allow_unsigned_manifest:
-        manifest_payload = _read_manifest_payload(manifest_path)
-        manifest_verification = {
-            "manifest_sha256": hashlib.sha256(manifest_payload).hexdigest(),
+        _, payload = _stable_payload(
+            manifest_path,
+            "aggregate release manifest",
+            MAX_RELEASE_MANIFEST_SIZE,
+        )
+        verification = {
+            "manifest_sha256": hashlib.sha256(payload).hexdigest(),
             "signature_algorithm": None,
             "public_key_format": None,
             "signer_fingerprint_sha256": None,
@@ -175,455 +314,609 @@ def build_publish_plan(
             "native_verifier_protocol": None,
             "native_verifier_path": None,
             "native_verifier_sha256": None,
+            "verification_mode": "development-unsigned",
+            "signature_path": None,
+            "public_key_path": None,
         }
-        signature_path_value = None
-        public_key_path_value = None
-        verification_mode = "development-unsigned"
     else:
         assert manifest_signature_path is not None
         assert manifest_public_key_path is not None
         assert trusted_signing_fingerprint is not None
         assert release_manifest_verifier_path is not None
         assert trusted_release_manifest_verifier_sha256 is not None
-        signature_path = manifest_signature_path.absolute()
-        public_key_path = manifest_public_key_path.absolute()
-        native_verifier_path = release_manifest_verifier_path.absolute()
+        signature_path = _safe_absolute_path(
+            manifest_signature_path, "manifest signature path"
+        )
+        public_key_path = _safe_absolute_path(
+            manifest_public_key_path, "manifest public key path"
+        )
+        native_verifier = _safe_absolute_path(
+            release_manifest_verifier_path, "native verifier path"
+        )
         try:
-            manifest_verification = verify_release_manifest(
+            verified = verify_release_manifest(
                 manifest_path,
                 signature_path,
                 public_key_path,
                 trusted_signing_fingerprint,
-                native_verifier_path,
+                native_verifier,
                 trusted_release_manifest_verifier_sha256,
             )
         except ReleaseManifestSignatureError as exc:
             raise PublishPlanError(
                 f"aggregate release-manifest signature is invalid: {exc}"
             ) from exc
-        # Parse only bytes bound to the verified digest. A path replacement after
-        # verification therefore cannot feed unverified content into the plan.
-        manifest_payload = _read_manifest_payload(manifest_path)
-        if (
-            hashlib.sha256(manifest_payload).hexdigest()
-            != manifest_verification["manifest_sha256"]
-        ):
+        _, payload = _stable_payload(
+            manifest_path,
+            "verified aggregate release manifest",
+            MAX_RELEASE_MANIFEST_SIZE,
+        )
+        if hashlib.sha256(payload).hexdigest() != verified["manifest_sha256"]:
             raise PublishPlanError(
                 "aggregate release manifest changed after signature verification"
             )
-        signature_path_value = str(signature_path)
-        public_key_path_value = str(public_key_path)
-        verification_mode = "ed25519"
+        verification = {
+            **verified,
+            "verification_mode": "ed25519",
+            "signature_path": str(signature_path),
+            "public_key_path": str(public_key_path),
+        }
+    try:
+        manifest = load_canonical_release_manifest(payload)
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"aggregate release manifest is invalid: {exc}") from exc
+    return manifest, payload, verification
 
-    manifest = _load_manifest_payload(manifest_payload)
-    artifacts_dir = artifacts_dir.resolve()
 
-    artifacts: List[Artifact] = []
-    for entry in manifest["artifacts"]:
-        if not isinstance(entry, dict):
-            raise PublishPlanError("Release manifest contains a non-object artifact entry")
-        profile = entry.get("profile")
-        path_value = entry.get("path")
-        sha256 = entry.get("sha256")
-        kind = entry.get("kind", "")
-        fmt = entry.get("format", "")
-        if not profile or not path_value or not sha256:
-            raise PublishPlanError(f"Artifact entry is missing required fields: {entry}")
-        base_uri = target_map.get(profile)
-        if not base_uri:
-            raise PublishPlanError(f"No publish target configured for profile '{profile}'")
-        rel_path = os.path.normpath(str(path_value))
-        source_path = artifacts_dir / rel_path
-        if not source_path.exists():
-            raise PublishPlanError(f"Artifact path does not exist: {source_path}")
-        size = source_path.stat().st_size
-        computed_sha = _sha256_file(source_path)
-        if computed_sha != sha256:
+def build_publish_plan(
+    manifest_path: Path,
+    artifacts_dir: Path,
+    target_map: Mapping[str, str],
+    *,
+    manifest_signature_path: Path | None = None,
+    manifest_public_key_path: Path | None = None,
+    trusted_signing_fingerprint: str | None = None,
+    release_manifest_verifier_path: Path | None = None,
+    trusted_release_manifest_verifier_sha256: str | None = None,
+    development_allow_unsigned_manifest: bool = False,
+) -> dict[str, object]:
+    """Build a deterministic plan from a closed canonical artifact inventory."""
+
+    manifest_path = _safe_absolute_path(manifest_path, "release manifest path")
+    artifacts_root = _safe_absolute_path(artifacts_dir, "release artifact root")
+    manifest, _, verification = _manifest_inputs(
+        manifest_path,
+        manifest_signature_path=manifest_signature_path,
+        manifest_public_key_path=manifest_public_key_path,
+        trusted_signing_fingerprint=trusted_signing_fingerprint,
+        release_manifest_verifier_path=release_manifest_verifier_path,
+        trusted_release_manifest_verifier_sha256=(
+            trusted_release_manifest_verifier_sha256
+        ),
+        development_allow_unsigned_manifest=development_allow_unsigned_manifest,
+    )
+    manifest_rows = manifest["artifacts"]
+    assert isinstance(manifest_rows, list)
+    required_profiles = {str(row["profile"]) for row in manifest_rows}
+    targets = _normalize_target_map(target_map, required_profiles)
+    expected_paths = [str(row["path"]) for row in manifest_rows]
+    try:
+        scanned_before = scan_inventory_paths(
+            artifacts_root,
+            ignored={"SHA256SUMS"},
+        )
+        if scanned_before != sorted(expected_paths):
+            missing = sorted(set(expected_paths) - set(scanned_before))
+            extra = sorted(set(scanned_before) - set(expected_paths))
             raise PublishPlanError(
-                f"SHA256 mismatch for {source_path}: manifest={sha256} computed={computed_sha}"
+                f"closed publish artifact inventory mismatch: "
+                f"missing={missing}, extra={extra}"
             )
-        destination = f"{base_uri}/{rel_path}"
-        artifacts.append(
-            Artifact(
-                profile=str(profile),
-                kind=str(kind),
-                format=str(fmt),
-                relative_path=rel_path,
-                source=source_path,
-                destination=destination,
-                sha256=sha256,
-                size=size,
-            )
+        checksums = parse_sha256sums(artifacts_root)
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"release artifact inventory is invalid: {exc}") from exc
+    if set(checksums) != set(expected_paths):
+        missing = sorted(set(expected_paths) - set(checksums))
+        extra = sorted(set(checksums) - set(expected_paths))
+        raise PublishPlanError(
+            f"canonical SHA256SUMS inventory mismatch: "
+            f"missing={missing}, extra={extra}"
         )
 
-    plan = {
-        "generated_at": _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    artifacts: list[Artifact] = []
+    captured_files: dict[str, object] = {}
+    for row in manifest_rows:
+        path = str(row["path"])
+        try:
+            info = stable_hash_relative(artifacts_root, path)
+        except ReleaseArtifactError as exc:
+            raise PublishPlanError(f"release artifact {path!r} is unsafe: {exc}") from exc
+        if info.sha256 != row["sha256"] or info.sha256 != checksums[path]:
+            raise PublishPlanError(
+                f"SHA256 mismatch for release artifact {path!r}"
+            )
+        if info.size != row["size"]:
+            raise PublishPlanError(f"size mismatch for release artifact {path!r}")
+        captured_files[path] = info
+        profile = str(row["profile"])
+        source = str(artifacts_root / Path(*path.split("/")))
+        artifacts.append(
+            Artifact(
+                profile=profile,
+                target=str(row["target"]),
+                kind=str(row["kind"]),
+                format=str(row["format"]),
+                relative_path=path,
+                source=source,
+                destination=_destination(targets[profile], path),
+                sha256=info.sha256,
+                size=info.size,
+            )
+        )
+    try:
+        scanned_after = scan_inventory_paths(
+            artifacts_root,
+            ignored={"SHA256SUMS"},
+        )
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"release artifact inventory is invalid: {exc}") from exc
+    if scanned_after != scanned_before:
+        raise PublishPlanError(
+            "release artifact inventory changed while the publish plan was built"
+        )
+    try:
+        if parse_sha256sums(artifacts_root) != checksums:
+            raise PublishPlanError(
+                "canonical SHA256SUMS changed while the publish plan was built"
+            )
+        for path, before in captured_files.items():
+            if stable_hash_relative(artifacts_root, path) != before:
+                raise PublishPlanError(
+                    f"release artifact {path!r} changed while the publish plan "
+                    "was built"
+                )
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"release artifact inventory is invalid: {exc}") from exc
+
+    return {
+        "schema": PUBLISH_PLAN_SCHEMA,
+        "schema_version": PUBLISH_PLAN_SCHEMA_VERSION,
+        "generated_at": manifest["built_at"],
+        "source_date_epoch": manifest["source_date_epoch"],
         "manifest": str(manifest_path),
-        "manifest_sha256": manifest_verification["manifest_sha256"],
-        "manifest_signature": signature_path_value,
-        "manifest_public_key": public_key_path_value,
-        "manifest_signature_algorithm": manifest_verification["signature_algorithm"],
-        "manifest_public_key_format": manifest_verification["public_key_format"],
-        "manifest_signer_fingerprint_sha256": manifest_verification[
+        "manifest_sha256": verification["manifest_sha256"],
+        "manifest_signature": verification["signature_path"],
+        "manifest_public_key": verification["public_key_path"],
+        "manifest_signature_algorithm": verification["signature_algorithm"],
+        "manifest_public_key_format": verification["public_key_format"],
+        "manifest_signer_fingerprint_sha256": verification[
             "signer_fingerprint_sha256"
         ],
-        "manifest_signature_verified": manifest_verification["signature_verified"],
-        "manifest_verification_mode": verification_mode,
-        "manifest_native_verifier_protocol": manifest_verification[
+        "manifest_signature_verified": verification["signature_verified"],
+        "manifest_verification_mode": verification["verification_mode"],
+        "manifest_native_verifier_protocol": verification[
             "native_verifier_protocol"
         ],
-        "manifest_native_verifier": manifest_verification["native_verifier_path"],
-        "manifest_native_verifier_sha256": manifest_verification[
-            "native_verifier_sha256"
-        ],
-        "artifacts_dir": str(artifacts_dir),
-        "target_map": target_map,
-        "version": manifest.get("version"),
-        "commit": manifest.get("commit"),
-        "os": manifest.get("os"),
-        "arch": manifest.get("arch"),
+        "manifest_native_verifier": verification["native_verifier_path"],
+        "manifest_native_verifier_sha256": verification["native_verifier_sha256"],
+        "artifacts_root": str(artifacts_root),
+        "target_map": targets,
+        "version": manifest["version"],
+        "commit": manifest["commit"],
+        "os": manifest["os"],
+        "arch": manifest["arch"],
         "artifacts": [
             {
-                "profile": a.profile,
-                "kind": a.kind,
-                "format": a.format,
-                "relative_path": a.relative_path,
-                "source": str(a.source),
-                "destination": a.destination,
-                "sha256": a.sha256,
-                "size": a.size,
+                "profile": artifact.profile,
+                "target": artifact.target,
+                "kind": artifact.kind,
+                "format": artifact.format,
+                "relative_path": artifact.relative_path,
+                "source": artifact.source,
+                "destination": artifact.destination,
+                "sha256": artifact.sha256,
+                "size": artifact.size,
             }
-            for a in artifacts
+            for artifact in artifacts
         ],
     }
-    return plan
 
 
-def _render_commands(plan: Dict[str, object]) -> List[str]:
-    artifacts = plan.get("artifacts", [])
-    commands: List[str] = []
-    for entry in artifacts:
-        if not isinstance(entry, dict):
-            continue
-        src = entry.get("source")
-        dest = entry.get("destination")
-        if not src or not dest:
-            continue
-        # Storage-agnostic: default to curl PUT/POST is not safe; emit a cp-style command for gateways.
-        commands.append(f"# upload {src} -> {dest}")
-    return commands
+def _validate_publish_plan_schema(plan: Mapping[str, object]) -> dict[str, object]:
+    if set(plan) != _PLAN_FIELDS:
+        raise PublishPlanError(
+            "publish plan fields must be exactly " + ", ".join(sorted(_PLAN_FIELDS))
+        )
+    if (
+        plan["schema"] != PUBLISH_PLAN_SCHEMA
+        or plan["schema_version"] != PUBLISH_PLAN_SCHEMA_VERSION
+    ):
+        raise PublishPlanError("publish plan schema is unsupported")
+    epoch = plan["source_date_epoch"]
+    if isinstance(epoch, bool) or not isinstance(epoch, int):
+        raise PublishPlanError("publish plan source_date_epoch must be an integer")
+    if plan["generated_at"] != format_source_date_epoch(epoch):
+        raise PublishPlanError(
+            "publish plan generated_at must equal the manifest release epoch"
+        )
+    for field in ("manifest", "artifacts_root"):
+        value = plan[field]
+        if not isinstance(value, str) or not value or _contains_control(value):
+            raise PublishPlanError(f"publish plan {field} path is invalid")
+    if _HEX_SHA256_RE.fullmatch(str(plan["manifest_sha256"])) is None:
+        raise PublishPlanError("publish plan manifest SHA256 is invalid")
+    targets = plan["target_map"]
+    if not isinstance(targets, dict) or not targets:
+        raise PublishPlanError("publish plan target_map must be a non-empty object")
+    normalized_targets = {
+        profile: _canonical_target_uri(uri) for profile, uri in targets.items()
+    }
+    if normalized_targets != targets:
+        raise PublishPlanError("publish plan target_map is not canonical")
+    rows = plan["artifacts"]
+    if not isinstance(rows, list) or not rows:
+        raise PublishPlanError("publish plan artifacts must be a non-empty array")
+    normalized_rows: list[dict[str, object]] = []
+    for raw in rows:
+        if not isinstance(raw, dict) or set(raw) != _PLAN_ARTIFACT_FIELDS:
+            raise PublishPlanError(
+                "publish plan artifact rows have an invalid closed schema"
+            )
+        descriptor = validate_artifact_descriptor(
+            {
+                "profile": raw["profile"],
+                "target": raw["target"],
+                "kind": raw["kind"],
+                "format": raw["format"],
+                "path": raw["relative_path"],
+                "sha256": raw["sha256"],
+                "size": raw["size"],
+            },
+            require_digest=True,
+        )
+        for field in ("source", "destination"):
+            value = raw[field]
+            if not isinstance(value, str) or not value or _contains_control(value):
+                raise PublishPlanError(
+                    f"publish plan artifact {field} is invalid"
+                )
+        profile = str(descriptor["profile"])
+        if profile not in normalized_targets:
+            raise PublishPlanError(
+                f"publish plan has no target for profile {profile}"
+            )
+        if raw["destination"] != _destination(
+            normalized_targets[profile],
+            str(descriptor["path"]),
+        ):
+            raise PublishPlanError(
+                "publish plan artifact destination is not canonically derived"
+            )
+        normalized_rows.append(dict(raw))
+    if normalized_rows != sorted(
+        normalized_rows,
+        key=lambda row: (
+            str(row["relative_path"]),
+            str(row["profile"]),
+            str(row["target"]),
+            str(row["kind"]),
+            str(row["format"]),
+        ),
+    ):
+        raise PublishPlanError("publish plan artifact rows are not canonically sorted")
+    mode = plan["manifest_verification_mode"]
+    if mode == "ed25519":
+        required_signed = {
+            "manifest_signature": str,
+            "manifest_public_key": str,
+            "manifest_signer_fingerprint_sha256": str,
+            "manifest_native_verifier": str,
+            "manifest_native_verifier_sha256": str,
+        }
+        if (
+            plan["manifest_signature_algorithm"] != "ed25519"
+            or plan["manifest_public_key_format"] != "raw-ed25519-32"
+            or plan["manifest_signature_verified"] is not True
+            or plan["manifest_native_verifier_protocol"]
+            != "sorafs-validate-release-manifest-v1"
+            or any(
+                not isinstance(plan[field], expected) or not plan[field]
+                for field, expected in required_signed.items()
+            )
+        ):
+            raise PublishPlanError(
+                "publish plan has incomplete aggregate Ed25519 metadata"
+            )
+    elif mode == "development-unsigned":
+        if (
+            plan["manifest_signature"] is not None
+            or plan["manifest_public_key"] is not None
+            or plan["manifest_signature_algorithm"] is not None
+            or plan["manifest_public_key_format"] is not None
+            or plan["manifest_signer_fingerprint_sha256"] is not None
+            or plan["manifest_signature_verified"] is not False
+            or plan["manifest_native_verifier_protocol"] is not None
+            or plan["manifest_native_verifier"] is not None
+            or plan["manifest_native_verifier_sha256"] is not None
+        ):
+            raise PublishPlanError(
+                "development unsigned plan contains signature metadata"
+            )
+    else:
+        raise PublishPlanError(
+            "publish plan verification mode must be ed25519 or development-unsigned"
+        )
+    return dict(plan)
 
 
-def write_plan_files(plan: Dict[str, object], output_dir: Path) -> Dict[str, Path]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    json_path = output_dir / "publish_plan.json"
-    with json_path.open("w", encoding="utf-8") as fh:
-        json.dump(plan, fh, indent=2)
-        fh.write("\n")
-
-    commands = _render_commands(plan)
-    shell_path = output_dir / "publish_plan.sh"
-    shell_body = "#!/usr/bin/env bash\nset -euo pipefail\n\n" + "\n".join(commands) + "\n"
-    shell_path.write_text(shell_body, encoding="utf-8")
-    shell_path.chmod(0o750)
-
-    txt_path = output_dir / "publish_plan.txt"
-    txt_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
-    return {"json": json_path, "sh": shell_path, "txt": txt_path}
-
-
-def _http_head(url: str) -> Optional[int]:
-    req = urllib_request.Request(url, method="HEAD")
+def _load_canonical_plan(path: Path, label: str) -> tuple[object, dict[str, object]]:
+    info, payload = _stable_payload(path, label, MAX_PUBLISH_PLAN_SIZE)
     try:
-        with urllib_request.urlopen(req) as resp:
-            length = resp.headers.get("Content-Length")
+        plan = _validate_publish_plan_schema(
+            load_json_object(payload, label)
+        )
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"{label} is invalid: {exc}") from exc
+    if canonical_json_bytes(plan) != payload:
+        raise PublishPlanError(f"{label} is not canonical deterministic JSON")
+    return info, plan
+
+
+def _render_messages(plan: Mapping[str, object]) -> list[str]:
+    rows = plan["artifacts"]
+    assert isinstance(rows, list)
+    return [
+        f"upload {row['source']} -> {row['destination']}"
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
+def write_plan_files(
+    plan: Mapping[str, object],
+    output_dir: Path,
+) -> dict[str, Path]:
+    """Write all plan views exclusively; existing paths are never replaced."""
+
+    normalized = _validate_publish_plan_schema(plan)
+    output_root = _safe_absolute_path(output_dir, "publish plan output directory")
+    if not output_root.is_dir() or output_root.is_symlink():
+        raise PublishPlanError(
+            "publish plan output directory must already exist as a direct directory"
+        )
+    paths = {
+        "json": output_root / "publish_plan.json",
+        "sh": output_root / "publish_plan.sh",
+        "txt": output_root / "publish_plan.txt",
+    }
+    if any(path.exists() or path.is_symlink() for path in paths.values()):
+        raise PublishPlanError("publish plan output paths must all be new")
+    messages = _render_messages(normalized)
+    shell_lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+        *[f"printf '%s\\n' {shlex.quote(message)}" for message in messages],
+        "",
+    ]
+    try:
+        exclusive_write_bytes(
+            paths["json"],
+            canonical_json_bytes(normalized),
+            mode=0o644,
+        )
+        exclusive_write_bytes(
+            paths["sh"],
+            "\n".join(shell_lines).encode("utf-8"),
+            mode=0o755,
+        )
+        exclusive_write_bytes(
+            paths["txt"],
+            ("\n".join(messages) + "\n").encode("utf-8"),
+            mode=0o644,
+        )
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"failed to write publish plan: {exc}") from exc
+    return paths
+
+
+def _http_head(url: str) -> int | None:
+    request = urllib_request.Request(url, method="HEAD")
+    try:
+        with urllib_request.urlopen(request, timeout=10) as response:
+            length = response.headers.get("Content-Length")
             return int(length) if length is not None else None
-    except (HTTPError, URLError, ValueError):
+    except (HTTPError, URLError, OSError, ValueError):
         return None
 
 
-def _probe_with_command(cmd_template: str, destination: str) -> Optional[int]:
-    rendered = cmd_template.format(destination=destination)
-    cmd = shlex.split(rendered)
+def _probe_with_command(template: str, destination: str) -> int | None:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        tokens = shlex.split(template)
+    except ValueError:
+        return None
+    if sum(token.count("{destination}") for token in tokens) != 1:
+        return None
+    command = [
+        token.replace("{destination}", destination) for token in tokens
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
     except (subprocess.SubprocessError, OSError):
         return None
+    if len(completed.stdout.encode("utf-8")) > 64 * 1024:
+        return None
     try:
-        payload = json.loads(proc.stdout.strip() or "{}")
+        payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
         return None
-    size = payload.get("size") or payload.get("content_length")
+    if not isinstance(payload, dict):
+        return None
+    size = payload.get("size", payload.get("content_length"))
+    if isinstance(size, bool):
+        return None
     try:
-        return int(size) if size is not None else None
+        parsed = int(size)
     except (TypeError, ValueError):
         return None
+    return parsed if parsed >= 0 else None
 
 
 def validate_publish_plan(
     plan_path: Path,
-    previous_plan_path: Optional[Path] = None,
+    previous_plan_path: Path | None = None,
     probe_remote: bool = False,
-    probe_command: Optional[str] = None,
+    probe_command: str | None = None,
     *,
-    trusted_signing_fingerprint: Optional[str] = None,
-    release_manifest_verifier_path: Optional[Path] = None,
-    trusted_release_manifest_verifier_sha256: Optional[str] = None,
+    manifest_path: Path | None = None,
+    artifacts_dir: Path | None = None,
+    target_map: Mapping[str, str] | None = None,
+    manifest_signature_path: Path | None = None,
+    manifest_public_key_path: Path | None = None,
+    trusted_signing_fingerprint: str | None = None,
+    release_manifest_verifier_path: Path | None = None,
+    trusted_release_manifest_verifier_sha256: str | None = None,
     development_allow_unsigned_manifest: bool = False,
-) -> Dict[str, object]:
-    with plan_path.open("r", encoding="utf-8") as fh:
-        try:
-            plan = json.load(fh)
-        except json.JSONDecodeError as exc:
-            raise PublishPlanError(f"Publish plan is not valid JSON: {exc}") from exc
+) -> dict[str, object]:
+    """Replay a plan only from independently supplied roots, targets, and tuple."""
 
-    artifacts = plan.get("artifacts", [])
-    if not isinstance(artifacts, list):
-        raise PublishPlanError("Publish plan is missing an 'artifacts' array")
-    results = []
-    local_failures: List[str] = []
-    remote_failures: List[str] = []
-
-    manifest_value = plan.get("manifest")
-    if not isinstance(manifest_value, str) or not manifest_value:
-        raise PublishPlanError("Publish plan is missing the aggregate manifest path")
-    manifest_path = Path(manifest_value)
-    expected_manifest_sha = plan.get("manifest_sha256")
-    if not isinstance(expected_manifest_sha, str):
-        raise PublishPlanError("Publish plan is missing the aggregate manifest SHA256")
-    verification_mode = plan.get("manifest_verification_mode")
-    if verification_mode == "ed25519":
-        if trusted_signing_fingerprint is None:
-            raise PublishPlanError(
-                "production publish-plan validation requires an independently "
-                "trusted signing fingerprint"
-            )
-        if (
-            release_manifest_verifier_path is None
-            or trusted_release_manifest_verifier_sha256 is None
-        ):
-            raise PublishPlanError(
-                "production publish-plan validation requires the pinned native "
-                "release-manifest verifier path and reviewed SHA256"
-            )
-        signature_value = plan.get("manifest_signature")
-        public_key_value = plan.get("manifest_public_key")
-        fingerprint = plan.get("manifest_signer_fingerprint_sha256")
-        if (
-            not isinstance(signature_value, str)
-            or not signature_value
-            or not isinstance(public_key_value, str)
-            or not public_key_value
-            or not isinstance(fingerprint, str)
-            or not fingerprint
-            or plan.get("manifest_signature_algorithm") != "ed25519"
-            or plan.get("manifest_public_key_format") != "raw-ed25519-32"
-            or plan.get("manifest_signature_verified") is not True
-            or plan.get("manifest_native_verifier_protocol")
-            != "sorafs-validate-release-manifest-v1"
-        ):
-            raise PublishPlanError(
-                "Publish plan has incomplete aggregate Ed25519 verification metadata"
-            )
-        if fingerprint != trusted_signing_fingerprint:
-            raise PublishPlanError(
-                "Publish plan signer fingerprint does not match the independently "
-                "trusted signing fingerprint"
-            )
-        native_verifier = release_manifest_verifier_path.absolute()
-        if plan.get("manifest_native_verifier") != str(native_verifier):
-            raise PublishPlanError(
-                "Publish plan native verifier path does not match the independently "
-                "supplied verifier path"
-            )
-        if (
-            plan.get("manifest_native_verifier_sha256")
-            != trusted_release_manifest_verifier_sha256
-        ):
-            raise PublishPlanError(
-                "Publish plan native verifier digest does not match the independently "
-                "reviewed SHA256"
-            )
-        try:
-            verification = verify_release_manifest(
-                manifest_path,
-                Path(signature_value),
-                Path(public_key_value),
-                trusted_signing_fingerprint,
-                native_verifier,
-                trusted_release_manifest_verifier_sha256,
-            )
-        except ReleaseManifestSignatureError as exc:
-            local_failures.append(
-                f"aggregate release-manifest signature verification failed: {exc}"
-            )
-        else:
-            if verification["manifest_sha256"] != expected_manifest_sha:
-                local_failures.append(
-                    "aggregate release-manifest digest no longer matches the publish plan"
-                )
-    elif verification_mode == "development-unsigned":
-        if trusted_signing_fingerprint is not None:
-            raise PublishPlanError(
-                "Development unsigned validation cannot accept a trusted signing "
-                "fingerprint"
-            )
-        if (
-            release_manifest_verifier_path is not None
-            or trusted_release_manifest_verifier_sha256 is not None
-        ):
-            raise PublishPlanError(
-                "Development unsigned validation cannot accept native verifier inputs"
-            )
-        if not development_allow_unsigned_manifest:
-            raise PublishPlanError(
-                "unsigned publish plans are test/development-only; validation requires "
-                "development_allow_unsigned_manifest"
-            )
-        if (
-            plan.get("manifest_signature") is not None
-            or plan.get("manifest_public_key") is not None
-            or plan.get("manifest_signature_algorithm") is not None
-            or plan.get("manifest_public_key_format") is not None
-            or plan.get("manifest_signer_fingerprint_sha256") is not None
-            or plan.get("manifest_signature_verified") is not False
-            or plan.get("manifest_native_verifier_protocol") is not None
-            or plan.get("manifest_native_verifier") is not None
-            or plan.get("manifest_native_verifier_sha256") is not None
-        ):
-            raise PublishPlanError(
-                "Development unsigned publish plan contains conflicting signature metadata"
-            )
-        try:
-            manifest_payload = _read_manifest_payload(manifest_path)
-        except PublishPlanError as exc:
-            local_failures.append(str(exc))
-        else:
-            if hashlib.sha256(manifest_payload).hexdigest() != expected_manifest_sha:
-                local_failures.append(
-                    "aggregate release-manifest digest no longer matches the publish plan"
-                )
-    else:
+    if manifest_path is None or artifacts_dir is None or target_map is None:
         raise PublishPlanError(
-            "Publish plan must declare ed25519 or development-unsigned manifest verification"
+            "publish-plan validation requires independent manifest_path, "
+            "artifacts_dir, and target_map inputs"
+        )
+    plan_path = _safe_absolute_path(plan_path, "publish plan path")
+    pinned_plan, plan = _load_canonical_plan(plan_path, "publish plan")
+    expected = build_publish_plan(
+        manifest_path,
+        artifacts_dir,
+        target_map,
+        manifest_signature_path=manifest_signature_path,
+        manifest_public_key_path=manifest_public_key_path,
+        trusted_signing_fingerprint=trusted_signing_fingerprint,
+        release_manifest_verifier_path=release_manifest_verifier_path,
+        trusted_release_manifest_verifier_sha256=(
+            trusted_release_manifest_verifier_sha256
+        ),
+        development_allow_unsigned_manifest=development_allow_unsigned_manifest,
+    )
+    if canonical_json_bytes(plan) != canonical_json_bytes(expected):
+        raise PublishPlanError(
+            "publish plan does not match independently reconstructed release inputs"
         )
 
-    for entry in artifacts:
-        if not isinstance(entry, dict):
-            continue
-        source = Path(entry.get("source", ""))
-        expected_sha = entry.get("sha256")
-        expected_size = entry.get("size")
-        destination = entry.get("destination")
-        rel_path = entry.get("relative_path")
-        local_status = "ok"
-        local_error = None
-
-        if not source.exists():
-            local_status = "missing"
-            local_error = f"missing source {source}"
-            local_failures.append(local_error)
-        else:
-            size = source.stat().st_size
-            if expected_size is not None and size != expected_size:
-                local_status = "size-mismatch"
-                local_error = f"size mismatch for {source}: expected {expected_size} got {size}"
-                local_failures.append(local_error)
-            computed_sha = _sha256_file(source)
-            if expected_sha and computed_sha != expected_sha:
-                local_status = "sha-mismatch"
-                local_error = (
-                    f"sha mismatch for {source}: expected {expected_sha} computed {computed_sha}"
-                )
-                local_failures.append(local_error)
-
+    results: list[dict[str, object]] = []
+    remote_failures: list[str] = []
+    rows = plan["artifacts"]
+    assert isinstance(rows, list)
+    for row in rows:
+        assert isinstance(row, dict)
+        destination = str(row["destination"])
+        expected_size = int(row["size"])
         remote_status = "skipped"
-        remote_error = None
-        remote_size = None
-        if probe_remote and destination and destination.startswith(("http://", "https://")):
+        remote_error: str | None = None
+        remote_size: int | None = None
+        if probe_remote and destination.startswith("https://"):
             remote_size = _http_head(destination)
-            if remote_size is None:
-                remote_status = "error"
-                remote_error = f"HEAD failed for {destination}"
-                remote_failures.append(remote_error)
-            elif expected_size is not None and remote_size != expected_size:
-                remote_status = "size-mismatch"
-                remote_error = (
-                    f"remote size mismatch for {destination}: expected {expected_size} got {remote_size}"
-                )
-                remote_failures.append(remote_error)
-            else:
-                remote_status = "ok"
-        elif probe_remote and probe_command and destination:
+        elif probe_remote and probe_command:
             remote_size = _probe_with_command(probe_command, destination)
+        if probe_remote and (
+            destination.startswith("https://") or probe_command is not None
+        ):
             if remote_size is None:
                 remote_status = "error"
-                remote_error = f"probe command failed for {destination}"
-                remote_failures.append(remote_error)
-            elif expected_size is not None and remote_size != expected_size:
+                remote_error = f"remote size probe failed for {destination}"
+            elif remote_size != expected_size:
                 remote_status = "size-mismatch"
                 remote_error = (
-                    f"probe size mismatch for {destination}: expected {expected_size} got {remote_size}"
+                    f"remote size mismatch for {destination}: "
+                    f"expected {expected_size} got {remote_size}"
                 )
-                remote_failures.append(remote_error)
             else:
                 remote_status = "ok"
-
+            if remote_error is not None:
+                remote_failures.append(remote_error)
         results.append(
             {
-                "relative_path": rel_path,
+                "relative_path": row["relative_path"],
                 "destination": destination,
-                "local_status": local_status,
-                "local_error": local_error,
+                "local_status": "ok",
+                "local_error": None,
                 "remote_status": remote_status,
                 "remote_error": remote_error,
                 "remote_size": remote_size,
             }
         )
 
-    diff = None
-    if previous_plan_path:
-        with previous_plan_path.open("r", encoding="utf-8") as fh:
-            previous = json.load(fh)
-        prev_map = {a["relative_path"]: a for a in previous.get("artifacts", []) if isinstance(a, dict)}
-        curr_map = {a["relative_path"]: a for a in artifacts if isinstance(a, dict)}
-        added = sorted(set(curr_map) - set(prev_map))
-        removed = sorted(set(prev_map) - set(curr_map))
-        changed = sorted(
-            path
-            for path in set(curr_map) & set(prev_map)
-            if (
-                curr_map[path].get("sha256") != prev_map[path].get("sha256")
-                or curr_map[path].get("destination") != prev_map[path].get("destination")
-            )
+    diff: dict[str, list[str]] | None = None
+    if previous_plan_path is not None:
+        _, previous = _load_canonical_plan(
+            _safe_absolute_path(previous_plan_path, "previous publish plan path"),
+            "previous publish plan",
         )
-        diff = {"added": added, "removed": removed, "changed": changed}
+        previous_rows = previous["artifacts"]
+        assert isinstance(previous_rows, list)
+        previous_map = {
+            str(row["relative_path"]): row
+            for row in previous_rows
+            if isinstance(row, dict)
+        }
+        current_map = {
+            str(row["relative_path"]): row
+            for row in rows
+            if isinstance(row, dict)
+        }
+        diff = {
+            "added": sorted(set(current_map) - set(previous_map)),
+            "removed": sorted(set(previous_map) - set(current_map)),
+            "changed": sorted(
+                path
+                for path in set(current_map) & set(previous_map)
+                if current_map[path] != previous_map[path]
+            ),
+        }
 
-    report = {
+    try:
+        if stable_hash_path(plan_path) != pinned_plan:
+            raise PublishPlanError(
+                "publish plan path changed while validation was running"
+            )
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"publish plan became unsafe: {exc}") from exc
+    return {
         "plan": str(plan_path),
-        "generated_at": plan.get("generated_at"),
-        "status": "ok" if not local_failures and not remote_failures else "failed",
-        "local_failures": local_failures,
+        "plan_sha256": pinned_plan.sha256,
+        "generated_at": plan["generated_at"],
+        "status": "ok" if not remote_failures else "failed",
+        "local_failures": [],
         "remote_failures": remote_failures,
         "results": results,
         "diff": diff,
     }
-    return report
 
 
-def _write_report(report: Dict[str, object], output: Path) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8") as fh:
-        json.dump(report, fh, indent=2)
-        fh.write("\n")
+def _write_report(report: Mapping[str, object], output: Path) -> None:
+    try:
+        exclusive_write_bytes(
+            _safe_absolute_path(output, "publish report output"),
+            canonical_json_bytes(report),
+            mode=0o644,
+        )
+    except ReleaseArtifactError as exc:
+        raise PublishPlanError(f"failed to write publish report: {exc}") from exc
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
-    target_map = parse_target_map(args.target)
     plan = build_publish_plan(
         manifest_path=Path(args.manifest),
         artifacts_dir=Path(args.artifacts_dir),
-        target_map=target_map,
+        target_map=parse_target_map(args.target),
         manifest_signature_path=Path(args.manifest_signature)
         if args.manifest_signature
         else None,
@@ -649,6 +942,15 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         previous_plan_path=Path(args.previous_plan) if args.previous_plan else None,
         probe_remote=args.probe_remote,
         probe_command=args.probe_command,
+        manifest_path=Path(args.manifest),
+        artifacts_dir=Path(args.artifacts_dir),
+        target_map=parse_target_map(args.target),
+        manifest_signature_path=Path(args.manifest_signature)
+        if args.manifest_signature
+        else None,
+        manifest_public_key_path=Path(args.manifest_public_key)
+        if args.manifest_public_key
+        else None,
         trusted_signing_fingerprint=args.trusted_signing_fingerprint,
         release_manifest_verifier_path=Path(args.release_manifest_verifier)
         if args.release_manifest_verifier
@@ -660,99 +962,54 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     )
     if args.output:
         _write_report(report, Path(args.output))
-    print(json.dumps(report, indent=2))
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["status"] == "ok" else 1
+
+
+def _add_manifest_tuple_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--artifacts-dir", required=True)
+    parser.add_argument("--target", action="append", required=True)
+    parser.add_argument("--manifest-signature")
+    parser.add_argument("--manifest-public-key")
+    parser.add_argument("--trusted-signing-fingerprint")
+    parser.add_argument("--release-manifest-verifier")
+    parser.add_argument("--trusted-release-manifest-verifier-sha256")
+    parser.add_argument(
+        "--development-allow-unsigned-manifest",
+        action="store_true",
+        help="TEST/DEVELOPMENT ONLY; never valid for promotion",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    generate = subparsers.add_parser("generate")
+    _add_manifest_tuple_arguments(generate)
+    generate.add_argument("--output-dir", required=True)
+    generate.set_defaults(func=_cmd_generate)
 
-    gen = subparsers.add_parser("generate", help="Create publish_plan.* artefacts")
-    gen.add_argument("--manifest", required=True, help="Path to release_manifest.json")
-    gen.add_argument("--artifacts-dir", required=True, help="Directory containing release artifacts")
-    gen.add_argument(
-        "--target",
-        action="append",
-        required=True,
-        help="Publish target URI (e.g., sorafs://... or https://...). Repeat as profile=uri to target specific tracks.",
-    )
-    gen.add_argument("--output-dir", required=True, help="Directory to write plan files into")
-    gen.add_argument(
-        "--manifest-signature",
-        help="Raw 64-byte Ed25519 signature for the aggregate release manifest",
-    )
-    gen.add_argument(
-        "--manifest-public-key",
-        help="Raw 32-byte Ed25519 public key for the aggregate manifest",
-    )
-    gen.add_argument(
-        "--trusted-signing-fingerprint",
-        help="Reviewed lowercase SHA256 fingerprint of the raw Ed25519 public key",
-    )
-    gen.add_argument(
-        "--release-manifest-verifier",
-        help="Direct path to the reviewed sorafs-validate native verifier",
-    )
-    gen.add_argument(
-        "--trusted-release-manifest-verifier-sha256",
-        help="Reviewed lowercase SHA256 of the exact native verifier executable",
-    )
-    gen.add_argument(
-        "--development-allow-unsigned-manifest",
-        action="store_true",
-        help=(
-            "TEST/DEVELOPMENT ONLY: permit an unsigned aggregate manifest; "
-            "never use this mode for promotion"
-        ),
-    )
-    gen.set_defaults(func=_cmd_generate)
-
-    val = subparsers.add_parser("validate", help="Validate a publish plan (local and optional HTTP remote)")
-    val.add_argument("--plan", required=True, help="Path to publish_plan.json")
-    val.add_argument("--previous-plan", help="Optional previous plan to diff against")
-    val.add_argument("--probe-remote", action="store_true", help="Probe HTTP(S) destinations via HEAD")
-    val.add_argument(
-        "--probe-command",
-        help="Optional external probe command; use {destination} placeholder (expects JSON with size/content_length).",
-    )
-    val.add_argument("--output", help="Optional path to write the validation report JSON")
-    val.add_argument(
-        "--trusted-signing-fingerprint",
-        help=(
-            "Independently reviewed lowercase SHA256 fingerprint of the raw "
-            "Ed25519 public key; required for production validation"
-        ),
-    )
-    val.add_argument(
-        "--release-manifest-verifier",
-        help="Direct path to the reviewed sorafs-validate native verifier",
-    )
-    val.add_argument(
-        "--trusted-release-manifest-verifier-sha256",
-        help="Reviewed lowercase SHA256 of the exact native verifier executable",
-    )
-    val.add_argument(
-        "--development-allow-unsigned-manifest",
-        action="store_true",
-        help=(
-            "TEST/DEVELOPMENT ONLY: validate a plan explicitly marked "
-            "development-unsigned"
-        ),
-    )
-    val.set_defaults(func=_cmd_validate)
+    validate = subparsers.add_parser("validate")
+    validate.add_argument("--plan", required=True)
+    validate.add_argument("--previous-plan")
+    validate.add_argument("--probe-remote", action="store_true")
+    validate.add_argument("--probe-command")
+    validate.add_argument("--output")
+    _add_manifest_tuple_arguments(validate)
+    validate.set_defaults(func=_cmd_validate)
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except PublishPlanError as exc:
+    except (PublishPlanError, ReleaseArtifactError) as exc:
         print(f"publish plan error: {exc}", file=sys.stderr)
         return 1
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised via CLI
+if __name__ == "__main__":
     raise SystemExit(main())

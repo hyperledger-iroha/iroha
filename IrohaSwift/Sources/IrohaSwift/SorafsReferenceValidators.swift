@@ -5,7 +5,9 @@ public enum SorafsReferenceValidationError: Error, Equatable {
     case invalidLabel(String)
     case invalidPrivateKey(String)
     case invalidOrderbookField(String)
+    case invalidGovernanceLogNodeInput(String)
     case invalidGovernanceDagInput(String)
+    case invalidFixtureBundleInput(String)
     case unsupportedOrderbookPayloadKind(SorafsOrderbookPayloadKind)
 }
 
@@ -46,6 +48,52 @@ public enum SorafsPdpPayloadKind: UInt32, Sendable {
         case .commitment: return "commitment.to"
         case .challenge: return "challenge.to"
         case .proof: return "proof.to"
+        }
+    }
+}
+
+public enum SorafsFixtureBundlePayloadKind: UInt32, Sendable {
+    case providerAdvert = 1
+    case providerAdmissionEnvelope = 2
+    case replicationOrder = 3
+    case porChallenge = 4
+    case porProof = 5
+    case potrReceipt = 6
+    case repairEvidence = 7
+    case repairReport = 8
+    case repairTaskRecord = 9
+    case repairSlashProposal = 10
+    case repairTaskEvent = 11
+    case orderbookOrderRequest = 12
+    case orderbookOrderCancel = 13
+    case orderbookTradeEvent = 14
+    case orderbookSettlementChannel = 15
+    case orderbookSettlementReceipt = 16
+    case pdpCommitment = 17
+    case pdpChallenge = 18
+    case pdpProof = 19
+
+    public var defaultLabel: String {
+        switch self {
+        case .providerAdvert: return "provider-advert.to"
+        case .providerAdmissionEnvelope: return "provider-admission-envelope.to"
+        case .replicationOrder: return "replication-order.to"
+        case .porChallenge: return "por-challenge.to"
+        case .porProof: return "por-proof.to"
+        case .potrReceipt: return "potr-receipt.to"
+        case .repairEvidence: return "repair-evidence.to"
+        case .repairReport: return "repair-report.to"
+        case .repairTaskRecord: return "repair-task-record.to"
+        case .repairSlashProposal: return "repair-slash-proposal.to"
+        case .repairTaskEvent: return "repair-task-event.to"
+        case .orderbookOrderRequest: return "orderbook-order-request.to"
+        case .orderbookOrderCancel: return "orderbook-order-cancel.to"
+        case .orderbookTradeEvent: return "orderbook-trade-event.to"
+        case .orderbookSettlementChannel: return "orderbook-settlement-channel.to"
+        case .orderbookSettlementReceipt: return "orderbook-settlement-receipt.to"
+        case .pdpCommitment: return "pdp-commitment.to"
+        case .pdpChallenge: return "pdp-challenge.to"
+        case .pdpProof: return "pdp-proof.to"
         }
     }
 }
@@ -219,6 +267,23 @@ public struct SorafsGovernanceDagBlockInput: Sendable {
     }
 }
 
+/// One typed canonical payload supplied to heterogeneous fixture-bundle validation.
+public struct SorafsFixtureBundlePayloadInput: Sendable {
+    public let kind: SorafsFixtureBundlePayloadKind
+    public let payload: Data
+    public let label: String?
+
+    public init(
+        kind: SorafsFixtureBundlePayloadKind,
+        payload: Data,
+        label: String? = nil
+    ) {
+        self.kind = kind
+        self.payload = payload
+        self.label = label
+    }
+}
+
 public enum SorafsReferenceValidators {
     /// Canonical maximum byte length for a V1 orderbook owner account.
     public static let orderbookOwnerAccountMaxBytesV1 = 256
@@ -230,6 +295,8 @@ public enum SorafsReferenceValidators {
     public static let referenceMaxInputBytesV1 = 67_108_864
     /// Maximum UTF-8 bytes accepted for one diagnostic input label.
     public static let referenceMaxLabelBytesV1 = 1_024
+    /// Maximum payload count accepted by one fixture-bundle validation call.
+    public static let fixtureBundleMaxPayloadsV1 = 64
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isSorafsReferenceValidationAvailable
@@ -249,6 +316,14 @@ public enum SorafsReferenceValidators {
 
     public static var isGovernanceDagNativeAvailable: Bool {
         NoritoNativeBridge.shared.isSorafsReferenceGovernanceDagValidationAvailable
+    }
+
+    public static var isGovernanceLogNodeNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isSorafsReferenceGovernanceLogNodeValidationAvailable
+    }
+
+    public static var isFixtureBundleNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isSorafsReferenceFixtureBundleValidationAvailable
     }
 
     public static var isOrderbookFieldBuilderAvailable: Bool {
@@ -315,6 +390,75 @@ public enum SorafsReferenceValidators {
             kind: kind.rawValue,
             payload: payload,
             label: resolvedLabel,
+            generatedAtUnix: generatedAtUnix
+        ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return json
+    }
+
+    /// Validate a bounded heterogeneous fixture bundle and canonical cross-links.
+    public static func validateFixtureBundleJSON(
+        payloads: [SorafsFixtureBundlePayloadInput],
+        nowUnix: UInt64? = nil,
+        generatedAtUnix: UInt64 = currentEpochSeconds()
+    ) throws -> String {
+        guard (1...fixtureBundleMaxPayloadsV1).contains(payloads.count) else {
+            throw SorafsReferenceValidationError.invalidFixtureBundleInput(
+                "payloads must contain 1...\(fixtureBundleMaxPayloadsV1) entries"
+            )
+        }
+        var aggregateBytes = 0
+        var resolved: [(kind: UInt32, payload: Data, label: String)] = []
+        resolved.reserveCapacity(payloads.count)
+        for (index, input) in payloads.enumerated() {
+            guard input.payload.count <= referenceMaxInputBytesV1 else {
+                throw SorafsReferenceValidationError.invalidFixtureBundleInput(
+                    "payloads[\(index)].payload must be at most \(referenceMaxInputBytesV1) bytes"
+                )
+            }
+            let label = try validatorLabel(input.label, fallback: input.kind.defaultLabel)
+            aggregateBytes += input.payload.count + label.utf8.count
+            guard aggregateBytes <= referenceMaxInputBytesV1 else {
+                throw SorafsReferenceValidationError.invalidFixtureBundleInput(
+                    "fixture-bundle inputs exceed \(referenceMaxInputBytesV1) aggregate bytes"
+                )
+            }
+            resolved.append((input.kind.rawValue, input.payload, label))
+        }
+        guard let json = NoritoNativeBridge.shared.sorafsReferenceValidateFixtureBundle(
+            payloads: resolved,
+            nowUnix: nowUnix ?? generatedAtUnix,
+            generatedAtUnix: generatedAtUnix
+        ) else {
+            throw SorafsReferenceValidationError.bridgeUnavailable
+        }
+        return json
+    }
+
+    /// Validate one canonical signed `GovernanceLogNodeV1` against its expected node CID.
+    public static func validateGovernanceLogNodeJSON(
+        payload: Data,
+        label: String? = nil,
+        expectedNodeCid: Data,
+        generatedAtUnix: UInt64 = currentEpochSeconds()
+    ) throws -> String {
+        try requireReferencePayload(payload, "payload")
+        let resolvedLabel = try validatorLabel(label, fallback: "governance.to")
+        guard expectedNodeCid.count == governanceDagCidBytesV1 else {
+            throw SorafsReferenceValidationError.invalidGovernanceLogNodeInput(
+                "expectedNodeCid must contain exactly \(governanceDagCidBytesV1) bytes"
+            )
+        }
+        try requireReferenceAggregateBytes(
+            payload.count,
+            resolvedLabel.utf8.count,
+            expectedNodeCid.count
+        )
+        guard let json = NoritoNativeBridge.shared.sorafsReferenceValidateGovernanceLogNode(
+            payload: payload,
+            label: resolvedLabel,
+            expectedNodeCid: expectedNodeCid,
             generatedAtUnix: generatedAtUnix
         ) else {
             throw SorafsReferenceValidationError.bridgeUnavailable

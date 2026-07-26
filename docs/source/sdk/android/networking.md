@@ -29,7 +29,7 @@ SRE can audit manifest drift.
 | `ClientConfig` field | Purpose | `iroha_config` source |
 |----------------------|---------|-----------------------|
 | `baseUri()` | Torii `/v1/pipeline` root used by the HTTP client and Norito RPC helper. | `[torii]` public API URL written into the Android manifest. |
-| `sorafsGatewayUri()` | Gateway host for SoraFS fetches. | `[torii.sorafs]` (mirrors `[sorafs.discovery]`); defaults to `baseUri` when omitted. |
+| `sorafsGatewayUri()` | Gateway host for SoraFS fetches. | `[sorafs.discovery]`; defaults to `baseUri` when omitted. |
 | `requestTimeout()` | Deterministic per-request timeout. | `[torii.client.timeout_ms]` (or the platform default when absent). |
 | `defaultHeaders()` | Authorization, correlation IDs, SDK version. | `[telemetry.headers]` and operator-provided overrides. |
 | `retryPolicy()` | Submission retry behaviour. | `[torii.retry.*]` (attempt cap, base delay, retryable status codes). |

@@ -15,7 +15,7 @@ auditors share a single source of truth.
 | Provider adverts | Refresh/expiry | Providers refresh adverts every 12 h; TTL is 24 h. Payloads are signed `ProviderAdvertBodyV1` envelopes with deterministic nonce/QoS metadata. | Provider advert publishing pipelines plus the admission fixtures enforce cadence/TLV limits. Dashboards: `torii_sorafs_admission_total`, `torii_sorafs_provider_range_capability_total` (see `docs/source/sorafs/provider_advert_multisource.md`). |
 | Proof cadence | PoR/PDP windows | 1 h epochs, ≤32 samples, 10 m probe window + 2 m grace. Sora-PDP runs on all hot replicas; Sora-PoTR classifies 90 s (hot) / 5 m (warm) deadlines. | `sorafs_cli proof verify` (PoR) and PDP probe harnesses; dashboards `dashboards/grafana/sorafs_capacity_health.json` (`torii_da_pdp_bonus_micro_total`, `torii_da_potr_bonus_micro_total`). HTTP fetches must carry `Sora-PDP` / `Sora-PoTR` headers (`docs/source/soradns_gateway_content_binding.md`). |
 | Replication orders | Acceptance SLA | Orders expire if not accepted within 5 minutes, require `precommit` plus QA PoR `PASS` before completion, and every artefact lands in the GovernanceLog DAG. | `torii_sorafs_registry_orders_total`, `torii_sorafs_replication_sla_total`, and the DAG fixtures in `docs/source/sorafs_governance_dag_plan.md`. Regenerate fixtures via `cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`. |
-| Pricing & auto-renew | Billing currency & decay ladder | Charges denominated in **XOR** with USD TWAP surfaced in UX; auto-renew enabled by default with per-account spend caps. Degradation ladder: Full service → Read-only (30 d) → Reduced replicas (30 d) → Cold archive (60 d) → Tombstone. | `sorafs.node.deal_*` metrics (deal engine), dashboards `dashboards/grafana/sorafs_capacity_health.json`, docs `docs/source/sorafs/deal_engine.md` and `docs/source/sorafs/storage_capacity_marketplace.md`. |
+| Pricing & auto-renew | Billing currency & decay ladder | Charges denominated in **XOR** with USD TWAP surfaced in UX; auto-renew enabled by default with per-account spend caps. Degradation ladder: Full service → Read-only (30 d) → Reduced replicas (30 d) → Cold archive (60 d) → Tombstone. | Finalized native orderbook/reserve events and supervised hedging/billing metrics, dashboards `dashboards/grafana/sorafs_capacity_health.json`, and `docs/source/sorafs/storage_capacity_marketplace.md`. |
 | Transport | Default mode | Read-only retrieval defaults to SoraNet anonymity (entry/middle/exit relays). Direct mode requires explicit overrides in CLI/SDK. Handshake uses hybrid X25519 + Kyber (SNNet‑16) with PQ roll-out for relay identities/tickets. | `sorafs_cli fetch` / `sorafs_fetch` policy overrides, `crates/iroha_cli/src/commands/streaming.rs`, `crates/soranet_pq`, and the PQ rollout plan (`docs/source/soranet/pq_rollout_plan.md`). Dashboards flag direct-mode downgrades via `torii_stream_transport_policy_total`. |
 
 ## 1. Chunking & Proof Layout
@@ -99,11 +99,11 @@ auditors share a single source of truth.
 
 ## 5. Pricing, Auto-Renew, and Degradation Ladder
 
-- Deals denominate storage/egress charges in **XOR** and expose USD-tracking
-  metadata so UX can surface fiat equivalents (`docs/source/sorafs/deal_engine.md`).
-- Auto-renew is **enabled by default**. Clients configure caps via Norito
-  payloads (`DealTermsV1.account_cap`, `DealTermsV1.egress_cap`) and the CLI/SDK
-  surfaces them through `sorafs_cli deal terms` / `iroha app sorafs deal terms`.
+- Native orderbook, reserve/rent, and billing records denominate storage and
+  egress charges in **XOR**. Governed pricing projections expose USD-tracking
+  metadata so UX can surface fiat equivalents.
+- Auto-renew is **enabled by default**. Clients configure governed caps through
+  native signed transactions and reconcile the resulting finalized records.
 - Degradation ladder:
   1. **Full service** — healthy autopayments.
   2. **Read-only** (30 days) — replication orders freeze; clients can fetch data
@@ -124,7 +124,7 @@ auditors share a single source of truth.
   `max_peers=1` requires an explicit override recorded in adoption artefacts
   (see `docs/source/sorafs_orchestrator_rollout.md`).
 - Gateway relays must honour GAR policies for anonymised traffic. Deterministic
-  host mapping + GAR scaffolding are generated via `cargo xtask soradns-hosts`,
+  host mapping and GAR deployment artifacts are generated via `cargo xtask soradns-hosts`,
   `cargo xtask soradns-gar-template`, and `cargo xtask soradns-binding-template`.
 - Handshake: hybrid X25519 + Kyber (ML-KEM‑768) per `crates/iroha_crypto` and
   `crates/soranet_pq`. The PQ rollout plan in `docs/source/soranet/pq_rollout_plan.md`

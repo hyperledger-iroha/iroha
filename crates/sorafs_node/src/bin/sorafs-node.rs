@@ -431,24 +431,6 @@ fn render_verdict_summary(verdict: &AuditVerdictV1, outcome: &PorVerdictOutcome)
         "consecutive_failures".to_owned(),
         Value::from(outcome.consecutive_failures),
     );
-    if let Some(slash) = &outcome.slash {
-        let mut slash_map = Map::new();
-        slash_map.insert(
-            "provider_id_hex".to_owned(),
-            Value::from(hex::encode(slash.provider_id.as_bytes())),
-        );
-        slash_map.insert(
-            "manifest_digest_hex".to_owned(),
-            Value::from(hex::encode(slash.manifest_digest)),
-        );
-        slash_map.insert(
-            "penalty".to_owned(),
-            Value::from(slash.penalty.as_quantity().to_string()),
-        );
-        slash_map.insert("strikes".to_owned(), Value::from(slash.strikes));
-        slash_map.insert("reason".to_owned(), Value::from(slash.reason.clone()));
-        map.insert("slash_recommendation".to_owned(), Value::Object(slash_map));
-    }
     map.insert(
         "decided_at_unix".to_owned(),
         Value::from(verdict.decided_at),

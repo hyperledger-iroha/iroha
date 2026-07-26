@@ -22,10 +22,15 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
 > finalized chain view with complete commit provenance.
 >
 > A captured receipt does not become queryable until an authorized transaction
-> forwarder commits it. Remaining SF-14 work includes production
-> forwarding/reconciliation across that boundary, genuine live multi-provider
-> rollout evidence, and operator provisioning of the governed gateway/provider
-> key roster and reputation-weight policy. A process-local pending status or
+> forwarder commits it. Torii now builds `PotrFinalizedAdmissionReaderV1` from
+> `PotrStateFinalizedPolicySourceV1` and its council-verified admission
+> registry when the runtime signer roles are supplied. Remaining SF-14 work
+> includes production forwarding/reconciliation across that boundary, genuine
+> live multi-provider rollout evidence, deployment-owned HSM/KMS adapters for
+> the shipped role-separated runtime signer interfaces, operator provisioning
+> of the governed gateway/provider key roster and reputation-weight policy,
+> focused/workspace Rust validation, and four-peer independent
+> rotation/recovery/replay evidence. A process-local pending status or
 > cached-receipt replay path is not a valid substitute.
 > `scripts/check_sorafs_potr_rollout_evidence.py` now provides the fail-closed
 > SF-14 rollout evidence gate, and
@@ -149,6 +154,20 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
   binds the self-contained keys to the configured gateway trust anchor and the
   council-verified provider admission record. Self-advertised keys alone never
   authorize commitment.
+- Torii no longer derives a provider ML-DSA key from the gateway stream-token
+  Ed25519 seed. `PotrRuntimeSignerRolesV1` requires distinct gateway and
+  provider runtime objects and stable non-zero administrative identities, plus
+  separate reader/source/resolver identities and an exact non-zero baseline
+  anchor. Torii binds `PotrStateFinalizedPolicySourceV1` to authoritative state
+  and `PotrFinalizedAdmissionReaderV1` to the council-verified admission
+  registry. The reader resolves the council admission before signing and
+  rechecks the exact provider, policy identity/digest/sequence, finalized
+  height/hash, and envelope after both signatures. A stale, revoked,
+  unavailable, substituted, or mid-signature-changed policy fails closed.
+  Gateway output is verified before the provider HSM is invoked, and the
+  completed receipt is verified again against both governed keys. The generic
+  Torii launcher supplies no gateway/provider signer roles and fails closed
+  until the deployment injects those two independently administered providers.
 - Validation also checks schema version, non-zero manifest/provider/request
   identifiers, range and timestamp ordering, latency/status consistency,
   bounded optional notes, and canonical encoding. The authoritative receipt
@@ -157,8 +176,11 @@ summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
 ## Storage & Aggregation
 
 - **Gateway tracking:** An embedded bounded receipt tracker may support local
-  diagnostics, but it is not authoritative and is never the PoTR
-  proof-stream source.
+  diagnostics, but it is not authoritative and is never the PoTR proof-stream
+  source. It atomically persists the accepted policy identity/digest/sequence,
+  finalized cursor, provider, and admission-envelope digest before any
+  external handoff and restores that exact binding as the monotonic floor for
+  the next live admission read.
 - **Ledger identity:** The authoritative key is
   `BLAKE3("sorafs.potr.request-scope.v1\0" || manifest_digest || provider_id
   || request_id)`. A conflicting receipt for the same scope fails closed

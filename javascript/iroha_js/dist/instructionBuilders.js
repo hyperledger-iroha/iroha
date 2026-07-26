@@ -1,9 +1,11 @@
 import { Buffer } from "buffer";
 import { createHash } from "./cryptoHash.js";
+import { blake2b256 } from "./blake2b.js";
 import {
   noritoEncodeInstruction,
   noritoDecodePrivacyProofEnvelope,
   noritoEncodePrivacyProofEnvelope,
+  validateSorafsReplicationOrderPayloadV1,
 } from "./norito.js";
 import {
   canonicalizeMultihashHex,
@@ -37,6 +39,9 @@ const UINT32_MAX = 0xffff_ffff;
 const DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_AUX_BYTES = 64 * 1024;
+export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
+const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1 =
+  4 * Math.ceil(SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 / 3);
 const ZK_ACE_BACKEND = "stark/fri/sha256-goldilocks";
 const ZK_ACE_DOMAIN_TAG = "iroha:zk-ace:pq-authorization:v0";
 const ZK_ACE_ACTION_TRANSFER = "transparent_asset_transfer";
@@ -304,6 +309,23 @@ function asQuantity(value, name) {
       name,
     );
   }
+}
+
+function asPositiveQuantity(value, name) {
+  const canonical = asQuantity(value, name);
+  if (NumericV1.decodeQuantityJson(canonical).mantissa <= 0n) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be greater than zero`,
+      name,
+    );
+  }
+  return canonical;
+}
+
+function normalizeAssetLockId(value, name) {
+  const lockId = assertExactNonBlankString(value, name);
+  return canonicalHashLiteral(blake2b256(Buffer.from(lockId, "utf8")));
 }
 
 function asPositiveProofScalarQuantity(value, name) {
@@ -10589,6 +10611,188 @@ function normalizeAccountIds(values, name, { allowEmpty = false } = {}) {
   return values.map((account, index) =>
     normalizeAccountId(account, `${name}[${index}]`),
   );
+}
+
+function normalizeSorafsReplicationIdentifier(value, name) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must contain exactly 64 lowercase hexadecimal characters`,
+      name,
+    );
+  }
+  if (/^0{64}$/u.test(value)) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must not be the zero identifier`,
+      name,
+    );
+  }
+  return value;
+}
+
+function normalizeSorafsReplicationPayload(value, name) {
+  if (
+    typeof value === "string" &&
+    value.length > SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1
+  ) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} encoded form exceeds the ${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1}-byte decoded limit`,
+      name,
+    );
+  }
+  const canonical = normalizeOptionalExactBase64String(value, name);
+  const decoded = Buffer.from(canonical, "base64");
+  const decodedLength = decoded.length;
+  if (decodedLength > SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} exceeds the ${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1}-byte decoded limit`,
+      name,
+    );
+  }
+  return { canonical, decoded };
+}
+
+/**
+ * Build the canonical native `IssueReplicationOrder` instruction.
+ *
+ * The returned object uses the Rust/Norito field names. `orderPayload` must be
+ * exact standard base64 containing between 1 byte and 1 MiB.
+ *
+ * @param {{orderId: string, orderPayload: string, issuedEpoch: number|string|bigint, deadlineEpoch: number|string|bigint}} options
+ * @returns {{IssueReplicationOrder: {order_id: string, order_payload: string, issued_epoch: number, deadline_epoch: number}}}
+ */
+export function buildIssueReplicationOrderInstruction(options) {
+  const source = assertPlainObject(options, "issueReplicationOrder");
+  assertAllowedFields(
+    source,
+    new Set(["orderId", "orderPayload", "issuedEpoch", "deadlineEpoch"]),
+    "issueReplicationOrder",
+  );
+  const issuedEpoch = asNonNegativeInteger(
+    source.issuedEpoch,
+    "issueReplicationOrder.issuedEpoch",
+  );
+  const deadlineEpoch = asNonNegativeInteger(
+    source.deadlineEpoch,
+    "issueReplicationOrder.deadlineEpoch",
+  );
+  if (deadlineEpoch <= issuedEpoch) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      "issueReplicationOrder.deadlineEpoch must be greater than issuedEpoch",
+      "issueReplicationOrder.deadlineEpoch",
+    );
+  }
+  const orderId = normalizeSorafsReplicationIdentifier(
+    source.orderId,
+    "issueReplicationOrder.orderId",
+  );
+  const { canonical: orderPayload, decoded: orderPayloadBytes } =
+    normalizeSorafsReplicationPayload(
+      source.orderPayload,
+      "issueReplicationOrder.orderPayload",
+    );
+  validateSorafsReplicationOrderPayloadV1(orderPayloadBytes, orderId);
+  return {
+    IssueReplicationOrder: {
+      order_id: orderId,
+      order_payload: orderPayload,
+      issued_epoch: issuedEpoch,
+      deadline_epoch: deadlineEpoch,
+    },
+  };
+}
+
+/**
+ * Build the canonical provider-specific `CompleteReplicationOrder` instruction.
+ *
+ * @param {{orderId: string, providerId: string, completionEpoch: number|string|bigint}} options
+ * @returns {{CompleteReplicationOrder: {order_id: string, provider_id: string, completion_epoch: number}}}
+ */
+export function buildCompleteReplicationOrderInstruction(options) {
+  const source = assertPlainObject(options, "completeReplicationOrder");
+  assertAllowedFields(
+    source,
+    new Set(["orderId", "providerId", "completionEpoch"]),
+    "completeReplicationOrder",
+  );
+  return {
+    CompleteReplicationOrder: {
+      order_id: normalizeSorafsReplicationIdentifier(
+        source.orderId,
+        "completeReplicationOrder.orderId",
+      ),
+      provider_id: normalizeSorafsReplicationIdentifier(
+        source.providerId,
+        "completeReplicationOrder.providerId",
+      ),
+      completion_epoch: asNonNegativeInteger(
+        source.completionEpoch,
+        "completeReplicationOrder.completionEpoch",
+      ),
+    },
+  };
+}
+
+/**
+ * Build the canonical native `ExpireReplicationOrder` instruction.
+ *
+ * @param {{orderId: string, expirationEpoch: number|string|bigint}} options
+ * @returns {{ExpireReplicationOrder: {order_id: string, expiration_epoch: number}}}
+ */
+export function buildExpireReplicationOrderInstruction(options) {
+  const source = assertPlainObject(options, "expireReplicationOrder");
+  assertAllowedFields(
+    source,
+    new Set(["orderId", "expirationEpoch"]),
+    "expireReplicationOrder",
+  );
+  return {
+    ExpireReplicationOrder: {
+      order_id: normalizeSorafsReplicationIdentifier(
+        source.orderId,
+        "expireReplicationOrder.orderId",
+      ),
+      expiration_epoch: asNonNegativeInteger(
+        source.expirationEpoch,
+        "expireReplicationOrder.expirationEpoch",
+      ),
+    },
+  };
+}
+
+/**
+ * Build the canonical compare-and-cancel `CancelAssetLock` instruction.
+ *
+ * `lockId` is hashed with the native Blake2b-256 escrow-id derivation. The
+ * expected remaining amount is mandatory, positive, and encoded using the
+ * exact canonical Quantity spelling observed in finalized ledger state.
+ *
+ * @param {{lockId: string, expectedRemainingAmount: KotodamaQuantity|string|bigint}} options
+ * @returns {{CancelAssetLock: {escrow_id: string, expected_remaining_amount: string}}}
+ */
+export function buildCancelAssetLockInstruction(options) {
+  const source = assertPlainObject(options, "cancelAssetLock");
+  assertAllowedFields(
+    source,
+    new Set(["lockId", "expectedRemainingAmount"]),
+    "cancelAssetLock",
+  );
+  return {
+    CancelAssetLock: {
+      escrow_id: normalizeAssetLockId(
+        source.lockId,
+        "cancelAssetLock.lockId",
+      ),
+      expected_remaining_amount: asPositiveQuantity(
+        source.expectedRemainingAmount,
+        "cancelAssetLock.expectedRemainingAmount",
+      ),
+    },
+  };
 }
 
 /**

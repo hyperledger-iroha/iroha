@@ -16,7 +16,7 @@ This note summarises the authorization and abuse controls around SoraFS control-
   with `GrantPermission`/`RevokePermission`. Deleted
   `RepairWorkerSignaturePayloadV1` bodies are not accepted as a compatibility
   format, and Torii never injects an authority into an unsigned request.
-- The SoraFS storage pin API (`/v1/sorafs/storage/pin`) requires a matching approved paid pin registry record for the manifest digest, chunk profile, content length, policy, chunk plan digest, and fee payer. The recorded fee asset, treasury, and amount are treated as the committed on-chain receipt, so later governance pricing or treasury changes do not invalidate an already-paid manifest. It no longer treats bearer tokens or CIDR allow-lists as the source of admission authority; quota limits still apply before ingest.
+- V1 exposes no public storage-ingest API. `POST /v1/sorafs/pin/register` accepts only a canonical caller-signed transaction; after finality, a provider-internal durable outbox may ingest the payload only when the approved manifest, exact finalized height/hash, configured provider identity, and committed replication assignment all agree. Idempotency and dead-letter identities are derived from those committed fields, never from caller-selected HTTP metadata.
 - Local moderation quarantine review, release, and encrypted object store/read endpoints require canonical request signatures from accounts holding the `sorafs_moderation_operator` role. Keep this as a dedicated empty role for the Torii API gate; do not attach broad ledger permissions to it unless a separate governance change requires them.
 - SoraNet privacy ingest endpoints (`/v1/soranet/privacy/{event,share}`) require `X-SoraNet-Privacy-Token` (or `X-API-Token`), a non-empty CIDR allow-list, and the token/burst limits under `torii.soranet_privacy_ingest`; requests outside the namespace or over budget are rejected before metrics ingestion.
 
@@ -28,16 +28,11 @@ This note summarises the authorization and abuse controls around SoraFS control-
 
 ## Torii ingress guards
 
-- `sorafs.storage.pin`: legacy token and CIDR fields remain parseable for old configs, but storage pin admission is paid-registry based. Keep operational rate limits enabled so a valid paid pin cannot be replayed into an unbounded local ingest burst.
+- Storage ingest is not an ingress route in V1. Reject any deployment or generated OpenAPI/catalog that reintroduces a public POST upload path. Only the supervised provider worker consumes finalized ledger state and its durable outbox; ordinary HTTP traffic cannot alter storage bytes, quota reservations, or provider-keyed metadata.
 - `torii.soranet_privacy_ingest`: disabled by default; enabling requires a token list and CIDR scope (empty list denies). The rate limiter uses `rate_per_sec`/`burst`, keyed by token/IP, and emits `soranet_privacy_ingest_reject_total{endpoint,reason}` on rejects.
 - Sample configuration:
 
 ```toml
-[sorafs.storage.pin.rate_limit]
-max_requests = 30
-window = "60s"
-ban = "5m"
-
 [torii.soranet_privacy_ingest]
 enabled = true
 require_token = true

@@ -1,5 +1,9 @@
-# Canonicalize a real baseline/appeal/hold precedence probe. No claim is synthesized.
+# Exercise baseline/appeal/hold precedence with a non-production fixture.
 --kind precedence
---probe-artifact /runtime/sorafs/gateway-compliance/probes/precedence.json
+--probe-artifact scripts/examples/fixtures/gateway_compliance/precedence.json
 --out artifacts/sorafs_gateway/precedence-canary.json
---now-unix 1800100000
+--deployment-id sorafs-gateway-release-42
+--environment production
+--generated-at-unix 1800699940
+--now-unix 1800700000
+--non-production-fixture
