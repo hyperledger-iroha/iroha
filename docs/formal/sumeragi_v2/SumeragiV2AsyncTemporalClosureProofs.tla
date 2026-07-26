@@ -10,10 +10,11 @@ The rank, starvation, and complete indexed progress-witness preservation
 obligations are proved in the lower closure modules.  In particular, the
 Decision and historical locked-body witnesses now survive every runner,
 non-runner, crash, restart, and replay arm before projecting to the open
-progress kernel.  Timeout/view progress and locked-body reproposal are not
-independent scheduler debts: both admit Decision as a terminal outcome and
-are proved below from the same responsive-Decision convergence.  Rotating
-leader progress is reduced to the exact adequate-leader service kernel,
+progress kernel.  Timeout/view progress is the first explicit temporal leaf.
+Locked-body reproposal consumes that leaf through the direct retained-lock
+reduction and no longer closes by responsive-Decision subsumption.  Rotating
+leader progress is reduced separately to the exact adequate-leader service
+kernel,
 application completion is reduced to the exact Decision-stage service
 pipeline retained by the final witness layer.  Height productivity is closed
 by the exact tick-blocked Runtime proof: weak fairness returns every undecided
@@ -103,17 +104,24 @@ THEOREM AsyncTemporalClosureRotatingLeaderProgressObligation ==
 BY AdequateLeaderServiceKernelObligation,
    AdequateLeaderServiceKernelSuppliesRotatingLeaderProgress
 
-THEOREM AsyncTemporalClosureTimeoutViewProgressObligation ==
+AsyncTemporalClosureTimeoutViewProgressObligation ==
   \A initialContext:
     TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))
-BY AsyncTemporalClosureRotatingLeaderProgressObligation,
-   RotatingLeaderProgressPropertyImpliesTimeoutViewProgressProperty
 
-THEOREM AsyncTemporalClosureLockedBodyReproposalProgressObligation ==
+LockedBodyDirectClosureResidualProperty(specification) ==
+  /\ TimeoutViewProgressProperty(specification)
+  /\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(specification)
+  /\ RetainedLockLeaderTurnProducerOriginProperty(specification)
+  /\ RetainedLockRankHandoffProperty(specification)
+
+THEOREM AsyncTemporalClosureLockedBodyReproposalProgressReduction ==
   \A initialContext:
-    LockedBodyReproposalProgressProperty(AsyncLiveSpecAt(initialContext))
-BY AsyncTemporalClosureRotatingLeaderProgressObligation,
-   RotatingLeaderProgressClosesLockedBodyReproposal
+    LockedBodyDirectClosureResidualProperty(
+      AsyncLiveSpecAt(initialContext))
+      => LockedBodyReproposalProgressProperty(
+           AsyncLiveSpecAt(initialContext))
+BY DirectRetainedLockDecompositionClosesLockedBodyReproposal
+   DEF LockedBodyDirectClosureResidualProperty
 
 THEOREM ExactDecisionOffSchedulerResidualConvergenceObligation ==
   \A initialContext:

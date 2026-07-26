@@ -1077,7 +1077,7 @@ increase of 18. Rejecting replay of a proposal superseded by a same-round lock
 adds one exact reducer regression. Preserving that proposal's exact tag, round,
 and subject through runner startup adds one exact runner regression. Two
 cross-platform lifecycle V3 crash regressions cover state replacement before
-directory sync and root replacement before predecessor cleanup. The current inventory therefore contains 727 tests across 38 modules.
+directory sync and root replacement before predecessor cleanup. The current inventory therefore contains 732 tests across 38 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 81 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1152,7 +1152,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`53c85b2ca35797cf17b6939dbd1cc6d3a5e7653ccf0e7b37941c4bf79339ed96`.
+`e4f9c69b5465ae3203d289394f490b4d98adb895dae8a6e0362092d7549a7169`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1273,7 +1273,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
-727-test inventory, the pinned harness lock and resolved toolchain, the formal
+732-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

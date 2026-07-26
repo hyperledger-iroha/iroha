@@ -11845,22 +11845,22 @@ pub(super) mod tests {
             routes.mark_reply_unwritable_while_delivery_active(&expected_route),
             "the old route may drain while its admitted write still owns a flush"
         );
-        let successor_route = routes.mint_via(peer.clone(), hub_b);
-        let successor_message = certified_sidecar_generation_hint(&service.local_peer, &peer, 21);
-        let successor = certified_sidecar_reply_control_fanout(
+        let alternate_route = routes.mint_via(peer.clone(), hub_b);
+        let alternate_message = certified_sidecar_generation_hint(&service.local_peer, &peer, 21);
+        let alternate = certified_sidecar_reply_control_fanout(
             service.exact_output_scope(),
             &peer,
-            successor_message.clone(),
-            NetworkReplyRoutes::try_from_route(successor_route.clone())
-                .expect("the distinct successor has one live reply route"),
+            alternate_message.clone(),
+            NetworkReplyRoutes::try_from_route(alternate_route.clone())
+                .expect("the alternate source attempt has one live reply route"),
         );
         assert_eq!(
-            pending.can_enqueue(&successor),
+            pending.can_enqueue(&alternate),
             Ok(false),
             "a pending old writer flush cannot be replaced"
         );
         assert_eq!(
-            pending.enqueue(successor),
+            pending.enqueue(alternate),
             Ok(ExactFanoutOwnership::SourceRetained)
         );
         assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
@@ -11881,15 +11881,15 @@ pub(super) mod tests {
         assert!(pending.fanouts.is_empty());
         assert!(pending.admitted_sidecar_chunks.is_empty());
 
-        let successor = certified_sidecar_reply_control_fanout(
+        let alternate = certified_sidecar_reply_control_fanout(
             service.exact_output_scope(),
             &peer,
-            successor_message,
-            NetworkReplyRoutes::try_from_route(successor_route)
-                .expect("the retained lane successor keeps its exact route"),
+            alternate_message,
+            NetworkReplyRoutes::try_from_route(alternate_route)
+                .expect("the retained alternate control keeps its exact route"),
         );
-        assert_eq!(pending.can_enqueue(&successor), Ok(true));
-        assert_eq!(pending.enqueue(successor), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(pending.can_enqueue(&alternate), Ok(true));
+        assert_eq!(pending.enqueue(alternate), Ok(ExactFanoutOwnership::Owned));
     }
 
     #[test]
@@ -11958,7 +11958,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn writable_responder_control_source_retains_one_distinct_successor() {
+    fn writable_responder_control_source_retains_one_distinct_pending_control() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let scope = service.exact_output_scope();
@@ -12011,7 +12011,7 @@ pub(super) mod tests {
                 } else {
                     ExactFanoutOwnership::SourceRetained
                 }),
-                "one distinct successor remains owned by upstream lane work"
+                "one distinct pending control remains owned by upstream lane work"
             );
             assert_eq!(
                 pending.fanouts.len(),
@@ -15080,8 +15080,8 @@ pub(super) mod tests {
         assert!(
             pending
                 .can_enqueue_owned_reply_transfer(reconnect())
-                .expect("terminal route refresh preflight observes no new reservation"),
-            "a terminal source route refresh must fit even when shared capacity is full"
+                .expect("terminal source reattachment preflight observes no new reservation"),
+            "a terminal source reattachment must fit even when shared capacity is full"
         );
         assert_eq!(
             pending
