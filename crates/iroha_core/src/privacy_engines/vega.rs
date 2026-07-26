@@ -14,8 +14,13 @@ use iroha_data_model::privacy::{
     VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
     VegaExistingCredentialStatementV1,
 };
-use iroha_zkp_halo2::vega::{VegaFieldError, VegaMdlFigure9ErrorV1, VegaT256ScalarV1};
+use iroha_zkp_halo2::vega::{
+    VegaFieldError, VegaMdlFigure9ErrorV1, VegaMdlProofContextV1, VegaMdlProofErrorV1,
+    VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1, VegaT256ScalarV1,
+    prove_vega_mdl_figure9_v1, verify_vega_mdl_figure9_v1,
+};
 use p256::{EncodedPoint, PublicKey, elliptic_curve::sec1::ToEncodedPoint};
+use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{Date, Month, OffsetDateTime};
@@ -220,6 +225,9 @@ pub enum VegaMdlError {
     /// The witness is not the one released exact deterministic-CBOR profile.
     #[error("Vega witness is not the released exact Figure 9 encoding")]
     InvalidClosedProfileEncoding,
+    /// Canonical proof construction, decoding, or verification failed.
+    #[error(transparent)]
+    Proof(#[from] VegaMdlProofErrorV1),
 }
 
 impl From<cbor::CborError> for VegaMdlError {
@@ -276,6 +284,21 @@ impl<'a> VegaMdlConsensusBindingV1<'a> {
             verifier_digest: *context.verifier_digest.as_bytes(),
             statement_schema_digest: *context.statement_schema_digest.as_bytes(),
             engine_manifest_digest: *context.engine_manifest_digest.as_bytes(),
+        }
+    }
+
+    /// Borrow the exact consensus frame used by the native proof transcript.
+    #[must_use]
+    pub const fn proof_context(&self) -> VegaMdlProofContextV1<'a> {
+        VegaMdlProofContextV1 {
+            chain_id: self.chain_id,
+            genesis_hash: self.genesis_hash,
+            action_index: self.action_index,
+            parameter_id: self.parameter_id,
+            parameter_digest: self.parameter_digest,
+            verifier_digest: self.verifier_digest,
+            statement_schema_digest: self.statement_schema_digest,
+            engine_manifest_digest: self.engine_manifest_digest,
         }
     }
 
@@ -393,6 +416,78 @@ impl VegaMdlPublicInputsV1 {
     pub const fn as_array(&self) -> &[VegaT256ScalarV1; VEGA_MDL_PUBLIC_INPUT_COUNT_V1] {
         &self.elements
     }
+}
+
+struct CoreVegaRandomSource<'a, R>(&'a mut R);
+
+impl<R: RngCore + CryptoRng> VegaRandomSourceV1 for CoreVegaRandomSource<'_, R> {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1> {
+        self.0
+            .try_fill_bytes(destination)
+            .map_err(|_| VegaRandomSourceErrorV1::Unavailable)
+    }
+}
+
+/// Preflight and prove the complete closed Figure 9 mDL relation.
+///
+/// The public statement is checked against the independently supplied
+/// consensus binding and trusted block date before private parsing. The same
+/// typed statement and binding are then passed to the circuit and
+/// Fiat--Shamir transcript; native preflight is never accepted as a substitute
+/// for the proof relation.
+///
+/// # Errors
+///
+/// Fails closed on malformed consensus context, a stale or malformed
+/// credential, invalid ES256 authentication, random-source failure, an
+/// unsatisfied circuit, or proof-system failure.
+pub fn prove_mdl_figure9_v1<R: RngCore + CryptoRng>(
+    statement: &VegaExistingCredentialStatementV1,
+    binding: &VegaMdlConsensusBindingV1<'_>,
+    trusted_block_timestamp_ms: u64,
+    witness: VegaMdlWitnessV1,
+    config: VegaMdlProverConfigV1,
+    random: &mut R,
+) -> Result<Vec<u8>, VegaMdlError> {
+    let validated = validate_mdl_witness(statement, binding, trusted_block_timestamp_ms, witness)?;
+    let circuit_witness = validated.circuit_witness()?;
+    let mut random_source = CoreVegaRandomSource(random);
+    prove_vega_mdl_figure9_v1(
+        &binding.proof_context(),
+        validated.public_inputs().as_array(),
+        &circuit_witness,
+        config,
+        &mut random_source,
+    )
+    .map_err(VegaMdlError::from)
+}
+
+/// Verify one canonical Figure 9 proof against consensus and trusted time.
+///
+/// Verification independently reconstructs the fourteen typed public inputs
+/// and the device-authentication binding digest. It never accepts prover-side
+/// preflight results or caller-supplied lookup data.
+///
+/// # Errors
+///
+/// Fails closed on a context mismatch, invalid trusted date, device-binding
+/// mismatch, malformed proof encoding, or failed proof equations.
+pub fn verify_mdl_figure9_v1(
+    statement: &VegaExistingCredentialStatementV1,
+    binding: &VegaMdlConsensusBindingV1<'_>,
+    trusted_block_timestamp_ms: u64,
+    proof: &[u8],
+) -> Result<(), VegaMdlError> {
+    binding.validate(statement)?;
+    validate_trusted_presentation_date_v1(statement, trusted_block_timestamp_ms)?;
+    if derive_device_authentication_digest_v1(statement, binding)?
+        != statement.device_authentication_digest
+    {
+        return Err(VegaMdlError::DeviceAuthenticationDigestMismatch);
+    }
+    let public_inputs = VegaMdlPublicInputsV1::from_statement(statement)?;
+    verify_vega_mdl_figure9_v1(&binding.proof_context(), public_inputs.as_array(), proof)
+        .map_err(VegaMdlError::from)
 }
 
 /// Construct the exact length-delimited device-authentication consensus frame.

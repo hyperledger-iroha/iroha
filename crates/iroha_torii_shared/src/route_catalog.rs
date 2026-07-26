@@ -2674,6 +2674,9 @@ pub mod runtime_governance {
     /// Read node capability metadata.
     pub const NODE_CAPABILITIES: RouteDescriptor =
         public_get("node.capabilities", "/v1/node/capabilities");
+    /// Read the authoritative committed privacy capability snapshot.
+    pub const PRIVACY_CAPABILITIES: RouteDescriptor =
+        public_get("privacy.capabilities", "/v1/privacy/capabilities");
     /// Read the latest query-projection checkpoint.
     pub const NODE_PROJECTION_CHECKPOINT: RouteDescriptor = public_get(
         "node.query_projection.checkpoint",
@@ -2884,6 +2887,7 @@ pub mod runtime_governance {
         RUNTIME_ABI_HASH,
         RUNTIME_METRICS,
         NODE_CAPABILITIES,
+        PRIVACY_CAPABILITIES,
         NODE_PROJECTION_CHECKPOINT,
         NODE_PROJECTION_CHECKPOINT_PLAN,
         NODE_PROJECTION_CHECKPOINT_PUBLISH,
@@ -4448,6 +4452,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::RUNTIME_ABI_HASH,
     runtime_governance::RUNTIME_METRICS,
     runtime_governance::NODE_CAPABILITIES,
+    runtime_governance::PRIVACY_CAPABILITIES,
     runtime_governance::NODE_PROJECTION_CHECKPOINT,
     runtime_governance::NODE_PROJECTION_CHECKPOINT_PLAN,
     runtime_governance::NODE_PROJECTION_CHECKPOINT_PUBLISH,
@@ -4998,6 +5003,30 @@ mod tests {
                 "retired route {retired} leaked into the canonical catalog"
             );
         }
+    }
+
+    #[test]
+    fn canonical_catalog_exposes_only_the_authoritative_privacy_snapshot_route() {
+        let privacy_routes = CATALOGED_ROUTES
+            .iter()
+            .filter(|route| route.path().contains("/privacy/"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            privacy_routes,
+            vec![&runtime_governance::PRIVACY_CAPABILITIES]
+        );
+        assert_eq!(
+            runtime_governance::PRIVACY_CAPABILITIES.path(),
+            "/v1/privacy/capabilities"
+        );
+        assert_eq!(
+            runtime_governance::PRIVACY_CAPABILITIES.method(),
+            HttpMethod::Get
+        );
+        assert_eq!(
+            runtime_governance::PRIVACY_CAPABILITIES.stable_route_id(),
+            "privacy.capabilities"
+        );
     }
 
     #[test]

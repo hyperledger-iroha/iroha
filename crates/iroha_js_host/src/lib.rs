@@ -14154,9 +14154,7 @@ fn privacy_request_has_invalid_catalog_shape(request: &PrivacyProofRequestV1) ->
         || !privacy_sdk_entrypoint_is_portable(&request.entrypoint)
 }
 
-fn privacy_request_has_exposed_readiness_claim_text_field(
-    request: &PrivacyProofRequestV1,
-) -> bool {
+fn privacy_request_has_exposed_readiness_claim_text_field(request: &PrivacyProofRequestV1) -> bool {
     privacy_request_text_fields(request)
         .iter()
         .any(|field| privacy_exposed_label_claims_production_readiness(field))

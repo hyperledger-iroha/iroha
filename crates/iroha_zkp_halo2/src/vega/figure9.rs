@@ -344,8 +344,153 @@ fn validate_profile_encoding(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+
+    const ISSUER_X: &str = "df666ab5a8f2c65017756b27cabae13b4b8e3864c5a4182884c4872920f43364";
+    const ISSUER_Y: &str = "b2470a2618899b3bc06b6e6d356a68d7eefcc120c828c628edbeb4352068b6e7";
+    const DEVICE_X: &str = "864145351e998d7aaab002ed334edf912fb26a0a699c704fdde71a9ee43867f8";
+    const DEVICE_Y: &str = "88d8642588166c08f40726875227b8c74dc459d322055f7902f2f05eb724dc6d";
+    const DEVICE_DIGEST: &str = "de99d281426b98f14f930f795f2a94263542621674bac0818fbda34718a6450e";
+    const DEVICE_R: &str = "0d9d54525b87cd31f9ecc122fd40b0f6dcb094db325ed2632f304797b3e89a5a";
+    const DEVICE_S_INVERSE: &str =
+        "bae1741e8d463d4c2127b7fccd7b3bc12d7f5e64c73fcf934a26f7deb53ba23b";
+    const BASELINE_BIRTH_DIGEST: &str =
+        "367ab450ea6746eb0eace42be70947e253d054fab10cc106d48f5de4db629951";
+    const BASELINE_ISSUER_R: &str =
+        "5f3ae8409f2db3f2ec0e30e1e80e1d9c1a43080eb88d37a46daba02249a06905";
+    const BASELINE_ISSUER_S_INVERSE: &str =
+        "6d916194a7bae7a44dae93513631a521200220e6ade5c756c931db53b10f1cb9";
+    const BIRTHDAY_EXACT_BIRTH_DIGEST: &str =
+        "3f12cd2ca9ab70fb3790ad6be00e2dc34b04bf8840ecc699218ec07025cf51bf";
+    const BIRTHDAY_EXACT_ISSUER_R: &str =
+        "22277179a54a13c3881d02401b0d4c921ec54a060e5a3f43d8971ddee5d5b858";
+    const BIRTHDAY_EXACT_ISSUER_S_INVERSE: &str =
+        "7566b512e04f5ea2154fde1f185ff1eb2b0d4e204ffe3d424a1292a3abc16a27";
+    const UNDERAGE_BIRTH_DIGEST: &str =
+        "43a3c93a26394ff5c01cbe2eb70a22f6de08a7dcb1e7198444c579da1099af0e";
+    const UNDERAGE_ISSUER_R: &str =
+        "e26ad0bcc6479037e69059dcf7cc721be61d7375e8077214f839ddbb20a517ee";
+    const UNDERAGE_ISSUER_S_INVERSE: &str =
+        "8ec3e8ebdf829bea6b594311521eb0fdbdf3783eeb697070d20baf1d53363798";
+    const EXPIRY_EXACT_ISSUER_R: &str =
+        "16dc3175efc6a7bbebc57d38958205f4628ba2fbd21a0acd4b22ff3dba0b0c60";
+    const EXPIRY_EXACT_ISSUER_S_INVERSE: &str =
+        "b5277f18cbc2e334b0b41a41214087f9909ef0b8a1fbd9c03f99a2dcb514e5dc";
+    const EXPIRY_NEXT_ISSUER_R: &str =
+        "25ed1214e1596916aed9e6f15b53a780118b469359de088eac63608655237e90";
+    const EXPIRY_NEXT_ISSUER_S_INVERSE: &str =
+        "9ea68d5750396687f671c18d5ae82d8ffd98789fd06daac57359ec2022b2b08b";
+    const FUTURE_VALID_FROM_ISSUER_R: &str =
+        "955e099cd9fd81cf01ac901e3ad83b7de663539755bb0e4094b12810983e6d3e";
+    const FUTURE_VALID_FROM_ISSUER_S_INVERSE: &str =
+        "64c0b480152b088da99f564dbbb7ef876bc26cffa0d5d8ce39db3e53fca9816d";
+    const SIGNED_AFTER_VALID_FROM_ISSUER_R: &str =
+        "c544f2c2e94236f2b6ab81ae61e5f0b7ee89a1af8a08d730c9e26a9c16537122";
+    const SIGNED_AFTER_VALID_FROM_ISSUER_S_INVERSE: &str =
+        "b63409e4735522039616beda2651614d3f616b4a9205598677075e9418f5e482";
+
+    #[derive(Clone)]
+    pub(crate) struct SignedFixture {
+        pub(crate) public: [Scalar; VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1],
+        pub(crate) issuer: Vec<u8>,
+        pub(crate) birth: Vec<u8>,
+        pub(crate) issuer_r: [u8; 32],
+        pub(crate) issuer_s_inverse: [u8; 32],
+        pub(crate) device_r: [u8; 32],
+        pub(crate) device_s_inverse: [u8; 32],
+    }
+
+    impl SignedFixture {
+        pub(crate) fn witness(&self) -> VegaMdlFigure9WitnessV1<'_> {
+            VegaMdlFigure9WitnessV1::new(
+                &self.issuer,
+                &self.birth,
+                &self.issuer_r,
+                &self.issuer_s_inverse,
+                &self.device_r,
+                &self.device_s_inverse,
+            )
+            .expect("closed signed fixture")
+        }
+    }
+
+    fn hex32(value: &str) -> [u8; 32] {
+        hex::decode(value)
+            .expect("hex")
+            .try_into()
+            .expect("32 bytes")
+    }
+
+    pub(crate) fn baseline_signed_fixture() -> SignedFixture {
+        let mut issuer = FIGURE9_LAYOUT.issuer_template.clone();
+        let birth = FIGURE9_LAYOUT.birth_template.clone();
+        issuer[FIGURE9_LAYOUT.issuer_birth_digest.clone()]
+            .copy_from_slice(&hex32(BASELINE_BIRTH_DIGEST));
+        issuer[FIGURE9_LAYOUT.issuer_device_x.clone()].copy_from_slice(&hex32(DEVICE_X));
+        issuer[FIGURE9_LAYOUT.issuer_device_y.clone()].copy_from_slice(&hex32(DEVICE_Y));
+
+        let issuer_x = Scalar::from_be_bytes_exact(hex32(ISSUER_X)).expect("canonical issuer x");
+        let issuer_y = Scalar::from_be_bytes_exact(hex32(ISSUER_Y)).expect("canonical issuer y");
+        let digest = hex32(DEVICE_DIGEST);
+        let digest_words = digest
+            .chunks_exact(4)
+            .map(|word| {
+                Scalar::from_u64(u64::from(u32::from_be_bytes(
+                    word.try_into().expect("word"),
+                )))
+            })
+            .collect::<Vec<_>>();
+        let public = core::array::from_fn(|index| match index {
+            0 => issuer_x,
+            1 => issuer_y,
+            2..=9 => digest_words[index - 2],
+            10 => Scalar::from_u64(2026),
+            11 => Scalar::from_u64(7),
+            12 => Scalar::from_u64(26),
+            13 => Scalar::from_u64(18),
+            _ => unreachable!("14 public inputs"),
+        });
+        SignedFixture {
+            public,
+            issuer,
+            birth,
+            issuer_r: hex32(BASELINE_ISSUER_R),
+            issuer_s_inverse: hex32(BASELINE_ISSUER_S_INVERSE),
+            device_r: hex32(DEVICE_R),
+            device_s_inverse: hex32(DEVICE_S_INVERSE),
+        }
+    }
+
+    fn signed_variant(
+        birth_date: Option<(&[u8; 10], &str)>,
+        signed: Option<&[u8; 20]>,
+        valid_from: Option<&[u8; 20]>,
+        valid_until: Option<&[u8; 20]>,
+        issuer_r: &str,
+        issuer_s_inverse: &str,
+    ) -> SignedFixture {
+        let mut fixture = baseline_signed_fixture();
+        if let Some((birth_date, birth_digest)) = birth_date {
+            fixture.birth[FIGURE9_LAYOUT.birth_date.clone()].copy_from_slice(birth_date);
+            fixture.issuer[FIGURE9_LAYOUT.issuer_birth_digest.clone()]
+                .copy_from_slice(&hex32(birth_digest));
+        }
+        if let Some(value) = signed {
+            fixture.issuer[FIGURE9_LAYOUT.issuer_signed_datetime.clone()].copy_from_slice(value);
+        }
+        if let Some(value) = valid_from {
+            fixture.issuer[FIGURE9_LAYOUT.issuer_valid_from_datetime.clone()]
+                .copy_from_slice(value);
+        }
+        if let Some(value) = valid_until {
+            fixture.issuer[FIGURE9_LAYOUT.issuer_valid_until_datetime.clone()]
+                .copy_from_slice(value);
+        }
+        fixture.issuer_r = hex32(issuer_r);
+        fixture.issuer_s_inverse = hex32(issuer_s_inverse);
+        fixture
+    }
 
     fn dummy_signature_material() -> ([u8; 32], [u8; 32], [u8; 32], [u8; 32]) {
         ([1; 32], [2; 32], [3; 32], [4; 32])
@@ -407,8 +552,7 @@ mod tests {
             }
         }
 
-        let (issuer_r, issuer_s_inverse, device_r, device_s_inverse) =
-            dummy_signature_material();
+        let (issuer_r, issuer_s_inverse, device_r, device_s_inverse) = dummy_signature_material();
         let witness = VegaMdlFigure9WitnessV1::new(
             &layout.issuer_template,
             &layout.birth_template,
@@ -421,5 +565,171 @@ mod tests {
         let debug = format!("{witness:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains(&hex::encode(issuer_r)));
+    }
+
+    #[test]
+    fn independent_openssl_signed_figure9_vector_satisfies_the_complete_relation() {
+        let fixture = baseline_signed_fixture();
+        validate_vega_mdl_figure9_relation_v1(&fixture.public, &fixture.witness())
+            .expect("complete signed relation");
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full signed boundary vectors are a release-mode circuit gate"
+    )]
+    fn independently_signed_calendar_boundaries_enforce_age_expiry_and_validity_order() {
+        let birthday_exact = signed_variant(
+            Some((b"2008-07-26", BIRTHDAY_EXACT_BIRTH_DIGEST)),
+            None,
+            None,
+            None,
+            BIRTHDAY_EXACT_ISSUER_R,
+            BIRTHDAY_EXACT_ISSUER_S_INVERSE,
+        );
+        validate_vega_mdl_figure9_relation_v1(&birthday_exact.public, &birthday_exact.witness())
+            .expect("exact eighteenth birthday is accepted");
+
+        let underage = signed_variant(
+            Some((b"2008-07-27", UNDERAGE_BIRTH_DIGEST)),
+            None,
+            None,
+            None,
+            UNDERAGE_ISSUER_R,
+            UNDERAGE_ISSUER_S_INVERSE,
+        );
+        assert_eq!(
+            validate_vega_mdl_figure9_relation_v1(&underage.public, &underage.witness()),
+            Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
+        );
+
+        let expiry_exact = signed_variant(
+            None,
+            None,
+            None,
+            Some(b"2026-07-26T12:34:56Z"),
+            EXPIRY_EXACT_ISSUER_R,
+            EXPIRY_EXACT_ISSUER_S_INVERSE,
+        );
+        assert_eq!(
+            validate_vega_mdl_figure9_relation_v1(&expiry_exact.public, &expiry_exact.witness()),
+            Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
+        );
+
+        let expiry_next = signed_variant(
+            None,
+            None,
+            None,
+            Some(b"2026-07-27T12:34:56Z"),
+            EXPIRY_NEXT_ISSUER_R,
+            EXPIRY_NEXT_ISSUER_S_INVERSE,
+        );
+        validate_vega_mdl_figure9_relation_v1(&expiry_next.public, &expiry_next.witness())
+            .expect("next-day expiry is accepted");
+
+        let future_valid_from = signed_variant(
+            None,
+            None,
+            Some(b"2026-07-27T04:05:06Z"),
+            None,
+            FUTURE_VALID_FROM_ISSUER_R,
+            FUTURE_VALID_FROM_ISSUER_S_INVERSE,
+        );
+        assert_eq!(
+            validate_vega_mdl_figure9_relation_v1(
+                &future_valid_from.public,
+                &future_valid_from.witness()
+            ),
+            Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
+        );
+
+        let signed_after_valid_from = signed_variant(
+            None,
+            Some(b"2026-08-01T03:04:05Z"),
+            Some(b"2026-07-01T04:05:06Z"),
+            None,
+            SIGNED_AFTER_VALID_FROM_ISSUER_R,
+            SIGNED_AFTER_VALID_FROM_ISSUER_S_INVERSE,
+        );
+        assert_eq!(
+            validate_vega_mdl_figure9_relation_v1(
+                &signed_after_valid_from.public,
+                &signed_after_valid_from.witness()
+            ),
+            Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
+        );
+    }
+
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "full authenticated-field adversarial matrix is a release-mode circuit gate"
+    )]
+    fn every_authenticated_input_class_and_statement_class_fails_under_adversarial_mutation() {
+        let baseline = baseline_signed_fixture();
+        let assert_unsatisfied = |fixture: &SignedFixture| {
+            assert_eq!(
+                validate_vega_mdl_figure9_relation_v1(&fixture.public, &fixture.witness()),
+                Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation)
+            );
+        };
+
+        for range in [
+            FIGURE9_LAYOUT.issuer_birth_digest.clone(),
+            FIGURE9_LAYOUT.issuer_device_x.clone(),
+            FIGURE9_LAYOUT.issuer_device_y.clone(),
+            FIGURE9_LAYOUT.issuer_signed_datetime.clone(),
+            FIGURE9_LAYOUT.issuer_valid_from_datetime.clone(),
+            FIGURE9_LAYOUT.issuer_valid_until_datetime.clone(),
+        ] {
+            let mut changed = baseline.clone();
+            changed.issuer[range.start] ^= 1;
+            assert_unsatisfied(&changed);
+        }
+        for range in [
+            FIGURE9_LAYOUT.birth_random.clone(),
+            FIGURE9_LAYOUT.birth_date.clone(),
+        ] {
+            let mut changed = baseline.clone();
+            changed.birth[range.start] ^= 1;
+            assert_unsatisfied(&changed);
+        }
+        for signature_field in 0..4 {
+            let mut changed = baseline.clone();
+            match signature_field {
+                0 => changed.issuer_r[0] ^= 1,
+                1 => changed.issuer_s_inverse[0] ^= 1,
+                2 => changed.device_r[0] ^= 1,
+                3 => changed.device_s_inverse[0] ^= 1,
+                _ => unreachable!(),
+            }
+            assert_unsatisfied(&changed);
+        }
+        for index in 0..10 {
+            let mut changed = baseline.clone();
+            changed.public[index] += Scalar::one();
+            assert_unsatisfied(&changed);
+        }
+
+        let mut before_valid_from = baseline.clone();
+        before_valid_from.public[10] = Scalar::from_u64(2025);
+        before_valid_from.public[11] = Scalar::from_u64(1);
+        before_valid_from.public[12] = Scalar::from_u64(1);
+        assert_unsatisfied(&before_valid_from);
+
+        let mut expiry_boundary = baseline.clone();
+        expiry_boundary.public[10] = Scalar::from_u64(2035);
+        expiry_boundary.public[11] = Scalar::from_u64(8);
+        expiry_boundary.public[12] = Scalar::from_u64(17);
+        assert_unsatisfied(&expiry_boundary);
+
+        let mut invalid_calendar = baseline.clone();
+        invalid_calendar.public[11] = Scalar::from_u64(13);
+        assert_unsatisfied(&invalid_calendar);
+
+        let mut threshold_too_high = baseline;
+        threshold_too_high.public[13] = Scalar::from_u64(40);
+        assert_unsatisfied(&threshold_too_high);
     }
 }

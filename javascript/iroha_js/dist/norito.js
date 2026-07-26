@@ -1628,7 +1628,9 @@ function toBuffer(value) {
 }
 
 function encodePureJsInstruction(instruction) {
-  return encodePureJsInstructionPayload(instruction);
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () =>
+    encodePureJsInstructionPayload(instruction),
+  );
 }
 
 function encodePureJsInstructionPayload(instruction) {
@@ -2011,8 +2013,15 @@ function encodeInstructionBoxPayload(
 }
 
 function encodeInstructionEnvelope(wireId, innerPayload) {
-  const outerPayload = encodeInstructionBoxPayload(wireId, innerPayload, 0);
-  return frameNoritoPayload(outerPayload, INSTRUCTION_BOX_SCHEMA_HASH, 0);
+  const flags = noritoLengthFlags & COMPACT_LEN_FLAG;
+  const outerPayload = encodeInstructionBoxPayload(
+    wireId,
+    innerPayload,
+    flags,
+    "instruction",
+    flags,
+  );
+  return frameNoritoPayload(outerPayload, INSTRUCTION_BOX_SCHEMA_HASH, flags);
 }
 
 function encodeEnumInstruction(wireId, variantIndex, bodyPayload) {
@@ -5988,14 +5997,17 @@ function encodeEscrowIdValue(value, context) {
   if ((bytes[bytes.length - 1] & 1) === 0) {
     throw new TypeError(`${context} must use a native hash with its marker bit set`);
   }
-  return bytes;
+  return encodeNoritoField(bytes);
 }
 
 function decodeEscrowIdValue(payload, context) {
-  if (payload.length !== 32 || (payload[payload.length - 1] & 1) === 0) {
+  const reader = new BufferReader(payload, context);
+  const bytes = readNoritoField(reader, "hash");
+  reader.assertEof();
+  if (bytes.length !== 32 || (bytes[bytes.length - 1] & 1) === 0) {
     throw new TypeError(`${context} must use a native hash with its marker bit set`);
   }
-  return decodeHashValue(payload, context);
+  return decodeHashValue(bytes, `${context}.hash`);
 }
 
 function encodeStringValue(value, context) {

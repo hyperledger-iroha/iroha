@@ -11,11 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
     PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
-    PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyNullifierV1,
-    PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
-    PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
-    PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
+    PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1,
+    PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
+    PrivacyPgcBootstrapProofDigestV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
+    PrivacyStatementDigestV1,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -1127,13 +1127,12 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     }
 
     for ((namespace, role), history) in &history_by_scope {
-        let retained_root_count = if namespace.protocol_id()
-            == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-        {
-            policy.current_limits.retained_root_count
-        } else {
-            policy.admission_retained_root_count()
-        };
+        let retained_root_count =
+            if namespace.protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+                policy.current_limits.retained_root_count
+            } else {
+                policy.admission_retained_root_count()
+            };
         let retained = usize::try_from(retained_root_count)
             .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
         if history.len() > retained {
@@ -2278,9 +2277,7 @@ pub(crate) fn validate_non_pgc_privacy_root_retention_v1(
         if key.namespace().protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
             continue;
         }
-        let count = counts
-            .entry((key.namespace(), key.role()))
-            .or_default();
+        let count = counts.entry((key.namespace(), key.role())).or_default();
         *count = count
             .checked_add(1)
             .ok_or_else(|| "privacy root-history count overflow".to_owned())?;
@@ -2865,12 +2862,13 @@ mod tests {
             unreachable!("VeRange fixture")
         };
         limits.max_aggregation_count -= 1;
-        proposal.pending_protocol_limits_tightening =
-            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+        proposal.pending_protocol_limits_tightening = Some(
+            iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
                 scheduled_at_height: 1_000,
                 effective_at_height: 1_300,
                 next_limits,
-            });
+            },
+        );
         let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
         let mut activations = Storage::new();
         activations.insert(key, proposal);
@@ -2895,12 +2893,13 @@ mod tests {
             unreachable!("VeRange fixture")
         };
         limits.max_aggregation_count -= 1;
-        proposal.pending_protocol_limits_tightening =
-            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+        proposal.pending_protocol_limits_tightening = Some(
+            iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
                 scheduled_at_height: 1_000,
                 effective_at_height: 1_300,
                 next_limits,
-            });
+            },
+        );
         let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
         let mut activations = Storage::new();
         activations.insert(key, proposal);
@@ -2928,18 +2927,12 @@ mod tests {
         );
 
         assert!(
-            validate_privacy_activation_schedules_at_committed_height_v1(
-                &activations.view(),
-                999
-            )
-            .expect_err("a snapshot cannot contain a future-admitted schedule")
-            .contains("scheduled-at")
+            validate_privacy_activation_schedules_at_committed_height_v1(&activations.view(), 999)
+                .expect_err("a snapshot cannot contain a future-admitted schedule")
+                .contains("scheduled-at")
         );
-        validate_privacy_activation_schedules_at_committed_height_v1(
-            &activations.view(),
-            1_299,
-        )
-        .expect("effective E is valid in committed E-1");
+        validate_privacy_activation_schedules_at_committed_height_v1(&activations.view(), 1_299)
+            .expect("effective E is valid in committed E-1");
         assert!(
             validate_privacy_activation_schedules_at_committed_height_v1(
                 &activations.view(),
@@ -3718,6 +3711,59 @@ mod tests {
                 .expect_err("mutated immutable metadata after rollover")
                 .contains("different immutable pool invariant")
         );
+    }
+
+    #[test]
+    fn future_non_pgc_retention_is_prevalidated_while_pgc_is_prunable() {
+        let orchard_namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new(nonzero(0xA7)),
+            }),
+        );
+        let provenance = PrivacyRootProvenanceV1::governance(
+            PrivacyRootPublicationDigestV1::new(nonzero(0xA8)),
+            1,
+        )
+        .expect("governance provenance");
+        let mut non_pgc_roots = Storage::new();
+        for epoch in 1..=2 {
+            non_pgc_roots.insert(
+                PrivacyRootKeyV1::new(
+                    orchard_namespace,
+                    PrivacyRootRoleV1::NoteCommitmentAnchor,
+                    epoch,
+                    PrivacyRootV1::new([u8::try_from(epoch).expect("small epoch"); 32]),
+                )
+                .expect("Orchard root key"),
+                provenance,
+            );
+        }
+        validate_non_pgc_privacy_root_retention_v1(&non_pgc_roots.view(), 2)
+            .expect("inclusive future cap");
+        assert!(
+            validate_non_pgc_privacy_root_retention_v1(&non_pgc_roots.view(), 1)
+                .expect_err("non-PGC histories cannot be implicitly pruned")
+                .contains("exceeding scheduled retention 1")
+        );
+        assert!(validate_non_pgc_privacy_root_retention_v1(&non_pgc_roots.view(), 0).is_err());
+
+        let pgc_namespace = pgc_namespace(0xB7);
+        let mut pgc_roots = Storage::new();
+        for epoch in 1..=3 {
+            pgc_roots.insert(
+                PrivacyRootKeyV1::new(
+                    pgc_namespace,
+                    PrivacyRootRoleV1::PgcAccountState,
+                    epoch,
+                    PrivacyRootV1::new([u8::try_from(epoch).expect("small epoch"); 32]),
+                )
+                .expect("PGC root key"),
+                provenance,
+            );
+        }
+        validate_non_pgc_privacy_root_retention_v1(&pgc_roots.view(), 1)
+            .expect("PGC histories use the typed due-height pruning planner");
     }
 
     #[test]

@@ -1192,10 +1192,10 @@ mod tests {
                 hex::encode(Sha256::digest(proof.encode())),
             ),
             (
-                "e6cfafc5380a4a4c248f399684a5e43df1192bc460bd4de630eea985655ec575".to_owned(),
-                "b75a3e8fa401d6edadfa1fb50f50ae8a40e65cf9dabe6052869414ad5995316e".to_owned(),
+                "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
+                "e785c256e2682ad5a82649b8ace70906088b2822d979ffd75b40150e686295e6".to_owned(),
                 90_419,
-                "37d5db31ea0d84398d9ce43f02c289a3b4a2e69e56191c82af78627b549fe9d0".to_owned(),
+                "29a507156f9a1558e135b841913beb470887de3f0ef10b4333ca4431b82ea8d7".to_owned(),
             )
         );
     }

@@ -161,6 +161,7 @@ import {
   noritoDecodePrivacyProofEnvelope,
   noritoEncodeInstruction,
   noritoEncodePrivacyProofEnvelope,
+  validateNoritoFrame,
 } from "../src/norito.js";
 import {
   hasNoritoBinding,
@@ -317,6 +318,35 @@ const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS)
 
 function toByteArray(bytes) {
   return Array.from(Buffer.from(bytes));
+}
+
+function readCompactFieldPayload(buffer, offset, context) {
+  let cursor = offset;
+  let length = 0n;
+  let shift = 0n;
+  for (;;) {
+    if (cursor >= buffer.length) {
+      throw new RangeError(`${context} compact length overruns its buffer`);
+    }
+    const byte = buffer[cursor];
+    cursor += 1;
+    length |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) {
+      break;
+    }
+    shift += 7n;
+    if (shift >= 64n) {
+      throw new RangeError(`${context} compact length exceeds u64`);
+    }
+  }
+  if (length > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(`${context} compact length exceeds the safe integer range`);
+  }
+  const end = cursor + Number(length);
+  if (end > buffer.length) {
+    throw new RangeError(`${context} payload overruns its buffer`);
+  }
+  return { payload: buffer.subarray(cursor, end), next: end };
 }
 
 function encodeAndDecode(instruction) {
@@ -2117,14 +2147,26 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
   };
   withPureJsInstructionCodec(() => {
     const encoded = noritoEncodeInstruction(instruction);
-    const wireFieldLength = Number(encoded.readBigUInt64LE(40));
-    const innerFieldOffset = 40 + 8 + wireFieldLength;
-    const innerFieldPayloadOffset = innerFieldOffset + 8;
-    const innerFrameOffset = innerFieldPayloadOffset + 8;
-    const innerSchemaHash = encoded.subarray(
-      innerFrameOffset + 6,
-      innerFrameOffset + 22,
+    const outerFrame = validateNoritoFrame(encoded);
+    assert.equal(outerFrame.flags, 0x02);
+    const wireField = readCompactFieldPayload(
+      outerFrame.payload,
+      0,
+      "CastPlainBallot.wire",
     );
+    const innerField = readCompactFieldPayload(
+      outerFrame.payload,
+      wireField.next,
+      "CastPlainBallot.inner",
+    );
+    assert.equal(innerField.next, outerFrame.payload.length);
+    const innerFrameLength = Number(innerField.payload.readBigUInt64LE(0));
+    const innerFrame = innerField.payload.subarray(8);
+    assert.equal(innerFrame.length, innerFrameLength);
+    const validatedInner = validateNoritoFrame(innerFrame, {
+      expectedTypeName: "iroha_data_model::isi::governance::CastPlainBallot",
+      expectedPaddingLength: 8,
+    });
     const expectedSchemaHash = createHash("sha256")
       .update(
         "norito:v1:type-name\0iroha_data_model::isi::governance::CastPlainBallot",
@@ -2133,7 +2175,7 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
       .digest()
       .subarray(0, 16);
     assert.equal(expectedSchemaHash.toString("hex"), "62b23313103064bc2c9d528ac3548949");
-    assert.deepEqual(innerSchemaHash, expectedSchemaHash);
+    assert.deepEqual(validatedInner.schemaHash, expectedSchemaHash);
     assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
 
     for (const amount of [

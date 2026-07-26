@@ -8,6 +8,7 @@
 
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::{AssetDefinitionId, ChainId, account::AccountId};
@@ -25,6 +26,9 @@ pub const PRIVACY_PGC_BOOTSTRAP_PROOF_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for core's deterministic PGC account-state root derivation.
 pub const PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-state-root:v1";
+/// Domain separator for canonical Bootle/Lantern issuer-policy record digests.
+pub const BOOTLE_LANTERN_ISSUER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:bootle-lantern:issuer-policy:v1";
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -66,31 +70,49 @@ pub const MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1: u64 = 300;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "protocol", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyProtocolIdV1 {
     /// Native ZK-ACE post-quantum authorization protocol v0.
+    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v0"))]
     ZkAcePqAuthorizationV0,
     /// Anonymous PGC k-out-of-n payment protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
     AnonymousPgcKOutOfNV1,
     /// VeRange transparent range-proof protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "verange-transparent-range-v1"))]
     VeRangeTransparentRangeV1,
     /// Native Iroha ZK-AMS admission and anonymous-account provisioning suite v1.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-ams-v1"))]
     IrohaZkAmsV1,
     /// Vega proof over an existing credential v0.
+    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v0"))]
     VegaExistingCredentialZkV0,
     /// Native Iroha P-256 X.509 predicate STARK protocol v0.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v0"))]
     IrohaZkX509StarkP256V0,
     /// Native Iroha Jindo multilinear lattice polynomial-commitment protocol v0.
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "iroha-jindo-polynomial-commitment-v0")
+    )]
     IrohaJindoPolynomialCommitmentV0,
-    /// Native Iroha Bootle GenISIS anonymous-credential STARK profile v0.
-    IrohaBootleGenisisAcStarkV0,
+    /// Native Bootle Lantern/LNP22 module-lattice anonymous credential v1.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-bootle-lantern-anoncred-v1"))]
+    IrohaBootleLanternAnoncredV1,
     /// Orchard Halo2 action protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "orchard-halo2-actions-v1"))]
     OrchardHalo2ActionsV1,
     /// Monero FCMP++ full-chain membership protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "monero-fcmp-plus-plus-v1"))]
     MoneroFcmpPlusPlusV1,
     /// Native IVM private-note STARK protocol v1.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
     IrohaIvmPrivateNoteStarkV1,
     /// Post-quantum MASP STARK protocol v0.
+    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
     PqMaspStarkV0,
 }
 
@@ -107,7 +129,7 @@ impl PrivacyProtocolIdV1 {
         Self::VegaExistingCredentialZkV0,
         Self::IrohaZkX509StarkP256V0,
         Self::IrohaJindoPolynomialCommitmentV0,
-        Self::IrohaBootleGenisisAcStarkV0,
+        Self::IrohaBootleLanternAnoncredV1,
         Self::OrchardHalo2ActionsV1,
         Self::MoneroFcmpPlusPlusV1,
         Self::IrohaIvmPrivateNoteStarkV1,
@@ -129,7 +151,7 @@ impl PrivacyProtocolIdV1 {
             Self::VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
             Self::IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
             Self::IrohaJindoPolynomialCommitmentV0 => "iroha-jindo-polynomial-commitment-v0",
-            Self::IrohaBootleGenisisAcStarkV0 => "iroha-bootle-genisis-ac-stark-v0",
+            Self::IrohaBootleLanternAnoncredV1 => "iroha-bootle-lantern-anoncred-v1",
             Self::OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
             Self::MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
             Self::IrohaIvmPrivateNoteStarkV1 => "iroha-ivm-private-note-stark-v1",
@@ -151,7 +173,7 @@ impl PrivacyProtocolIdV1 {
             b"vega-existing-credential-zk-v0" => Some(Self::VegaExistingCredentialZkV0),
             b"iroha-zk-x509-stark-p256-v0" => Some(Self::IrohaZkX509StarkP256V0),
             b"iroha-jindo-polynomial-commitment-v0" => Some(Self::IrohaJindoPolynomialCommitmentV0),
-            b"iroha-bootle-genisis-ac-stark-v0" => Some(Self::IrohaBootleGenisisAcStarkV0),
+            b"iroha-bootle-lantern-anoncred-v1" => Some(Self::IrohaBootleLanternAnoncredV1),
             b"orchard-halo2-actions-v1" => Some(Self::OrchardHalo2ActionsV1),
             b"monero-fcmp-plus-plus-v1" => Some(Self::MoneroFcmpPlusPlusV1),
             b"iroha-ivm-private-note-stark-v1" => Some(Self::IrohaIvmPrivateNoteStarkV1),
@@ -167,10 +189,11 @@ impl PrivacyProtocolIdV1 {
             Self::ZkAcePqAuthorizationV0 | Self::PqMaspStarkV0 => {
                 PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
             }
-            Self::IrohaZkX509StarkP256V0
-            | Self::IrohaBootleGenisisAcStarkV0
-            | Self::IrohaIvmPrivateNoteStarkV1 => {
+            Self::IrohaZkX509StarkP256V0 | Self::IrohaIvmPrivateNoteStarkV1 => {
                 PrivacyProofSystemIdV1::StarkFriPoseidon2Goldilocks
+            }
+            Self::IrohaBootleLanternAnoncredV1 => {
+                PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm
             }
             Self::IrohaZkAmsV1 => {
                 PrivacyProofSystemIdV1::ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512
@@ -194,9 +217,9 @@ impl PrivacyProtocolIdV1 {
         match self {
             Self::ZkAcePqAuthorizationV0
             | Self::IrohaZkX509StarkP256V0
-            | Self::IrohaBootleGenisisAcStarkV0
             | Self::IrohaIvmPrivateNoteStarkV1
             | Self::PqMaspStarkV0 => PrivacyEngineIdV1::NativeGoldilocksStarkFri,
+            Self::IrohaBootleLanternAnoncredV1 => PrivacyEngineIdV1::NativeLanternLnp22,
             Self::IrohaZkAmsV1 => PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255,
             Self::AnonymousPgcKOutOfNV1 => PrivacyEngineIdV1::NativeAnonymousPgcP256,
             Self::VeRangeTransparentRangeV1 => PrivacyEngineIdV1::NativeVeRangeP256,
@@ -217,32 +240,58 @@ impl PrivacyProtocolIdV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "proof_system", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "proof_system", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyProofSystemIdV1 {
     /// STARK/FRI over Goldilocks with SHA-256 transcript and commitments.
+    #[cfg_attr(feature = "json", norito(rename = "stark-fri-sha256-goldilocks"))]
     StarkFriSha256Goldilocks,
     /// STARK/FRI over Goldilocks with Poseidon2 transcript and commitments.
+    #[cfg_attr(feature = "json", norito(rename = "stark-fri-poseidon2-goldilocks"))]
     StarkFriPoseidon2Goldilocks,
     /// ZK-AMS transparent STARK batch admission plus Ristretto255 MLSAGS provisioning.
     ///
     /// Batch admission uses Poseidon2/Goldilocks commitment digests and a
     /// transparent STARK/FRI proof. Account provisioning uses MLSAGS over
     /// Ristretto255 with SHA3-512 for the transcript and hash-to-group suite.
+    #[cfg_attr(
+        feature = "json",
+        norito(
+            rename = "zk-ams-transparent-stark-poseidon2-goldilocks-mlsags-ristretto255-sha3-512"
+        )
+    )]
     ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512,
     /// Anonymous PGC k-out-of-n proof system over P-256.
+    #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-p256"))]
     AnonymousPgcP256,
     /// Iroha Type-1 VeRange profile over P-256 with SHA-256.
     ///
     /// This profile is distinct from the upstream BN254-and-Keccak reference.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-verange-p256"))]
     IrohaVeRangeP256,
     /// Vega Neutron/Nova/Spartan proof system with Hyrax commitments over T256.
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "vega-neutron-nova-spartan-hyrax-t256")
+    )]
     VegaNeutronNovaSpartanHyraxT256,
     /// Jindo multilinear lattice polynomial-commitment proof system.
+    #[cfg_attr(feature = "json", norito(rename = "jindo-polynomial-commitment"))]
     JindoPolynomialCommitment,
     /// Halo2 IPA proof system over the Pasta curve cycle.
+    #[cfg_attr(feature = "json", norito(rename = "halo2-ipa-pasta"))]
     Halo2IpaPasta,
     /// FCMP++ Curve Tree and Bulletproofs proof composition.
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "fcmp-plus-plus-curve-tree-bulletproofs")
+    )]
     FcmpPlusPlusCurveTreeBulletproofs,
+    /// Bootle Lantern/LNP22 module-lattice linear-and-norm proof system.
+    #[cfg_attr(feature = "json", norito(rename = "lantern-lnp22-module-linear-norm"))]
+    LanternLnp22ModuleLinearNorm,
 }
 
 /// Native verifier engine implementation selected by a privacy protocol.
@@ -254,24 +303,41 @@ pub enum PrivacyProofSystemIdV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "engine", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "engine", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyEngineIdV1 {
     /// Native Goldilocks STARK/FRI verifier.
+    #[cfg_attr(feature = "json", norito(rename = "native-goldilocks-stark-fri"))]
     NativeGoldilocksStarkFri,
     /// Native ZK-AMS transparent-STARK and Ristretto255-MLSAGS verifier suite.
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "native-zk-ams-transparent-stark-mlsags-ristretto255")
+    )]
     NativeZkAmsTransparentStarkMlsagsRistretto255,
     /// Native Anonymous PGC verifier over P-256.
+    #[cfg_attr(feature = "json", norito(rename = "native-anonymous-pgc-p256"))]
     NativeAnonymousPgcP256,
     /// Native VeRange verifier over P-256.
+    #[cfg_attr(feature = "json", norito(rename = "native-verange-p256"))]
     NativeVeRangeP256,
     /// Native Vega verifier.
+    #[cfg_attr(feature = "json", norito(rename = "native-vega"))]
     NativeVega,
     /// Native Jindo verifier.
+    #[cfg_attr(feature = "json", norito(rename = "native-jindo"))]
     NativeJindo,
     /// Native Orchard Halo2 verifier.
+    #[cfg_attr(feature = "json", norito(rename = "native-halo2-orchard"))]
     NativeHalo2Orchard,
     /// Native FCMP++ verifier.
+    #[cfg_attr(feature = "json", norito(rename = "native-fcmp-plus-plus"))]
     NativeFcmpPlusPlus,
+    /// Native Bootle Lantern/LNP22 module-lattice verifier.
+    #[cfg_attr(feature = "json", norito(rename = "native-lantern-lnp22"))]
+    NativeLanternLnp22,
 }
 
 macro_rules! define_privacy_digest {
@@ -369,6 +435,10 @@ define_privacy_digest!(
     PrivacyStatementDigestV1
 );
 define_privacy_digest!(
+    /// Digest of the canonical transaction-intent projection bound by a privacy statement.
+    PrivacyTransactionIntentDigestV1
+);
+define_privacy_digest!(
     /// Digest of a canonical governance root publication.
     PrivacyRootPublicationDigestV1
 );
@@ -407,6 +477,10 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Digest of the governed contents of a privacy policy.
     PrivacyPolicyDigestV1
+);
+define_privacy_digest!(
+    /// Digest of one canonical committed Bootle/Lantern issuer-policy record.
+    PrivacyBootleLanternIssuerPolicyDigestV1
 );
 define_privacy_digest!(
     /// Fixed identifier of a credential or certificate issuer.
@@ -806,8 +880,8 @@ impl PrivacyNamespaceV1 {
                     parameter_id: statement.context.parameter_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaBootleGenisisAcStarkV0(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
+            PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) => Self::new(
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
                 PrivacyNamespaceScopeV1::IssuerPolicy(PrivacyIssuerPolicyNamespaceV1 {
                     issuer_id: statement.issuer_id,
                     policy_id: statement.policy_id,
@@ -883,7 +957,7 @@ impl PrivacyNamespaceV1 {
                     | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
                 PrivacyNamespaceScopeV1::Parameter(_)
             ) | (
-                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
                 PrivacyNamespaceScopeV1::IssuerPolicy(_)
             ) | (
                 PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
@@ -1051,7 +1125,7 @@ impl PrivacyRootRoleV1 {
                 Self::PgcAccountState
             ) | (PrivacyProtocolIdV1::IrohaZkAmsV1, Self::AccountRegistry)
                 | (
-                    PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
+                    PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
                     Self::Revocation
                 )
                 | (
@@ -1497,6 +1571,7 @@ pub enum PrivacyLimitFieldV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyConsensusLimitsV1 {
     /// Maximum privacy actions in one transaction.
     pub max_actions_per_transaction: u32,
@@ -1817,6 +1892,7 @@ pub enum PrivacyConsensusLimitsTighteningErrorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyConsensusPolicyTighteningV1 {
     /// Exact block which admitted this schedule.
     pub scheduled_at_height: u64,
@@ -1853,6 +1929,7 @@ impl PrivacyConsensusPolicyTighteningV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyConsensusPolicyV1 {
     /// Limits effective for the current committed state.
     pub current_limits: PrivacyConsensusLimitsV1,
@@ -2029,6 +2106,7 @@ fn validate_privacy_policy_schedule_heights_v1(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProposedLifecycleV1 {
     /// Height at which the proposal became canonical.
     pub proposed_at_height: u64,
@@ -2042,6 +2120,7 @@ pub struct PrivacyProposedLifecycleV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyActiveLifecycleV1 {
     /// Height at which the proposal became canonical.
     pub proposed_at_height: u64,
@@ -2057,6 +2136,7 @@ pub struct PrivacyActiveLifecycleV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacySuspendedLifecycleV1 {
     /// Height at which the proposal became canonical.
     pub proposed_at_height: u64,
@@ -2072,6 +2152,7 @@ pub struct PrivacySuspendedLifecycleV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyRetiredLifecycleV1 {
     /// Height at which the proposal became canonical.
     pub proposed_at_height: u64,
@@ -2087,15 +2168,22 @@ pub struct PrivacyRetiredLifecycleV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "state", content = "record"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "state", content = "record", deny_unknown_fields)
+)]
 pub enum PrivacyProtocolLifecycleV1 {
     /// Governance approved a future activation height.
+    #[cfg_attr(feature = "json", norito(rename = "proposed"))]
     Proposed(PrivacyProposedLifecycleV1),
     /// The protocol is currently active.
+    #[cfg_attr(feature = "json", norito(rename = "active"))]
     Active(PrivacyActiveLifecycleV1),
     /// The protocol is temporarily fail-closed.
+    #[cfg_attr(feature = "json", norito(rename = "suspended"))]
     Suspended(PrivacySuspendedLifecycleV1),
     /// The protocol is permanently unavailable.
+    #[cfg_attr(feature = "json", norito(rename = "retired"))]
     Retired(PrivacyRetiredLifecycleV1),
 }
 
@@ -2333,9 +2421,13 @@ pub enum PrivacyLifecycleTransitionError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "assurance", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "assurance", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyAssuranceV1 {
     /// Testnet-only experimental; not security-audited and not a production-readiness claim.
+    #[cfg_attr(feature = "json", norito(rename = "experimental"))]
     Experimental,
 }
 
@@ -2345,6 +2437,7 @@ pub enum PrivacyAssuranceV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct AnonymousPgcActivationLimitsV1 {
     /// Maximum anonymity-set size `n` for this activation.
     pub max_anonymity_set_size: u32,
@@ -2358,6 +2451,7 @@ pub struct AnonymousPgcActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VeRangeActivationLimitsV1 {
     /// Maximum aggregation count `T` admitted by this activation.
     pub max_aggregation_count: u32,
@@ -2369,6 +2463,7 @@ pub struct VeRangeActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ZkAmsActivationLimitsV1 {
     /// Maximum ordered admission anchors in one batch settlement.
     pub max_batch_size: u32,
@@ -2382,6 +2477,7 @@ pub struct ZkAmsActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct JindoActivationLimitsV1 {
     /// Maximum polynomial commitments per statement.
     pub max_polynomial_count: u32,
@@ -2397,6 +2493,7 @@ pub struct JindoActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct OrchardActivationLimitsV1 {
     /// Maximum one-to-one spend/output actions per statement.
     pub max_action_count: u32,
@@ -2408,6 +2505,7 @@ pub struct OrchardActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct FcmpActivationLimitsV1 {
     /// Maximum consumed outputs per transfer.
     pub max_input_count: u32,
@@ -2421,6 +2519,7 @@ pub struct FcmpActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IvmPrivateNoteActivationLimitsV1 {
     /// Maximum consumed notes per action.
     pub max_input_count: u32,
@@ -2434,6 +2533,7 @@ pub struct IvmPrivateNoteActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PqMaspActivationLimitsV1 {
     /// Maximum consumed notes per action.
     pub max_input_count: u32,
@@ -2447,31 +2547,49 @@ pub struct PqMaspActivationLimitsV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "protocol", content = "limits"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "limits", deny_unknown_fields)
+)]
 pub enum PrivacyProtocolActivationLimitsV1 {
     /// ZK-ACE has no additional first-release count limits.
+    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v0"))]
     ZkAcePqAuthorizationV0,
     /// Anonymous PGC receiver policy.
+    #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
     AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1),
     /// VeRange aggregation policy.
+    #[cfg_attr(feature = "json", norito(rename = "verange-transparent-range-v1"))]
     VeRangeTransparentRangeV1(VeRangeActivationLimitsV1),
     /// ZK-AMS batch-admission and account-provisioning policy.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-ams-v1"))]
     IrohaZkAmsV1(ZkAmsActivationLimitsV1),
     /// Vega has no additional first-release count limits.
+    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v0"))]
     VegaExistingCredentialZkV0,
     /// X.509 has fixed first-release limits encoded by its statement validator.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v0"))]
     IrohaZkX509StarkP256V0,
     /// Jindo batched opening policy.
+    #[cfg_attr(
+        feature = "json",
+        norito(rename = "iroha-jindo-polynomial-commitment-v0")
+    )]
     IrohaJindoPolynomialCommitmentV0(JindoActivationLimitsV1),
-    /// SIS-with-hints has a fixed first-release attribute profile.
-    IrohaBootleGenisisAcStarkV0,
+    /// Lantern anonymous credentials have a fixed first-release parameter profile.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-bootle-lantern-anoncred-v1"))]
+    IrohaBootleLanternAnoncredV1,
     /// Orchard one-to-one action policy.
+    #[cfg_attr(feature = "json", norito(rename = "orchard-halo2-actions-v1"))]
     OrchardHalo2ActionsV1(OrchardActivationLimitsV1),
     /// FCMP++ input/output policy.
+    #[cfg_attr(feature = "json", norito(rename = "monero-fcmp-plus-plus-v1"))]
     MoneroFcmpPlusPlusV1(FcmpActivationLimitsV1),
     /// Native private-note input/output policy.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
     IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteActivationLimitsV1),
     /// PQ-MASP input/output policy.
+    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
     PqMaspStarkV0(PqMaspActivationLimitsV1),
 }
 
@@ -2489,7 +2607,7 @@ impl PrivacyProtocolActivationLimitsV1 {
             Self::IrohaJindoPolynomialCommitmentV0(_) => {
                 PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
             }
-            Self::IrohaBootleGenisisAcStarkV0 => PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
+            Self::IrohaBootleLanternAnoncredV1 => PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
             Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
@@ -2633,7 +2751,7 @@ impl PrivacyProtocolActivationLimitsV1 {
             (Self::ZkAcePqAuthorizationV0, Self::ZkAcePqAuthorizationV0)
             | (Self::VegaExistingCredentialZkV0, Self::VegaExistingCredentialZkV0)
             | (Self::IrohaZkX509StarkP256V0, Self::IrohaZkX509StarkP256V0)
-            | (Self::IrohaBootleGenisisAcStarkV0, Self::IrohaBootleGenisisAcStarkV0) => Ok(()),
+            | (Self::IrohaBootleLanternAnoncredV1, Self::IrohaBootleLanternAnoncredV1) => Ok(()),
             (Self::AnonymousPgcKOutOfNV1(value), Self::AnonymousPgcKOutOfNV1(max)) => {
                 validate_profile_limit_ceiling(
                     PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
@@ -2871,6 +2989,7 @@ pub enum PrivacyProtocolActivationLimitsValidationError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProtocolLimitsTighteningV1 {
     /// Exact block which admitted this schedule.
     pub scheduled_at_height: u64,
@@ -2926,6 +3045,7 @@ pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProtocolActivationRecordV1 {
     /// Exact protocol identity.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -3072,6 +3192,667 @@ pub enum PrivacyActivationValidationError {
     Lifecycle(PrivacyLifecycleValidationError),
 }
 
+/// Exact public capability-snapshot wire version.
+pub const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1: u32 = 1;
+
+/// Exact locally compiled bindings exposed by the public privacy snapshot.
+///
+/// This is a wire-model counterpart of the core-only compiled profile. It
+/// deliberately contains no lifecycle or readiness boolean: governance state
+/// is carried separately by [`PrivacyCapabilityRowV1::activation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyCompiledProfileSnapshotV1 {
+    /// Closed protocol identity.
+    pub protocol_id: PrivacyProtocolIdV1,
+    /// Closed proof-system identity.
+    pub proof_system_id: PrivacyProofSystemIdV1,
+    /// Closed native-engine identity.
+    pub engine_id: PrivacyEngineIdV1,
+    /// Deterministic identifier of the compiled parameter set.
+    pub parameter_id: PrivacyParameterIdV1,
+    /// Digest of the exact compiled parameters.
+    pub parameter_digest: PrivacyParameterDigestV1,
+    /// Digest of the exact verifier relation and proof wire.
+    pub verifier_digest: PrivacyVerifierDigestV1,
+    /// Digest of the exact public-statement schema.
+    pub statement_schema_digest: PrivacyStatementSchemaDigestV1,
+    /// Digest of the complete compiled engine manifest.
+    pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
+    /// Exact protocol-specific limits compiled into the verifier.
+    pub protocol_limits: PrivacyProtocolActivationLimitsV1,
+}
+
+impl PrivacyCompiledProfileSnapshotV1 {
+    /// Validate the closed protocol mappings and every fixed binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic error for the first mismatched identity, zero
+    /// binding, protocol-tag mismatch, or invalid limit.
+    pub fn validate(&self) -> Result<(), PrivacyCompiledProfileSnapshotValidationErrorV1> {
+        let expected_proof_system = self.protocol_id.expected_proof_system();
+        if self.proof_system_id != expected_proof_system {
+            return Err(
+                PrivacyCompiledProfileSnapshotValidationErrorV1::ProofSystemMismatch {
+                    protocol_id: self.protocol_id,
+                    expected: expected_proof_system,
+                    actual: self.proof_system_id,
+                },
+            );
+        }
+        let expected_engine = self.protocol_id.expected_engine();
+        if self.engine_id != expected_engine {
+            return Err(
+                PrivacyCompiledProfileSnapshotValidationErrorV1::EngineMismatch {
+                    protocol_id: self.protocol_id,
+                    expected: expected_engine,
+                    actual: self.engine_id,
+                },
+            );
+        }
+        if self.parameter_id.is_zero() {
+            return Err(PrivacyCompiledProfileSnapshotValidationErrorV1::ZeroParameterId);
+        }
+        if self.parameter_digest.is_zero() {
+            return Err(PrivacyCompiledProfileSnapshotValidationErrorV1::ZeroParameterDigest);
+        }
+        if self.verifier_digest.is_zero() {
+            return Err(PrivacyCompiledProfileSnapshotValidationErrorV1::ZeroVerifierDigest);
+        }
+        if self.statement_schema_digest.is_zero() {
+            return Err(PrivacyCompiledProfileSnapshotValidationErrorV1::ZeroStatementSchemaDigest);
+        }
+        if self.engine_manifest_digest.is_zero() {
+            return Err(PrivacyCompiledProfileSnapshotValidationErrorV1::ZeroEngineManifestDigest);
+        }
+        let limits_protocol = self.protocol_limits.protocol_id();
+        if limits_protocol != self.protocol_id {
+            return Err(
+                PrivacyCompiledProfileSnapshotValidationErrorV1::ProtocolLimitsMismatch {
+                    protocol_id: self.protocol_id,
+                    limits_protocol,
+                },
+            );
+        }
+        self.protocol_limits
+            .validate()
+            .map_err(PrivacyCompiledProfileSnapshotValidationErrorV1::ProtocolLimits)
+    }
+}
+
+/// Validation failure for [`PrivacyCompiledProfileSnapshotV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
+    /// Protocol and proof-system identities differ.
+    #[error(
+        "compiled privacy protocol {protocol_id:?} requires proof system {expected:?}, got {actual:?}"
+    )]
+    ProofSystemMismatch {
+        /// Protocol in the compiled profile.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Required proof system.
+        expected: PrivacyProofSystemIdV1,
+        /// Rejected proof system.
+        actual: PrivacyProofSystemIdV1,
+    },
+    /// Protocol and native-engine identities differ.
+    #[error(
+        "compiled privacy protocol {protocol_id:?} requires engine {expected:?}, got {actual:?}"
+    )]
+    EngineMismatch {
+        /// Protocol in the compiled profile.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Required engine.
+        expected: PrivacyEngineIdV1,
+        /// Rejected engine.
+        actual: PrivacyEngineIdV1,
+    },
+    /// Compiled parameter-set identifier is zero.
+    #[error("compiled privacy parameter id must be non-zero")]
+    ZeroParameterId,
+    /// Compiled parameter digest is zero.
+    #[error("compiled privacy parameter digest must be non-zero")]
+    ZeroParameterDigest,
+    /// Compiled verifier digest is zero.
+    #[error("compiled privacy verifier digest must be non-zero")]
+    ZeroVerifierDigest,
+    /// Compiled statement-schema digest is zero.
+    #[error("compiled privacy statement-schema digest must be non-zero")]
+    ZeroStatementSchemaDigest,
+    /// Compiled engine-manifest digest is zero.
+    #[error("compiled privacy engine-manifest digest must be non-zero")]
+    ZeroEngineManifestDigest,
+    /// Compiled limits are tagged for another protocol.
+    #[error(
+        "compiled privacy protocol {protocol_id:?} differs from protocol-limit tag {limits_protocol:?}"
+    )]
+    ProtocolLimitsMismatch {
+        /// Compiled protocol.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Protocol encoded by the compiled limit variant.
+        limits_protocol: PrivacyProtocolIdV1,
+    },
+    /// Compiled protocol-specific limits are malformed.
+    #[error("compiled privacy protocol limits are invalid: {0}")]
+    ProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
+}
+
+/// Typed failure canonicalizing a compiled public-statement schema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "schema_error", content = "detail", deny_unknown_fields)
+)]
+pub enum PrivacyCompiledStatementSchemaErrorV1 {
+    /// Two types reused one stable identifier for incompatible shapes.
+    #[cfg_attr(feature = "json", norito(rename = "conflicting-stable-type-id"))]
+    ConflictingStableTypeId,
+    /// A schema referenced a type absent from the canonical map.
+    #[cfg_attr(feature = "json", norito(rename = "missing-type-reference"))]
+    MissingTypeReference,
+}
+
+/// Typed reason why one closed protocol has no executable compiled profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "reason", content = "detail", deny_unknown_fields)
+)]
+pub enum PrivacyCompiledProfileUnavailableReasonV1 {
+    /// This binary contains no complete end-to-end engine for the protocol.
+    #[cfg_attr(feature = "json", norito(rename = "engine-unavailable"))]
+    EngineUnavailable,
+    /// Deterministic transparent parameter initialization failed.
+    #[cfg_attr(feature = "json", norito(rename = "profile-initialization-failed"))]
+    ProfileInitializationFailed,
+    /// The locally generated statement schema was ambiguous or incomplete.
+    #[cfg_attr(feature = "json", norito(rename = "statement-schema-invalid"))]
+    StatementSchemaInvalid(PrivacyCompiledStatementSchemaErrorV1),
+}
+
+/// Closed result of obtaining one locally compiled privacy profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "status", content = "value", deny_unknown_fields)
+)]
+pub enum PrivacyCompiledProfileResultV1 {
+    /// The exact native profile is executable in this binary.
+    #[cfg_attr(feature = "json", norito(rename = "available"))]
+    Available(PrivacyCompiledProfileSnapshotV1),
+    /// The protocol remains explicitly unavailable and fail-closed.
+    #[cfg_attr(feature = "json", norito(rename = "unavailable"))]
+    Unavailable(PrivacyCompiledProfileUnavailableReasonV1),
+}
+
+/// One protocol row in the canonical public capability snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyCapabilityRowV1 {
+    /// Closed protocol identity for this row.
+    pub protocol_id: PrivacyProtocolIdV1,
+    /// Exact local compiled-profile result.
+    pub compiled_profile: PrivacyCompiledProfileResultV1,
+    /// Exact committed governance record, if registered.
+    pub activation: Option<PrivacyProtocolActivationRecordV1>,
+}
+
+impl PrivacyCapabilityRowV1 {
+    /// Validate a row against its committed snapshot height.
+    ///
+    /// # Errors
+    ///
+    /// Rejects embedded identity mismatches, malformed compiled profiles,
+    /// activation without an executable engine, activation/profile binding
+    /// drift, and lifecycle or policy heights inconsistent with the snapshot.
+    pub fn validate_at_committed_height(
+        &self,
+        committed_height: u64,
+    ) -> Result<(), PrivacyCapabilityRowValidationErrorV1> {
+        let profile = match self.compiled_profile {
+            PrivacyCompiledProfileResultV1::Available(profile) => {
+                profile
+                    .validate()
+                    .map_err(PrivacyCapabilityRowValidationErrorV1::CompiledProfile)?;
+                if profile.protocol_id != self.protocol_id {
+                    return Err(
+                        PrivacyCapabilityRowValidationErrorV1::CompiledProfileProtocolMismatch {
+                            row_protocol: self.protocol_id,
+                            profile_protocol: profile.protocol_id,
+                        },
+                    );
+                }
+                Some(profile)
+            }
+            PrivacyCompiledProfileResultV1::Unavailable(_) => None,
+        };
+
+        let Some(activation) = self.activation else {
+            return Ok(());
+        };
+        let Some(profile) = profile else {
+            return Err(
+                PrivacyCapabilityRowValidationErrorV1::UnavailableActivation {
+                    protocol_id: self.protocol_id,
+                },
+            );
+        };
+        activation
+            .validate()
+            .map_err(PrivacyCapabilityRowValidationErrorV1::Activation)?;
+        if activation.protocol_id != self.protocol_id {
+            return Err(
+                PrivacyCapabilityRowValidationErrorV1::ActivationProtocolMismatch {
+                    row_protocol: self.protocol_id,
+                    activation_protocol: activation.protocol_id,
+                },
+            );
+        }
+        validate_privacy_capability_activation_profile_v1(&activation, &profile)?;
+        validate_privacy_capability_activation_height_v1(&activation, committed_height)
+    }
+}
+
+fn validate_privacy_capability_activation_profile_v1(
+    activation: &PrivacyProtocolActivationRecordV1,
+    profile: &PrivacyCompiledProfileSnapshotV1,
+) -> Result<(), PrivacyCapabilityRowValidationErrorV1> {
+    if activation.proof_system_id != profile.proof_system_id {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                field: PrivacyCapabilityBindingFieldV1::ProofSystem,
+            },
+        );
+    }
+    if activation.engine_id != profile.engine_id {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                field: PrivacyCapabilityBindingFieldV1::Engine,
+            },
+        );
+    }
+    if activation.parameter_id != profile.parameter_id {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                field: PrivacyCapabilityBindingFieldV1::ParameterId,
+            },
+        );
+    }
+    if activation.parameter_digest != profile.parameter_digest {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                field: PrivacyCapabilityBindingFieldV1::ParameterDigest,
+            },
+        );
+    }
+    if activation.verifier_digest != profile.verifier_digest {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                field: PrivacyCapabilityBindingFieldV1::VerifierDigest,
+            },
+        );
+    }
+    if activation.statement_schema_digest != profile.statement_schema_digest {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                field: PrivacyCapabilityBindingFieldV1::StatementSchemaDigest,
+            },
+        );
+    }
+    if activation.engine_manifest_digest != profile.engine_manifest_digest {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                field: PrivacyCapabilityBindingFieldV1::EngineManifestDigest,
+            },
+        );
+    }
+    activation
+        .protocol_limits
+        .validate_with_ceiling(&profile.protocol_limits)
+        .map_err(PrivacyCapabilityRowValidationErrorV1::ActivationProtocolLimits)
+}
+
+fn validate_privacy_capability_activation_height_v1(
+    activation: &PrivacyProtocolActivationRecordV1,
+    committed_height: u64,
+) -> Result<(), PrivacyCapabilityRowValidationErrorV1> {
+    let (proposed_at_height, activated_at_height, state_since_height) = match activation.lifecycle {
+        PrivacyProtocolLifecycleV1::Proposed(state) => {
+            if state.activate_at_height <= committed_height {
+                return Err(
+                    PrivacyCapabilityRowValidationErrorV1::UnpromotedDueActivation {
+                        activate_at_height: state.activate_at_height,
+                        committed_height,
+                    },
+                );
+            }
+            (state.proposed_at_height, None, None)
+        }
+        PrivacyProtocolLifecycleV1::Active(state) => (
+            state.proposed_at_height,
+            Some(state.activated_at_height),
+            Some(state.state_since_height),
+        ),
+        PrivacyProtocolLifecycleV1::Suspended(state) => (
+            state.proposed_at_height,
+            Some(state.activated_at_height),
+            Some(state.state_since_height),
+        ),
+        PrivacyProtocolLifecycleV1::Retired(state) => (
+            state.proposed_at_height,
+            state.activated_at_height,
+            Some(state.state_since_height),
+        ),
+    };
+    if proposed_at_height > committed_height {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ProposalAfterCommitted {
+                proposed_at_height,
+                committed_height,
+            },
+        );
+    }
+    if let Some(activated_at_height) = activated_at_height
+        && activated_at_height > committed_height
+    {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::ActivationAfterCommitted {
+                activated_at_height,
+                committed_height,
+            },
+        );
+    }
+    if let Some(state_since_height) = state_since_height
+        && state_since_height > committed_height
+    {
+        return Err(
+            PrivacyCapabilityRowValidationErrorV1::LifecycleStateAfterCommitted {
+                state_since_height,
+                committed_height,
+            },
+        );
+    }
+    if let Some(pending) = activation.pending_protocol_limits_tightening {
+        if pending.scheduled_at_height > committed_height {
+            return Err(
+                PrivacyCapabilityRowValidationErrorV1::ProtocolLimitsScheduledAfterCommitted {
+                    scheduled_at_height: pending.scheduled_at_height,
+                    committed_height,
+                },
+            );
+        }
+        if pending.effective_at_height <= committed_height {
+            return Err(
+                PrivacyCapabilityRowValidationErrorV1::ProtocolLimitsNotFuture {
+                    effective_at_height: pending.effective_at_height,
+                    committed_height,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Immutable binding selected when comparing activation and compiled profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivacyCapabilityBindingFieldV1 {
+    /// Proof-system identity.
+    ProofSystem,
+    /// Native-engine identity.
+    Engine,
+    /// Parameter-set identifier.
+    ParameterId,
+    /// Parameter-set digest.
+    ParameterDigest,
+    /// Verifier digest.
+    VerifierDigest,
+    /// Statement-schema digest.
+    StatementSchemaDigest,
+    /// Engine-manifest digest.
+    EngineManifestDigest,
+}
+
+/// Validation failure for one [`PrivacyCapabilityRowV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyCapabilityRowValidationErrorV1 {
+    /// Locally compiled profile is malformed.
+    #[error("privacy capability compiled profile is invalid: {0}")]
+    CompiledProfile(PrivacyCompiledProfileSnapshotValidationErrorV1),
+    /// Row and compiled-profile identities differ.
+    #[error(
+        "privacy capability row protocol {row_protocol:?} differs from compiled profile {profile_protocol:?}"
+    )]
+    CompiledProfileProtocolMismatch {
+        /// Row identity.
+        row_protocol: PrivacyProtocolIdV1,
+        /// Embedded profile identity.
+        profile_protocol: PrivacyProtocolIdV1,
+    },
+    /// A governance activation exists for an unavailable local engine.
+    #[error("unavailable privacy protocol {protocol_id:?} cannot have an activation")]
+    UnavailableActivation {
+        /// Unavailable protocol.
+        protocol_id: PrivacyProtocolIdV1,
+    },
+    /// Governed activation is malformed.
+    #[error("privacy capability activation is invalid: {0}")]
+    Activation(PrivacyActivationValidationError),
+    /// Row and governed activation identities differ.
+    #[error(
+        "privacy capability row protocol {row_protocol:?} differs from activation {activation_protocol:?}"
+    )]
+    ActivationProtocolMismatch {
+        /// Row identity.
+        row_protocol: PrivacyProtocolIdV1,
+        /// Embedded activation identity.
+        activation_protocol: PrivacyProtocolIdV1,
+    },
+    /// An immutable governed binding differs from the compiled profile.
+    #[error("privacy activation differs from compiled profile at {field:?}")]
+    ActivationProfileMismatch {
+        /// Mismatched immutable field.
+        field: PrivacyCapabilityBindingFieldV1,
+    },
+    /// Governed protocol limits exceed the compiled profile.
+    #[error("privacy activation limits differ from compiled profile: {0}")]
+    ActivationProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
+    /// Proposal admission is later than the snapshot that contains it.
+    #[error(
+        "privacy proposal height {proposed_at_height} is after committed height {committed_height}"
+    )]
+    ProposalAfterCommitted {
+        /// Persisted proposal height.
+        proposed_at_height: u64,
+        /// Snapshot height.
+        committed_height: u64,
+    },
+    /// A due proposal remained unpromoted in committed state.
+    #[error(
+        "privacy activation at height {activate_at_height} remained proposed at committed height {committed_height}"
+    )]
+    UnpromotedDueActivation {
+        /// Scheduled activation height.
+        activate_at_height: u64,
+        /// Snapshot height.
+        committed_height: u64,
+    },
+    /// First activation is later than the committed snapshot.
+    #[error(
+        "privacy activation height {activated_at_height} is after committed height {committed_height}"
+    )]
+    ActivationAfterCommitted {
+        /// Claimed first activation height.
+        activated_at_height: u64,
+        /// Snapshot height.
+        committed_height: u64,
+    },
+    /// Current lifecycle interval begins after the committed snapshot.
+    #[error(
+        "privacy lifecycle state height {state_since_height} is after committed height {committed_height}"
+    )]
+    LifecycleStateAfterCommitted {
+        /// Claimed current-state start height.
+        state_since_height: u64,
+        /// Snapshot height.
+        committed_height: u64,
+    },
+    /// Protocol-limit schedule claims admission after the snapshot.
+    #[error(
+        "privacy protocol-limit schedule height {scheduled_at_height} is after committed height {committed_height}"
+    )]
+    ProtocolLimitsScheduledAfterCommitted {
+        /// Claimed admission height.
+        scheduled_at_height: u64,
+        /// Snapshot height.
+        committed_height: u64,
+    },
+    /// Protocol-limit schedule was retained after its exact effective height.
+    #[error(
+        "privacy protocol-limit effective height {effective_at_height} is not after committed height {committed_height}"
+    )]
+    ProtocolLimitsNotFuture {
+        /// Scheduled effective height.
+        effective_at_height: u64,
+        /// Snapshot height.
+        committed_height: u64,
+    },
+}
+
+/// Authoritative committed privacy capability snapshot.
+///
+/// `protocols` must contain exactly [`PrivacyProtocolIdV1::ALL`] in Norito
+/// discriminant order. The ordering rule makes missing, duplicate, and
+/// reordered rows fail closed without accepting aliases.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyCapabilitySnapshotV1 {
+    /// Exact snapshot schema version.
+    pub version: u32,
+    /// Height of the committed state from which this snapshot was read.
+    pub committed_height: u64,
+    /// Authoritative singleton chain-wide privacy policy.
+    pub consensus_policy: PrivacyConsensusPolicyV1,
+    /// Exactly twelve protocol rows in canonical discriminant order.
+    pub protocols: Vec<PrivacyCapabilityRowV1>,
+}
+
+impl PrivacyCapabilitySnapshotV1 {
+    /// Validate the complete public snapshot and all embedded state.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an unknown version, invalid singleton policy, any row-count or
+    /// ordering drift, or an invalid protocol row.
+    pub fn validate(&self) -> Result<(), PrivacyCapabilitySnapshotValidationErrorV1> {
+        if self.version != PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1 {
+            return Err(PrivacyCapabilitySnapshotValidationErrorV1::Version {
+                expected: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+                actual: self.version,
+            });
+        }
+        self.consensus_policy
+            .validate_at_committed_height(self.committed_height)
+            .map_err(PrivacyCapabilitySnapshotValidationErrorV1::ConsensusPolicy)?;
+        if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
+            return Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolCount {
+                expected: PrivacyProtocolIdV1::COUNT,
+                actual: self.protocols.len(),
+            });
+        }
+        for (index, (row, expected)) in self
+            .protocols
+            .iter()
+            .zip(PrivacyProtocolIdV1::ALL)
+            .enumerate()
+        {
+            if row.protocol_id != expected {
+                return Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolOrder {
+                    index,
+                    expected,
+                    actual: row.protocol_id,
+                });
+            }
+            row.validate_at_committed_height(self.committed_height)
+                .map_err(
+                    |source| PrivacyCapabilitySnapshotValidationErrorV1::ProtocolRow {
+                        protocol_id: expected,
+                        source,
+                    },
+                )?;
+        }
+        Ok(())
+    }
+}
+
+/// Validation failure for [`PrivacyCapabilitySnapshotV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyCapabilitySnapshotValidationErrorV1 {
+    /// Snapshot wire version is not the exact first-release version.
+    #[error("privacy capability snapshot version {actual} differs from required {expected}")]
+    Version {
+        /// Required version.
+        expected: u32,
+        /// Rejected version.
+        actual: u32,
+    },
+    /// Singleton policy is invalid at the committed height.
+    #[error("privacy capability consensus policy is invalid: {0}")]
+    ConsensusPolicy(PrivacyPolicyValidationErrorV1),
+    /// Protocol row count differs from the closed registry.
+    #[error("privacy capability snapshot has {actual} rows; expected {expected}")]
+    ProtocolCount {
+        /// Closed first-release row count.
+        expected: usize,
+        /// Rejected row count.
+        actual: usize,
+    },
+    /// A row is missing, duplicated, or reordered.
+    #[error(
+        "privacy capability row {index} is {actual:?}; expected canonical protocol {expected:?}"
+    )]
+    ProtocolOrder {
+        /// Zero-based row index.
+        index: usize,
+        /// Required protocol at this index.
+        expected: PrivacyProtocolIdV1,
+        /// Rejected protocol at this index.
+        actual: PrivacyProtocolIdV1,
+    },
+    /// One canonical row is invalid.
+    #[error("privacy capability row {protocol_id:?} is invalid: {source}")]
+    ProtocolRow {
+        /// Protocol selected by row order.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Exact row validation failure.
+        source: PrivacyCapabilityRowValidationErrorV1,
+    },
+}
+
 /// Closed Anonymous PGC anonymity-set sizes in the first release.
 pub const ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1: [u32; 3] = [16, 32, 64];
 /// Maximum Anonymous PGC anonymity-set size in the first release.
@@ -3103,12 +3884,20 @@ pub const IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1: u32 = 32;
 pub const IROHA_JINDO_MAX_FIELD_ELEMENT_BYTES_V1: u16 = 64;
 /// Maximum canonical byte width of one governed Jindo lattice commitment.
 pub const IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1: u32 = 64 * 1024;
-/// Exact credential attribute count bound by the SIS-with-hints profile.
-pub const SIS_WITH_HINTS_ATTRIBUTE_COUNT_V1: u32 = 8;
-/// Maximum encoded bytes in one SIS-with-hints attribute.
-pub const SIS_WITH_HINTS_MAX_ATTRIBUTE_BYTES_V1: u32 = 1_024;
-/// Maximum selectively disclosed attributes in one SIS-with-hints statement.
-pub const SIS_WITH_HINTS_MAX_DISCLOSED_ATTRIBUTES_V1: u32 = 8;
+/// Exact direct 64-bit attribute count in the Bootle/Lantern credential profile.
+pub const BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1: usize = 8;
+/// Exact byte width of one direct Bootle/Lantern attribute.
+pub const BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1: usize = 8;
+/// Degree of every polynomial in the Bootle/Lantern application ring.
+pub const BOOTLE_LANTERN_RING_DEGREE_V1: usize = 64;
+/// Application-ring modulus used by the fixed Bootle/Lantern profile.
+pub const BOOTLE_LANTERN_APPLICATION_MODULUS_V1: u16 = 12_289;
+/// Rows and columns in the issuer's canonical public matrix `B`.
+pub const BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1: usize = 8;
+/// Maximum selectively disclosed attributes in one Bootle/Lantern statement.
+pub const BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1: u32 = 8;
+/// Maximum governed allowed public values for one required attribute.
+pub const BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1: u32 = 32;
 /// Maximum decoded ISO 18013-5 MSO payload bytes admitted by Vega.
 ///
 /// This is the 1,920-byte mDL profile evaluated in Figure 9 of the Vega paper.
@@ -3168,6 +3957,9 @@ pub struct PrivacyStatementContextV1 {
     pub chain_id: ChainId,
     /// Zero-based privacy action index within the transaction.
     pub action_index: u32,
+    /// Digest of the canonical transaction projection with derived privacy
+    /// digests zeroed and the typed proof payload empty.
+    pub transaction_intent_digest: PrivacyTransactionIntentDigestV1,
     /// Exact governed parameter-set identifier.
     pub parameter_id: PrivacyParameterIdV1,
     /// Digest of the governed parameter set.
@@ -3204,6 +3996,9 @@ impl PrivacyStatementContextV1 {
                 index: self.action_index,
                 max_actions: limits.max_actions_per_transaction,
             });
+        }
+        if self.transaction_intent_digest.is_zero() {
+            return Err(PrivacyStatementValidationError::ZeroTransactionIntentDigest);
         }
         if self.parameter_id.is_zero() {
             return Err(PrivacyStatementValidationError::ZeroParameterId);
@@ -3759,64 +4554,485 @@ pub struct IrohaJindoPolynomialCommitmentStatementV1 {
     pub evaluation_queries: Vec<PrivacyJindoEvaluationQueryV1>,
 }
 
-/// Public representation of one selectively disclosed SIS-with-hints attribute.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+/// One direct 64-bit attribute in the fixed Bootle/Lantern credential profile.
+///
+/// Bits are interpreted little-endian and become the 64 binary coefficients
+/// of exactly one application-ring polynomial. This is deliberately not an
+/// arbitrary byte string or a digest-preimage claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "representation", content = "value"))]
-pub enum PrivacyDisclosedAttributeValueV1 {
-    /// Canonical plaintext attribute encoding.
-    Plaintext(Vec<u8>),
-    /// Digest-only disclosure under the governed attribute schema.
-    Digest(PrivacyAttributeDigestV1),
+pub struct BootleLanternAttributeValueV1(
+    /// Exact little-endian 64-bit attribute encoding.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub [u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1],
+);
+
+impl BootleLanternAttributeValueV1 {
+    /// Construct one direct attribute value.
+    #[must_use]
+    pub const fn new(bytes: [u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the exact direct attribute bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; BOOTLE_LANTERN_ATTRIBUTE_BYTES_V1] {
+        &self.0
+    }
 }
 
-/// One sorted SIS-with-hints selective-disclosure entry.
+/// One polynomial in `Z_12289[X]/(X^64 + 1)`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct PrivacyDisclosedAttributeV1 {
+pub struct BootleLanternPolynomialV1 {
+    /// Exactly 64 canonical coefficients, each strictly below 12,289.
+    pub coefficients: Vec<u16>,
+}
+
+/// Canonical issuer verification matrix `B` in the application ring.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BootleLanternIssuerPublicMatrixV1 {
+    /// Exactly 64 polynomials in row-major 8-by-8 order.
+    pub entries: Vec<BootleLanternPolynomialV1>,
+}
+
+/// Governed allowed values for one required public attribute.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BootleLanternAllowedAttributeValuesV1 {
+    /// Strictly increasing values; empty means any disclosed value is allowed.
+    pub values: Vec<BootleLanternAttributeValueV1>,
+}
+
+/// Committed issuer key and selective-disclosure policy trusted by verification.
+///
+/// The proof submitter supplies only the record identity and digest in the
+/// statement. Core resolves this complete record from committed state.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BootleLanternIssuerPolicyV1 {
+    /// Credential issuer governed by this record.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Stable policy identity within the issuer namespace.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Monotonically increasing policy/key epoch.
+    pub epoch: u64,
+    /// Exact issuer parameter artifact identity.
+    pub issuer_parameter_id: PrivacyParameterIdV1,
+    /// Digest of the exact issuer parameter artifact.
+    pub issuer_parameter_digest: PrivacyParameterDigestV1,
+    /// Canonical issuer verification matrix `B`.
+    pub issuer_public_matrix: BootleLanternIssuerPublicMatrixV1,
+    /// Bitmap of attributes that every presentation must disclose.
+    pub required_disclosure_bitmap: u8,
+    /// Per-attribute allowed public values in fixed attribute order.
+    pub allowed_values: Vec<BootleLanternAllowedAttributeValuesV1>,
+    /// Digest of this record with this field normalized to zero.
+    pub record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
+}
+
+impl BootleLanternIssuerPolicyV1 {
+    /// Compute the canonical record digest with `record_digest` normalized to zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if canonical encoding of the normalized record
+    /// unexpectedly fails.
+    pub fn computed_record_digest(
+        &self,
+    ) -> Result<PrivacyBootleLanternIssuerPolicyDigestV1, norito::Error> {
+        let mut normalized = self.clone();
+        normalized.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        let encoded = norito::to_bytes(&normalized)?;
+        let mut hasher = Sha256::new();
+        hasher.update(BOOTLE_LANTERN_ISSUER_POLICY_DIGEST_DOMAIN_V1);
+        hasher.update(
+            u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        Ok(PrivacyBootleLanternIssuerPolicyDigestV1::new(
+            hasher.finalize().into(),
+        ))
+    }
+
+    /// Validate canonical issuer key, disclosure rules, and self-authenticating digest.
+    ///
+    /// This intrinsic check does not make the record trusted. Core must resolve
+    /// it from committed state and separately match its issuer parameter
+    /// artifact before native verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first deterministic structural or digest failure.
+    pub fn validate(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        if self.issuer_id.is_zero() {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroIssuerId);
+        }
+        if self.policy_id.is_zero() {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroPolicyId);
+        }
+        if self.epoch == 0 {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroEpoch);
+        }
+        if self.issuer_parameter_id.is_zero() {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroIssuerParameterId);
+        }
+        if self.issuer_parameter_digest.is_zero() {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroIssuerParameterDigest);
+        }
+
+        let mut matrix_is_zero = true;
+        let matrix_entries = self.issuer_public_matrix.entries.len();
+        let expected_matrix_entries =
+            BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
+        if matrix_entries != expected_matrix_entries {
+            return Err(
+                BootleLanternIssuerPolicyValidationErrorV1::InvalidIssuerMatrixEntryCount {
+                    count: u32::try_from(matrix_entries).map_err(|_| {
+                        BootleLanternIssuerPolicyValidationErrorV1::IssuerMatrixEntryCountOverflow
+                    })?,
+                    expected: u32::try_from(expected_matrix_entries)
+                        .expect("fixed matrix entry count fits u32"),
+                },
+            );
+        }
+        for (entry_index, polynomial) in self.issuer_public_matrix.entries.iter().enumerate() {
+            if polynomial.coefficients.len() != BOOTLE_LANTERN_RING_DEGREE_V1 {
+                return Err(
+                    BootleLanternIssuerPolicyValidationErrorV1::InvalidPolynomialCoefficientCount {
+                        polynomial: u8::try_from(entry_index)
+                            .expect("fixed matrix entry index fits u8"),
+                        count: u32::try_from(polynomial.coefficients.len()).map_err(|_| {
+                            BootleLanternIssuerPolicyValidationErrorV1::
+                                    PolynomialCoefficientCountOverflow
+                        })?,
+                        expected: u32::try_from(BOOTLE_LANTERN_RING_DEGREE_V1)
+                            .expect("fixed ring degree fits u32"),
+                    },
+                );
+            }
+            for (coefficient_index, coefficient) in
+                polynomial.coefficients.iter().copied().enumerate()
+            {
+                if coefficient >= BOOTLE_LANTERN_APPLICATION_MODULUS_V1 {
+                    return Err(
+                        BootleLanternIssuerPolicyValidationErrorV1::NonCanonicalMatrixCoefficient {
+                            row: u8::try_from(
+                                entry_index / BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
+                            )
+                            .expect("fixed matrix row fits u8"),
+                            column: u8::try_from(
+                                entry_index % BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
+                            )
+                            .expect("fixed matrix column fits u8"),
+                            coefficient: u8::try_from(coefficient_index)
+                                .expect("fixed ring coefficient fits u8"),
+                            value: coefficient,
+                        },
+                    );
+                }
+                matrix_is_zero &= coefficient == 0;
+            }
+        }
+        if matrix_is_zero {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix);
+        }
+
+        if self.allowed_values.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
+            return Err(
+                BootleLanternIssuerPolicyValidationErrorV1::InvalidAllowedValueRuleCount {
+                    count: u32::try_from(self.allowed_values.len()).map_err(|_| {
+                        BootleLanternIssuerPolicyValidationErrorV1::AllowedValueRuleCountOverflow
+                    })?,
+                    expected: u32::try_from(BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
+                        .expect("fixed attribute count fits u32"),
+                },
+            );
+        }
+        for (index, allowed) in self.allowed_values.iter().enumerate() {
+            let count = u32::try_from(allowed.values.len()).map_err(|_| {
+                BootleLanternIssuerPolicyValidationErrorV1::AllowedValueCountOverflow
+            })?;
+            if count > BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1 {
+                return Err(
+                    BootleLanternIssuerPolicyValidationErrorV1::TooManyAllowedValues {
+                        index: u8::try_from(index).expect("fixed attribute index fits u8"),
+                        count,
+                        max: BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1,
+                    },
+                );
+            }
+            let required = self.required_disclosure_bitmap & (1_u8 << index) != 0;
+            if !required && !allowed.values.is_empty() {
+                return Err(
+                    BootleLanternIssuerPolicyValidationErrorV1::AllowedValuesForOptionalAttribute {
+                        index: u8::try_from(index).expect("fixed attribute index fits u8"),
+                    },
+                );
+            }
+            if allowed.values.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(
+                    BootleLanternIssuerPolicyValidationErrorV1::
+                        AllowedValuesNotStrictlyIncreasing {
+                            index: u8::try_from(index).expect("fixed attribute index fits u8"),
+                        },
+                );
+            }
+        }
+
+        if self.record_digest.is_zero() {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroRecordDigest);
+        }
+        let expected = self
+            .computed_record_digest()
+            .map_err(|_| BootleLanternIssuerPolicyValidationErrorV1::EncodingFailure)?;
+        if self.record_digest != expected {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::RecordDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Validate a first record for a newly created issuer-policy key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an intrinsic record failure or rejects any initial epoch other
+    /// than one.
+    pub fn validate_initial(&self) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        self.validate()?;
+        if self.epoch != 1 {
+            return Err(
+                BootleLanternIssuerPolicyValidationErrorV1::InvalidInitialEpoch {
+                    epoch: self.epoch,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Validate an atomic replacement of one committed issuer-policy record.
+    ///
+    /// # Errors
+    ///
+    /// Rejects namespace changes, a non-increasing epoch, an unchanged
+    /// rotation, or any intrinsically invalid successor.
+    pub fn validate_successor(
+        &self,
+        previous: &Self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        previous.validate()?;
+        self.validate()?;
+        if self.issuer_id != previous.issuer_id {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerIdChanged);
+        }
+        if self.policy_id != previous.policy_id {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyIdChanged);
+        }
+        if self.epoch <= previous.epoch {
+            return Err(
+                BootleLanternIssuerPolicyValidationErrorV1::NonIncreasingEpoch {
+                    previous: previous.epoch,
+                    next: self.epoch,
+                },
+            );
+        }
+        if self.issuer_parameter_id == previous.issuer_parameter_id
+            && self.issuer_parameter_digest == previous.issuer_parameter_digest
+            && self.issuer_public_matrix == previous.issuer_public_matrix
+            && self.required_disclosure_bitmap == previous.required_disclosure_bitmap
+            && self.allowed_values == previous.allowed_values
+        {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::UnchangedRotation);
+        }
+        Ok(())
+    }
+}
+
+/// Structural failure for a committed Bootle/Lantern issuer-policy record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum BootleLanternIssuerPolicyValidationErrorV1 {
+    /// Issuer identifier is zero.
+    #[error("Bootle/Lantern issuer id must be non-zero")]
+    ZeroIssuerId,
+    /// Policy identifier is zero.
+    #[error("Bootle/Lantern policy id must be non-zero")]
+    ZeroPolicyId,
+    /// Record epoch is zero.
+    #[error("Bootle/Lantern issuer-policy epoch must be non-zero")]
+    ZeroEpoch,
+    /// Issuer parameter identifier is zero.
+    #[error("Bootle/Lantern issuer parameter id must be non-zero")]
+    ZeroIssuerParameterId,
+    /// Issuer parameter digest is zero.
+    #[error("Bootle/Lantern issuer parameter digest must be non-zero")]
+    ZeroIssuerParameterDigest,
+    /// Matrix entry count overflowed its canonical diagnostic.
+    #[error("Bootle/Lantern issuer matrix entry count overflow")]
+    IssuerMatrixEntryCountOverflow,
+    /// Matrix does not contain exactly 64 row-major polynomials.
+    #[error("Bootle/Lantern issuer matrix has {count} entries; expected {expected}")]
+    InvalidIssuerMatrixEntryCount {
+        /// Observed entry count.
+        count: u32,
+        /// Fixed entry count.
+        expected: u32,
+    },
+    /// Polynomial coefficient count overflowed its canonical diagnostic.
+    #[error("Bootle/Lantern polynomial coefficient count overflow")]
+    PolynomialCoefficientCountOverflow,
+    /// One matrix polynomial does not contain exactly 64 coefficients.
+    #[error(
+        "Bootle/Lantern issuer matrix polynomial {polynomial} has {count} coefficients; expected {expected}"
+    )]
+    InvalidPolynomialCoefficientCount {
+        /// Row-major matrix-polynomial index.
+        polynomial: u8,
+        /// Observed coefficient count.
+        count: u32,
+        /// Fixed coefficient count.
+        expected: u32,
+    },
+    /// One issuer matrix coefficient is not a canonical residue.
+    #[error(
+        "Bootle/Lantern issuer matrix coefficient B[{row}][{column}][{coefficient}]={value} is not below 12289"
+    )]
+    NonCanonicalMatrixCoefficient {
+        /// Matrix row.
+        row: u8,
+        /// Matrix column.
+        column: u8,
+        /// Polynomial coefficient.
+        coefficient: u8,
+        /// Rejected residue.
+        value: u16,
+    },
+    /// Issuer matrix is the all-zero sentinel.
+    #[error("Bootle/Lantern issuer matrix must not be all zero")]
+    AllZeroIssuerMatrix,
+    /// An allowed-value vector length overflowed its canonical count.
+    #[error("Bootle/Lantern allowed-value count overflow")]
+    AllowedValueCountOverflow,
+    /// Attribute-rule vector length overflowed its canonical diagnostic.
+    #[error("Bootle/Lantern allowed-value rule count overflow")]
+    AllowedValueRuleCountOverflow,
+    /// Policy does not contain exactly eight attribute-rule entries.
+    #[error("Bootle/Lantern policy has {count} attribute rules; expected {expected}")]
+    InvalidAllowedValueRuleCount {
+        /// Observed rule count.
+        count: u32,
+        /// Fixed rule count.
+        expected: u32,
+    },
+    /// One attribute allows too many governed public values.
+    #[error("Bootle/Lantern attribute {index} has {count} allowed values, exceeding maximum {max}")]
+    TooManyAllowedValues {
+        /// Attribute index.
+        index: u8,
+        /// Observed value count.
+        count: u32,
+        /// Fixed maximum.
+        max: u32,
+    },
+    /// A non-required attribute carries an unenforceable allowed-value policy.
+    #[error("Bootle/Lantern optional attribute {index} must not carry allowed values")]
+    AllowedValuesForOptionalAttribute {
+        /// Attribute index.
+        index: u8,
+    },
+    /// Allowed values contain a duplicate or are out of order.
+    #[error("Bootle/Lantern attribute {index} allowed values must be strictly increasing")]
+    AllowedValuesNotStrictlyIncreasing {
+        /// Attribute index.
+        index: u8,
+    },
+    /// Record digest is zero.
+    #[error("Bootle/Lantern issuer-policy record digest must be non-zero")]
+    ZeroRecordDigest,
+    /// Canonical normalized record encoding failed.
+    #[error("Bootle/Lantern issuer-policy record encoding failed")]
+    EncodingFailure,
+    /// Record digest does not match the canonical record contents.
+    #[error("Bootle/Lantern issuer-policy record digest mismatch")]
+    RecordDigestMismatch,
+    /// A newly created issuer-policy key did not start at epoch one.
+    #[error("Bootle/Lantern initial issuer-policy epoch {epoch} must equal one")]
+    InvalidInitialEpoch {
+        /// Rejected initial epoch.
+        epoch: u64,
+    },
+    /// A rotation changed the issuer namespace.
+    #[error("Bootle/Lantern issuer-policy rotation must not change issuer id")]
+    IssuerIdChanged,
+    /// A rotation changed the policy namespace.
+    #[error("Bootle/Lantern issuer-policy rotation must not change policy id")]
+    PolicyIdChanged,
+    /// A replacement epoch did not strictly increase.
+    #[error("Bootle/Lantern issuer-policy epoch must increase: previous {previous}, next {next}")]
+    NonIncreasingEpoch {
+        /// Current committed epoch.
+        previous: u64,
+        /// Proposed successor epoch.
+        next: u64,
+    },
+    /// A replacement changed only epoch and digest.
+    #[error("Bootle/Lantern issuer-policy rotation must change key, parameters, or policy rules")]
+    UnchangedRotation,
+}
+
+/// One canonical Bootle/Lantern selective-disclosure entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct BootleLanternDisclosedAttributeV1 {
     /// Zero-based index in the fixed eight-attribute credential.
-    pub index: u16,
-    /// Public plaintext or governed-schema digest.
-    pub value: PrivacyDisclosedAttributeValueV1,
+    pub index: u8,
+    /// Direct public 64-bit attribute value.
+    pub value: BootleLanternAttributeValueV1,
 }
 
-/// Native Bootle GenISIS SIS-with-hints credential statement.
+/// Native Bootle Lantern/LNP22 module-lattice anonymous-credential statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct IrohaBootleGenisisAcStarkStatementV1 {
+pub struct IrohaBootleLanternAnoncredStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
     /// Anonymous-credential issuer identifier.
     pub issuer_id: PrivacyIssuerIdV1,
     /// Selective-disclosure policy identifier.
     pub policy_id: PrivacyPolicyIdV1,
+    /// Exact current committed issuer-policy epoch.
+    pub issuer_policy_epoch: u64,
+    /// Digest of the complete committed issuer-policy record.
+    pub issuer_policy_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
     /// Exact issuer parameter-set identifier.
     pub issuer_parameter_id: PrivacyParameterIdV1,
     /// Digest of the issuer parameter set.
     pub issuer_parameter_digest: PrivacyParameterDigestV1,
-    /// Commitment to the credential.
-    pub credential_commitment: PrivacyCommitmentV1,
-    /// Commitment to the SIS hint transcript.
-    pub hints_commitment: PrivacyCommitmentV1,
-    /// Canonical revocation accumulator root.
-    pub revocation_root: PrivacyRootV1,
-    /// Epoch at which the revocation root was canonical.
-    pub revocation_epoch: u64,
-    /// Presentation nullifier.
-    pub presentation_nullifier: PrivacyNullifierV1,
-    /// Total attributes committed by the credential.
-    pub attribute_count: u32,
-    /// Strictly increasing selectively disclosed attributes.
-    pub disclosures: Vec<PrivacyDisclosedAttributeV1>,
+    /// Strictly increasing direct selectively disclosed attributes.
+    pub disclosures: Vec<BootleLanternDisclosedAttributeV1>,
 }
 
 /// Direction of a public value balance relative to a private pool.
@@ -4072,8 +5288,8 @@ pub enum PrivacyStatementV1 {
     IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1),
     /// Native Iroha Jindo multilinear lattice polynomial-commitment statement.
     IrohaJindoPolynomialCommitmentV0(IrohaJindoPolynomialCommitmentStatementV1),
-    /// Native Iroha Bootle GenISIS anonymous-credential statement.
-    IrohaBootleGenisisAcStarkV0(IrohaBootleGenisisAcStarkStatementV1),
+    /// Native Bootle Lantern/LNP22 anonymous-credential statement.
+    IrohaBootleLanternAnoncredV1(IrohaBootleLanternAnoncredStatementV1),
     /// Orchard Halo2 action statement.
     OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1),
     /// Monero FCMP++ membership statement.
@@ -4098,8 +5314,8 @@ impl PrivacyStatementV1 {
             Self::IrohaJindoPolynomialCommitmentV0(_) => {
                 PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
             }
-            Self::IrohaBootleGenisisAcStarkV0(_) => {
-                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0
+            Self::IrohaBootleLanternAnoncredV1(_) => {
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
             }
             Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
@@ -4119,11 +5335,33 @@ impl PrivacyStatementV1 {
             Self::VegaExistingCredentialZkV0(statement) => &statement.context,
             Self::IrohaZkX509StarkP256V0(statement) => &statement.context,
             Self::IrohaJindoPolynomialCommitmentV0(statement) => &statement.context,
-            Self::IrohaBootleGenisisAcStarkV0(statement) => &statement.context,
+            Self::IrohaBootleLanternAnoncredV1(statement) => &statement.context,
             Self::OrchardHalo2ActionsV1(statement) => &statement.context,
             Self::MoneroFcmpPlusPlusV1(statement) => &statement.context,
             Self::IrohaIvmPrivateNoteStarkV1(statement) => &statement.context,
             Self::PqMaspStarkV0(statement) => &statement.context,
+        }
+    }
+
+    /// Mutably borrow the explicit shared context inside this protocol statement.
+    ///
+    /// Transaction-intent normalization uses this single exhaustive boundary
+    /// instead of duplicating protocol-specific statement matches.
+    #[must_use]
+    pub const fn context_mut(&mut self) -> &mut PrivacyStatementContextV1 {
+        match self {
+            Self::ZkAcePqAuthorizationV0(statement) => &mut statement.context,
+            Self::AnonymousPgcKOutOfNV1(statement) => &mut statement.context,
+            Self::VeRangeTransparentRangeV1(statement) => &mut statement.context,
+            Self::IrohaZkAmsV1(statement) => &mut statement.context,
+            Self::VegaExistingCredentialZkV0(statement) => &mut statement.context,
+            Self::IrohaZkX509StarkP256V0(statement) => &mut statement.context,
+            Self::IrohaJindoPolynomialCommitmentV0(statement) => &mut statement.context,
+            Self::IrohaBootleLanternAnoncredV1(statement) => &mut statement.context,
+            Self::OrchardHalo2ActionsV1(statement) => &mut statement.context,
+            Self::MoneroFcmpPlusPlusV1(statement) => &mut statement.context,
+            Self::IrohaIvmPrivateNoteStarkV1(statement) => &mut statement.context,
+            Self::PqMaspStarkV0(statement) => &mut statement.context,
         }
     }
 
@@ -4167,7 +5405,7 @@ impl PrivacyStatementV1 {
             Self::VegaExistingCredentialZkV0(statement) => validate_vega(statement)?,
             Self::IrohaZkX509StarkP256V0(statement) => validate_zk_x509(statement)?,
             Self::IrohaJindoPolynomialCommitmentV0(statement) => validate_jindo(statement, limits)?,
-            Self::IrohaBootleGenisisAcStarkV0(statement) => validate_sis_hints(statement)?,
+            Self::IrohaBootleLanternAnoncredV1(statement) => validate_bootle_lantern(statement)?,
             Self::OrchardHalo2ActionsV1(statement) => validate_orchard(statement, limits)?,
             Self::MoneroFcmpPlusPlusV1(statement) => validate_fcmp(statement, limits)?,
             Self::IrohaIvmPrivateNoteStarkV1(statement) => {
@@ -4700,11 +5938,19 @@ fn validate_jindo(
     Ok(())
 }
 
-fn validate_sis_hints(
-    statement: &IrohaBootleGenisisAcStarkStatementV1,
+fn validate_bootle_lantern(
+    statement: &IrohaBootleLanternAnoncredStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     require_nonzero_id(statement.issuer_id.is_zero(), PrivacyTypedFieldV1::IssuerId)?;
     require_nonzero_id(statement.policy_id.is_zero(), PrivacyTypedFieldV1::PolicyId)?;
+    require_epoch(
+        statement.issuer_policy_epoch,
+        PrivacyEpochFieldV1::IssuerPolicy,
+    )?;
+    require_nonzero_id(
+        statement.issuer_policy_record_digest.is_zero(),
+        PrivacyTypedFieldV1::IssuerPolicyRecordDigest,
+    )?;
     require_nonzero_id(
         statement.issuer_parameter_id.is_zero(),
         PrivacyTypedFieldV1::IssuerParameterId,
@@ -4713,68 +5959,29 @@ fn validate_sis_hints(
         statement.issuer_parameter_digest.is_zero(),
         PrivacyTypedFieldV1::IssuerParameterDigest,
     )?;
-    require_commitment(statement.credential_commitment, 0)?;
-    require_commitment(statement.hints_commitment, 1)?;
-    require_nonzero_id(
-        statement.revocation_root.is_zero(),
-        PrivacyTypedFieldV1::RevocationRoot,
-    )?;
-    require_epoch(statement.revocation_epoch, PrivacyEpochFieldV1::Revocation)?;
-    require_nullifier(statement.presentation_nullifier, 0)?;
-    if statement.attribute_count != SIS_WITH_HINTS_ATTRIBUTE_COUNT_V1 {
-        return Err(PrivacyStatementValidationError::InvalidAttributeCount {
-            count: statement.attribute_count,
-            expected: SIS_WITH_HINTS_ATTRIBUTE_COUNT_V1,
-        });
-    }
     let disclosed_count = u32::try_from(statement.disclosures.len())
         .map_err(|_| PrivacyStatementValidationError::PayloadLengthOverflow)?;
-    if disclosed_count > SIS_WITH_HINTS_MAX_DISCLOSED_ATTRIBUTES_V1 {
+    if disclosed_count > BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1 {
         return Err(
-            PrivacyStatementValidationError::TooManyDisclosedAttributes {
+            PrivacyStatementValidationError::TooManyBootleLanternDisclosures {
                 count: disclosed_count,
-                max: SIS_WITH_HINTS_MAX_DISCLOSED_ATTRIBUTES_V1,
+                max: BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1,
             },
         );
     }
     let mut previous = None;
     for disclosure in &statement.disclosures {
-        if u32::from(disclosure.index) >= statement.attribute_count {
+        if usize::from(disclosure.index) >= BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
             return Err(
-                PrivacyStatementValidationError::DisclosedAttributeOutOfBounds {
+                PrivacyStatementValidationError::BootleLanternDisclosureIndexOutOfBounds {
                     index: disclosure.index,
-                    attribute_count: statement.attribute_count,
                 },
             );
         }
         if previous.is_some_and(|value| disclosure.index <= value) {
-            return Err(PrivacyStatementValidationError::DisclosedAttributesNotStrictlyIncreasing);
-        }
-        match &disclosure.value {
-            PrivacyDisclosedAttributeValueV1::Plaintext(value) => {
-                let bytes = u32_len(value.len())?;
-                if bytes == 0
-                    || bytes > SIS_WITH_HINTS_MAX_ATTRIBUTE_BYTES_V1
-                    || value.iter().all(|byte| *byte == 0)
-                {
-                    return Err(
-                        PrivacyStatementValidationError::InvalidDisclosedAttributeValue {
-                            index: disclosure.index,
-                            bytes,
-                            max: SIS_WITH_HINTS_MAX_ATTRIBUTE_BYTES_V1,
-                        },
-                    );
-                }
-            }
-            PrivacyDisclosedAttributeValueV1::Digest(digest) => {
-                if digest.is_zero() {
-                    return Err(
-                        PrivacyStatementValidationError::ZeroDisclosedAttributeDigest {
-                            index: disclosure.index,
-                        },
-                    );
-                }
-            }
+            return Err(
+                PrivacyStatementValidationError::BootleLanternDisclosuresNotStrictlyIncreasing,
+            );
         }
         previous = Some(disclosure.index);
     }
@@ -5431,6 +6638,15 @@ impl IrohaZkAmsProofV1 {
         }
     }
 
+    /// Mutably borrow the exact native proof or signature bytes.
+    #[must_use]
+    pub const fn bytes_mut(&mut self) -> &mut PrivacyProofBytesV1 {
+        match self {
+            Self::TransparentStarkBatchAdmission(bytes)
+            | Self::Ristretto255MlsagsProvisionAccount(bytes) => bytes,
+        }
+    }
+
     /// Return whether this proof variant matches a typed public action.
     #[must_use]
     pub const fn matches_action(&self, action: &PrivacyZkAmsActionV1) -> bool {
@@ -5469,8 +6685,8 @@ pub enum PrivacyProofV1 {
     IrohaZkX509StarkP256V0(PrivacyProofBytesV1),
     /// Native Iroha Jindo multilinear lattice polynomial-commitment proof.
     IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1),
-    /// Native Iroha Bootle GenISIS anonymous-credential proof.
-    IrohaBootleGenisisAcStarkV0(PrivacyProofBytesV1),
+    /// Native Bootle Lantern/LNP22 anonymous-credential proof.
+    IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1),
     /// Orchard Halo2 action proof.
     OrchardHalo2ActionsV1(PrivacyProofBytesV1),
     /// Monero FCMP++ membership proof.
@@ -5495,8 +6711,8 @@ impl PrivacyProofV1 {
             Self::IrohaJindoPolynomialCommitmentV0(_) => {
                 PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
             }
-            Self::IrohaBootleGenisisAcStarkV0(_) => {
-                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0
+            Self::IrohaBootleLanternAnoncredV1(_) => {
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
             }
             Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
@@ -5515,12 +6731,34 @@ impl PrivacyProofV1 {
             | Self::VegaExistingCredentialZkV0(bytes)
             | Self::IrohaZkX509StarkP256V0(bytes)
             | Self::IrohaJindoPolynomialCommitmentV0(bytes)
-            | Self::IrohaBootleGenisisAcStarkV0(bytes)
+            | Self::IrohaBootleLanternAnoncredV1(bytes)
             | Self::OrchardHalo2ActionsV1(bytes)
             | Self::MoneroFcmpPlusPlusV1(bytes)
             | Self::IrohaIvmPrivateNoteStarkV1(bytes)
             | Self::PqMaspStarkV0(bytes) => bytes,
             Self::IrohaZkAmsV1(proof) => proof.bytes(),
+        }
+    }
+
+    /// Mutably borrow the protocol-specific native proof payload.
+    ///
+    /// Transaction-intent normalization uses this exhaustive accessor to
+    /// empty the sole typed proof byte vector without protocol-shape drift.
+    #[must_use]
+    pub const fn bytes_mut(&mut self) -> &mut PrivacyProofBytesV1 {
+        match self {
+            Self::ZkAcePqAuthorizationV0(bytes)
+            | Self::AnonymousPgcKOutOfNV1(bytes)
+            | Self::VeRangeTransparentRangeV1(bytes)
+            | Self::VegaExistingCredentialZkV0(bytes)
+            | Self::IrohaZkX509StarkP256V0(bytes)
+            | Self::IrohaJindoPolynomialCommitmentV0(bytes)
+            | Self::IrohaBootleLanternAnoncredV1(bytes)
+            | Self::OrchardHalo2ActionsV1(bytes)
+            | Self::MoneroFcmpPlusPlusV1(bytes)
+            | Self::IrohaIvmPrivateNoteStarkV1(bytes)
+            | Self::PqMaspStarkV0(bytes) => bytes,
+            Self::IrohaZkAmsV1(proof) => proof.bytes_mut(),
         }
     }
 }
@@ -5546,6 +6784,8 @@ pub enum PrivacyTypedFieldV1 {
     IssuerParameterId,
     /// Issuer parameter-set digest.
     IssuerParameterDigest,
+    /// Digest of the committed Bootle/Lantern issuer-policy record.
+    IssuerPolicyRecordDigest,
     /// Certificate subject-key digest.
     CertificateKeyDigest,
     /// Public Vega Figure 9 device-authentication digest `H_dev`.
@@ -5577,6 +6817,8 @@ pub enum PrivacyEpochFieldV1 {
     CertificateAuthorityMembership,
     /// Revocation-state epoch.
     Revocation,
+    /// Committed issuer-policy record epoch.
+    IssuerPolicy,
     /// Authorization epoch.
     Authorization,
     /// Private-program execution epoch.
@@ -5648,6 +6890,9 @@ pub enum PrivacyStatementValidationError {
         /// Maximum action count in one transaction.
         max_actions: u32,
     },
+    /// Canonical transaction-intent projection digest is zero.
+    #[error("privacy statement transaction-intent digest must be non-zero")]
+    ZeroTransactionIntentDigest,
     /// Governed parameter-set identifier is zero.
     #[error("privacy statement parameter id must be non-zero")]
     ZeroParameterId,
@@ -6037,53 +7282,23 @@ pub enum PrivacyStatementValidationError {
     /// Two Jindo openings use the same evaluation point.
     #[error("Jindo evaluation points must be distinct")]
     DuplicateJindoEvaluationPoint,
-    /// SIS-with-hints attribute count differs from its fixed profile.
-    #[error("SIS-with-hints attribute count {count} must equal {expected}")]
-    InvalidAttributeCount {
-        /// Observed attribute count.
-        count: u32,
-        /// Required profile count.
-        expected: u32,
-    },
-    /// SIS-with-hints disclosed attribute count exceeds its approved profile.
-    #[error("SIS-with-hints disclosed attribute count {count} exceeds {max}")]
-    TooManyDisclosedAttributes {
+    /// Bootle/Lantern disclosed attribute count exceeds its fixed profile.
+    #[error("Bootle/Lantern disclosed attribute count {count} exceeds {max}")]
+    TooManyBootleLanternDisclosures {
         /// Observed disclosure count.
         count: u32,
         /// Approved maximum.
         max: u32,
     },
-    /// A disclosed attribute index is outside the committed attribute vector.
-    #[error(
-        "SIS-with-hints disclosed attribute index {index} is outside attribute count {attribute_count}"
-    )]
-    DisclosedAttributeOutOfBounds {
+    /// A Bootle/Lantern disclosure index is outside the fixed eight attributes.
+    #[error("Bootle/Lantern disclosed attribute index {index} is outside 0..8")]
+    BootleLanternDisclosureIndexOutOfBounds {
         /// Invalid disclosed index.
-        index: u16,
-        /// Committed attribute count.
-        attribute_count: u32,
+        index: u8,
     },
-    /// Disclosed attribute indices contain a duplicate or are out of order.
-    #[error("SIS-with-hints disclosed attribute indices must be strictly increasing")]
-    DisclosedAttributesNotStrictlyIncreasing,
-    /// A disclosed plaintext attribute is empty, degenerate, or too large.
-    #[error(
-        "SIS-with-hints disclosed attribute {index} has invalid length {bytes}; maximum is {max}"
-    )]
-    InvalidDisclosedAttributeValue {
-        /// Attribute index.
-        index: u16,
-        /// Encoded value bytes.
-        bytes: u32,
-        /// Approved maximum bytes.
-        max: u32,
-    },
-    /// A digest-only disclosed attribute has a zero digest.
-    #[error("SIS-with-hints disclosed attribute {index} has a zero digest")]
-    ZeroDisclosedAttributeDigest {
-        /// Attribute index.
-        index: u16,
-    },
+    /// Bootle/Lantern disclosure indices contain a duplicate or are out of order.
+    #[error("Bootle/Lantern disclosed attribute indices must be strictly increasing")]
+    BootleLanternDisclosuresNotStrictlyIncreasing,
     /// Orchard spend and output action counts differ.
     #[error("Orchard spend count {spends} differs from output count {outputs}")]
     OrchardSpendOutputCountMismatch {
@@ -6598,6 +7813,7 @@ mod tests {
         PrivacyStatementContextV1 {
             chain_id: "privacy-test-chain".parse().expect("chain id"),
             action_index: 0,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(6)),
             parameter_id: PrivacyParameterIdV1::new(raw(1)),
             parameter_digest: PrivacyParameterDigestV1::new(raw(2)),
             verifier_digest: PrivacyVerifierDigestV1::new(raw(3)),
@@ -6783,31 +7999,29 @@ mod tests {
                     ],
                 },
             ),
-            PrivacyStatementV1::IrohaBootleGenisisAcStarkV0(IrohaBootleGenisisAcStarkStatementV1 {
-                context: context(),
-                issuer_id: PrivacyIssuerIdV1::new(raw(72)),
-                policy_id: PrivacyPolicyIdV1::new(raw(73)),
-                issuer_parameter_id: PrivacyParameterIdV1::new(raw(74)),
-                issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(75)),
-                credential_commitment: commitment(76),
-                hints_commitment: commitment(77),
-                revocation_root: PrivacyRootV1::new(raw(78)),
-                revocation_epoch: 12,
-                presentation_nullifier: nullifier(79),
-                attribute_count: SIS_WITH_HINTS_ATTRIBUTE_COUNT_V1,
-                disclosures: vec![
-                    PrivacyDisclosedAttributeV1 {
-                        index: 1,
-                        value: PrivacyDisclosedAttributeValueV1::Plaintext(vec![1, 2]),
-                    },
-                    PrivacyDisclosedAttributeV1 {
-                        index: 4,
-                        value: PrivacyDisclosedAttributeValueV1::Digest(
-                            PrivacyAttributeDigestV1::new(raw(80)),
-                        ),
-                    },
-                ],
-            }),
+            PrivacyStatementV1::IrohaBootleLanternAnoncredV1(
+                IrohaBootleLanternAnoncredStatementV1 {
+                    context: context(),
+                    issuer_id: PrivacyIssuerIdV1::new(raw(72)),
+                    policy_id: PrivacyPolicyIdV1::new(raw(73)),
+                    issuer_policy_epoch: 12,
+                    issuer_policy_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new(
+                        raw(76),
+                    ),
+                    issuer_parameter_id: PrivacyParameterIdV1::new(raw(74)),
+                    issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(75)),
+                    disclosures: vec![
+                        BootleLanternDisclosedAttributeV1 {
+                            index: 1,
+                            value: BootleLanternAttributeValueV1::new([0; 8]),
+                        },
+                        BootleLanternDisclosedAttributeV1 {
+                            index: 4,
+                            value: BootleLanternAttributeValueV1::new([u8::MAX; 8]),
+                        },
+                    ],
+                },
+            ),
             PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
                 context: context(),
                 asset_definition_id: asset.clone(),
@@ -6996,8 +8210,8 @@ mod tests {
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => {
                 PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(bytes)
             }
-            PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0 => {
-                PrivacyProofV1::IrohaBootleGenisisAcStarkV0(bytes)
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+                PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes)
             }
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
                 PrivacyProofV1::OrchardHalo2ActionsV1(bytes)
@@ -7053,8 +8267,8 @@ mod tests {
                     },
                 )
             }
-            PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0 => {
-                PrivacyProtocolActivationLimitsV1::IrohaBootleGenisisAcStarkV0
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+                PrivacyProtocolActivationLimitsV1::IrohaBootleLanternAnoncredV1
             }
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
                 PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(
@@ -7137,6 +8351,56 @@ mod tests {
         }
     }
 
+    fn compiled_profile_snapshot(
+        activation: &PrivacyProtocolActivationRecordV1,
+    ) -> PrivacyCompiledProfileSnapshotV1 {
+        PrivacyCompiledProfileSnapshotV1 {
+            protocol_id: activation.protocol_id,
+            proof_system_id: activation.proof_system_id,
+            engine_id: activation.engine_id,
+            parameter_id: activation.parameter_id,
+            parameter_digest: activation.parameter_digest,
+            verifier_digest: activation.verifier_digest,
+            statement_schema_digest: activation.statement_schema_digest,
+            engine_manifest_digest: activation.engine_manifest_digest,
+            protocol_limits: activation.protocol_limits,
+        }
+    }
+
+    fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
+        let pgc_activation = activation(&envelope(statement_for(
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        )));
+        let pgc_profile = compiled_profile_snapshot(&pgc_activation);
+        PrivacyCapabilitySnapshotV1 {
+            version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+            committed_height: 2,
+            consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+            protocols: PrivacyProtocolIdV1::ALL
+                .into_iter()
+                .map(|protocol_id| {
+                    if protocol_id == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+                        PrivacyCapabilityRowV1 {
+                            protocol_id,
+                            compiled_profile: PrivacyCompiledProfileResultV1::Available(
+                                pgc_profile,
+                            ),
+                            activation: Some(pgc_activation),
+                        }
+                    } else {
+                        PrivacyCapabilityRowV1 {
+                            protocol_id,
+                            compiled_profile: PrivacyCompiledProfileResultV1::Unavailable(
+                                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                            ),
+                            activation: None,
+                        }
+                    }
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn protocol_ids_keep_closed_norito_discriminants() {
         assert_eq!(PrivacyProtocolIdV1::ALL.len(), PrivacyProtocolIdV1::COUNT);
@@ -7185,8 +8449,8 @@ mod tests {
                 "iroha-jindo-polynomial-commitment-v0",
             ),
             (
-                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
-                "iroha-bootle-genisis-ac-stark-v0",
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+                "iroha-bootle-lantern-anoncred-v1",
             ),
             (
                 PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
@@ -7232,6 +8496,7 @@ mod tests {
             "zk-x509-onchain-identity-v0",
             "jindo-lattice-pcs-zk-v0",
             "sis-hints-anoncred-pq-v0",
+            "iroha-bootle-genisis-ac-stark-v0",
             "miden-stark-note-v1",
             "pq-masp-stark-fri-v1",
             "zkat-policy-private-auth-v1",
@@ -7248,6 +8513,350 @@ mod tests {
                 "non-canonical protocol label {label:?} must fail"
             );
         }
+    }
+
+    #[test]
+    fn privacy_public_json_labels_are_exact_and_roundtrip() {
+        for protocol in PrivacyProtocolIdV1::ALL {
+            let expected = format!(
+                "{{\"protocol\":\"{}\",\"value\":null}}",
+                protocol.canonical_label()
+            );
+            assert_eq!(
+                norito::json::to_json(&protocol).expect("serialize protocol id"),
+                expected
+            );
+            assert_eq!(
+                norito::json::from_json::<PrivacyProtocolIdV1>(&expected)
+                    .expect("deserialize protocol id"),
+                protocol
+            );
+
+            let limits = protocol_limits(protocol);
+            let limits_json = norito::json::to_json(&limits).expect("serialize protocol limits");
+            assert!(
+                limits_json.starts_with(&format!(
+                    "{{\"protocol\":\"{}\",\"limits\":",
+                    protocol.canonical_label()
+                )),
+                "unexpected activation-limit label: {limits_json}"
+            );
+            assert_eq!(
+                norito::json::from_json::<PrivacyProtocolActivationLimitsV1>(&limits_json)
+                    .expect("deserialize protocol limits"),
+                limits
+            );
+        }
+
+        let proof_systems = [
+            (
+                PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
+                "stark-fri-sha256-goldilocks",
+            ),
+            (
+                PrivacyProofSystemIdV1::StarkFriPoseidon2Goldilocks,
+                "stark-fri-poseidon2-goldilocks",
+            ),
+            (
+                PrivacyProofSystemIdV1::ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512,
+                "zk-ams-transparent-stark-poseidon2-goldilocks-mlsags-ristretto255-sha3-512",
+            ),
+            (
+                PrivacyProofSystemIdV1::AnonymousPgcP256,
+                "anonymous-pgc-p256",
+            ),
+            (
+                PrivacyProofSystemIdV1::IrohaVeRangeP256,
+                "iroha-verange-p256",
+            ),
+            (
+                PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256,
+                "vega-neutron-nova-spartan-hyrax-t256",
+            ),
+            (
+                PrivacyProofSystemIdV1::JindoPolynomialCommitment,
+                "jindo-polynomial-commitment",
+            ),
+            (PrivacyProofSystemIdV1::Halo2IpaPasta, "halo2-ipa-pasta"),
+            (
+                PrivacyProofSystemIdV1::FcmpPlusPlusCurveTreeBulletproofs,
+                "fcmp-plus-plus-curve-tree-bulletproofs",
+            ),
+            (
+                PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm,
+                "lantern-lnp22-module-linear-norm",
+            ),
+        ];
+        for (value, label) in proof_systems {
+            let expected = format!("{{\"proof_system\":\"{label}\",\"value\":null}}");
+            assert_eq!(
+                norito::json::to_json(&value).expect("serialize proof-system id"),
+                expected
+            );
+            assert_eq!(
+                norito::json::from_json::<PrivacyProofSystemIdV1>(&expected)
+                    .expect("deserialize proof-system id"),
+                value
+            );
+        }
+
+        let engines = [
+            (
+                PrivacyEngineIdV1::NativeGoldilocksStarkFri,
+                "native-goldilocks-stark-fri",
+            ),
+            (
+                PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255,
+                "native-zk-ams-transparent-stark-mlsags-ristretto255",
+            ),
+            (
+                PrivacyEngineIdV1::NativeAnonymousPgcP256,
+                "native-anonymous-pgc-p256",
+            ),
+            (PrivacyEngineIdV1::NativeVeRangeP256, "native-verange-p256"),
+            (PrivacyEngineIdV1::NativeVega, "native-vega"),
+            (PrivacyEngineIdV1::NativeJindo, "native-jindo"),
+            (
+                PrivacyEngineIdV1::NativeHalo2Orchard,
+                "native-halo2-orchard",
+            ),
+            (
+                PrivacyEngineIdV1::NativeFcmpPlusPlus,
+                "native-fcmp-plus-plus",
+            ),
+            (
+                PrivacyEngineIdV1::NativeLanternLnp22,
+                "native-lantern-lnp22",
+            ),
+        ];
+        for (value, label) in engines {
+            let expected = format!("{{\"engine\":\"{label}\",\"value\":null}}");
+            assert_eq!(
+                norito::json::to_json(&value).expect("serialize engine id"),
+                expected
+            );
+            assert_eq!(
+                norito::json::from_json::<PrivacyEngineIdV1>(&expected)
+                    .expect("deserialize engine id"),
+                value
+            );
+        }
+
+        let unavailable = [
+            (
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                "{\"reason\":\"engine-unavailable\",\"detail\":null}",
+            ),
+            (
+                PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed,
+                "{\"reason\":\"profile-initialization-failed\",\"detail\":null}",
+            ),
+            (
+                PrivacyCompiledProfileUnavailableReasonV1::StatementSchemaInvalid(
+                    PrivacyCompiledStatementSchemaErrorV1::ConflictingStableTypeId,
+                ),
+                "{\"reason\":\"statement-schema-invalid\",\"detail\":{\"schema_error\":\"conflicting-stable-type-id\",\"detail\":null}}",
+            ),
+            (
+                PrivacyCompiledProfileUnavailableReasonV1::StatementSchemaInvalid(
+                    PrivacyCompiledStatementSchemaErrorV1::MissingTypeReference,
+                ),
+                "{\"reason\":\"statement-schema-invalid\",\"detail\":{\"schema_error\":\"missing-type-reference\",\"detail\":null}}",
+            ),
+        ];
+        for (value, expected) in unavailable {
+            assert_eq!(
+                norito::json::to_json(&value).expect("serialize unavailable reason"),
+                expected
+            );
+            assert_eq!(
+                norito::json::from_json::<PrivacyCompiledProfileUnavailableReasonV1>(expected)
+                    .expect("deserialize unavailable reason"),
+                value
+            );
+        }
+
+        assert_eq!(
+            norito::json::to_json(&PrivacyAssuranceV1::Experimental).expect("serialize assurance"),
+            "{\"assurance\":\"experimental\",\"value\":null}"
+        );
+        let lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 1,
+            activated_at_height: 2,
+            state_since_height: 2,
+        });
+        assert_eq!(
+            norito::json::to_json(&lifecycle).expect("serialize lifecycle"),
+            "{\"state\":\"active\",\"record\":{\"proposed_at_height\":1,\"activated_at_height\":2,\"state_since_height\":2}}"
+        );
+    }
+
+    #[test]
+    fn privacy_public_json_rejects_aliases_case_whitespace_confusables_and_unknown_fields() {
+        for hostile in [
+            "AnonymousPgcKOutOfNV1",
+            "anonymous-pgc-k-out-of-n",
+            "anonymous-pgc-k-out-of-n-v0",
+            "ANONYMOUS-PGC-K-OUT-OF-N-V1",
+            " anonymous-pgc-k-out-of-n-v1",
+            "anonymous-pgc-k-out-of-n-v1 ",
+            "anonymous\u{2010}pgc-k-out-of-n-v1",
+            "anonym\u{043e}us-pgc-k-out-of-n-v1",
+            "iroha-bootle-genisis-ac-stark-v0",
+            "unknown",
+        ] {
+            let json = format!("{{\"protocol\":\"{hostile}\",\"value\":null}}");
+            assert!(
+                norito::json::from_json::<PrivacyProtocolIdV1>(&json).is_err(),
+                "hostile protocol JSON {json} must fail"
+            );
+        }
+        for hostile in [
+            "{\"protocol\":\"anonymous-pgc-k-out-of-n-v1\",\"value\":null,\"extra\":1}",
+            "{\"protocol\":\"anonymous-pgc-k-out-of-n-v1\",\"protocol\":\"anonymous-pgc-k-out-of-n-v1\",\"value\":null}",
+            "{\"proof_system\":\"AnonymousPgcP256\",\"value\":null}",
+            "{\"proof_system\":\"anonymous-pgc-p256 \",\"value\":null}",
+            "{\"engine\":\"NativeAnonymousPgcP256\",\"value\":null}",
+            "{\"engine\":\"native-anonymous-pgc-p25\u{ff16}\",\"value\":null}",
+            "{\"reason\":\"EngineUnavailable\",\"detail\":null}",
+            "{\"reason\":\"engine-unavailable\",\"detail\":null,\"extra\":false}",
+            "{\"reason\":\"statement-schema-invalid\",\"detail\":{\"schema_error\":\"MissingTypeReference\",\"detail\":null}}",
+            "{\"assurance\":\"production\",\"value\":null}",
+            "{\"assurance\":\"Experimental\",\"value\":null}",
+        ] {
+            let rejected = norito::json::from_json::<PrivacyProtocolIdV1>(hostile).is_err()
+                && norito::json::from_json::<PrivacyProofSystemIdV1>(hostile).is_err()
+                && norito::json::from_json::<PrivacyEngineIdV1>(hostile).is_err()
+                && norito::json::from_json::<PrivacyCompiledProfileUnavailableReasonV1>(hostile)
+                    .is_err()
+                && norito::json::from_json::<PrivacyAssuranceV1>(hostile).is_err();
+            assert!(rejected, "hostile closed-enum JSON {hostile} must fail");
+        }
+    }
+
+    #[test]
+    fn capability_snapshot_roundtrips_and_rejects_structural_adversaries() {
+        let snapshot = capability_snapshot();
+        snapshot.validate().expect("valid capability snapshot");
+
+        let archive = norito::to_bytes(&snapshot).expect("encode snapshot");
+        let decoded: PrivacyCapabilitySnapshotV1 =
+            norito::decode_from_bytes(&archive).expect("decode snapshot");
+        assert_eq!(decoded, snapshot);
+        decoded.validate().expect("validate decoded snapshot");
+
+        let canonical = norito::json::to_json(&snapshot).expect("serialize snapshot JSON");
+        let decoded_json: PrivacyCapabilitySnapshotV1 =
+            norito::json::from_json(&canonical).expect("decode snapshot JSON");
+        assert_eq!(decoded_json, snapshot);
+        decoded_json.validate().expect("validate JSON snapshot");
+
+        let unknown = canonical.replacen('{', "{\"unknown\":true,", 1);
+        assert!(
+            norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&unknown).is_err(),
+            "unknown top-level field must fail"
+        );
+        let duplicate = canonical.replacen('{', "{\"version\":1,", 1);
+        assert!(
+            norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&duplicate).is_err(),
+            "duplicate top-level field must fail"
+        );
+
+        let assurance_alias = canonical.replacen(
+            "\"assurance\":\"experimental\"",
+            "\"assurance\":\"production\"",
+            1,
+        );
+        assert!(
+            norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&assurance_alias).is_err(),
+            "non-Experimental assurance must fail"
+        );
+
+        let pgc_profile = match snapshot.protocols[1].compiled_profile {
+            PrivacyCompiledProfileResultV1::Available(profile) => profile,
+            PrivacyCompiledProfileResultV1::Unavailable(_) => unreachable!("PGC fixture available"),
+        };
+        let parameter_json =
+            norito::json::to_json(&pgc_profile.parameter_id).expect("serialize fixed bytes");
+        let malformed_fixed_bytes = canonical.replacen(
+            &format!("\"parameter_id\":{parameter_json}"),
+            "\"parameter_id\":[1]",
+            1,
+        );
+        assert!(
+            norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&malformed_fixed_bytes).is_err(),
+            "wrong-length fixed bytes must fail"
+        );
+        let out_of_range_fixed_bytes = canonical.replacen(
+            &format!("\"parameter_id\":{parameter_json}"),
+            "\"parameter_id\":[256,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]",
+            1,
+        );
+        assert!(
+            norito::json::from_json::<PrivacyCapabilitySnapshotV1>(&out_of_range_fixed_bytes)
+                .is_err(),
+            "out-of-range fixed byte must fail"
+        );
+
+        let mut missing = snapshot.clone();
+        missing.protocols.pop();
+        assert!(matches!(
+            missing.validate(),
+            Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolCount { .. })
+        ));
+
+        let mut duplicate_row = snapshot.clone();
+        duplicate_row.protocols[2] = duplicate_row.protocols[1];
+        assert!(matches!(
+            duplicate_row.validate(),
+            Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolOrder { .. })
+        ));
+
+        let mut reordered = snapshot.clone();
+        reordered.protocols.swap(0, 1);
+        assert!(matches!(
+            reordered.validate(),
+            Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolOrder { .. })
+        ));
+
+        let mut embedded_id_mismatch = snapshot.clone();
+        embedded_id_mismatch.protocols[2].compiled_profile =
+            PrivacyCompiledProfileResultV1::Available(pgc_profile);
+        assert!(matches!(
+            embedded_id_mismatch.validate(),
+            Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolRow {
+                source: PrivacyCapabilityRowValidationErrorV1::CompiledProfileProtocolMismatch { .. },
+                ..
+            })
+        ));
+
+        let mut activation_profile_mismatch = snapshot.clone();
+        activation_profile_mismatch.protocols[1]
+            .activation
+            .as_mut()
+            .expect("PGC activation")
+            .parameter_digest = PrivacyParameterDigestV1::new(raw(250));
+        assert!(matches!(
+            activation_profile_mismatch.validate(),
+            Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolRow {
+                source: PrivacyCapabilityRowValidationErrorV1::ActivationProfileMismatch {
+                    field: PrivacyCapabilityBindingFieldV1::ParameterDigest,
+                },
+                ..
+            })
+        ));
+
+        let mut unavailable_activation = snapshot;
+        unavailable_activation.protocols[2].activation = Some(activation(&envelope(
+            statement_for(PrivacyProtocolIdV1::VeRangeTransparentRangeV1),
+        )));
+        assert!(matches!(
+            unavailable_activation.validate(),
+            Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolRow {
+                source: PrivacyCapabilityRowValidationErrorV1::UnavailableActivation { .. },
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -7567,14 +9176,10 @@ mod tests {
             .validate_tightening_to(&strict)
             .expect("one component may be lowered");
 
-        let mutations: [(
-            PrivacyLimitFieldV1,
-            fn(&mut PrivacyConsensusLimitsV1),
-        ); 10] = [
-            (
-                PrivacyLimitFieldV1::ActionsPerTransaction,
-                |value| value.max_actions_per_transaction += 1,
-            ),
+        let mutations: [(PrivacyLimitFieldV1, fn(&mut PrivacyConsensusLimitsV1)); 10] = [
+            (PrivacyLimitFieldV1::ActionsPerTransaction, |value| {
+                value.max_actions_per_transaction += 1
+            }),
             (PrivacyLimitFieldV1::ActionsPerBlock, |value| {
                 value.max_actions_per_block += 1;
             }),
@@ -7584,10 +9189,9 @@ mod tests {
             (PrivacyLimitFieldV1::ActionBytes, |value| {
                 value.max_action_bytes += 1;
             }),
-            (
-                PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
-                |value| value.max_privacy_bytes_per_transaction += 1,
-            ),
+            (PrivacyLimitFieldV1::PrivacyBytesPerTransaction, |value| {
+                value.max_privacy_bytes_per_transaction += 1
+            }),
             (PrivacyLimitFieldV1::PrivacyBytesPerBlock, |value| {
                 value.max_privacy_bytes_per_block += 1;
             }),
@@ -7693,10 +9297,12 @@ mod tests {
         };
         assert!(matches!(
             policy.validate_at_committed_height(99),
-            Err(PrivacyPolicyValidationErrorV1::PendingScheduledAfterCommitted {
-                scheduled_at_height: 100,
-                committed_height: 99
-            })
+            Err(
+                PrivacyPolicyValidationErrorV1::PendingScheduledAfterCommitted {
+                    scheduled_at_height: 100,
+                    committed_height: 99
+                }
+            )
         ));
         policy
             .validate_at_committed_height(100)
@@ -8670,55 +10276,83 @@ mod tests {
     }
 
     #[test]
-    fn sis_disclosures_are_exact_bounded_and_canonically_ordered() {
+    fn bootle_lantern_disclosures_are_fixed_direct_and_canonically_ordered() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
-        let base = statement_for(PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0);
-        let mutate = |f: fn(&mut IrohaBootleGenisisAcStarkStatementV1)| {
+        let base = statement_for(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1);
+        let mutate = |f: fn(&mut IrohaBootleLanternAnoncredStatementV1)| {
             let mut value = base.clone();
-            let PrivacyStatementV1::IrohaBootleGenisisAcStarkV0(statement) = &mut value else {
+            let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut value else {
                 unreachable!()
             };
             f(statement);
             value.validate(&limits)
         };
         assert!(matches!(
-            mutate(|statement| statement.attribute_count = 7),
-            Err(PrivacyStatementValidationError::InvalidAttributeCount { .. })
+            mutate(|statement| statement.issuer_policy_epoch = 0),
+            Err(PrivacyStatementValidationError::ZeroEpoch {
+                field: PrivacyEpochFieldV1::IssuerPolicy
+            })
+        ));
+        assert!(matches!(
+            mutate(|statement| {
+                statement.issuer_policy_record_digest =
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::IssuerPolicyRecordDigest
+            })
         ));
         assert!(matches!(
             mutate(|statement| statement.disclosures.swap(0, 1)),
-            Err(PrivacyStatementValidationError::DisclosedAttributesNotStrictlyIncreasing)
+            Err(PrivacyStatementValidationError::BootleLanternDisclosuresNotStrictlyIncreasing)
         ));
         assert!(matches!(
             mutate(|statement| statement.disclosures[1].index = 8),
-            Err(PrivacyStatementValidationError::DisclosedAttributeOutOfBounds { .. })
+            Err(
+                PrivacyStatementValidationError::BootleLanternDisclosureIndexOutOfBounds {
+                    index: 8
+                }
+            )
+        ));
+        assert!(matches!(
+            mutate(|statement| statement.disclosures[1].index = statement.disclosures[0].index),
+            Err(PrivacyStatementValidationError::BootleLanternDisclosuresNotStrictlyIncreasing)
         ));
         assert!(matches!(
             mutate(|statement| {
-                statement.disclosures[0].value =
-                    PrivacyDisclosedAttributeValueV1::Plaintext(vec![0; 2])
+                statement.disclosures = (0_u8..=8)
+                    .map(|index| BootleLanternDisclosedAttributeV1 {
+                        index,
+                        value: BootleLanternAttributeValueV1::new([index; 8]),
+                    })
+                    .collect()
             }),
-            Err(PrivacyStatementValidationError::InvalidDisclosedAttributeValue { .. })
+            Err(
+                PrivacyStatementValidationError::TooManyBootleLanternDisclosures {
+                    count: 9,
+                    max: 8
+                }
+            )
         ));
-        assert!(matches!(
-            mutate(|statement| {
-                statement.disclosures[0].value = PrivacyDisclosedAttributeValueV1::Plaintext(vec![
-                        1;
-                        usize::try_from(
-                            SIS_WITH_HINTS_MAX_ATTRIBUTE_BYTES_V1 + 1
-                        )
-                        .expect("bound fits usize")
-                    ])
-            }),
-            Err(PrivacyStatementValidationError::InvalidDisclosedAttributeValue { .. })
-        ));
-        assert!(matches!(
-            mutate(|statement| {
-                statement.disclosures[1].value =
-                    PrivacyDisclosedAttributeValueV1::Digest(PrivacyAttributeDigestV1::new([0; 32]))
-            }),
-            Err(PrivacyStatementValidationError::ZeroDisclosedAttributeDigest { .. })
-        ));
+
+        let mut all_boundaries = base;
+        let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut all_boundaries
+        else {
+            unreachable!()
+        };
+        statement.disclosures = (0_u8..8)
+            .map(|index| BootleLanternDisclosedAttributeV1 {
+                index,
+                value: BootleLanternAttributeValueV1::new(if index.is_multiple_of(2) {
+                    [0; 8]
+                } else {
+                    [u8::MAX; 8]
+                }),
+            })
+            .collect();
+        all_boundaries
+            .validate(&limits)
+            .expect("all eight direct zero/maximum values are canonical");
     }
 
     #[test]

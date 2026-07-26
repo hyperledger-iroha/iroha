@@ -12,14 +12,18 @@ use std::collections::BTreeMap;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PrivacyAssuranceV1, PrivacyEngineIdV1,
-    PrivacyEngineManifestDigestV1,
-    PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
-    PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
-    PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1,
-    PrivacyVerifierDigestV1, TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1,
-    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VERANGE_HARD_MAX_AGGREGATION_COUNT_V1,
-    VeRangeActivationLimitsV1, VeRangeTransparentRangeStatementV1,
+    PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
+    PrivacyAssuranceV1, PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
+    PrivacyCapabilitySnapshotValidationErrorV1, PrivacyCompiledProfileResultV1,
+    PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
+    PrivacyCompiledStatementSchemaErrorV1, PrivacyConsensusPolicyV1, PrivacyEngineIdV1,
+    PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+    PrivacyPgcAccountBootstrapV1, PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1,
+    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+    PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
+    TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
+    VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
+    VeRangeTransparentRangeStatementV1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
 use sha2::{Digest, Sha256};
@@ -118,6 +122,88 @@ impl CompiledPrivacyProfileV1 {
     }
 }
 
+impl From<CompiledPrivacyProfileV1> for PrivacyCompiledProfileSnapshotV1 {
+    fn from(profile: CompiledPrivacyProfileV1) -> Self {
+        Self {
+            protocol_id: profile.protocol_id,
+            proof_system_id: profile.proof_system_id,
+            engine_id: profile.engine_id,
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
+            protocol_limits: profile.protocol_limits,
+        }
+    }
+}
+
+/// Build the exact local compiled-profile result for one public snapshot row.
+#[must_use]
+pub fn compiled_privacy_profile_snapshot_result_v1(
+    protocol_id: PrivacyProtocolIdV1,
+) -> PrivacyCompiledProfileResultV1 {
+    match compiled_privacy_profile_v1(protocol_id) {
+        Ok(profile) => PrivacyCompiledProfileResultV1::Available(profile.into()),
+        Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { .. }) => {
+            PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            )
+        }
+        Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { .. }) => {
+            PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::ProfileInitializationFailed,
+            )
+        }
+        Err(CompiledPrivacyProfileErrorV1::StatementSchemaInvalid { source, .. }) => {
+            let source = match source {
+                CanonicalSchemaDigestErrorV1::ConflictingStableTypeId => {
+                    PrivacyCompiledStatementSchemaErrorV1::ConflictingStableTypeId
+                }
+                CanonicalSchemaDigestErrorV1::MissingTypeReference => {
+                    PrivacyCompiledStatementSchemaErrorV1::MissingTypeReference
+                }
+            };
+            PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::StatementSchemaInvalid(source),
+            )
+        }
+    }
+}
+
+/// Build and validate an authoritative committed privacy capability snapshot.
+///
+/// `activation_for` must read from the same immutable committed world view as
+/// `consensus_policy` and `committed_height`. The closure is invoked exactly
+/// once for every protocol in canonical discriminant order.
+///
+/// # Errors
+///
+/// Returns a deterministic structural or height-consistency error if the
+/// committed state cannot be represented by the closed snapshot contract.
+pub fn committed_privacy_capability_snapshot_v1(
+    committed_height: u64,
+    consensus_policy: PrivacyConsensusPolicyV1,
+    mut activation_for: impl FnMut(PrivacyProtocolIdV1) -> Option<PrivacyProtocolActivationRecordV1>,
+) -> Result<PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1> {
+    let protocols = PrivacyProtocolIdV1::ALL
+        .into_iter()
+        .map(|protocol_id| PrivacyCapabilityRowV1 {
+            protocol_id,
+            compiled_profile: compiled_privacy_profile_snapshot_result_v1(protocol_id),
+            activation: activation_for(protocol_id),
+        })
+        .collect();
+    let snapshot = PrivacyCapabilitySnapshotV1 {
+        version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+        committed_height,
+        consensus_policy,
+        protocols,
+    };
+    snapshot.validate()?;
+    Ok(snapshot)
+}
+
 /// Return the exact compiled profile for an executable native verifier.
 ///
 /// # Errors
@@ -142,7 +228,7 @@ pub fn compiled_privacy_profile_v1(
         | PrivacyProtocolIdV1::VegaExistingCredentialZkV0
         | PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
         | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
-        | PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0
+        | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
         | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
         | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
         | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
@@ -1073,10 +1159,10 @@ mod tests {
             ),
             (
                 "58c1a93d39f23727ae8b5bbb661414f3dcadf2479575282cd7e3b9ebbb5589fc".to_owned(),
-                "e6cfafc5380a4a4c248f399684a5e43df1192bc460bd4de630eea985655ec575".to_owned(),
-                "f4d0bc2d8e806a656be12a693598679896c1acf113733c4f29121c592f00c8fa".to_owned(),
+                "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
+                "96d998f0519b9bc9bc95a959ff5e5b70fa76e248e6e17fdff4e210e175fd9af3".to_owned(),
                 "5098dd5693ae9b8a45e652a9dfa7774326e3fbc6ae6b616d5ed16dd3c536a176".to_owned(),
-                "2e81158ef41e5487eef19c9d80d2dc0ac8d0ead34eccd5c87eec6ad40d4cfe95".to_owned(),
+                "ef39c7a61b23a3fa1b6977ed082e7ad26a46563f96af8dbd90d865f98c10d5a9".to_owned(),
             )
         );
     }

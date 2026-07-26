@@ -5,6 +5,7 @@
 //! governed statement and parameter digests through [`p256::TranscriptBindingV1`].
 
 pub mod anonymous_pgc;
+pub mod jindo;
 pub mod p256;
 pub mod vega;
 pub mod verange;

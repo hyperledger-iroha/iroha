@@ -2,12 +2,20 @@
 
 use thiserror::Error;
 
+use halo2curves::{
+    group::{Curve as _, prime::PrimeCurveAffine as _},
+    msm::msm_best,
+    t256::{T256, T256Affine},
+};
+
 use super::{
     VegaCurveError, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1,
 };
 
 const COMMITMENT_BEGIN: &[u8] = b"poly_commitment_begin";
 const COMMITMENT_END: &[u8] = b"poly_commitment_end";
+pub(super) const MAX_COMMITMENT_WORKERS: usize = 20;
+pub(super) const COMMITMENT_WORKER_STACK_BYTES: usize = 512 * 1024;
 
 /// Failure while constructing or combining a Hyrax commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -61,7 +69,11 @@ impl Commitment {
 #[derive(Clone, Debug)]
 pub(super) struct CommitmentKey {
     generators: Vec<Point>,
+    generator_affines: Vec<T256Affine>,
     hiding_generator: Point,
+    worker_count: usize,
+    #[cfg(test)]
+    panic_worker: Option<usize>,
 }
 
 impl CommitmentKey {
@@ -76,9 +88,14 @@ impl CommitmentKey {
                 .ok_or(CommitmentError::InvalidDimension)?,
         )?;
         let hiding_generator = points.pop().ok_or(CommitmentError::InvalidDimension)?;
+        let generator_affines = batch_normalize(&points);
         let key = Self {
             generators: points,
+            generator_affines,
             hiding_generator,
+            worker_count: 1,
+            #[cfg(test)]
+            panic_worker: None,
         };
         key.validate_independence()?;
         Ok(key)
@@ -96,6 +113,23 @@ impl CommitmentKey {
         self.hiding_generator
     }
 
+    pub(super) fn with_worker_count(
+        mut self,
+        worker_count: usize,
+    ) -> Result<Self, CommitmentError> {
+        if worker_count == 0 || worker_count > MAX_COMMITMENT_WORKERS {
+            return Err(CommitmentError::InvalidDimension);
+        }
+        self.worker_count = worker_count;
+        Ok(self)
+    }
+
+    #[cfg(test)]
+    fn with_test_worker_panic(mut self, worker_index: usize) -> Self {
+        self.panic_worker = Some(worker_index);
+        self
+    }
+
     pub(super) fn commit(
         &self,
         values: &[Scalar],
@@ -108,19 +142,89 @@ impl CommitmentKey {
         if row_blindings.len() != row_count {
             return Err(CommitmentError::InvalidDimension);
         }
-        let mut points = Vec::with_capacity(row_count);
+        let worker_count = self.worker_count;
+        if worker_count > row_count {
+            return Err(CommitmentError::InvalidDimension);
+        }
+        let points = std::thread::scope(|scope| {
+            let mut workers = Vec::with_capacity(worker_count);
+            for worker_index in 0..worker_count {
+                let row_start = worker_index
+                    .checked_mul(row_count)
+                    .map(|value| value / worker_count)
+                    .ok_or(CommitmentError::InvalidDimension)?;
+                let row_end = worker_index
+                    .checked_add(1)
+                    .and_then(|index| index.checked_mul(row_count))
+                    .map(|value| value / worker_count)
+                    .ok_or(CommitmentError::InvalidDimension)?;
+                let value_start = row_start
+                    .checked_mul(self.columns())
+                    .ok_or(CommitmentError::InvalidDimension)?;
+                let value_end = row_end
+                    .checked_mul(self.columns())
+                    .map(|end| end.min(values.len()))
+                    .ok_or(CommitmentError::InvalidDimension)?;
+                let value_rows = &values[value_start..value_end];
+                let blinding_rows = &row_blindings[row_start..row_end];
+                let worker = std::thread::Builder::new()
+                    .name(format!("vega-msm-{worker_index}"))
+                    .stack_size(COMMITMENT_WORKER_STACK_BYTES)
+                    .spawn_scoped(scope, move || {
+                        #[cfg(test)]
+                        if self.panic_worker == Some(worker_index) {
+                            panic!("injected Vega commitment worker panic");
+                        }
+                        self.commit_rows(value_rows, blinding_rows)
+                    });
+                match worker {
+                    Ok(worker) => workers.push(worker),
+                    Err(_) => {
+                        for worker in workers {
+                            let _ = worker.join();
+                        }
+                        return Err(CommitmentError::InvalidDimension);
+                    }
+                }
+            }
+            let mut points = Vec::with_capacity(row_count);
+            let mut worker_failed = false;
+            for worker in workers {
+                match worker.join() {
+                    Ok(Ok(worker_points)) if !worker_failed => points.extend(worker_points),
+                    Ok(Ok(_)) => {}
+                    Ok(Err(_)) | Err(_) => worker_failed = true,
+                }
+            }
+            if worker_failed {
+                return Err(CommitmentError::InvalidDimension);
+            }
+            Ok::<_, CommitmentError>(points)
+        })?;
+        Commitment::from_points(points)
+    }
+
+    fn commit_rows(
+        &self,
+        values: &[Scalar],
+        row_blindings: &[Scalar],
+    ) -> Result<Vec<Point>, CommitmentError> {
+        let mut points = Vec::with_capacity(row_blindings.len());
         for (row, blinding) in values
             .chunks(self.columns())
             .zip(row_blindings.iter().copied())
         {
-            let committed = msm(row, &self.generators[..row.len()])?
-                .add(self.hiding_generator.mul_scalar(blinding));
+            let committed = Point(msm_best(
+                &row.iter().map(|scalar| scalar.0).collect::<Vec<_>>(),
+                &self.generator_affines[..row.len()],
+            ))
+            .add(self.hiding_generator.mul_scalar(blinding));
             if committed.is_identity() {
                 return Err(CommitmentError::InvalidDimension);
             }
             points.push(committed);
         }
-        Commitment::from_points(points)
+        Ok(points)
     }
 
     fn validate_independence(&self) -> Result<(), CommitmentError> {
@@ -144,14 +248,17 @@ pub(super) fn msm(scalars: &[Scalar], points: &[Point]) -> Result<Point, Commitm
     if scalars.len() != points.len() {
         return Err(CommitmentError::InvalidDimension);
     }
-    Ok(scalars
-        .iter()
-        .copied()
-        .zip(points.iter().copied())
-        .filter(|(scalar, _)| !scalar.is_zero())
-        .fold(Point::identity(), |sum, (scalar, point)| {
-            sum.add(point.mul_scalar(scalar))
-        }))
+    Ok(Point(msm_best(
+        &scalars.iter().map(|scalar| scalar.0).collect::<Vec<_>>(),
+        &batch_normalize(points),
+    )))
+}
+
+fn batch_normalize(points: &[Point]) -> Vec<T256Affine> {
+    let projective = points.iter().map(|point| point.0).collect::<Vec<T256>>();
+    let mut affine = vec![T256Affine::identity(); projective.len()];
+    T256::batch_normalize(&projective, &mut affine);
+    affine
 }
 
 pub(super) fn combine(commitments: &[&Commitment]) -> Result<Commitment, CommitmentError> {
@@ -252,6 +359,33 @@ mod tests {
         let commitment = key.commit(&[s(1), s(2)], &[s(3)]).expect("valid");
         assert!(fold(&[&commitment], &[Scalar::zero()]).is_err());
         assert!(combine(&[]).is_err());
+    }
+
+    #[test]
+    fn invalid_worker_counts_and_worker_panics_fail_closed() {
+        let key = CommitmentKey::derive(b"vega-commitment-worker-negative", 2)
+            .expect("canonical commitment key");
+        assert!(key.clone().with_worker_count(0).is_err());
+        assert!(
+            key.clone()
+                .with_worker_count(MAX_COMMITMENT_WORKERS + 1)
+                .is_err()
+        );
+        assert!(
+            key.clone()
+                .with_worker_count(2)
+                .expect("two workers")
+                .commit(&[s(1), s(2)], &[s(3)])
+                .is_err(),
+            "worker count greater than the row count must fail"
+        );
+        assert_eq!(
+            key.with_worker_count(2)
+                .expect("two workers")
+                .with_test_worker_panic(1)
+                .commit(&[s(1), s(2), s(3), s(4)], &[s(5), s(6)]),
+            Err(CommitmentError::InvalidDimension)
+        );
     }
 
     #[test]

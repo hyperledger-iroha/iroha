@@ -29,6 +29,8 @@ mod commitment;
 mod curve;
 #[path = "vega/date.rs"]
 mod date;
+#[path = "vega/engine.rs"]
+mod engine;
 #[path = "vega/figure9.rs"]
 mod figure9;
 #[path = "vega/figure9_layout.rs"]
@@ -56,6 +58,13 @@ mod wire;
 
 pub use curve::{
     VEGA_T256_BASE_MODULUS_BE_V1, VegaCurveError, VegaT256PointV1, derive_t256_generators_v1,
+};
+pub use engine::{
+    MAX_VEGA_PROVER_RELEASE_MEMORY_CEILING_BYTES_V1, MAX_VEGA_PROVER_WORKERS_V1,
+    VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
+    VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1, VegaMdlProofContextV1, VegaMdlProofDimensionsV1,
+    VegaMdlProofErrorV1, VegaMdlProverConfigV1, VegaRandomSourceErrorV1, VegaRandomSourceV1,
+    prove_vega_mdl_figure9_v1, vega_mdl_proof_dimensions_v1, verify_vega_mdl_figure9_v1,
 };
 pub use figure9::{
     VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9ErrorV1, VegaMdlFigure9WitnessV1,
