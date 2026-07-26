@@ -4327,6 +4327,14 @@ AdequateLeaderTargetCandidateIdentity(
        leaderView, subject)
   /\ AdequateLeaderTargetCandidateRole(candidate, target, leader)
 
+AdequateLeaderFrozenTargetCandidateIdentity(
+    candidate, rank, target, leaderContext, leader, leaderView, subject) ==
+  /\ rank \in AdequateLeaderTargetSemanticRankCarrier
+  /\ ExactLeaderFrozenSemanticIdentity(
+       candidate, rank, leaderContext, candidate.node,
+       leaderView, subject)
+  /\ AdequateLeaderTargetCandidateRole(candidate, target, leader)
+
 AdequateLeaderTargetRankFrontier(
     target, leaderContext, leader, leaderView, subject, rank) ==
   \E candidate \in AsyncCandidateSet:
@@ -4338,6 +4346,27 @@ AdequateLeaderTargetRankOwnerSet(
   {candidate \in AsyncCandidateSet:
      AdequateLeaderTargetCandidateIdentity(
        candidate, rank, target, leaderContext, leader, leaderView, subject)}
+
+AdequateLeaderFrozenCandidateOwnerIdentity(
+    candidate, rank, target, leaderContext, leader, leaderView, subject) ==
+  [target |-> target,
+   context |-> leaderContext,
+   leader |-> leader,
+   view |-> leaderView,
+   subject |-> subject,
+   phase |-> rank[1],
+   owner |-> candidate.node,
+   kind |-> "Candidate",
+   payload |-> ExactAsyncCandidateIdentity(candidate)]
+
+AdequateLeaderTargetRankOwnerIdentitySet(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  {AdequateLeaderFrozenCandidateOwnerIdentity(
+     candidate, rank, target, leaderContext,
+     leader, leaderView, subject):
+     candidate \in
+       AdequateLeaderTargetRankOwnerSet(
+         target, leaderContext, leader, leaderView, subject, rank)}
 
 \* This is a distinct-logical-owner count.  On `AsyncLiveSpecAt` traces,
 \* `AsyncProgressOwnershipInvariant` rules out two scheduler locations owning
@@ -4426,6 +4455,48 @@ AdequateLeaderTargetWireIdentity(
        leaderView, subject)
   /\ LeaderWireProductiveTransportIdentity(item)
 
+AdequateLeaderFrozenWireOwnerIdentity(
+    item, target, leaderContext, leader, leaderView, subject) ==
+  [target |-> target,
+   context |-> leaderContext,
+   leader |-> leader,
+   view |-> leaderView,
+   subject |-> subject,
+   phase |-> item.kind,
+   owner |-> item.envelope.recipient,
+   kind |-> "Wire",
+   payload |-> item]
+
+AdequateLeaderFrozenCandidateOwnerUniverse(
+    target, leaderContext, leader, leaderView, subject) ==
+  UNION {
+    {AdequateLeaderFrozenCandidateOwnerIdentity(
+       candidate, rank, target, leaderContext,
+       leader, leaderView, subject):
+       candidate \in
+         {owner \in AsyncCandidateSet:
+            AdequateLeaderFrozenTargetCandidateIdentity(
+              owner, rank, target, leaderContext,
+              leader, leaderView, subject)}}:
+    rank \in AdequateLeaderTargetSemanticRankCarrier}
+
+AdequateLeaderFrozenWireOwnerUniverse(
+    target, leaderContext, leader, leaderView, subject) ==
+  {AdequateLeaderFrozenWireOwnerIdentity(
+     item, target, leaderContext, leader, leaderView, subject):
+     item \in
+       {wire \in AsyncNetworkItems:
+          AdequateLeaderTargetWireIdentity(
+            wire, target, leaderContext, leader, leaderView, subject)}}
+
+AdequateLeaderFrozenOwnerUniverse(
+    target, leaderContext, leader, leaderView, subject) ==
+  AdequateLeaderFrozenCandidateOwnerUniverse(
+    target, leaderContext, leader, leaderView, subject)
+    \cup
+  AdequateLeaderFrozenWireOwnerUniverse(
+    target, leaderContext, leader, leaderView, subject)
+
 \* A locally formed CommitQC is first persisted by the forming leader.  That
 \* non-target PersistDecision is not terminal for `target`; its only accepted
 \* target-corridor outcome is the exact rebroadcast/transport handoff.
@@ -4497,11 +4568,34 @@ AdequateLeaderTargetProducerResidual(
   /\ ~AdequateLeaderTargetCertifiedResponseCapacityResidual(
        target, leaderContext, leader, leaderView, subject)
 
-\* A target-local action can replenish the exact same semantic rank without
-\* deciding the target.  This action is not a rank decrease: a discharge of
-\* the temporal descent property must prove that such producer episodes are
-\* finite, coalesced, or themselves governed by a prior well-founded debt.
-AdequateLeaderTargetRankReplenishmentAction(
+\* Servicing a concrete owner has three disjoint outcomes: Decision/strict
+\* occurrence descent, an equal-count identity replacement, or a
+\* count-increasing replenishment.  Only the first is progress.  The other
+\* two enter the separate finite non-descent episode below.
+AdequateLeaderTargetEqualCountOwnerReplacementAction(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  /\ rank \in AdequateLeaderTargetSemanticRankCarrier
+  /\ subject \in Subjects
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ IsFiniteSet(
+       AdequateLeaderTargetRankOwnerSet(
+         target, leaderContext, leader, leaderView, subject, rank))
+  /\ IsFiniteSet(
+       AdequateLeaderTargetRankOwnerSet(
+         target, leaderContext, leader, leaderView, subject, rank)')
+  /\ AsyncNext
+  /\ ~NodeHasDecision(target)'
+  /\ AdequateLeaderTargetRankOwnerCount(
+       target, leaderContext, leader, leaderView, subject, rank)'
+       = AdequateLeaderTargetRankOwnerCount(
+           target, leaderContext, leader, leaderView, subject, rank)
+  /\ AdequateLeaderTargetRankOwnerIdentitySet(
+       target, leaderContext, leader, leaderView, subject, rank)'
+       # AdequateLeaderTargetRankOwnerIdentitySet(
+           target, leaderContext, leader, leaderView, subject, rank)
+
+AdequateLeaderTargetCountIncreasingReplenishmentAction(
     target, leaderContext, leader, leaderView, subject, rank) ==
   /\ rank \in AdequateLeaderTargetSemanticRankCarrier
   /\ subject \in Subjects
@@ -4520,6 +4614,11 @@ AdequateLeaderTargetRankReplenishmentAction(
        > AdequateLeaderTargetRankOwnerCount(
            target, leaderContext, leader, leaderView, subject, rank)
 
+AdequateLeaderTargetRankReplenishmentAction(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  AdequateLeaderTargetCountIncreasingReplenishmentAction(
+    target, leaderContext, leader, leaderView, subject, rank)
+
 AdequateLeaderTargetRankReplenishmentResidual(
     target, leaderContext, leader, leaderView, subject, rank) ==
   /\ AdequateLeaderTargetRankFrontier(
@@ -4528,6 +4627,35 @@ AdequateLeaderTargetRankReplenishmentResidual(
        <<AdequateLeaderTargetRankReplenishmentAction(
            target, leaderContext, leader, leaderView,
            subject, rank)>>_AsyncAllVars
+
+AdequateLeaderTargetStrictOccurrenceDescentGoal(
+    target, leaderContext, leader, leaderView, subject, occurrenceRank) ==
+  \/ NodeHasDecision(target)
+  \/ \E lowerOccurrenceRank \in
+       SetLessThan(
+         occurrenceRank,
+         AdequateLeaderTargetOccurrenceRankOrdering,
+         AdequateLeaderTargetOccurrenceRankCarrier):
+       AdequateLeaderTargetOccurrenceRankFrontier(
+         target, leaderContext, leader,
+         leaderView, subject, lowerOccurrenceRank)
+
+AdequateLeaderTargetDecisionOrStrictlyLowerOccurrenceAction(
+    target, leaderContext, leader, leaderView, subject, occurrenceRank) ==
+  /\ AdequateLeaderTargetOccurrenceRankFrontier(
+       target, leaderContext, leader,
+       leaderView, subject, occurrenceRank)
+  /\ AsyncNext
+  /\ AdequateLeaderTargetStrictOccurrenceDescentGoal(
+       target, leaderContext, leader,
+       leaderView, subject, occurrenceRank)'
+
+AdequateLeaderTargetNonDescentEpisodeAction(
+    target, leaderContext, leader, leaderView, subject, rank) ==
+  \/ AdequateLeaderTargetEqualCountOwnerReplacementAction(
+       target, leaderContext, leader, leaderView, subject, rank)
+  \/ AdequateLeaderTargetCountIncreasingReplenishmentAction(
+       target, leaderContext, leader, leaderView, subject, rank)
 
 AdequateLeaderTargetProducerTransportResidual(
     target, leaderContext, leader, leaderView, subject) ==
