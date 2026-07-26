@@ -2186,18 +2186,35 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistLockCommitReady
      /\ candidate.kind = "PersistLockCommit")
       => (RegularCoreCommandReady(candidate)'
             <=> RegularCoreCommandReady(candidate))
-BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                ExactLeaderSchedulerReadinessFrame,
+                candidate.kind = "PersistLockCommit"
+         PROVE RegularCoreCommandReady(candidate)'
+                 <=> RegularCoreCommandReady(candidate)
+    <2>1. \A request:
+             PersistLockCommitReady(request)'
+               <=> PersistLockCommitReady(request)
+      BY <1>1, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             PersistLockCommitReady, BodyHeldBy,
+             RetainedLockedBodyRecord, vars
+    <2> QED BY <1>1, <2>1, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             RegularCoreCommandReady, CommandMatches, vars
+  <1> QED BY <1>1
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesFormCommitQCReady ==
+  \A node, roundView, subject:
+    ExactLeaderSchedulerReadinessFrame
+      => (FormCommitQCReady(node, roundView, subject)'
+            <=> FormCommitQCReady(node, roundView, subject))
+BY IsaT(120)
    DEF ExactLeaderSchedulerReadinessFrame,
-       RegularCoreCommandReady, CommandMatches,
-       LockCommitQcValues, ReceivedQcValues,
-       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
-       PersistLockCommitReady, FormCommitQCReady,
-       BeginDecisionReady, CurrentOpenPrepareForCommit,
-       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
-       RetainedLockedBodyRecord, VoteSignersAt,
+       FormCommitQCReady, VoteSignersAt,
        CommitRoundAdmissible, LockedPrepareRound,
        QcWireValid, NodeIdle, PendingNodes, SigningNodes,
-       CurrentVoters, CurrentEpoch, vars
+       CurrentVoters, CurrentEpoch, QC, vars
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularFormCommitQCReady ==
   \A candidate:
@@ -2205,18 +2222,31 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularFormCommitQCReady ==
      /\ candidate.kind = "FormCommitQC")
       => (RegularCoreCommandReady(candidate)'
             <=> RegularCoreCommandReady(candidate))
-BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                ExactLeaderSchedulerReadinessFrame,
+                candidate.kind = "FormCommitQC"
+         PROVE RegularCoreCommandReady(candidate)'
+                 <=> RegularCoreCommandReady(candidate)
+    <2>1. FormCommitQCReady(
+             candidate.node, candidate.view, candidate.subject)'
+               <=> FormCommitQCReady(
+                     candidate.node, candidate.view, candidate.subject)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesFormCommitQCReady
+    <2> QED BY <1>1, <2>1, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             RegularCoreCommandReady, vars
+  <1> QED BY <1>1
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesBeginDecisionReady ==
+  \A node, qc:
+    ExactLeaderSchedulerReadinessFrame
+      => (BeginDecisionReady(node, qc)'
+            <=> BeginDecisionReady(node, qc))
+BY IsaT(120)
    DEF ExactLeaderSchedulerReadinessFrame,
-       RegularCoreCommandReady, CommandMatches,
-       LockCommitQcValues, ReceivedQcValues,
-       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
-       PersistLockCommitReady, FormCommitQCReady,
-       BeginDecisionReady, CurrentOpenPrepareForCommit,
-       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
-       RetainedLockedBodyRecord, VoteSignersAt,
-       CommitRoundAdmissible, LockedPrepareRound,
-       QcWireValid, NodeIdle, PendingNodes, SigningNodes,
-       CurrentVoters, CurrentEpoch, vars
+       BeginDecisionReady, NodeIdle, PendingNodes, SigningNodes, vars
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginDecisionReady ==
   \A candidate:
@@ -2224,18 +2254,22 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginDecisionReady ==
      /\ candidate.kind = "BeginDecision")
       => (RegularCoreCommandReady(candidate)'
             <=> RegularCoreCommandReady(candidate))
-BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(180)
-   DEF ExactLeaderSchedulerReadinessFrame,
-       RegularCoreCommandReady, CommandMatches,
-       LockCommitQcValues, ReceivedQcValues,
-       BeginLockCommandEvidenceMatches, BeginLockCommitReady,
-       PersistLockCommitReady, FormCommitQCReady,
-       BeginDecisionReady, CurrentOpenPrepareForCommit,
-       NodeTimedOut, BodyHeldBy, BodyValidatedBy,
-       RetainedLockedBodyRecord, VoteSignersAt,
-       CommitRoundAdmissible, LockedPrepareRound,
-       QcWireValid, NodeIdle, PendingNodes, SigningNodes,
-       CurrentVoters, CurrentEpoch, vars
+PROOF
+  <1>1. ASSUME NEW candidate,
+                ExactLeaderSchedulerReadinessFrame,
+                candidate.kind = "BeginDecision"
+         PROVE RegularCoreCommandReady(candidate)'
+                 <=> RegularCoreCommandReady(candidate)
+    <2>1. \A qc:
+             BeginDecisionReady(candidate.node, qc)'
+               <=> BeginDecisionReady(candidate.node, qc)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesBeginDecisionReady
+    <2> QED BY <1>1, <2>1, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             RegularCoreCommandReady, CommandMatches,
+             ReceivedQcValues, vars
+  <1> QED BY <1>1
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularCommitReady ==
   \A candidate:
@@ -2257,17 +2291,44 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularPersistTimeoutReady ==
      /\ candidate.kind = "PersistTimeout")
       => (RegularCoreCommandReady(candidate)'
             <=> RegularCoreCommandReady(candidate))
-BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
-   ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability,
-   IsaT(180)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                ExactLeaderSchedulerReadinessFrame,
+                candidate.kind = "PersistTimeout"
+         PROVE RegularCoreCommandReady(candidate)'
+                 <=> RegularCoreCommandReady(candidate)
+    <2>1. \A request:
+             PersistTimeoutReady(request)'
+               <=> PersistTimeoutReady(request)
+      BY <1>1, IsaT(60)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             PersistTimeoutReady, vars
+    <2> QED BY <1>1, <2>1, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             RegularCoreCommandReady, CommandMatches, vars
+  <1> QED BY <1>1
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesBeginInstallTCReady ==
+  \A node, tc:
+    ExactLeaderSchedulerReadinessFrame
+      => (BeginInstallTCReady(node, tc)'
+            <=> BeginInstallTCReady(node, tc))
+BY IsaT(120)
    DEF ExactLeaderSchedulerReadinessFrame,
-       RegularCoreCommandReady, CommandMatches,
-       PersistTimeoutReady, ReceivedTcValues,
-       InstallTcEvidenceMatches, BeginInstallTCReady,
+       BeginInstallTCReady,
        StrictSameRoundTcUpgrade, NodeInstalledTC, TcHighRank,
+       PrepareQcRank,
        NodeIdle, PendingNodes, SigningNodes, NoDecisionForNode,
-       CertifiedResponseCapabilityAuthorized,
-       InstallCertifiedBodyEffectReady, BodyHeldBy, vars
+       vars
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesInstallTcEvidence ==
+  \A command, tc:
+    ExactLeaderSchedulerReadinessFrame
+      => (InstallTcEvidenceMatches(command, tc)'
+            <=> InstallTcEvidenceMatches(command, tc))
+BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems, IsaT(60)
+   DEF ExactLeaderSchedulerReadinessFrame,
+       InstallTcEvidenceMatches, vars
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginInstallTCReady ==
   \A candidate:
@@ -2275,16 +2336,34 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularBeginInstallTCReady ==
      /\ candidate.kind = "BeginInstallTC")
       => (RegularCoreCommandReady(candidate)'
             <=> RegularCoreCommandReady(candidate))
-BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
-   ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability,
-   IsaT(180)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                ExactLeaderSchedulerReadinessFrame,
+                candidate.kind = "BeginInstallTC"
+         PROVE RegularCoreCommandReady(candidate)'
+                 <=> RegularCoreCommandReady(candidate)
+    <2>1. \A tc:
+             BeginInstallTCReady(candidate.node, tc)'
+               <=> BeginInstallTCReady(candidate.node, tc)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesBeginInstallTCReady
+    <2>2. \A tc:
+             InstallTcEvidenceMatches(candidate, tc)'
+               <=> InstallTcEvidenceMatches(candidate, tc)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesInstallTcEvidence
+    <2> QED BY <1>1, <2>1, <2>2, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             RegularCoreCommandReady, ReceivedTcValues, vars
+  <1> QED BY <1>1
+
+THEOREM ExactLeaderSchedulerReadinessFramePreservesInstallCertifiedBodyEffectReady ==
+  \A node, roundView, subject:
+    ExactLeaderSchedulerReadinessFrame
+      => (InstallCertifiedBodyEffectReady(node, roundView, subject)'
+            <=> InstallCertifiedBodyEffectReady(node, roundView, subject))
+BY IsaT(60)
    DEF ExactLeaderSchedulerReadinessFrame,
-       RegularCoreCommandReady, CommandMatches,
-       PersistTimeoutReady, ReceivedTcValues,
-       InstallTcEvidenceMatches, BeginInstallTCReady,
-       StrictSameRoundTcUpgrade, NodeInstalledTC, TcHighRank,
-       NodeIdle, PendingNodes, SigningNodes, NoDecisionForNode,
-       CertifiedResponseCapabilityAuthorized,
        InstallCertifiedBodyEffectReady, BodyHeldBy, vars
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularFetchCertifiedBodyReady ==
@@ -2293,17 +2372,26 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularFetchCertifiedBodyRead
      /\ candidate.kind = "FetchCertifiedBody")
       => (RegularCoreCommandReady(candidate)'
             <=> RegularCoreCommandReady(candidate))
-BY ExactLeaderSchedulerReadinessFramePreservesNetworkItems,
-   ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability,
-   IsaT(180)
-   DEF ExactLeaderSchedulerReadinessFrame,
-       RegularCoreCommandReady, CommandMatches,
-       PersistTimeoutReady, ReceivedTcValues,
-       InstallTcEvidenceMatches, BeginInstallTCReady,
-       StrictSameRoundTcUpgrade, NodeInstalledTC, TcHighRank,
-       NodeIdle, PendingNodes, SigningNodes, NoDecisionForNode,
-       CertifiedResponseCapabilityAuthorized,
-       InstallCertifiedBodyEffectReady, BodyHeldBy, vars
+PROOF
+  <1>1. ASSUME NEW candidate,
+                ExactLeaderSchedulerReadinessFrame,
+                candidate.kind = "FetchCertifiedBody"
+         PROVE RegularCoreCommandReady(candidate)'
+                 <=> RegularCoreCommandReady(candidate)
+    <2>1. CertifiedResponseCapabilityAuthorized(candidate.item)'
+               <=> CertifiedResponseCapabilityAuthorized(candidate.item)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesCertifiedCapability
+    <2>2. InstallCertifiedBodyEffectReady(
+             candidate.node, candidate.view, candidate.subject)'
+               <=> InstallCertifiedBodyEffectReady(
+                     candidate.node, candidate.view, candidate.subject)
+      BY <1>1,
+         ExactLeaderSchedulerReadinessFramePreservesInstallCertifiedBodyEffectReady
+    <2> QED BY <1>1, <2>1, <2>2, IsaT(120)
+         DEF ExactLeaderSchedulerReadinessFrame,
+             RegularCoreCommandReady, vars
+  <1> QED BY <1>1
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesRegularTimeoutReady ==
   \A candidate:
@@ -2354,9 +2442,21 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesExecutionReady ==
     ExactLeaderSchedulerReadinessFrame
       => (CommandExecutionReady(candidate)'
             <=> CommandExecutionReady(candidate))
-BY IsaT(120)
-   DEF ExactLeaderSchedulerReadinessFrame,
-       CommandExecutionReady, vars
+BY ExactLeaderSchedulerReadinessFramePreservesRegularReady,
+   ExactLeaderSchedulerReadinessFramePreservesDecisionFetchReady,
+   ExactLeaderSchedulerReadinessFramePreservesSignProposalReady,
+   ExactLeaderSchedulerReadinessFramePreservesSignVoteReady,
+   ExactLeaderSchedulerReadinessFramePreservesFormPrepareQCReady,
+   ExactLeaderSchedulerReadinessFramePreservesSignTimeoutReady,
+   ExactLeaderSchedulerReadinessFramePreservesPersistInstallReady,
+   ExactLeaderSchedulerReadinessFramePreservesPersistDecisionReady,
+   ExactLeaderSchedulerReadinessFramePreservesRequestCertifiedBodyReady,
+   ExactLeaderSchedulerReadinessFramePreservesApplyReady,
+   ExactLeaderSchedulerReadinessFramePreservesCoreDeliveryReady,
+   ExactLeaderSchedulerReadinessFramePreservesChunkDeliveryReady,
+   ExactLeaderSchedulerReadinessFramePreservesRejectJunkReady,
+   IsaT(120)
+   DEF CommandExecutionReady
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesDispatchable ==
   \A candidate:
@@ -2427,7 +2527,8 @@ THEOREM ExactLeaderSchedulerReadinessFramePreservesInvariant ==
   /\ ExactLeaderSchedulerOriginReadinessInvariant
   /\ ExactLeaderSchedulerReadinessFrame
   => ExactLeaderSchedulerOriginReadinessInvariant'
-BY ExactLeaderSchedulerReadinessFramePreservesRank,
+BY ExactLeaderSchedulerReadinessFramePreservesCandidateSet,
+   ExactLeaderSchedulerReadinessFramePreservesRank,
    ExactLeaderSchedulerReadinessFramePreservesExecutionReady,
    ExactLeaderSchedulerReadinessFramePreservesDispatchable,
    ExactLeaderSchedulerReadinessFramePreservesAlternateOwner,

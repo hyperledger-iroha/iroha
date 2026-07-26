@@ -139,9 +139,7 @@ impl PrivacyProtocolIdV1 {
             | Self::IrohaBootleGenisisAcStarkV0
             | Self::IrohaIvmPrivateNoteStarkV1
             | Self::PqMaspStarkV0 => PrivacyEngineIdV1::NativeGoldilocksStarkFri,
-            Self::IrohaZkAmsV1 => {
-                PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255
-            }
+            Self::IrohaZkAmsV1 => PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255,
             Self::AnonymousPgcKOutOfNV1 => PrivacyEngineIdV1::NativeAnonymousPgcP256,
             Self::VeRangeTransparentRangeV1 => PrivacyEngineIdV1::NativeVeRangeP256,
             Self::VegaExistingCredentialZkV0 => PrivacyEngineIdV1::NativeVega,
@@ -750,9 +748,9 @@ impl PrivacyNamespaceV1 {
                 PrivacyProtocolIdV1::IrohaZkAmsV1,
                 PrivacyNamespaceScopeV1::IssuerRegistryPolicy(
                     PrivacyIssuerRegistryPolicyNamespaceV1 {
-                    issuer_id: statement.issuer_id,
-                    registry_id: statement.registry_id,
-                    policy_id: statement.policy_id,
+                        issuer_id: statement.issuer_id,
+                        registry_id: statement.registry_id,
+                        policy_id: statement.policy_id,
                     },
                 ),
             ),
@@ -1041,22 +1039,24 @@ impl PrivacyRootRoleV1 {
             (
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 Self::PgcAccountState
-            ) | (
-                PrivacyProtocolIdV1::IrohaZkAmsV1,
-                Self::AccountRegistry
-            ) | (
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-                Self::Issuer | Self::Revocation
-            ) | (
-                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
-                Self::Revocation
-            ) | (
-                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-                Self::CertificateAuthorityMembership | Self::CertificateRevocationNonmembership
-            ) | (
-                PrivacyProtocolIdV1::OrchardHalo2ActionsV1 | PrivacyProtocolIdV1::PqMaspStarkV0,
-                Self::NoteCommitmentAnchor
-            ) | (PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, Self::OutputSet)
+            ) | (PrivacyProtocolIdV1::IrohaZkAmsV1, Self::AccountRegistry)
+                | (
+                    PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+                    Self::Issuer | Self::Revocation
+                )
+                | (
+                    PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
+                    Self::Revocation
+                )
+                | (
+                    PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                    Self::CertificateAuthorityMembership | Self::CertificateRevocationNonmembership
+                )
+                | (
+                    PrivacyProtocolIdV1::OrchardHalo2ActionsV1 | PrivacyProtocolIdV1::PqMaspStarkV0,
+                    Self::NoteCommitmentAnchor
+                )
+                | (PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, Self::OutputSet)
                 | (
                     PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                     Self::ProgramState
@@ -2665,7 +2665,7 @@ pub struct VeRangeTransparentRangeStatementV1 {
 /// The order of these pairs is part of the Fiat-Shamir transcript certified
 /// by the batch proof. Validation therefore preserves caller order and rejects
 /// duplicate credential hashes or seed public keys without sorting.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3319,13 +3319,13 @@ pub enum PrivacyStatementV1 {
     AnonymousPgcKOutOfNV1(AnonymousPgcKOutOfNStatementV1),
     /// VeRange transparent range statement.
     VeRangeTransparentRangeV1(VeRangeTransparentRangeStatementV1),
-    /// Native Iroha ZK-AMS STARK admission statement.
-    IrohaZkAmsStarkV0(IrohaZkAmsStarkStatementV1),
+    /// Native Iroha ZK-AMS admission/provisioning statement.
+    IrohaZkAmsV1(IrohaZkAmsStatementV1),
     /// Vega existing-credential predicate statement.
     VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1),
     /// Native Iroha P-256 X.509 predicate STARK statement.
     IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1),
-    /// Native Iroha Jindo univariate polynomial-commitment statement.
+    /// Native Iroha Jindo multilinear lattice polynomial-commitment statement.
     IrohaJindoPolynomialCommitmentV0(IrohaJindoPolynomialCommitmentStatementV1),
     /// Native Iroha Bootle GenISIS anonymous-credential statement.
     IrohaBootleGenisisAcStarkV0(IrohaBootleGenisisAcStarkStatementV1),
@@ -3347,7 +3347,7 @@ impl PrivacyStatementV1 {
             Self::ZkAcePqAuthorizationV0(_) => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             Self::AnonymousPgcKOutOfNV1(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             Self::VeRangeTransparentRangeV1(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            Self::IrohaZkAmsStarkV0(_) => PrivacyProtocolIdV1::IrohaZkAmsStarkV0,
+            Self::IrohaZkAmsV1(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
             Self::VegaExistingCredentialZkV0(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             Self::IrohaZkX509StarkP256V0(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
             Self::IrohaJindoPolynomialCommitmentV0(_) => {
@@ -3370,7 +3370,7 @@ impl PrivacyStatementV1 {
             Self::ZkAcePqAuthorizationV0(statement) => &statement.context,
             Self::AnonymousPgcKOutOfNV1(statement) => &statement.context,
             Self::VeRangeTransparentRangeV1(statement) => &statement.context,
-            Self::IrohaZkAmsStarkV0(statement) => &statement.context,
+            Self::IrohaZkAmsV1(statement) => &statement.context,
             Self::VegaExistingCredentialZkV0(statement) => &statement.context,
             Self::IrohaZkX509StarkP256V0(statement) => &statement.context,
             Self::IrohaJindoPolynomialCommitmentV0(statement) => &statement.context,
@@ -3418,7 +3418,7 @@ impl PrivacyStatementV1 {
             Self::ZkAcePqAuthorizationV0(statement) => validate_zk_ace(statement)?,
             Self::AnonymousPgcKOutOfNV1(statement) => validate_anonymous_pgc(statement, limits)?,
             Self::VeRangeTransparentRangeV1(statement) => validate_verange(statement, limits)?,
-            Self::IrohaZkAmsStarkV0(statement) => validate_zk_ams(statement, limits)?,
+            Self::IrohaZkAmsV1(statement) => validate_zk_ams(statement)?,
             Self::VegaExistingCredentialZkV0(statement) => validate_vega(statement)?,
             Self::IrohaZkX509StarkP256V0(statement) => validate_zk_x509(statement)?,
             Self::IrohaJindoPolynomialCommitmentV0(statement) => validate_jindo(statement, limits)?,
@@ -3578,53 +3578,109 @@ fn validate_verange(
 }
 
 fn validate_zk_ams(
-    statement: &IrohaZkAmsStarkStatementV1,
-    limits: &PrivacyConsensusLimitsV1,
+    statement: &IrohaZkAmsStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     require_nonzero_id(statement.issuer_id.is_zero(), PrivacyTypedFieldV1::IssuerId)?;
-    require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
-    require_nonzero_id(statement.issuer_root.is_zero(), PrivacyTypedFieldV1::Root)?;
-    require_nonzero_id(statement.policy_id.is_zero(), PrivacyTypedFieldV1::PolicyId)?;
-    require_epoch(statement.issuer_epoch, PrivacyEpochFieldV1::Issuer)?;
     require_nonzero_id(
-        statement.account_pool_root.is_zero(),
-        PrivacyTypedFieldV1::Root,
+        statement.registry_id.is_zero(),
+        PrivacyTypedFieldV1::RegistryId,
     )?;
-    require_epoch(statement.account_pool_root_epoch, PrivacyEpochFieldV1::Root)?;
-    validate_next_root_transition(
-        statement.account_pool_root,
-        statement.account_pool_root_epoch,
-        statement.next_account_pool_root,
-        statement.next_account_pool_root_epoch,
-        PrivacyRootTransitionFieldV1::AccountPool,
-    )?;
-    let batch_max = ZK_AMS_MAX_BATCH_SIZE_V1
-        .min(limits.max_nullifiers_per_action)
-        .min(limits.max_commitments_per_action);
-    if statement.batch_size == 0 || statement.batch_size > batch_max {
-        return Err(PrivacyStatementValidationError::InvalidBatchSize {
-            count: statement.batch_size,
-            max: batch_max,
-        });
+    require_nonzero_id(statement.policy_id.is_zero(), PrivacyTypedFieldV1::PolicyId)?;
+    match &statement.action {
+        PrivacyZkAmsActionV1::BatchAdmission(batch) => {
+            require_nonzero_id(
+                batch.account_registry_root.is_zero(),
+                PrivacyTypedFieldV1::Root,
+            )?;
+            require_epoch(batch.account_registry_root_epoch, PrivacyEpochFieldV1::Root)?;
+            validate_next_root_transition(
+                batch.account_registry_root,
+                batch.account_registry_root_epoch,
+                batch.next_account_registry_root,
+                batch.next_account_registry_root_epoch,
+                PrivacyRootTransitionFieldV1::AccountRegistry,
+            )?;
+            let batch_size = u32_len(batch.anchors.len())?;
+            if batch_size == 0 || batch_size > ZK_AMS_MAX_BATCH_SIZE_V1 {
+                return Err(PrivacyStatementValidationError::InvalidBatchSize {
+                    count: batch_size,
+                    max: ZK_AMS_MAX_BATCH_SIZE_V1,
+                });
+            }
+            for (index, anchor) in batch.anchors.iter().enumerate() {
+                if anchor.phc_hash.is_zero() {
+                    return Err(PrivacyStatementValidationError::ZeroZkAmsPhcHash {
+                        index: u32_index(index)?,
+                    });
+                }
+                if anchor.seed_public_key.is_zero() {
+                    return Err(PrivacyStatementValidationError::ZeroZkAmsSeedPublicKey {
+                        index: u32_index(index)?,
+                    });
+                }
+            }
+            for later in 1..batch.anchors.len() {
+                if batch.anchors[..later]
+                    .iter()
+                    .any(|earlier| earlier.phc_hash == batch.anchors[later].phc_hash)
+                {
+                    return Err(PrivacyStatementValidationError::DuplicateZkAmsPhcHash);
+                }
+                if batch.anchors[..later]
+                    .iter()
+                    .any(|earlier| earlier.seed_public_key == batch.anchors[later].seed_public_key)
+                {
+                    return Err(PrivacyStatementValidationError::DuplicateZkAmsSeedPublicKey);
+                }
+            }
+            require_nonzero_id(
+                batch.accumulated_instance_digest.is_zero(),
+                PrivacyTypedFieldV1::ZkAmsAccumulatedInstanceDigest,
+            )?;
+            require_nonzero_id(
+                batch.padding_cross_term_digest.is_zero(),
+                PrivacyTypedFieldV1::ZkAmsPaddingCrossTermDigest,
+            )?;
+            require_nonzero_id(
+                batch.final_folded_instance_digest.is_zero(),
+                PrivacyTypedFieldV1::ZkAmsFinalFoldedInstanceDigest,
+            )
+        }
+        PrivacyZkAmsActionV1::ProvisionAccount(provision) => {
+            require_nonzero_id(
+                provision.account_registry_root.is_zero(),
+                PrivacyTypedFieldV1::Root,
+            )?;
+            require_epoch(
+                provision.account_registry_root_epoch,
+                PrivacyEpochFieldV1::Root,
+            )?;
+            let ring_size = u32_len(provision.admitted_seed_key_ring.len())?;
+            if !ZK_AMS_RING_SIZES_V1.contains(&ring_size) {
+                return Err(PrivacyStatementValidationError::InvalidZkAmsRingSize {
+                    size: ring_size,
+                });
+            }
+            for (index, key) in provision.admitted_seed_key_ring.iter().enumerate() {
+                if key.is_zero() {
+                    return Err(PrivacyStatementValidationError::ZeroZkAmsSeedPublicKey {
+                        index: u32_index(index)?,
+                    });
+                }
+            }
+            if provision
+                .admitted_seed_key_ring
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            {
+                return Err(PrivacyStatementValidationError::ZkAmsSeedKeyRingNotStrictlyIncreasing);
+            }
+            if provision.key_image.is_zero() {
+                return Err(PrivacyStatementValidationError::ZeroZkAmsKeyImage);
+            }
+            Ok(())
+        }
     }
-    if statement.recursion_depth == 0 || statement.recursion_depth > ZK_AMS_MAX_RECURSION_DEPTH_V1 {
-        return Err(PrivacyStatementValidationError::InvalidRecursionDepth {
-            depth: statement.recursion_depth,
-            max: ZK_AMS_MAX_RECURSION_DEPTH_V1,
-        });
-    }
-    validate_nullifiers_with_max(&statement.admission_nullifiers, true, batch_max)?;
-    validate_commitments_with_max(&statement.account_commitments, true, batch_max)?;
-    require_count(
-        statement.admission_nullifiers.len(),
-        statement.batch_size,
-        PrivacyCountFieldV1::AdmissionNullifiers,
-    )?;
-    require_count(
-        statement.account_commitments.len(),
-        statement.batch_size,
-        PrivacyCountFieldV1::AdmittedAccounts,
-    )
 }
 
 fn validate_vega(
@@ -3764,51 +3820,112 @@ fn validate_zk_x509(
 
 fn validate_jindo(
     statement: &IrohaJindoPolynomialCommitmentStatementV1,
-    _limits: &PrivacyConsensusLimitsV1,
+    limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), PrivacyStatementValidationError> {
-    if statement.polynomial_count == 0
-        || statement.polynomial_count > IROHA_JINDO_MAX_POLYNOMIALS_V1
-    {
+    let polynomial_count = u32_len(statement.polynomial_commitments.len())?;
+    let polynomial_max = IROHA_JINDO_MAX_POLYNOMIALS_V1.min(limits.max_commitments_per_action);
+    if polynomial_count == 0 || polynomial_count > polynomial_max {
         return Err(PrivacyStatementValidationError::InvalidBatchSize {
-            count: statement.polynomial_count,
-            max: IROHA_JINDO_MAX_POLYNOMIALS_V1,
+            count: polynomial_count,
+            max: polynomial_max,
         });
     }
-    if statement.evaluation_point_count == 0
-        || statement.evaluation_point_count > IROHA_JINDO_MAX_EVALUATION_POINTS_V1
+    let evaluation_query_count = u32_len(statement.evaluation_queries.len())?;
+    if evaluation_query_count == 0 || evaluation_query_count > IROHA_JINDO_MAX_EVALUATION_QUERIES_V1
     {
-        return Err(PrivacyStatementValidationError::InvalidJindoPointCount {
-            count: statement.evaluation_point_count,
-            max: IROHA_JINDO_MAX_EVALUATION_POINTS_V1,
-        });
+        return Err(
+            PrivacyStatementValidationError::InvalidJindoEvaluationQueryCount {
+                count: evaluation_query_count,
+                max: IROHA_JINDO_MAX_EVALUATION_QUERIES_V1,
+            },
+        );
     }
-    validate_commitments_with_max(
-        &statement.polynomial_commitments,
-        true,
-        IROHA_JINDO_MAX_POLYNOMIALS_V1,
-    )?;
-    require_count(
-        statement.polynomial_commitments.len(),
-        statement.polynomial_count,
-        PrivacyCountFieldV1::JindoPolynomialCommitments,
-    )?;
-    require_count(
-        statement.openings.len(),
-        statement.evaluation_point_count,
-        PrivacyCountFieldV1::JindoEvaluationPoints,
-    )?;
-    for opening in &statement.openings {
+    if statement.regime.multilinear_variable_count == 0
+        || statement.regime.multilinear_variable_count > IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1
+    {
+        return Err(
+            PrivacyStatementValidationError::InvalidJindoMultilinearVariableCount {
+                count: statement.regime.multilinear_variable_count,
+                max: IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1,
+            },
+        );
+    }
+    if statement.regime.field_element_bytes == 0
+        || statement.regime.field_element_bytes > IROHA_JINDO_MAX_FIELD_ELEMENT_BYTES_V1
+    {
+        return Err(
+            PrivacyStatementValidationError::InvalidJindoFieldElementSize {
+                bytes: statement.regime.field_element_bytes,
+                max: IROHA_JINDO_MAX_FIELD_ELEMENT_BYTES_V1,
+            },
+        );
+    }
+    if statement.regime.lattice_commitment_bytes == 0
+        || statement.regime.lattice_commitment_bytes > IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1
+    {
+        return Err(
+            PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
+                index: None,
+                bytes: statement.regime.lattice_commitment_bytes,
+                expected: statement.regime.lattice_commitment_bytes,
+                max: IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1,
+            },
+        );
+    }
+    for (index, commitment) in statement.polynomial_commitments.iter().enumerate() {
+        let bytes = u32_len(commitment.encoding.len())?;
+        if bytes != statement.regime.lattice_commitment_bytes {
+            return Err(
+                PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
+                    index: Some(u32_index(index)?),
+                    bytes,
+                    expected: statement.regime.lattice_commitment_bytes,
+                    max: IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1,
+                },
+            );
+        }
+        if commitment.encoding.iter().all(|byte| *byte == 0) {
+            return Err(
+                PrivacyStatementValidationError::AllZeroJindoLatticeCommitment {
+                    index: u32_index(index)?,
+                },
+            );
+        }
+    }
+    if first_duplicate_index(&statement.polynomial_commitments).is_some() {
+        return Err(PrivacyStatementValidationError::DuplicateJindoLatticeCommitment);
+    }
+    let expected_field_bytes = usize::from(statement.regime.field_element_bytes);
+    for query in &statement.evaluation_queries {
         require_count(
-            opening.evaluations.len(),
-            statement.polynomial_count,
-            PrivacyCountFieldV1::JindoOpeningEvaluations,
+            query.evaluation_point.len(),
+            statement.regime.multilinear_variable_count,
+            PrivacyCountFieldV1::JindoEvaluationPointCoordinates,
         )?;
-    }
-    for later in 1..statement.openings.len() {
-        if statement.openings[..later]
+        require_count(
+            query.claimed_evaluations.len(),
+            polynomial_count,
+            PrivacyCountFieldV1::JindoClaimedEvaluations,
+        )?;
+        for element in query
+            .evaluation_point
             .iter()
-            .any(|earlier| earlier.evaluation_point == statement.openings[later].evaluation_point)
+            .chain(query.claimed_evaluations.iter())
         {
+            if element.encoding.len() != expected_field_bytes {
+                return Err(
+                    PrivacyStatementValidationError::InvalidJindoFieldElementEncoding {
+                        bytes: u32_len(element.encoding.len())?,
+                        expected: u32::from(statement.regime.field_element_bytes),
+                    },
+                );
+            }
+        }
+    }
+    for later in 1..statement.evaluation_queries.len() {
+        if statement.evaluation_queries[..later].iter().any(|earlier| {
+            earlier.evaluation_point == statement.evaluation_queries[later].evaluation_point
+        }) {
             return Err(PrivacyStatementValidationError::DuplicateJindoEvaluationPoint);
         }
     }
@@ -4313,12 +4430,23 @@ impl PrivacyProtocolActivationLimitsV1 {
                 statement.aggregation_count,
                 limits.max_aggregation_count,
             ),
-            (Self::IrohaZkAmsStarkV0(limits), PrivacyStatementV1::IrohaZkAmsStarkV0(statement)) => {
-                validate_activation_statement_count(
-                    PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
-                    statement.batch_size,
-                    limits.max_batch_size,
-                )
+            (Self::IrohaZkAmsV1(limits), PrivacyStatementV1::IrohaZkAmsV1(statement)) => {
+                match &statement.action {
+                    PrivacyZkAmsActionV1::BatchAdmission(batch) => {
+                        validate_activation_statement_len(
+                            PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
+                            batch.anchors.len(),
+                            limits.max_batch_size,
+                        )
+                    }
+                    PrivacyZkAmsActionV1::ProvisionAccount(provision) => {
+                        validate_activation_statement_len(
+                            PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+                            provision.admitted_seed_key_ring.len(),
+                            limits.max_ring_size,
+                        )
+                    }
+                }
             }
             (
                 Self::IrohaJindoPolynomialCommitmentV0(limits),
@@ -4326,13 +4454,18 @@ impl PrivacyProtocolActivationLimitsV1 {
             ) => {
                 validate_activation_statement_count(
                     PrivacyActivationLimitFieldV1::JindoPolynomialCount,
-                    statement.polynomial_count,
+                    u32::try_from(statement.polynomial_commitments.len()).unwrap_or(u32::MAX),
                     limits.max_polynomial_count,
                 )?;
                 validate_activation_statement_count(
-                    PrivacyActivationLimitFieldV1::JindoEvaluationPointCount,
-                    statement.evaluation_point_count,
-                    limits.max_evaluation_point_count,
+                    PrivacyActivationLimitFieldV1::JindoEvaluationQueryCount,
+                    u32::try_from(statement.evaluation_queries.len()).unwrap_or(u32::MAX),
+                    limits.max_evaluation_query_count,
+                )?;
+                validate_activation_statement_count(
+                    PrivacyActivationLimitFieldV1::JindoMultilinearVariableCount,
+                    statement.regime.multilinear_variable_count,
+                    limits.max_multilinear_variable_count,
                 )
             }
             (
@@ -4506,6 +4639,46 @@ impl PrivacyProofBytesV1 {
     }
 }
 
+/// Action-typed native ZK-AMS proof.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "action", content = "proof"))]
+pub enum IrohaZkAmsProofV1 {
+    /// Transparent Poseidon2/Goldilocks STARK batch-admission proof.
+    TransparentStarkBatchAdmission(PrivacyProofBytesV1),
+    /// Canonical Ristretto255 MLSAGS account-provisioning signature.
+    Ristretto255MlsagsProvisionAccount(PrivacyProofBytesV1),
+}
+
+impl IrohaZkAmsProofV1 {
+    /// Borrow the exact native proof or signature bytes.
+    #[must_use]
+    pub const fn bytes(&self) -> &PrivacyProofBytesV1 {
+        match self {
+            Self::TransparentStarkBatchAdmission(bytes)
+            | Self::Ristretto255MlsagsProvisionAccount(bytes) => bytes,
+        }
+    }
+
+    /// Return whether this proof variant matches a typed public action.
+    #[must_use]
+    pub const fn matches_action(&self, action: &PrivacyZkAmsActionV1) -> bool {
+        matches!(
+            (self, action),
+            (
+                Self::TransparentStarkBatchAdmission(_),
+                PrivacyZkAmsActionV1::BatchAdmission(_)
+            ) | (
+                Self::Ristretto255MlsagsProvisionAccount(_),
+                PrivacyZkAmsActionV1::ProvisionAccount(_)
+            )
+        )
+    }
+}
+
 /// Protocol-typed native proof payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -4520,13 +4693,13 @@ pub enum PrivacyProofV1 {
     AnonymousPgcKOutOfNV1(PrivacyProofBytesV1),
     /// VeRange transparent range proof.
     VeRangeTransparentRangeV1(PrivacyProofBytesV1),
-    /// Native Iroha ZK-AMS STARK admission proof.
-    IrohaZkAmsStarkV0(PrivacyProofBytesV1),
+    /// Native Iroha ZK-AMS admission or provisioning proof.
+    IrohaZkAmsV1(IrohaZkAmsProofV1),
     /// Vega existing-credential predicate proof.
     VegaExistingCredentialZkV0(PrivacyProofBytesV1),
     /// Native Iroha P-256 X.509 predicate STARK proof.
     IrohaZkX509StarkP256V0(PrivacyProofBytesV1),
-    /// Native Iroha Jindo univariate polynomial-commitment proof.
+    /// Native Iroha Jindo multilinear lattice polynomial-commitment proof.
     IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1),
     /// Native Iroha Bootle GenISIS anonymous-credential proof.
     IrohaBootleGenisisAcStarkV0(PrivacyProofBytesV1),
@@ -4548,7 +4721,7 @@ impl PrivacyProofV1 {
             Self::ZkAcePqAuthorizationV0(_) => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             Self::AnonymousPgcKOutOfNV1(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             Self::VeRangeTransparentRangeV1(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            Self::IrohaZkAmsStarkV0(_) => PrivacyProtocolIdV1::IrohaZkAmsStarkV0,
+            Self::IrohaZkAmsV1(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
             Self::VegaExistingCredentialZkV0(_) => PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
             Self::IrohaZkX509StarkP256V0(_) => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
             Self::IrohaJindoPolynomialCommitmentV0(_) => {
@@ -4571,7 +4744,6 @@ impl PrivacyProofV1 {
             Self::ZkAcePqAuthorizationV0(bytes)
             | Self::AnonymousPgcKOutOfNV1(bytes)
             | Self::VeRangeTransparentRangeV1(bytes)
-            | Self::IrohaZkAmsStarkV0(bytes)
             | Self::VegaExistingCredentialZkV0(bytes)
             | Self::IrohaZkX509StarkP256V0(bytes)
             | Self::IrohaJindoPolynomialCommitmentV0(bytes)
@@ -4580,6 +4752,7 @@ impl PrivacyProofV1 {
             | Self::MoneroFcmpPlusPlusV1(bytes)
             | Self::IrohaIvmPrivateNoteStarkV1(bytes)
             | Self::PqMaspStarkV0(bytes) => bytes,
+            Self::IrohaZkAmsV1(proof) => proof.bytes(),
         }
     }
 }
@@ -4589,6 +4762,8 @@ impl PrivacyProofV1 {
 pub enum PrivacyTypedFieldV1 {
     /// Privacy pool identifier.
     PoolId,
+    /// ZK-AMS admitted-identity registry identifier.
+    RegistryId,
     /// Governed policy identifier.
     PolicyId,
     /// Governed policy digest.
@@ -4621,6 +4796,12 @@ pub enum PrivacyTypedFieldV1 {
     AuthorizationKeyDigest,
     /// Post-quantum note-encryption-key digest.
     NoteEncryptionKeyDigest,
+    /// ZK-AMS accumulated relaxed-R1CS instance digest.
+    ZkAmsAccumulatedInstanceDigest,
+    /// ZK-AMS final padding cross-term digest.
+    ZkAmsPaddingCrossTermDigest,
+    /// ZK-AMS final folded relaxed-R1CS instance digest.
+    ZkAmsFinalFoldedInstanceDigest,
 }
 
 /// Epoch or height field used by statement validation diagnostics.
@@ -4651,8 +4832,8 @@ pub enum PrivacyEpochFieldV1 {
 pub enum PrivacyRootTransitionFieldV1 {
     /// Mutable encrypted PGC account table.
     PgcAccountState,
-    /// ZK-AMS destination account pool.
-    AccountPool,
+    /// ZK-AMS admitted-identity registry.
+    AccountRegistry,
     /// Orchard or PQ-MASP note-commitment anchor.
     NoteCommitmentAnchor,
     /// FCMP++ complete output set.
@@ -4675,16 +4856,10 @@ pub enum PrivacyP256CiphertextComponentV1 {
 pub enum PrivacyCountFieldV1 {
     /// VeRange aggregated commitments.
     AggregatedCommitments,
-    /// ZK-AMS admission nullifiers.
-    AdmissionNullifiers,
-    /// ZK-AMS admitted accounts.
-    AdmittedAccounts,
-    /// Jindo polynomial commitments.
-    JindoPolynomialCommitments,
-    /// Jindo distinct evaluation points.
-    JindoEvaluationPoints,
-    /// Jindo evaluation row width.
-    JindoOpeningEvaluations,
+    /// Coordinates in one Jindo multilinear evaluation point.
+    JindoEvaluationPointCoordinates,
+    /// Jindo claimed evaluations in polynomial-commitment order.
+    JindoClaimedEvaluations,
 }
 
 /// Validation failure for a protocol-specific [`PrivacyStatementV1`].
@@ -4933,14 +5108,36 @@ pub enum PrivacyStatementValidationError {
         /// Approved maximum.
         max: u32,
     },
-    /// ZK-AMS recursion depth is outside its approved profile.
-    #[error("ZK-AMS recursion depth {depth} is outside 1..={max}")]
-    InvalidRecursionDepth {
-        /// Observed recursion depth.
-        depth: u16,
-        /// Approved maximum.
-        max: u16,
+    /// A ZK-AMS admission anchor has a zero PHC hash.
+    #[error("ZK-AMS admission anchor {index} has a zero PHC hash")]
+    ZeroZkAmsPhcHash {
+        /// Zero-based anchor index.
+        index: u32,
     },
+    /// A ZK-AMS admission anchor or provisioning ring has a zero seed key.
+    #[error("ZK-AMS seed public key {index} must be non-zero")]
+    ZeroZkAmsSeedPublicKey {
+        /// Zero-based anchor or ring index.
+        index: u32,
+    },
+    /// Two ZK-AMS batch anchors carry the same PHC hash.
+    #[error("ZK-AMS batch contains a duplicate PHC hash")]
+    DuplicateZkAmsPhcHash,
+    /// Two ZK-AMS batch anchors carry the same seed public key.
+    #[error("ZK-AMS batch contains a duplicate seed public key")]
+    DuplicateZkAmsSeedPublicKey,
+    /// A ZK-AMS provisioning ring size is outside the closed profile.
+    #[error("ZK-AMS provisioning ring size {size} is not one of 16, 32, or 64")]
+    InvalidZkAmsRingSize {
+        /// Observed ring size.
+        size: u32,
+    },
+    /// A ZK-AMS seed-key ring is duplicated or non-canonical.
+    #[error("ZK-AMS seed public-key ring must be strictly increasing")]
+    ZkAmsSeedKeyRingNotStrictlyIncreasing,
+    /// A ZK-AMS MLSAGS key image is the zero sentinel.
+    #[error("ZK-AMS MLSAGS key image must be non-zero")]
+    ZeroZkAmsKeyImage,
     /// Credential validity epochs do not contain the presentation epoch.
     #[error(
         "privacy credential validity [{start}, {end}) does not contain current epoch {current}"
@@ -4996,14 +5193,61 @@ pub enum PrivacyStatementValidationError {
         /// Approved combined maximum.
         max: u32,
     },
-    /// Jindo distinct evaluation-point count is outside its approved profile.
-    #[error("Jindo evaluation-point count {count} is outside 1..={max}")]
-    InvalidJindoPointCount {
-        /// Observed evaluation-point count.
+    /// Jindo evaluation-query count is outside its approved profile.
+    #[error("Jindo evaluation-query count {count} is outside 1..={max}")]
+    InvalidJindoEvaluationQueryCount {
+        /// Observed evaluation-query count.
         count: u32,
         /// Approved maximum.
         max: u32,
     },
+    /// Jindo multilinear variable count is outside its approved profile.
+    #[error("Jindo multilinear variable count {count} is outside 1..={max}")]
+    InvalidJindoMultilinearVariableCount {
+        /// Observed variable count.
+        count: u32,
+        /// Approved maximum.
+        max: u32,
+    },
+    /// Jindo governed field-element width is outside its approved profile.
+    #[error("Jindo field-element width {bytes} is outside 1..={max}")]
+    InvalidJindoFieldElementSize {
+        /// Observed byte width.
+        bytes: u16,
+        /// Approved maximum.
+        max: u16,
+    },
+    /// A Jindo field-element encoding has the wrong governed width.
+    #[error("Jindo field-element encoding uses {bytes} bytes; expected {expected}")]
+    InvalidJindoFieldElementEncoding {
+        /// Observed byte width.
+        bytes: u32,
+        /// Exact governed byte width.
+        expected: u32,
+    },
+    /// A Jindo lattice commitment has an invalid governed width.
+    #[error(
+        "Jindo lattice commitment {index:?} uses {bytes} bytes; expected {expected}, profile maximum {max}"
+    )]
+    InvalidJindoLatticeCommitmentSize {
+        /// Commitment index, or `None` when the regime itself is invalid.
+        index: Option<u32>,
+        /// Observed or declared byte width.
+        bytes: u32,
+        /// Exact governed byte width.
+        expected: u32,
+        /// Approved maximum.
+        max: u32,
+    },
+    /// A Jindo lattice commitment is the all-zero sentinel.
+    #[error("Jindo lattice commitment {index} must not be all zero")]
+    AllZeroJindoLatticeCommitment {
+        /// Zero-based polynomial-commitment index.
+        index: u32,
+    },
+    /// Two Jindo lattice commitments are identical.
+    #[error("Jindo polynomial commitments must be distinct")]
+    DuplicateJindoLatticeCommitment,
     /// Two Jindo openings use the same evaluation point.
     #[error("Jindo evaluation points must be distinct")]
     DuplicateJindoEvaluationPoint,
@@ -5190,6 +5434,12 @@ impl PrivacyProofEnvelopeV1 {
                 envelope: self.protocol_id,
                 proof: proof_protocol,
             });
+        }
+        if let (PrivacyStatementV1::IrohaZkAmsV1(statement), PrivacyProofV1::IrohaZkAmsV1(proof)) =
+            (&self.statement, &self.proof)
+            && !proof.matches_action(&statement.action)
+        {
+            return Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch);
         }
         if self.parameter_id.is_zero() {
             return Err(PrivacyProofEnvelopeValidationError::ZeroParameterId);
@@ -5382,6 +5632,9 @@ pub enum PrivacyProofEnvelopeValidationError {
         /// Proof variant protocol.
         proof: PrivacyProtocolIdV1,
     },
+    /// ZK-AMS statement action and typed proof action differ.
+    #[error("ZK-AMS statement action and proof variant differ")]
+    ZkAmsActionProofMismatch,
     /// Parameter-set identifier is zero.
     #[error("privacy envelope parameter id must be non-zero")]
     ZeroParameterId,
@@ -5574,6 +5827,41 @@ mod tests {
         PrivacyNullifierV1::new(raw(seed))
     }
 
+    fn zk_ams_seed_key(seed: u8) -> PrivacyZkAmsSeedPublicKeyV1 {
+        PrivacyZkAmsSeedPublicKeyV1::new(raw(seed))
+    }
+
+    fn zk_ams_anchor(seed: u8) -> PrivacyZkAmsAdmissionAnchorV1 {
+        PrivacyZkAmsAdmissionAnchorV1 {
+            phc_hash: PrivacyZkAmsPhcHashV1::new(raw(seed)),
+            seed_public_key: zk_ams_seed_key(seed.wrapping_add(32)),
+        }
+    }
+
+    fn zk_ams_provision_statement(ring_size: u8) -> PrivacyStatementV1 {
+        PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
+            context: context(),
+            issuer_id: PrivacyIssuerIdV1::new(raw(40)),
+            registry_id: PrivacyZkAmsRegistryIdV1::new(raw(41)),
+            policy_id: PrivacyPolicyIdV1::new(raw(43)),
+            action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
+                account_registry_root: PrivacyRootV1::new(raw(144)),
+                account_registry_root_epoch: 10,
+                admitted_seed_key_ring: (1..=ring_size).map(zk_ams_seed_key).collect(),
+                account_id: account(200),
+                key_image: PrivacyZkAmsKeyImageV1::new(raw(201)),
+            }),
+        })
+    }
+
+    fn jindo_field(seed: u8) -> PrivacyJindoFieldElementV1 {
+        PrivacyJindoFieldElementV1::new(vec![seed; 2])
+    }
+
+    fn jindo_commitment(seed: u8) -> PrivacyJindoLatticeCommitmentV1 {
+        PrivacyJindoLatticeCommitmentV1::new(vec![seed; 4])
+    }
+
     fn encrypted_output(commitment_seed: u8, recipient_seed: u8) -> PrivacyEncryptedOutputV1 {
         PrivacyEncryptedOutputV1 {
             recipient: PrivacyRecipientIdV1::new(raw(recipient_seed)),
@@ -5619,21 +5907,25 @@ mod tests {
                 bit_length: PrivacyVeRangeBitLengthV1::Bits32,
                 aggregation_count: 2,
             }),
-            PrivacyStatementV1::IrohaZkAmsStarkV0(IrohaZkAmsStarkStatementV1 {
+            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
                 context: context(),
                 issuer_id: PrivacyIssuerIdV1::new(raw(40)),
-                pool_id: PrivacyPoolIdV1::new(raw(41)),
-                issuer_root: PrivacyRootV1::new(raw(42)),
-                issuer_epoch: 9,
-                account_pool_root: PrivacyRootV1::new(raw(144)),
-                account_pool_root_epoch: 10,
-                next_account_pool_root: PrivacyRootV1::new(raw(145)),
-                next_account_pool_root_epoch: 11,
+                registry_id: PrivacyZkAmsRegistryIdV1::new(raw(41)),
                 policy_id: PrivacyPolicyIdV1::new(raw(43)),
-                admission_nullifiers: vec![nullifier(44), nullifier(45)],
-                account_commitments: vec![commitment(46), commitment(47)],
-                batch_size: 2,
-                recursion_depth: 2,
+                action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
+                    account_registry_root: PrivacyRootV1::new(raw(144)),
+                    account_registry_root_epoch: 10,
+                    next_account_registry_root: PrivacyRootV1::new(raw(145)),
+                    next_account_registry_root_epoch: 11,
+                    anchors: vec![zk_ams_anchor(44), zk_ams_anchor(45)],
+                    accumulated_instance_digest: PrivacyZkAmsAccumulatedInstanceDigestV1::new(raw(
+                        46,
+                    )),
+                    padding_cross_term_digest: PrivacyZkAmsPaddingCrossTermDigestV1::new(raw(47)),
+                    final_folded_instance_digest: PrivacyZkAmsFinalFoldedInstanceDigestV1::new(
+                        raw(48),
+                    ),
+                }),
             }),
             PrivacyStatementV1::VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1 {
                 context: context(),
@@ -5686,27 +5978,26 @@ mod tests {
                 certificate_nullifier: nullifier(68),
             }),
             PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
-                IrohaJindoPolynomialCommitmentStatementV1::new(
-                    context(),
-                    vec![commitment(70), commitment(71)],
-                    vec![
-                        PrivacyJindoOpeningV1 {
-                            evaluation_point: PrivacyJindoScalarV1::new(raw(1)),
-                            evaluations: vec![
-                                PrivacyJindoScalarV1::new(raw(4)),
-                                PrivacyJindoScalarV1::new(raw(5)),
-                            ],
+                IrohaJindoPolynomialCommitmentStatementV1 {
+                    context: context(),
+                    regime: PrivacyJindoParameterRegimeV1 {
+                        multilinear_variable_count: 2,
+                        field_element_bytes: 2,
+                        lattice_commitment_bytes: 4,
+                        evaluation_hiding: true,
+                    },
+                    polynomial_commitments: vec![jindo_commitment(70), jindo_commitment(71)],
+                    evaluation_queries: vec![
+                        PrivacyJindoEvaluationQueryV1 {
+                            evaluation_point: vec![jindo_field(1), jindo_field(2)],
+                            claimed_evaluations: vec![jindo_field(4), jindo_field(5)],
                         },
-                        PrivacyJindoOpeningV1 {
-                            evaluation_point: PrivacyJindoScalarV1::new(raw(6)),
-                            evaluations: vec![
-                                PrivacyJindoScalarV1::new(raw(8)),
-                                PrivacyJindoScalarV1::new(raw(9)),
-                            ],
+                        PrivacyJindoEvaluationQueryV1 {
+                            evaluation_point: vec![jindo_field(6), jindo_field(7)],
+                            claimed_evaluations: vec![jindo_field(8), jindo_field(9)],
                         },
                     ],
-                )
-                .expect("valid Jindo dimensions"),
+                },
             ),
             PrivacyStatementV1::IrohaBootleGenisisAcStarkV0(IrohaBootleGenisisAcStarkStatementV1 {
                 context: context(),
@@ -5857,12 +6148,17 @@ mod tests {
                 statement.next_account_state_root,
                 statement.next_account_state_root_epoch
             ),
-            PrivacyStatementV1::IrohaZkAmsStarkV0(statement) => corrupt!(
-                statement.account_pool_root,
-                statement.account_pool_root_epoch,
-                statement.next_account_pool_root,
-                statement.next_account_pool_root_epoch
-            ),
+            PrivacyStatementV1::IrohaZkAmsV1(statement) => {
+                let PrivacyZkAmsActionV1::BatchAdmission(batch) = &mut statement.action else {
+                    panic!("ZK-AMS provisioning does not manage a root transition")
+                };
+                corrupt!(
+                    batch.account_registry_root,
+                    batch.account_registry_root_epoch,
+                    batch.next_account_registry_root,
+                    batch.next_account_registry_root_epoch
+                )
+            }
             PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => corrupt!(
                 statement.anchor,
                 statement.anchor_epoch,
@@ -5903,7 +6199,9 @@ mod tests {
             PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
                 PrivacyProofV1::VeRangeTransparentRangeV1(bytes)
             }
-            PrivacyProtocolIdV1::IrohaZkAmsStarkV0 => PrivacyProofV1::IrohaZkAmsStarkV0(bytes),
+            PrivacyProtocolIdV1::IrohaZkAmsV1 => PrivacyProofV1::IrohaZkAmsV1(
+                IrohaZkAmsProofV1::TransparentStarkBatchAdmission(bytes),
+            ),
             PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
                 PrivacyProofV1::VegaExistingCredentialZkV0(bytes)
             }
@@ -5949,9 +6247,10 @@ mod tests {
                     },
                 )
             }
-            PrivacyProtocolIdV1::IrohaZkAmsStarkV0 => {
-                PrivacyProtocolActivationLimitsV1::IrohaZkAmsStarkV0(ZkAmsActivationLimitsV1 {
+            PrivacyProtocolIdV1::IrohaZkAmsV1 => {
+                PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
                     max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
+                    max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
                 })
             }
             PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
@@ -5964,7 +6263,8 @@ mod tests {
                 PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                     JindoActivationLimitsV1 {
                         max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
-                        max_evaluation_point_count: IROHA_JINDO_MAX_EVALUATION_POINTS_V1,
+                        max_evaluation_query_count: IROHA_JINDO_MAX_EVALUATION_QUERIES_V1,
+                        max_multilinear_variable_count: IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1,
                     },
                 )
             }
@@ -6005,6 +6305,17 @@ mod tests {
         let protocol_id = statement.protocol_id();
         let context = statement.context().clone();
         let statement_digest = statement.digest().expect("statement digest");
+        let proof = match &statement {
+            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
+                action: PrivacyZkAmsActionV1::ProvisionAccount(_),
+                ..
+            }) => {
+                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255MlsagsProvisionAccount(
+                    PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]),
+                ))
+            }
+            _ => proof_for(protocol_id),
+        };
         PrivacyProofEnvelopeV1 {
             protocol_id,
             proof_system_id: protocol_id.expected_proof_system(),
@@ -6016,7 +6327,7 @@ mod tests {
             engine_manifest_digest: context.engine_manifest_digest,
             statement_digest,
             statement,
-            proof: proof_for(protocol_id),
+            proof,
         }
     }
 
@@ -6314,7 +6625,7 @@ mod tests {
 
         for role in [
             PrivacyRootRoleV1::PgcAccountState,
-            PrivacyRootRoleV1::AccountPool,
+            PrivacyRootRoleV1::AccountRegistry,
             PrivacyRootRoleV1::NoteCommitmentAnchor,
             PrivacyRootRoleV1::OutputSet,
             PrivacyRootRoleV1::ProgramState,
@@ -6433,7 +6744,7 @@ mod tests {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let protocols = [
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            PrivacyProtocolIdV1::IrohaZkAmsStarkV0,
+            PrivacyProtocolIdV1::IrohaZkAmsV1,
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
@@ -6628,13 +6939,15 @@ mod tests {
                     max_recipient_count: 8,
                 },
             ),
-            PrivacyProtocolActivationLimitsV1::IrohaZkAmsStarkV0(ZkAmsActivationLimitsV1 {
+            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
                 max_batch_size: 0,
+                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
             }),
             PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1 + 1,
-                    max_evaluation_point_count: IROHA_JINDO_MAX_EVALUATION_POINTS_V1,
+                    max_evaluation_query_count: IROHA_JINDO_MAX_EVALUATION_QUERIES_V1,
+                    max_multilinear_variable_count: IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1,
                 },
             ),
             PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
@@ -6661,62 +6974,129 @@ mod tests {
     }
 
     #[test]
-    fn zk_ams_obeys_global_vector_limits_and_recursion_profile() {
+    fn zk_ams_batch_binds_source_objects_and_rejects_malformed_anchors() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
-        let base = statement_for(PrivacyProtocolIdV1::IrohaZkAmsStarkV0);
-        let mutate = |f: fn(&mut IrohaZkAmsStarkStatementV1)| {
+        let base = statement_for(PrivacyProtocolIdV1::IrohaZkAmsV1);
+        let mutate = |f: fn(&mut PrivacyZkAmsBatchAdmissionV1)| {
             let mut value = base.clone();
-            let PrivacyStatementV1::IrohaZkAmsStarkV0(statement) = &mut value else {
+            let PrivacyStatementV1::IrohaZkAmsV1(statement) = &mut value else {
                 unreachable!()
             };
-            f(statement);
+            let PrivacyZkAmsActionV1::BatchAdmission(batch) = &mut statement.action else {
+                unreachable!()
+            };
+            f(batch);
             value.validate(&limits)
         };
         assert!(matches!(
-            mutate(|statement| {
-                statement.batch_size = 9;
-                statement.admission_nullifiers = (1..=9).map(nullifier).collect();
-                statement.account_commitments = (20..=28).map(commitment).collect();
-            }),
+            mutate(|batch| batch.anchors = (1..=9).map(zk_ams_anchor).collect()),
             Err(PrivacyStatementValidationError::InvalidBatchSize { count: 9, max: 8 })
         ));
         assert!(matches!(
-            mutate(|statement| statement.recursion_depth = 0),
-            Err(PrivacyStatementValidationError::InvalidRecursionDepth { depth: 0, .. })
+            mutate(|batch| batch.anchors.clear()),
+            Err(PrivacyStatementValidationError::InvalidBatchSize { count: 0, max: 8 })
         ));
         assert!(matches!(
-            mutate(|statement| statement.recursion_depth = ZK_AMS_MAX_RECURSION_DEPTH_V1 + 1),
-            Err(PrivacyStatementValidationError::InvalidRecursionDepth { .. })
+            mutate(|batch| batch.anchors[0].phc_hash = PrivacyZkAmsPhcHashV1::new([0; 32])),
+            Err(PrivacyStatementValidationError::ZeroZkAmsPhcHash { index: 0 })
         ));
         assert!(matches!(
-            mutate(|statement| {
-                statement.account_commitments.pop();
+            mutate(|batch| {
+                batch.anchors[1].phc_hash = batch.anchors[0].phc_hash;
             }),
-            Err(PrivacyStatementValidationError::DeclaredCountMismatch {
-                field: PrivacyCountFieldV1::AdmittedAccounts,
-                ..
-            })
+            Err(PrivacyStatementValidationError::DuplicateZkAmsPhcHash)
         ));
-
-        let mut lowered = limits;
-        lowered.max_nullifiers_per_action = 1;
-        lowered.max_commitments_per_action = 1;
-        lowered.validate().expect("lowered global limits");
         assert!(matches!(
-            base.validate(&lowered),
-            Err(PrivacyStatementValidationError::InvalidBatchSize { count: 2, max: 1 })
+            mutate(|batch| {
+                batch.anchors[1].seed_public_key = batch.anchors[0].seed_public_key;
+            }),
+            Err(PrivacyStatementValidationError::DuplicateZkAmsSeedPublicKey)
+        ));
+        assert!(matches!(
+            mutate(|batch| {
+                batch.accumulated_instance_digest =
+                    PrivacyZkAmsAccumulatedInstanceDigestV1::new([0; 32]);
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::ZkAmsAccumulatedInstanceDigest
+            })
         ));
     }
 
     #[test]
-    fn jindo_allows_zero_field_values_but_rejects_bad_matrices_and_duplicate_points() {
+    fn zk_ams_provisioning_enforces_closed_canonical_ring_and_key_image() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let provision = |ring_size: u8| {
+            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
+                context: context(),
+                issuer_id: PrivacyIssuerIdV1::new(raw(40)),
+                registry_id: PrivacyZkAmsRegistryIdV1::new(raw(41)),
+                policy_id: PrivacyPolicyIdV1::new(raw(43)),
+                action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
+                    account_registry_root: PrivacyRootV1::new(raw(144)),
+                    account_registry_root_epoch: 10,
+                    admitted_seed_key_ring: (1..=ring_size).map(zk_ams_seed_key).collect(),
+                    account_id: account(200),
+                    key_image: PrivacyZkAmsKeyImageV1::new(raw(201)),
+                }),
+            })
+        };
+        for size in [16, 32, 64] {
+            provision(size)
+                .validate(&limits)
+                .expect("closed ZK-AMS ring size");
+        }
+
+        let mutate = |f: fn(&mut PrivacyZkAmsProvisionAccountV1)| {
+            let mut value = provision(16);
+            let PrivacyStatementV1::IrohaZkAmsV1(statement) = &mut value else {
+                unreachable!()
+            };
+            let PrivacyZkAmsActionV1::ProvisionAccount(provision) = &mut statement.action else {
+                unreachable!()
+            };
+            f(provision);
+            value.validate(&limits)
+        };
+        assert!(matches!(
+            mutate(|provision| {
+                provision.admitted_seed_key_ring.pop();
+            }),
+            Err(PrivacyStatementValidationError::InvalidZkAmsRingSize { size: 15 })
+        ));
+        assert!(matches!(
+            mutate(|provision| provision.admitted_seed_key_ring.swap(0, 1)),
+            Err(PrivacyStatementValidationError::ZkAmsSeedKeyRingNotStrictlyIncreasing)
+        ));
+        assert!(matches!(
+            mutate(|provision| {
+                provision.admitted_seed_key_ring[1] = provision.admitted_seed_key_ring[0];
+            }),
+            Err(PrivacyStatementValidationError::ZkAmsSeedKeyRingNotStrictlyIncreasing)
+        ));
+        assert!(matches!(
+            mutate(|provision| {
+                provision.admitted_seed_key_ring[0] = PrivacyZkAmsSeedPublicKeyV1::new([0; 32]);
+            }),
+            Err(PrivacyStatementValidationError::ZeroZkAmsSeedPublicKey { index: 0 })
+        ));
+        assert!(matches!(
+            mutate(|provision| provision.key_image = PrivacyZkAmsKeyImageV1::new([0; 32])),
+            Err(PrivacyStatementValidationError::ZeroZkAmsKeyImage)
+        ));
+    }
+
+    #[test]
+    fn jindo_multilinear_profile_rejects_malformed_shapes_and_encodings() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let mut value = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0);
         let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
             unreachable!()
         };
-        statement.openings[0].evaluation_point = PrivacyJindoScalarV1::new([0; 32]);
-        statement.openings[0].evaluations[0] = PrivacyJindoScalarV1::new([0; 32]);
+        statement.evaluation_queries[0].evaluation_point[0] =
+            PrivacyJindoFieldElementV1::new(vec![0; 2]);
+        statement.evaluation_queries[0].claimed_evaluations[0] =
+            PrivacyJindoFieldElementV1::new(vec![0; 2]);
         value
             .validate(&limits)
             .expect("zero is a valid governed field element");
@@ -6725,24 +7105,86 @@ mod tests {
         let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut duplicate else {
             unreachable!()
         };
-        statement.openings[1].evaluation_point = statement.openings[0].evaluation_point;
+        statement.evaluation_queries[1].evaluation_point =
+            statement.evaluation_queries[0].evaluation_point.clone();
         assert!(matches!(
             duplicate.validate(&limits),
             Err(PrivacyStatementValidationError::DuplicateJindoEvaluationPoint)
         ));
 
-        let mut bad_matrix = value;
+        let mut bad_matrix = value.clone();
         let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut bad_matrix
         else {
             unreachable!()
         };
-        statement.openings[0].evaluations.pop();
+        statement.evaluation_queries[0].claimed_evaluations.pop();
         assert!(matches!(
             bad_matrix.validate(&limits),
             Err(PrivacyStatementValidationError::DeclaredCountMismatch {
-                field: PrivacyCountFieldV1::JindoOpeningEvaluations,
+                field: PrivacyCountFieldV1::JindoClaimedEvaluations,
                 ..
             })
+        ));
+
+        let mut bad_point = value.clone();
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut bad_point else {
+            unreachable!()
+        };
+        statement.evaluation_queries[0].evaluation_point.pop();
+        assert!(matches!(
+            bad_point.validate(&limits),
+            Err(PrivacyStatementValidationError::DeclaredCountMismatch {
+                field: PrivacyCountFieldV1::JindoEvaluationPointCoordinates,
+                ..
+            })
+        ));
+
+        let mut bad_field_width = value.clone();
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut bad_field_width
+        else {
+            unreachable!()
+        };
+        statement.evaluation_queries[0].evaluation_point[0]
+            .encoding
+            .push(1);
+        assert!(matches!(
+            bad_field_width.validate(&limits),
+            Err(
+                PrivacyStatementValidationError::InvalidJindoFieldElementEncoding {
+                    bytes: 3,
+                    expected: 2
+                }
+            )
+        ));
+
+        let mut zero_commitment = value.clone();
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut zero_commitment
+        else {
+            unreachable!()
+        };
+        statement.polynomial_commitments[0].encoding.fill(0);
+        assert!(matches!(
+            zero_commitment.validate(&limits),
+            Err(PrivacyStatementValidationError::AllZeroJindoLatticeCommitment { index: 0 })
+        ));
+
+        let mut wrong_commitment_width = value;
+        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
+            &mut wrong_commitment_width
+        else {
+            unreachable!()
+        };
+        statement.polynomial_commitments[0].encoding.push(1);
+        assert!(matches!(
+            wrong_commitment_width.validate(&limits),
+            Err(
+                PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
+                    index: Some(0),
+                    bytes: 5,
+                    expected: 4,
+                    ..
+                }
+            )
         ));
     }
 
@@ -7009,6 +7451,30 @@ mod tests {
                 state_since_height: 4,
             });
         assert!(active.validate_transition_to(&rewritten_history).is_err());
+    }
+
+    #[test]
+    fn activation_effective_height_uses_active_lifecycle_payload() {
+        let envelope = envelope(statement_for(
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        ));
+        let mut activation = activation(&envelope);
+        activation.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 1,
+            activated_at_height: 2,
+            state_since_height: 5,
+        });
+
+        assert_eq!(
+            envelope.validate_against_activation(&activation, 4),
+            Err(
+                PrivacyProofEnvelopeValidationError::ActivationNotEffective {
+                    current_height: 4,
+                    effective_height: 5,
+                }
+            )
+        );
+        assert_eq!(envelope.validate_against_activation(&activation, 5), Ok(()));
     }
 
     #[test]

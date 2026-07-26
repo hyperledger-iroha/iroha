@@ -1554,24 +1554,19 @@ ReplyClosedPrefixUpdate(witness) ==
       cancelled ==
         {identity \in rrAttemptLifecycleIdentities:
            /\ identity.owner = witness.requester
-           /\ identity.source = witness.responder
            /\ ReplyCoordinateAtOrBefore(
                 ReplyLifecycleIdentityCoordinate(identity),
                 newFloor)}
-      legacyProjectionRetired ==
-        {identity \in rrAttemptLifecycleIdentities:
-           /\ identity.owner = witness.requester
-           /\ identity.semanticSequence <= witness.closedThrough}
-      discarded == cancelled \cup legacyProjectionRetired
   IN /\ ReplyCloseWitnessValid(witness)
      /\ ReplyCoordinateAtOrBefore(oldFloor, newFloor)
      /\ rrClosedPrefix' =
           [rrClosedPrefix EXCEPT
-             ![witness.requester][witness.responder] = newFloor]
+             ![witness.requester] =
+               [source \in ReplySources |-> newFloor]]
      /\ rrDiscardedPartialIdentities' =
-          rrDiscardedPartialIdentities \cup discarded
+          rrDiscardedPartialIdentities \cup cancelled
      /\ rrAttemptLifecycleIdentities' =
-          rrAttemptLifecycleIdentities \ discarded
+          rrAttemptLifecycleIdentities \ cancelled
      /\ UNCHANGED <<rrServiceGeneration,
                     rrResponderGeneration,
                     rrDurableResponderGeneration,
@@ -1712,6 +1707,17 @@ RejectFutureGenerationWithoutMutation(
   /\ inputGeneration > rrResponderGeneration[responder]
   /\ UNCHANGED ReplyRouteV2Vars
 
+RejectRequesterEpochOverflowWithoutMutation(requester) ==
+  /\ requester \in ReplyOwners
+  /\ rrRequesterNextStreamEpoch[requester] =
+       ReplyDeliveryOrdinalLimit + 1
+  /\ UNCHANGED ReplyRouteV2Vars
+
+RejectNonTerminalResponderCompactionWithoutMutation(source) ==
+  /\ source \in ReplySources
+  /\ ~ReplyResponderStateTerminal(source)
+  /\ UNCHANGED ReplyRouteV2Vars
+
 ReturnOlderGenerationHintWithoutRoute(
     requester, responder, observedMessageHash) ==
   /\ requester \in ReplyOwners
@@ -1774,6 +1780,10 @@ ReplyRouteV2Next ==
        inputGeneration \in ReplyServiceGenerations:
        RejectFutureGenerationWithoutMutation(
          requester, responder, inputGeneration)
+  \/ \E requester \in ReplyOwners:
+       RejectRequesterEpochOverflowWithoutMutation(requester)
+  \/ \E source \in ReplySources:
+       RejectNonTerminalResponderCompactionWithoutMutation(source)
   \/ \E requester \in ReplyOwners, responder \in ReplySources,
        observedMessageHash
          \in SUBSET (ReplyRequestIdentitySet \cup ReplyCloseIdentitySet):
@@ -1782,9 +1792,34 @@ ReplyRouteV2Next ==
   \/ \E source \in ReplySources:
        RejectResponderGenerationOverflow(source)
 
+(***************************************************************************
+The V2 lifecycle retains the exact local scheduling premises needed by the
+per-source cursor and cumulative-close arguments.  The vector is the complete
+V2 state: coordinate-only persistence, hint cleanup, and generation rollover
+steps therefore cannot be used to satisfy fairness for ticket acquisition,
+exact-item service, close retry, or close acknowledgement.
+
+These are explicit environment/runtime premises.  They do not assert network
+responsiveness, create an admission ticket, or turn a route-free generation
+hint into reply authority.
+***************************************************************************)
+ReplyRouteV2Fairness ==
+  /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
+       source \in ReplySources:
+       WF_ReplyRouteV2Vars(
+         AcquireReplyTicketV2(owner, semantic, source))
+  /\ \A owner \in ReplyOwners, semantic \in ReplySemantics:
+       WF_ReplyRouteV2Vars(ServiceReplyRouteV2(owner, semantic))
+  /\ \A witness \in ReplyCloseWitnessSet:
+       WF_ReplyRouteV2Vars(RetryCloseSemanticRequestV2(witness))
+  /\ \A acknowledgement \in ReplyCloseAcknowledgementSet:
+       WF_ReplyRouteV2Vars(
+         AcknowledgeCloseSemanticRequestV2(acknowledgement))
+
 ReplyRouteV2Spec ==
   ReplyRouteV2Init
     /\ [][ReplyRouteV2Next]_ReplyRouteV2Vars
+    /\ ReplyRouteV2Fairness
 
 ReplyRouteTypeInvariant ==
   /\ rrAttempts \subseteq ReplyAttemptSet
@@ -1889,17 +1924,16 @@ ReplySourceTenureInvalidationStep ==
         ReplySourceHasNoTickets(owner, source)'
 
 ReplyAttemptCoveredByCloseStep(attempt) ==
-  /\ ReplySemanticBound(attempt.owner, attempt.semantic)
-  /\ rrSemanticSequence'[attempt.owner][attempt.semantic] =
-       rrSemanticSequence[attempt.owner][attempt.semantic]
-  /\ rrSemanticHash'[attempt.owner][attempt.semantic] =
-       rrSemanticHash[attempt.owner][attempt.semantic]
-  /\ rrRequesterClosedThrough'[attempt.owner]
-       > rrRequesterClosedThrough[attempt.owner]
-  /\ rrSemanticSequence[attempt.owner][attempt.semantic]
-       > rrRequesterClosedThrough[attempt.owner]
-  /\ rrSemanticSequence[attempt.owner][attempt.semantic]
-       <= rrRequesterClosedThrough'[attempt.owner]
+  \E identity \in rrAttemptLifecycleIdentities:
+    /\ identity.owner = attempt.owner
+    /\ identity.semantic = attempt.semantic
+    /\ identity.source = attempt.source
+    /\ ~ReplyAttemptOccurrenceCancelled(identity)
+    /\ ReplyCoordinateAtOrBefore(
+         ReplyLifecycleIdentityCoordinate(identity),
+         rrClosedPrefix'[attempt.owner][attempt.source])
+    /\ identity \notin rrAttemptLifecycleIdentities'
+    /\ identity \in rrDiscardedPartialIdentities'
 
 ReplyAttemptReplayValid(oldAttempt, newAttempt) ==
   /\ newAttempt.owner = oldAttempt.owner
@@ -1940,7 +1974,7 @@ ReplyTenureAwareReplayStep ==
   /\ ReplySourceTenureInvalidationStep
 
 ReplyTenureAwareReplay ==
-  [][ReplyTenureAwareReplayStep]_ReplyRouteVars
+  [][ReplyTenureAwareReplayStep]_ReplyRouteV2Vars
 
 ReplyLifecycleJournal ==
   [][ReplyLifecycleJournalStep]_ReplyRouteVars
@@ -1993,7 +2027,7 @@ ReplySourceIsolationStep ==
   /\ ReplyOtherCursorIsolationStep
 
 ReplySourceIsolation ==
-  [][ReplySourceIsolationStep]_ReplyRouteVars
+  [][ReplySourceIsolationStep]_ReplyRouteV2Vars
 
 ReplyRouteSafetyInvariant ==
   /\ ReplyRouteTypeInvariant
@@ -2086,6 +2120,8 @@ ReplyClosedPrefixLexicographicInvariant ==
   /\ \A owner \in ReplyOwners, source \in ReplySources:
        rrClosedPrefix[owner][source]
          \in ReplyOccurrenceCoordinateSet
+  /\ \A owner \in ReplyOwners, left, right \in ReplySources:
+       rrClosedPrefix[owner][left] = rrClosedPrefix[owner][right]
   /\ \A identity \in rrAttemptLifecycleIdentities:
        ReplyAttemptOccurrenceCancelled(identity) =>
          /\ identity \in rrDiscardedPartialIdentities
@@ -2133,6 +2169,16 @@ ReplyFutureGenerationRejectIsAtomic ==
     RejectFutureGenerationWithoutMutation(
       requester, responder, inputGeneration)
       => UNCHANGED ReplyRouteV2Vars
+
+ReplyCapacityRejectIsAtomic ==
+  /\ \A requester \in ReplyOwners:
+       RejectRequesterEpochOverflowWithoutMutation(requester)
+         => UNCHANGED ReplyRouteV2Vars
+  /\ \A source \in ReplySources:
+       /\ RejectNonTerminalResponderCompactionWithoutMutation(source)
+            => UNCHANGED ReplyRouteV2Vars
+       /\ RejectResponderGenerationOverflow(source)
+            => UNCHANGED ReplyRouteV2Vars
 
 ReplyHintPersistencePrecedesPartialDiscard ==
   \A reset \in ReplyHintResetSet:

@@ -3404,10 +3404,10 @@ fn certified_merge_sidecar_ingress_reply_route(
     reply_route: iroha_p2p::network::NetworkReplyRoute,
 ) -> Option<iroha_p2p::network::NetworkReplyRoute> {
     match message {
-        iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_) => None,
         iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
         | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_)
         | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::CloseAck(_)
+        | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::GenerationHint(_)
         | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Chunk(_) => Some(reply_route),
     }
 }
@@ -6961,7 +6961,7 @@ mod network_relay_tests {
     }
 
     #[test]
-    fn certified_merge_sidecar_generation_hint_alone_drops_ingress_reply_route() {
+    fn certified_merge_sidecar_messages_preserve_ingress_reply_route() {
         use iroha_core::merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
             CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
@@ -7029,21 +7029,15 @@ mod network_relay_tests {
             CertifiedMergeSidecarMessage::Request(request),
             close,
             close_ack,
+            generation_hint,
             CertifiedMergeSidecarMessage::Chunk(chunk),
         ] {
             let route = routes.mint(semantic_sender.clone());
             let retained =
                 super::certified_merge_sidecar_ingress_reply_route(&message, route.clone())
-                    .expect("non-Hint sidecar traffic keeps its authenticated reply route");
+                    .expect("sidecar traffic keeps its authenticated reply route");
             assert!(retained.same_delivery(&route));
         }
-
-        let hint_route = routes.mint(semantic_sender);
-        assert!(
-            super::certified_merge_sidecar_ingress_reply_route(&generation_hint, hint_route)
-                .is_none(),
-            "GenerationHint is Consensus control traffic without reply authority"
-        );
     }
 
     #[test]

@@ -178,28 +178,47 @@ AsyncReplyRouteNext ==
        inputGeneration \in AsyncReplyRoute!ReplyServiceGenerations:
        AsyncReplyRoute!RejectFutureGenerationWithoutMutation(
          requester, responder, inputGeneration)
+  \/ \E requester \in ValidatorIds:
+       AsyncReplyRoute!
+         RejectRequesterEpochOverflowWithoutMutation(requester)
+  \/ \E source \in AsyncReplyRoute!ReplySources:
+       AsyncReplyRoute!
+         RejectNonTerminalResponderCompactionWithoutMutation(source)
+  \/ \E requester \in ValidatorIds,
+       responder \in AsyncReplyRoute!ReplySources,
+       observedMessageHash
+         \in SUBSET
+              (AsyncReplyRoute!ReplyRequestIdentitySet
+                 \cup AsyncReplyRoute!ReplyCloseIdentitySet):
+       AsyncReplyRoute!ReturnOlderGenerationHintWithoutRoute(
+         requester, responder, observedMessageHash)
+  \/ \E source \in AsyncReplyRoute!ReplySources:
+       AsyncReplyRoute!RejectResponderGenerationOverflow(source)
 
 AsyncReplyRouteInit ==
   /\ AsyncReplyRoute!ReplyRouteV2Init
   /\ AsyncReplyRoute!ReplySources = ValidatorIds
 
-(* Keep production fairness definitionally identical to the ownership kernel.
-   This includes ticket acquisition, exact-item service, cumulative-close
-   retry, and exact close acknowledgement; a copied subset can silently make
-   terminal close work unfair. *)
+(*
+Keep the production premise definitionally identical to the V2 ownership
+kernel.  A copied subset can silently omit a terminal-close action or use the
+legacy state vector, allowing coordinate-only steps to masquerade as service.
+The premise remains local scheduling only; it does not assert network
+responsiveness.
+*)
 AsyncReplyRouteFairness ==
-  AsyncReplyRoute!ReplyRouteFairness
+  AsyncReplyRoute!ReplyRouteV2Fairness
 
 AsyncAcquireAnyReplyTicket ==
   \E owner \in ValidatorIds,
-     semantic \in AsyncReplySemanticIdentities,
-     source \in AsyncReplyRoute!ReplySources:
-    AsyncReplyRoute!AcquireReplyTicket(owner, semantic, source)
+    semantic \in AsyncReplySemanticIdentities,
+    source \in AsyncReplyRoute!ReplySources:
+    AsyncReplyRoute!AcquireReplyTicketV2(owner, semantic, source)
 
 AsyncServiceAnyReplyRoute ==
   \E owner \in ValidatorIds,
      semantic \in AsyncReplySemanticIdentities:
-    AsyncReplyRoute!ServiceReplyRoute(owner, semantic)
+    AsyncReplyRoute!ServiceReplyRouteV2(owner, semantic)
 
 (***************************************************************************
 The finite TLC configuration checks safety and counterexamples, not a
@@ -219,6 +238,8 @@ AsyncReplyRouteSafetyInvariant ==
   AsyncReplyRoute!ReplyRouteSafetyInvariant
 AsyncReplyRouteFullSafetyInvariant ==
   AsyncReplyRoute!ReplyRouteFullSafetyInvariant
+AsyncReplyRouteV2SafetyInvariant ==
+  AsyncReplyRoute!ReplyRouteV2SafetyInvariant
 AsyncReplyTenureAwareReplayStep ==
   AsyncReplyRoute!ReplyTenureAwareReplayStep
 AsyncReplyTenureAwareReplay ==

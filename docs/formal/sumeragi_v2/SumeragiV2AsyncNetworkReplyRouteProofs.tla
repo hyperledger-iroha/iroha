@@ -2,14 +2,13 @@
 EXTENDS SumeragiV2AsyncNetworkReplyRoutes, TLAPS
 
 (***************************************************************************
-Deductive product refinement for production reply routes.
+Safety projection for the asynchronous product and the V2 reply lifecycle.
 
-Consensus steps stutter every reply-route variable and route steps stutter
-every established asynchronous variable.  The two projections below prevent
-the product from borrowing progress across that boundary: production refines
-both the existing asynchronous spec and the independently fair route spec.
-The final theorem imports the route kernel's deductive ownership/liveness
-result through the exact production instantiation.
+The proved clauses below establish only structural projection: consensus
+steps stutter every V2 reply variable and reply steps stutter every consensus
+variable.  The temporal safety/progress products are named specified-unproved
+obligations at the end.  No rotating-leader or network delivery liveness is
+derived from local reply-route fairness.
 ***************************************************************************)
 
 AsyncReplyRouteProofs ==
@@ -36,52 +35,80 @@ AsyncReplyRouteProofs ==
     rrClosePendingThrough <- asyncReplyClosePendingThrough,
     rrCloseSentThrough <- asyncReplyCloseSentThrough,
     rrCloseAcknowledgedThrough <- asyncReplyCloseAcknowledgedThrough,
-    rrCloseRetryGeneration <- asyncReplyCloseRetryGeneration
+    rrCloseRetryGeneration <- asyncReplyCloseRetryGeneration,
+    rrServiceGeneration <- asyncReplyServiceGeneration,
+    rrResponderGeneration <- asyncReplyResponderGeneration,
+    rrDurableResponderGeneration <-
+      asyncReplyDurableResponderGeneration,
+    rrRequesterNextStreamEpoch <-
+      asyncReplyRequesterNextStreamEpoch,
+    rrRequesterStreamEpoch <- asyncReplyRequesterStreamEpoch,
+    rrCloseStreamEpoch <- asyncReplyCloseStreamEpoch,
+    rrClosedPrefix <- asyncReplyClosedPrefix,
+    rrAttemptLifecycleIdentities <-
+      asyncReplyAttemptLifecycleIdentities,
+    rrPendingHintResets <- asyncReplyPendingHintResets,
+    rrDiscardedPartialIdentities <-
+      asyncReplyDiscardedPartialIdentities
 
-THEOREM AsyncReplyRouteInitProvidesSourceGeometry ==
-  AsyncReplyRouteInit => AsyncReplyRoute!ReplySources = ValidatorIds
-BY Isa
-   DEF AsyncReplyRouteInit, AsyncReplyRoute!ReplyRouteInit,
-       AsyncReplyRoute!ReplyRouteConfiguration,
-       AsyncReplyRoute!ReplySources, AsyncReplySourceOrder,
-       ValidatorIds, ModelConfiguration, QuorumConfiguration
+THEOREM AsyncReplyRouteInitContainsExactV2Init ==
+  AsyncReplyRouteInit => AsyncReplyRoute!ReplyRouteV2Init
+BY DEF AsyncReplyRouteInit
 
-THEOREM AsyncReplyRouteNextRefinesOwnershipNext ==
-  AsyncReplyRouteNext => AsyncReplyRoute!ReplyRouteNext
+THEOREM AsyncProductionStepIsDisjointProduct ==
+  AsyncProductionNext <=>
+    \/ /\ AsyncNext
+       /\ UNCHANGED AsyncReplyRouteVars
+    \/ /\ AsyncReplyRouteNext
+       /\ UNCHANGED AsyncAllVars
+BY DEF AsyncProductionNext
+
+THEOREM AsyncConsensusProductBranchStuttersReplyLifecycle ==
+  /\ AsyncNext
+  /\ UNCHANGED AsyncReplyRouteVars
+  => UNCHANGED AsyncReplyRouteVars
+OBVIOUS
+
+THEOREM AsyncReplyProductBranchStuttersConsensus ==
+  /\ AsyncReplyRouteNext
+  /\ UNCHANGED AsyncAllVars
+  => UNCHANGED AsyncAllVars
+OBVIOUS
+
+THEOREM AsyncReplyRouteFairnessIsExactV2Fairness ==
+  AsyncReplyRouteFairness <=>
+    AsyncReplyRoute!ReplyRouteV2Fairness
+BY DEF AsyncReplyRouteFairness
+
+(***************************************************************************
+Checked product boundaries.  These theorems prove exact V2 action projection,
+both bracket projections, and both spec projections without importing any
+reply-route safety or progress result.
+***************************************************************************)
+THEOREM AsyncReplyRouteNextProjectionObligation ==
+  AsyncReplyRouteNext => AsyncReplyRoute!ReplyRouteV2Next
 BY SMT
-   DEF AsyncReplyRouteNext, AsyncObserveNewReplySource,
-       AsyncObserveLaterReplyDelivery, AsyncReconnectReplySource,
+   DEF AsyncReplyRouteNext,
+       AsyncObserveNewReplySource,
+       AsyncObserveLaterReplyDelivery,
+       AsyncReconnectReplySource,
        AsyncExactReplyCapabilityRetry,
-       AsyncReplyRoute!ReplyRouteNext
+       AsyncReplyRoute!ReplyRouteV2Next,
+       AsyncReplyRoute!RetireReplySourceV2,
+       AsyncReplyRoute!RecoverReplyRouteState
 
-THEOREM AsyncProductionBracketProjectsAsyncBracket ==
+THEOREM AsyncProductionBracketProjectsAsyncBracketObligation ==
   [AsyncProductionNext]_AsyncProductionVars
     => [AsyncNext]_AsyncAllVars
 BY SMT DEF AsyncProductionNext, AsyncProductionVars
 
-THEOREM AsyncProductionBracketProjectsReplyRouteBracket ==
+THEOREM AsyncProductionBracketProjectsReplyV2BracketObligation ==
   [AsyncProductionNext]_AsyncProductionVars
-    => [AsyncReplyRoute!ReplyRouteNext]_AsyncReplyRouteVars
-BY AsyncReplyRouteNextRefinesOwnershipNext, SMT
+    => [AsyncReplyRoute!ReplyRouteV2Next]_AsyncReplyRouteVars
+BY AsyncReplyRouteNextProjectionObligation, SMT
    DEF AsyncProductionNext, AsyncProductionVars
 
-THEOREM AsyncReplyRouteFairnessProjectsOwnershipFairness ==
-  /\ AsyncReplyRouteInit
-  /\ AsyncReplyRouteFairness
-  => AsyncReplyRoute!ReplyRouteFairness
-PROOF
-  <1>1. ASSUME AsyncReplyRouteInit,
-                AsyncReplyRouteFairness
-         PROVE AsyncReplyRoute!ReplyRouteFairness
-    <2>1. AsyncReplyRoute!ReplySources = ValidatorIds
-      BY <1>1, AsyncReplyRouteInitProvidesSourceGeometry
-    <2> QED BY <1>1, <2>1, PTL
-         DEF AsyncReplyRouteFairness,
-             AsyncReplyRoute!ReplyRouteFairness,
-             AsyncReplyRouteVars
-  <1> QED BY <1>1
-
-THEOREM AsyncProductionSpecAtProjectsAsyncSpecAt ==
+THEOREM AsyncProductionSpecAtProjectsAsyncSpecAtObligation ==
   \A initialContext:
     AsyncProductionSpecAt(initialContext)
       => AsyncSpecAt(initialContext)
@@ -94,136 +121,69 @@ PROOF
     <2>2. [][AsyncProductionNext]_AsyncProductionVars
       BY <1>1 DEF AsyncProductionSpecAt
     <2>3. [][AsyncNext]_AsyncAllVars
-      BY <2>2, AsyncProductionBracketProjectsAsyncBracket, PTL
+      BY <2>2,
+         AsyncProductionBracketProjectsAsyncBracketObligation, PTL
     <2>4. AsyncFairnessAt(initialContext)
       BY <1>1 DEF AsyncProductionSpecAt
     <2> QED BY <2>1, <2>3, <2>4 DEF AsyncSpecAt
   <1> QED BY <1>1
 
-THEOREM AsyncProductionSpecAtProjectsReplyRouteSpec ==
+THEOREM AsyncProductionSpecAtProjectsReplyRouteV2SpecObligation ==
   \A initialContext:
     AsyncProductionSpecAt(initialContext)
-      => AsyncReplyRoute!ReplyRouteSpec
+      => AsyncReplyRoute!ReplyRouteV2Spec
 PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncProductionSpecAt(initialContext)
-         PROVE AsyncReplyRoute!ReplyRouteSpec
+         PROVE AsyncReplyRoute!ReplyRouteV2Spec
     <2>1. AsyncReplyRouteInit
       BY <1>1 DEF AsyncProductionSpecAt
     <2>2. [][AsyncProductionNext]_AsyncProductionVars
       BY <1>1 DEF AsyncProductionSpecAt
-    <2>3. [][AsyncReplyRoute!ReplyRouteNext]_AsyncReplyRouteVars
+    <2>3. [][AsyncReplyRoute!ReplyRouteV2Next]_AsyncReplyRouteVars
       BY <2>2,
-         AsyncProductionBracketProjectsReplyRouteBracket, PTL
+         AsyncProductionBracketProjectsReplyV2BracketObligation, PTL
     <2>4. AsyncReplyRouteFairness
       BY <1>1 DEF AsyncProductionSpecAt
-    <2>5. AsyncReplyRoute!ReplyRouteFairness
-      BY <2>1, <2>4,
-         AsyncReplyRouteFairnessProjectsOwnershipFairness
-    <2> QED BY <2>1, <2>3, <2>5
-         DEF AsyncReplyRouteInit,
-             AsyncReplyRoute!ReplyRouteSpec,
+    <2>5. AsyncReplyRoute!ReplyRouteV2Init
+      BY <2>1, AsyncReplyRouteInitContainsExactV2Init
+    <2>6. AsyncReplyRoute!ReplyRouteV2Fairness
+      BY <2>4, AsyncReplyRouteFairnessIsExactV2Fairness
+    <2> QED BY <2>3, <2>5, <2>6
+         DEF AsyncReplyRoute!ReplyRouteV2Spec,
              AsyncReplyRouteVars
   <1> QED BY <1>1
 
-THEOREM AsyncProductionSpecProjectsAsyncSpec ==
-  AsyncProductionSpec => AsyncSpec
-BY AsyncProductionSpecAtProjectsAsyncSpecAt
-   DEF AsyncProductionSpec, AsyncProductionSpecAt,
-       AsyncSpec, AsyncSpecAt, AsyncInit, AsyncFairness
+(***************************************************************************
+Specified-unproved temporal boundaries.  They remain operators, not THEOREMs,
+and therefore provide no machine-checked completion evidence.
+***************************************************************************)
+AsyncReplyRouteV2InductiveSafetyObligation ==
+  AsyncReplyRouteProofs!ReplyRouteV2InductiveSafetyObligation
 
-THEOREM AsyncProductionSpecProjectsReplyRouteSpec ==
-  AsyncProductionSpec => AsyncReplyRoute!ReplyRouteSpec
-BY AsyncProductionSpecAtProjectsReplyRouteSpec
-   DEF AsyncProductionSpec, AsyncProductionSpecAt,
-       AsyncInit, AsyncFairness
+AsyncReplyRouteV2SuccessorIsolationObligation ==
+  AsyncReplyRouteProofs!ReplyRouteV2SuccessorIsolationObligation
 
-THEOREM AsyncProductionSpecAtProvidesReplyRouteProgress ==
+AsyncNetworkReplyRouteTemporalProductObligation ==
   \A initialContext:
     AsyncProductionSpecAt(initialContext) =>
-      /\ []AsyncReplyRouteSafetyInvariant
-      /\ []AsyncReplyRouteFullSafetyInvariant
+      /\ []AsyncReplyRouteV2SafetyInvariant
       /\ AsyncReplyTenureAwareReplay
       /\ AsyncReplySourceIsolation
-      /\ AsyncReplyLifecycleJournal
-      /\ \A requester \in ValidatorIds,
-            responder \in ValidatorIds:
-           AsyncReplyCloseWorkEventuallyTerminates(
-             requester, responder)
-      /\ \A owner \in ValidatorIds,
-            semantic \in AsyncReplySemanticIdentities,
-            source \in ValidatorIds:
-           AsyncReplySourceEventuallyProgresses(
-             owner, semantic, source)
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                AsyncProductionSpecAt(initialContext)
-         PROVE /\ []AsyncReplyRouteSafetyInvariant
-               /\ []AsyncReplyRouteFullSafetyInvariant
-               /\ AsyncReplyTenureAwareReplay
-               /\ AsyncReplySourceIsolation
-               /\ AsyncReplyLifecycleJournal
-               /\ \A requester \in ValidatorIds,
-                     responder \in ValidatorIds:
-                    AsyncReplyCloseWorkEventuallyTerminates(
-                      requester, responder)
-               /\ \A owner \in ValidatorIds,
-                     semantic \in AsyncReplySemanticIdentities,
-                     source \in ValidatorIds:
-                    AsyncReplySourceEventuallyProgresses(
-                      owner, semantic, source)
-    <2>1. AsyncReplyRoute!ReplyRouteSpec
-      BY <1>1, AsyncProductionSpecAtProjectsReplyRouteSpec
-    <2>2. /\ []AsyncReplyRoute!ReplyRouteSafetyInvariant
-           /\ []AsyncReplyRoute!ReplyRouteFullSafetyInvariant
-           /\ AsyncReplyRoute!ReplyTenureAwareReplay
-           /\ AsyncReplyRoute!ReplySourceIsolation
-           /\ AsyncReplyRoute!ReplyLifecycleJournal
-           /\ \A requester \in ValidatorIds,
-                 responder \in AsyncReplyRoute!ReplySources:
-                AsyncReplyRoute!ReplyCloseWorkEventuallyTerminates(
-                  requester, responder)
-           /\ \A owner \in ValidatorIds,
-                 semantic \in AsyncReplySemanticIdentities,
-                 source \in AsyncReplyRoute!ReplySources:
-                AsyncReplyRoute!ReplySourceEventuallyProgresses(
-                  owner, semantic, source)
-      BY <2>1,
-         AsyncReplyRouteProofs!ReplyRouteOwnershipModelObligation
-    <2>3. AsyncReplyRoute!ReplySources = ValidatorIds
-      BY <1>1, AsyncReplyRouteInitProvidesSourceGeometry
-         DEF AsyncProductionSpecAt
-    <2> QED BY <2>2, <2>3
-         DEF AsyncReplyRouteSafetyInvariant,
-             AsyncReplyRouteFullSafetyInvariant,
-             AsyncReplyTenureAwareReplay,
-             AsyncReplySourceIsolation,
-             AsyncReplyLifecycleJournal,
-             AsyncReplyCloseWorkEventuallyTerminates,
-             AsyncReplySourceEventuallyProgresses
-  <1> QED BY <1>1
 
-THEOREM AsyncNetworkReplyRouteModelObligation ==
-  \A initialContext:
-    AsyncProductionSpecAt(initialContext) =>
-      /\ AsyncSpecAt(initialContext)
-      /\ AsyncReplyRoute!ReplyRouteSpec
-      /\ []AsyncReplyRouteSafetyInvariant
-      /\ []AsyncReplyRouteFullSafetyInvariant
-      /\ AsyncReplyTenureAwareReplay
-      /\ AsyncReplySourceIsolation
-      /\ AsyncReplyLifecycleJournal
-      /\ \A requester \in ValidatorIds,
-            responder \in ValidatorIds:
-           AsyncReplyCloseWorkEventuallyTerminates(
-             requester, responder)
-      /\ \A owner \in ValidatorIds,
-            semantic \in AsyncReplySemanticIdentities,
-            source \in ValidatorIds:
-           AsyncReplySourceEventuallyProgresses(
-             owner, semantic, source)
-BY AsyncProductionSpecAtProjectsAsyncSpecAt,
-   AsyncProductionSpecAtProjectsReplyRouteSpec,
-   AsyncProductionSpecAtProvidesReplyRouteProgress
+THEOREM AsyncNetworkReplyRouteActionProjectionObligation ==
+  /\ AsyncReplyRouteNextProjectionObligation
+  /\ AsyncProductionBracketProjectsAsyncBracketObligation
+  /\ AsyncProductionBracketProjectsReplyV2BracketObligation
+BY AsyncReplyRouteNextProjectionObligation,
+   AsyncProductionBracketProjectsAsyncBracketObligation,
+   AsyncProductionBracketProjectsReplyV2BracketObligation
+
+AsyncNetworkReplyRouteModelObligation ==
+  /\ AsyncProductionSpecAtProjectsAsyncSpecAtObligation
+  /\ AsyncProductionSpecAtProjectsReplyRouteV2SpecObligation
+  /\ AsyncReplyRouteV2InductiveSafetyObligation
+  /\ AsyncReplyRouteV2SuccessorIsolationObligation
+  /\ AsyncNetworkReplyRouteTemporalProductObligation
 
 =============================================================================

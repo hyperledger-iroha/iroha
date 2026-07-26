@@ -38,18 +38,26 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar lifecycle. Wire version 1 must bind positive responder
   generation, requester epoch, and per-stream semantic sequence coordinates
   while excluding only monotonic `closed_through` from request identity.
-  `GenerationHint` must remain authenticated route-free Consensus control.
-  `MergeSidecarLifecycleSnapshotV2` must remain the only durable schema, with
-  V1 rejected and the checked generation increment plus empty responder state
-  persisted atomically. Generation rollover is permitted only for necessary
-  unified server-table compaction—either a full table or certified roster
-  geometry replacement—after every old stream, gate, transfer, and flush is
-  terminal. Historical test receipts and inventory seals predate this
-  final refactor and do not attest it. Re-run the focused and complete
+  `GenerationHint` must retain the triggering authenticated reply route, with
+  alternate sources coalesced as independent attempts.
+  `MergeSidecarLifecycleSnapshotV3` must remain the only durable schema, with
+  V1/V2 rejected and the checked generation increment plus empty responder
+  state committed through an fsynced inactive slot and marker-selected root.
+  Generation rollover is permitted only for a certified changed-roster
+  geometry after every old stream, gate, transfer, and flush is terminal; a
+  full same-roster table rejects without mutation. The focused
+  route and pipeline generation/epoch TLC traces are
+  wired and fresh at 7/7/depth 7 and 11/10/depth 10 respectively; the
+  fail-atomic capacity-overflow route/pipeline traces are fresh at 5/5/depth 5
+  and 8/7/depth 7. Historical full-matrix test receipts and inventory seals
+  predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining production inventory
-  legs and archived G-UNIT execution.
+  mutations before promotion, then finish the remaining 723-test,
+  38-module production inventory legs and archived G-UNIT execution.
+  The asynchronous reply-route product's 54/54 structural TLAPS projection is
+  complete; its V2 inductive-safety, successor-isolation, and temporal-product
+  obligations remain in the formal dependency queue.
 - Finish `G-UNIT` with a fresh archived run of all 277 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
@@ -25782,7 +25790,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-704-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+723-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25869,7 +25877,7 @@ runtime premise on the final signed source.
   presence is not execution evidence;
 - complete the remaining production-refinement and temporal proof for the typed
   applied-height handoff. Historical strict and bounded receipts predate the
-  sole-V2 compaction/persistence relation and a fresh strict run is still
+  V3 two-slot compaction/persistence relation and a fresh strict run is still
   required. The conditional rollover obligation remains
   `specified_unproved`; no deductive completion is claimed while its final
   persistence relation and the rotating-leader dependency remain unproved. It
@@ -26100,7 +26108,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  704-test target above supersedes that checkpoint. The 38-module pre-network
+  722-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

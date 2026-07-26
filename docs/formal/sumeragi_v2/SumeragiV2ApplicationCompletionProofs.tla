@@ -73,6 +73,7 @@ THEOREM ExactDecisionSourceProjectsPostGstServiceStage ==
     => DecisionRecoveryStageExact(node, qc)
 BY GstExcludesDecisionRecoveryAuthority, Isa
    DEF DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner,
        AsyncDecisionRecoveryStageExact, ExactDecisionRecord
 
 THEOREM PostGstResponsiveDecisionHasExactServiceSource ==
