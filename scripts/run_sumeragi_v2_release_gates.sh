@@ -1204,12 +1204,24 @@ required_production_liveness_tests=(
   merge_sidecar::tests::durable_response_drain_persists_pending_identity_before_handoff
   merge_sidecar::tests::authenticated_generation_hint_retires_old_attempt_before_reissue
   merge_sidecar::tests::close_covers_allocated_but_unsent_sequence_after_requester_recovery
+  merge_sidecar::tests::failed_response_rotation_persists_close_before_sequence_exhaustion
   merge_sidecar::tests::delayed_same_payload_flush_cannot_advance_the_successor_occurrence
   merge_sidecar::tests::same_occurrence_advances_piggybacked_floor_without_rematerializing_current_output
   merge_sidecar::tests::semantic_sequence_norito_decode_rejects_zero
-  merge_sidecar::tests::lifecycle_v2_roundtrip_and_restore_enforce_gate_and_attempt_bounds_separately
+  merge_sidecar::tests::lifecycle_v3_roundtrip_and_restore_enforce_gate_and_attempt_bounds_separately
   merge_sidecar::tests::legacy_lifecycle_v1_snapshot_is_rejected_without_migration
-  merge_sidecar::tests::durable_lifecycle_rejects_missing_sole_v2_state
+  merge_sidecar::tests::legacy_lifecycle_v2_snapshot_is_rejected_without_layout_guessing
+  merge_sidecar::tests::durable_lifecycle_v3_root_high_water_is_exact_monotonic_and_noop_stable
+  merge_sidecar::tests::durable_lifecycle_v3_bootstrap_recovers_first_commit_and_rejects_missing_roots
+  merge_sidecar::tests::durable_lifecycle_v3_rejects_crossed_bootstrap_and_committed_root_shapes
+  merge_sidecar::tests::durable_lifecycle_v3_recovers_regular_temps_and_rejects_unsafe_artifacts
+  merge_sidecar::tests::durable_lifecycle_v3_validates_semantics_before_retiring_crash_artifacts
+  merge_sidecar::tests::durable_lifecycle_v3_rejects_split_generations_and_rehashed_state
+  merge_sidecar::tests::durable_lifecycle_v3_generation_exhaustion_precedes_close_mutation
+  merge_sidecar::tests::durable_lifecycle_v3_generation_exhaustion_precedes_writer_flush_cas
+  merge_sidecar::tests::durable_lifecycle_v3_recovers_predecessor_between_state_and_root_publication
+  merge_sidecar::tests::durable_lifecycle_v3_recovers_successor_after_root_publication
+  merge_sidecar::tests::durable_lifecycle_v3_rejects_missing_state_with_surviving_root_high_water
   merge_sidecar::tests::durable_lifecycle_rejects_legacy_stream_state_without_guessing_a_layout
   merge_sidecar::tests::durable_lifecycle_rejects_regressed_duplicate_and_cross_epoch_state
   merge_sidecar::tests::durable_lifecycle_rejects_source_geometry_and_pending_marker_corruption
@@ -1243,7 +1255,9 @@ required_production_liveness_tests=(
   merge_sidecar::tests::same_roster_identity_preserves_server_state_and_changed_size_rolls_once
   merge_sidecar::tests::server_capacity_geometry_separates_streams_gates_and_attempts
   merge_sidecar::tests::service_generation_overflow_rejects_without_compacting_server_state
-  merge_sidecar::tests::full_server_table_rolls_only_after_terminal_state_and_rejects_active_state_atomically
+  merge_sidecar::tests::full_server_table_never_advances_generation_without_a_changed_roster
+  merge_sidecar::tests::durable_exact_output_fence_clears_unconfirmed_debt_without_forging_close
+  merge_sidecar::tests::durable_exact_output_fence_rejects_service_generation_exhaustion_before_mutation
   merge_sidecar::tests::service_generation_rollover_journal_failure_is_fail_atomic
   merge_sidecar::tests::fifth_gate_from_one_hub_is_rejected_while_another_hub_progresses
   merge_sidecar::tests::stale_close_ack_cannot_terminate_a_reallocated_stream_epoch
@@ -1415,9 +1429,10 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::sidecar_server_allocations_require_roster_requester_but_not_roster_relay
   sumeragi::v2_lane_work::tests::stale_generation_hint_bypasses_obstructed_journal_without_latching_restart
   sumeragi::v2_lane_work::tests::terminal_retirement_journal_failure_latches_lane_restart_with_gate_unchanged
-  sumeragi::v2_lane_work::tests::typed_changed_roster_v2_snapshot_failure_preserves_predecessor_state
+  sumeragi::v2_lane_work::tests::typed_changed_roster_v3_lifecycle_failure_preserves_predecessor_pair
+  sumeragi::v2_lane_work::tests::duplicate_generation_hint_coalesces_alternate_reply_sources
   sumeragi::v2_lane_work::tests::typed_finality_handoff_preserves_same_roster_current_chunk_for_retry
-  sumeragi::v2_lane_work::tests::typed_finality_handoff_rejects_changed_roster_with_active_writable_writer
+  sumeragi::v2_lane_work::tests::typed_finality_handoff_fences_changed_roster_after_sealing_active_writer
   sumeragi::v2_runtime::tests::retiring_exact_body_completion_releases_a_capacity_one_ingress_slot
   sumeragi::v2_runtime::tests::exact_authenticated_qc_from_distinct_sources_coalesces_in_one_runtime_slot
   sumeragi::v2_runtime::tests::exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot
@@ -1472,6 +1487,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once
   sumeragi::v2_runner::tests::runner_preflight_enqueue_race_retains_sidecar_source_until_capacity_reopens
   sumeragi::v2_runner::tests::runner_old_flushed_sidecar_receipt_cancels_queued_reconnect_retry
+  sumeragi::v2_runner::tests::closed_sidecar_prefix_handoff_requeues_only_failed_suffix
   sumeragi::v2_runner::tests::runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route
   sumeragi::v2_runner::tests::runner_dispatch_rejects_durable_response_without_reply_routes
   sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift
@@ -1490,7 +1506,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::successor_construction_rejects_foreign_same_height_predecessor_authority
   sumeragi::v2_runner::tests::direct_close_ack_retains_reply_route_from_lane_through_worker
   sumeragi::v2_runner::tests::empty_drain_after_peek_is_restart_required_without_panicking
-  sumeragi::v2_runner::tests::relayed_generation_hint_is_route_free_from_lane_through_worker
+  sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker
   sumeragi::v2_worker::tests::fetch_consumer_rebind_preserves_live_or_queued_reconstruction_owner
   sumeragi::v2_worker::tests::entered_view_accepts_same_view_higher_generation_supersession
   sumeragi::v2_worker::tests::invalid_fetch_consumer_rebind_fails_closed_without_consuming_owner
@@ -1554,8 +1570,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::adaptive_reply_timeout_grows_closed_preserves_and_flushed_resets_attempt
   sumeragi::v2_worker::tests::certified_sidecar_close_cancels_only_the_exact_stream_epoch
   sumeragi::v2_worker::tests::certified_sidecar_transfer_identity_binds_stream_epoch
-  sumeragi::v2_worker::tests::generation_hint_uses_route_free_topology_progress_ownership
-  sumeragi::v2_worker::tests::close_ack_retry_coalesces_alternate_return_route
+  sumeragi::v2_worker::tests::generation_hint_uses_ordinary_reply_flush_ownership
+  sumeragi::v2_worker::tests::generation_hint_uses_exact_reply_ownership_without_topology_fallback
+  sumeragi::v2_worker::tests::generation_hint_requires_exact_reply_route_ownership
+  sumeragi::v2_worker::tests::responder_control_retry_coalesces_alternate_return_route
   sumeragi::v2_worker::tests::final_exact_output_seal_is_one_shot_and_blocks_late_enqueue
   sumeragi::v2_worker::tests::finalized_cleanup_without_exact_output_seal_latches_restart
   sumeragi::v2_worker::tests::generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences
@@ -1716,6 +1734,7 @@ required_production_liveness_tests=(
   network_relay_tests::obsolete_sumeragi_relay_message_completes_as_delivered
   network_relay_tests::test_control_hold_release_preserves_live_route_and_retires_canceled_reentry
   network_relay_tests::certified_merge_sidecar_close_is_limited_but_responder_controls_are_critical
+  network_relay_tests::certified_merge_sidecar_messages_preserve_ingress_reply_route
   tests::relay_fairness::daemon_source_credit_layers_over_upstream_and_preserves_the_ninth_exact_owner
   tests::relay_fairness::saturated_sumeragi_dispatch_does_not_hold_normal_worker_permits
   tests::relay_fairness::real_inner_ingress_retry_preserves_a_copies_and_bounds_b_service_rank
@@ -1736,7 +1755,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=704
+readonly expected_production_liveness_test_count=723
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1836,7 +1855,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 704-test liveness inventory above. The later
+# not belong to the canonical 723-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.

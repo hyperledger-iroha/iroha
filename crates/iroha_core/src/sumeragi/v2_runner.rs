@@ -3087,7 +3087,9 @@ where
             ..
         } if matches!(
             message.as_ref(),
-            CertifiedMergeSidecarMessage::CloseAck(_) | CertifiedMergeSidecarMessage::Chunk(_)
+            CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_)
+                | CertifiedMergeSidecarMessage::Chunk(_)
         ) =>
         {
             reply_routes
@@ -3182,9 +3184,9 @@ fn dispatch_lane_work_effect(
         } => {
             let route_shape_is_valid = match message.as_ref() {
                 CertifiedMergeSidecarMessage::Request(_)
-                | CertifiedMergeSidecarMessage::Close(_)
-                | CertifiedMergeSidecarMessage::GenerationHint(_) => reply_routes.is_none(),
+                | CertifiedMergeSidecarMessage::Close(_) => reply_routes.is_none(),
                 CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_)
                 | CertifiedMergeSidecarMessage::Chunk(_) => reply_routes.is_some(),
             };
             if !route_shape_is_valid {
@@ -4189,9 +4191,6 @@ mod tests {
         let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
         let mut adapter = fixture.adapter;
         let responder = fixture.request.responder.clone();
-        let service_generation = fixture.request.service_generation;
-        let stream_epoch = fixture.request.stream_epoch;
-        let closed_through = fixture.request.semantic_sequence.get();
         let second_requester = fixture
             .context
             .roster
@@ -4199,26 +4198,39 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .find(|peer| peer != &responder && peer != &fixture.requester)
             .expect("runner prefix retry fixture has a second remote requester");
-        let requesters = [fixture.requester, second_requester];
+        let mut second_request = fixture.request.clone();
+        second_request.requester = second_requester;
+        second_request.request_id = second_request.canonical_request_id();
+        let requests = [fixture.request, second_request];
         let hub = PeerId::new(KeyPair::random().public_key().clone());
         let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 2);
 
-        for requester in &requesters {
-            let reply_route = routes.mint_via(requester.clone(), hub.clone());
+        for request in &requests {
+            let reply_route = routes.mint_via(request.requester.clone(), hub.clone());
+            assert_eq!(
+                adapter
+                    .accept_certified_merge_sidecar_for_test(
+                        request.requester.clone(),
+                        reply_route.clone(),
+                        request.clone(),
+                    )
+                    .expect("admit the exact Kura-backed request before closing it"),
+                V2LaneIngressOutcome::Inserted
+            );
             let mut close = CertifiedMergeSidecarCloseV1 {
                 version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-                service_generation,
-                stream_epoch,
-                closed_through,
+                service_generation: request.service_generation,
+                stream_epoch: request.stream_epoch,
+                closed_through: request.semantic_sequence.get(),
                 close_id: Hash::prehashed([0; Hash::LENGTH]),
-                requester: requester.clone(),
+                requester: request.requester.clone(),
                 responder: responder.clone(),
             };
             close.close_id = close.canonical_close_id();
             assert_eq!(
                 adapter.accept_relay_message(
                     LaneRelayMessage::CertifiedMergeSidecar {
-                        sender: requester.clone(),
+                        sender: request.requester.clone(),
                         reply_route: Some(reply_route),
                         message: CertifiedMergeSidecarMessage::Close(close),
                     },
@@ -4263,9 +4275,12 @@ mod tests {
             .chain(&retry_applied)
             .map(|prefix| prefix.requester.clone())
             .collect::<BTreeSet<_>>();
+        let requesters = requests
+            .into_iter()
+            .map(|request| request.requester)
+            .collect::<BTreeSet<_>>();
         assert_eq!(
-            applied_requesters,
-            requesters.into_iter().collect(),
+            applied_requesters, requesters,
             "the successful prefix plus the retried suffix cover the exact drained batch"
         );
 
@@ -4276,7 +4291,7 @@ mod tests {
     }
 
     #[test]
-    fn relayed_generation_hint_is_route_free_from_lane_through_worker() {
+    fn relayed_generation_hint_preserves_reply_route_from_lane_through_worker() {
         let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {
             mut adapter,
             validators,
@@ -4286,8 +4301,10 @@ mod tests {
             requester,
             request,
         } = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let changed_roster =
+            super::super::v2_lane_work::tests::changed_merge_sidecar_server_roster();
         adapter
-            .roll_merge_sidecar_service_generation_for_test()
+            .transition_merge_sidecar_responder_roster_for_test(&changed_roster)
             .expect("advance the quiescent responder generation");
         let mut services =
             super::super::v2_worker::tests::service_for_history_context_with_local_validator(
@@ -4303,28 +4320,49 @@ mod tests {
                 rank: 1,
             })
         });
-        let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
-        let reply_route = routes.mint_via(requester.clone(), hub);
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let route_b = routes.mint_via(requester.clone(), hub_b);
 
         assert_eq!(
             adapter.accept_relay_message(
                 LaneRelayMessage::CertifiedMergeSidecar {
                     sender: requester.clone(),
-                    reply_route: Some(reply_route.clone()),
-                    message: CertifiedMergeSidecarMessage::Request(request),
+                    reply_route: Some(route_a.clone()),
+                    message: CertifiedMergeSidecarMessage::Request(request.clone()),
                 },
                 0,
             ),
             V2LaneIngressOutcome::Inserted
         );
+        assert_eq!(
+            adapter.accept_relay_message(
+                LaneRelayMessage::CertifiedMergeSidecar {
+                    sender: requester.clone(),
+                    reply_route: Some(route_b.clone()),
+                    message: CertifiedMergeSidecarMessage::Request(request),
+                },
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted,
+            "an alternate authenticated delivery joins the same stateless Hint"
+        );
         assert!(matches!(
             adapter.next_effect(),
             Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
-                reply_routes: None,
+                reply_routes: Some(reply_routes),
                 message,
                 ..
-            }) if matches!(
+            }) if reply_routes.len() == 2
+                && reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_a))
+                && reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_b))
+                && matches!(
                     message.as_ref(),
                     CertifiedMergeSidecarMessage::GenerationHint(_)
                 )
@@ -4332,34 +4370,32 @@ mod tests {
 
         let mut malformed = adapter
             .next_effect()
-            .expect("the route-free GenerationHint remains lane-owned before dispatch");
+            .expect("the routed GenerationHint remains lane-owned before dispatch");
         let V2LaneWorkEffect::PostCertifiedMergeSidecar { reply_routes, .. } = &mut malformed
         else {
             unreachable!("the GenerationHint keeps its sidecar effect kind")
         };
-        *reply_routes = Some(
-            NetworkReplyRoutes::try_from_route(reply_route.clone())
-                .expect("construct an adversarial routed Hint"),
-        );
+        *reply_routes = None;
         assert!(
             dispatch_lane_work_effect(&services, malformed)
-                .expect_err("a GenerationHint with reply-route ownership is malformed")
+                .expect_err("a GenerationHint without reply-route ownership is malformed")
                 .to_string()
                 .contains("reply-route ownership")
         );
 
+        assert!(routes.retire(&route_a));
         dispatch_lane_work_effects(&mut adapter, &services, 1)
-            .expect("dispatch the route-free GenerationHint through exact output");
+            .expect("dispatch the routed GenerationHint through exact output");
         assert_eq!(adapter.effect_count(), 0);
         assert!(
-            services
-                .retains_route_free_generation_hint_for_test(&requester)
-                .expect("inspect route-free GenerationHint worker ownership")
+            !services
+                .retains_reply_route_for_test(&route_a)
+                .expect("the retired Hint source must not reach worker ownership")
         );
         assert!(
-            !services
-                .retains_reply_route_for_test(&reply_route)
-                .expect("the triggering request route must not escape into Hint ownership")
+            services
+                .retains_reply_route_for_test(&route_b)
+                .expect("the live Hint sibling must remain in worker ownership")
         );
     }
 

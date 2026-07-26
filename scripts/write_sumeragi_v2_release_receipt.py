@@ -340,7 +340,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 704
+_PRODUCTION_TEST_COUNT = 723
 _G_UNIT_TEST_COUNT = 277
 _G_UNIT_GROUPS = (
     (
@@ -428,7 +428,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::authoritative_runtime_gate_tests",
         32,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 102),
+    ("production-merge-sidecar", "merge_sidecar::tests", 116),
     ("production-v2-core", "sumeragi::v2_core::tests", 37),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     (
@@ -451,12 +451,12 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 62),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 51),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 52),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 39),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 30),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 77),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 31),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 79),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -520,7 +520,7 @@ _PRODUCTION_MODULES = (
     (
         "production-irohad-network-relay",
         "network_relay_tests",
-        3,
+        4,
     ),
     (
         "production-irohad-authenticated-via",

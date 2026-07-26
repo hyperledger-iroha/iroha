@@ -129,6 +129,32 @@ RequestA == "request-a"
 RequestB == "request-b"
 Source == 0
 
+ExactPipelineGenerationHint ==
+  LET observedMessageHash ==
+        MutationPipeline!ReplyOutstandingRequestHash(
+          0, RequestA, Source)
+  IN MutationPipeline!ReplyGenerationHint(
+       0, Source, Source, "Request", RequestA,
+       1, 2, observedMessageHash,
+       0, Source, 1, 2, observedMessageHash)
+
+PendingPipelineGenerationReset ==
+  CHOOSE reset \in pendingHintResets: TRUE
+
+StaleGenerationRequestIdentity ==
+  MutationPipeline!ReplyCanonicalRequestIdentity(
+    1, 1, 1, RequestA, 0, Source)
+
+StaleGenerationItem ==
+  MutationPipeline!ReplyPipelineRawItem(
+    0, RequestA, Source, 0, 0,
+    MutationItemClass(RequestA, 0, 0),
+    MutationItemRequiresFlush(RequestA, 0, 0),
+    1, 1, "Queued",
+    MutationPipeline!NoReplyPipelineTicket,
+    MutationPipeline!NoReplyTicketTenure,
+    {}, StaleGenerationRequestIdentity)
+
 SourceAttempt(semantic) ==
   MutationPipeline!ReplyAttemptFor(0, semantic, Source)
 
@@ -326,13 +352,25 @@ PipelineMutationInit ==
   /\ nextTicketId = [owner \in MutationOwners |-> 1]
   /\ serviceGeneration =
        [owner \in MutationOwners |->
-          [source \in MutationSources |-> 1]]
+          [source \in MutationSources |->
+             IF PipelineMutationMode = "CapacityOverflowFixed"
+             THEN MutationDeliveryOrdinalLimit
+             ELSE 1]]
   /\ responderGeneration =
-       [source \in MutationSources |-> 1]
+       [source \in MutationSources |->
+          IF PipelineMutationMode = "CapacityOverflowFixed"
+          THEN MutationDeliveryOrdinalLimit
+          ELSE 1]
   /\ durableResponderGeneration =
-       [source \in MutationSources |-> 1]
+       [source \in MutationSources |->
+          IF PipelineMutationMode = "CapacityOverflowFixed"
+          THEN MutationDeliveryOrdinalLimit
+          ELSE 1]
   /\ requesterNextStreamEpoch =
-       [owner \in MutationOwners |-> 2]
+       [owner \in MutationOwners |->
+          IF PipelineMutationMode = "CapacityOverflowFixed"
+          THEN MutationDeliveryOrdinalLimit + 1
+          ELSE 2]
   /\ requesterStreamEpoch =
        [owner \in MutationOwners |->
           [source \in MutationSources |-> 1]]
@@ -347,8 +385,138 @@ PipelineMutationInit ==
   /\ oldFlushAppliedTwice = FALSE
   /\ phase = 0
 
+PipelineGenerationPersistStep ==
+  /\ phase = 0
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!
+         PersistTerminalPipelineResponderGeneration(Source), 40)
+
+PipelineGenerationInstallStep ==
+  /\ phase = 40
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!
+         InstallPersistedPipelineResponderGeneration(Source), 41)
+
+PipelineGenerationObserveStep ==
+  /\ phase = 41
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!ObserveAuthenticatedReplyDelivery(
+         0, RequestA, Source, "New"), 42)
+
+PipelineGenerationAttachStep ==
+  /\ phase = 42
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!AttachPendingReplyDelivery(
+         0, RequestA, Source), 43)
+
+PipelineGenerationEnqueueOldStep ==
+  /\ phase = 43
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!EnqueueCurrentReplyItem(
+         0, RequestA, Source), 44)
+
+PipelineGenerationHintStep ==
+  /\ phase = 44
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       /\ MutationPipeline!PersistFreshEpochForGenerationHint(
+            ExactPipelineGenerationHint)
+       /\ UNCHANGED <<pendingAttachments, items,
+                      nextFifoOrdinal, nextTicketId>>,
+       45)
+
+PipelineGenerationDiscardStep ==
+  /\ phase = 45
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!DiscardPersistedPipelinePartialState(
+         PendingPipelineGenerationReset), 46)
+
+PipelineGenerationEnqueueSuccessorStep ==
+  /\ phase = 46
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!EnqueueCurrentReplyItem(
+         0, RequestA, Source), 47)
+
+PipelineStaleFlushRejectStep ==
+  /\ phase = 47
+  /\ PipelineMutationMode = "GenerationEpochFixed"
+  /\ AdvancePhase(
+       MutationPipeline!RejectStaleFlushReceiptWithoutMutation(
+         StaleGenerationItem), 48)
+
+PipelineCapacityObserveStep ==
+  /\ phase = 0
+  /\ PipelineMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationPipeline!ObserveAuthenticatedReplyDelivery(
+         0, RequestA, Source, "New"), 50)
+
+PipelineCapacityAttachStep ==
+  /\ phase = 50
+  /\ PipelineMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationPipeline!AttachPendingReplyDelivery(
+         0, RequestA, Source), 51)
+
+PipelineCapacityEnqueueStep ==
+  /\ phase = 51
+  /\ PipelineMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationPipeline!EnqueueCurrentReplyItem(
+         0, RequestA, Source), 52)
+
+PipelineCapacityCompactionRejectStep ==
+  /\ phase = 52
+  /\ PipelineMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       MutationPipeline!
+         RejectNonTerminalPipelineCompactionWithoutMutation(Source), 53)
+
+PipelineCapacityEpochOverflowRejectStep ==
+  /\ phase = 53
+  /\ PipelineMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       /\ MutationPipeline!
+            RejectRequesterEpochOverflowWithoutMutation(0)
+       /\ UNCHANGED <<pendingAttachments, items,
+                      nextFifoOrdinal, nextTicketId>>,
+       54)
+
+PipelineCapacityGenerationOverflowRejectStep ==
+  /\ phase = 54
+  /\ PipelineMutationMode = "CapacityOverflowFixed"
+  /\ AdvancePhase(
+       /\ MutationPipeline!RejectResponderGenerationOverflow(Source)
+       /\ UNCHANGED <<pendingAttachments, items,
+                      nextFifoOrdinal, nextTicketId>>,
+       55)
+
 PipelineMutationNext ==
+  \/ PipelineGenerationPersistStep
+  \/ PipelineGenerationInstallStep
+  \/ PipelineGenerationObserveStep
+  \/ PipelineGenerationAttachStep
+  \/ PipelineGenerationEnqueueOldStep
+  \/ PipelineGenerationHintStep
+  \/ PipelineGenerationDiscardStep
+  \/ PipelineGenerationEnqueueSuccessorStep
+  \/ PipelineStaleFlushRejectStep
+  \/ PipelineCapacityObserveStep
+  \/ PipelineCapacityAttachStep
+  \/ PipelineCapacityEnqueueStep
+  \/ PipelineCapacityCompactionRejectStep
+  \/ PipelineCapacityEpochOverflowRejectStep
+  \/ PipelineCapacityGenerationOverflowRejectStep
   \/ /\ phase = 0
+     /\ PipelineMutationMode
+          \notin {"GenerationEpochFixed", "CapacityOverflowFixed"}
      /\ AdvancePhase(
           MutationPipeline!ObserveAuthenticatedReplyDelivery(
             0, RequestA, Source, "New"), 1)
@@ -572,6 +740,7 @@ ClassWriterSiblingEventuallyAdvances ==
 
 RequestACursorNeverRegressesAfterApply ==
   phase < 12
+    \/ phase >= 40
     \/ SourceAttempt(RequestA).messageCursor >= 1
 
 SiblingLaterRebindBlocksOldTenureTicket ==
@@ -592,6 +761,67 @@ PipelineMutationSafety ==
   /\ RequestACursorNeverRegressesAfterApply
   /\ SiblingLaterRebindBlocksOldTenureTicket
   /\ OldFlushAppliedAtMostOnce
+
+PipelineGenerationEpochSafety ==
+  /\ PipelineMutationSafety
+  /\ PipelineMutationMode # "GenerationEpochFixed"
+       \/ /\ phase \in {0, 40, 41, 42, 43, 44, 45, 46, 47, 48}
+          /\ (phase = 40 =>
+                /\ durableResponderGeneration[Source] = 2
+                /\ responderGeneration[Source] = 1
+                /\ MutationPipeline!
+                     ReplyPipelineResponderTerminal(Source))
+          /\ (phase = 44 =>
+                /\ SourceItem(RequestA).serviceGeneration = 1
+                /\ SourceItem(RequestA).streamEpoch = 1
+                /\ MutationPipeline!ReplyGenerationHintValid(
+                     ExactPipelineGenerationHint))
+          /\ (phase = 45 =>
+                /\ serviceGeneration[0][Source] = 2
+                /\ requesterStreamEpoch[0][Source] = 2
+                /\ Cardinality(pendingHintResets) = 1
+                /\ StaleGenerationItem \in items
+                /\ ~MutationPipeline!
+                     ReplyFlushIdentityMatchesCurrentOccurrence(
+                       StaleGenerationItem))
+          /\ (phase = 46 =>
+                /\ items = {}
+                /\ Cardinality(discardedPartialIdentities) = 1)
+          /\ (phase \in {47, 48} =>
+                /\ SourceItem(RequestA).serviceGeneration = 2
+                /\ SourceItem(RequestA).streamEpoch = 2
+                /\ SourceItem(RequestA).semanticSequence = 1
+                /\ StaleGenerationItem \notin items
+                /\ ~MutationPipeline!
+                     ReplyFlushIdentityMatchesCurrentOccurrence(
+                       StaleGenerationItem)
+                /\ MutationPipeline!
+                     ReplyStaleChunkAckOrFlushCannotAffectSuccessor)
+
+PipelineCapacityOverflowSafety ==
+  /\ PipelineMutationSafety
+  /\ PipelineMutationMode # "CapacityOverflowFixed"
+       \/ /\ phase \in {0, 50, 51, 52, 53, 54, 55}
+          /\ responderGeneration[Source] =
+               MutationDeliveryOrdinalLimit
+          /\ durableResponderGeneration[Source] =
+               MutationDeliveryOrdinalLimit
+          /\ requesterNextStreamEpoch[0] =
+               MutationDeliveryOrdinalLimit + 1
+          /\ (phase \in {50, 51, 52, 53, 54, 55} =>
+                ~MutationPipeline!
+                   ReplyPipelineResponderTerminal(Source))
+          /\ (phase \in {51, 52, 53, 54, 55} =>
+                /\ MutationPipeline!ReplyAttemptOwned(
+                     0, RequestA, Source)
+                /\ serviceGeneration[0][Source] =
+                     MutationDeliveryOrdinalLimit)
+          /\ (phase = 50 =>
+                MutationPipeline!ReplyPendingAttachmentOwned(
+                  0, RequestA, Source))
+          /\ (phase \in {52, 53, 54, 55} =>
+                MutationPipeline!ReplyPipelineItemOwned(
+                  0, RequestA, Source))
 
 PipelineTenureAwareReplay ==
   MutationPipeline!ReplyTenureAwareReplay

@@ -697,7 +697,6 @@ ReplyPipelineItemsAfterClosedPrefix(witness) ==
   LET floor == ReplyCloseCoordinate(witness)
   IN {item \in rpItems:
         \/ item.owner # witness.requester
-        \/ item.source # witness.responder
         \/ ~ReplyCoordinateAtOrBefore(
              ReplyOccurrenceCoordinate(
                item.serviceGeneration,
@@ -732,6 +731,11 @@ RejectStaleFlushReceiptWithoutMutation(item) ==
   /\ item \in ReplyPipelineItemSet
   /\ item \notin rpItems
   /\ ~ReplyFlushIdentityMatchesCurrentOccurrence(item)
+  /\ UNCHANGED ReplyPipelineVars
+
+RejectNonTerminalPipelineCompactionWithoutMutation(source) ==
+  /\ source \in ReplySources
+  /\ ~ReplyPipelineResponderTerminal(source)
   /\ UNCHANGED ReplyPipelineVars
 
 ReplyPipelineNext ==
@@ -788,36 +792,36 @@ ReplyPipelineNext ==
           /\ RejectFutureGenerationWithoutMutation(
                requester, responder, inputGeneration)
           /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E requester \in ReplyOwners:
+          /\ RejectRequesterEpochOverflowWithoutMutation(requester)
+          /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E source \in ReplySources:
+          RejectNonTerminalPipelineCompactionWithoutMutation(source)
+      \/ \E requester \in ReplyOwners, responder \in ReplySources,
+          observedMessageHash
+            \in SUBSET
+                 (ReplyRequestIdentitySet \cup ReplyCloseIdentitySet):
+          /\ ReturnOlderGenerationHintWithoutRoute(
+               requester, responder, observedMessageHash)
+          /\ UNCHANGED ReplyPipelineLocalVars
+      \/ \E source \in ReplySources:
+          /\ RejectResponderGenerationOverflow(source)
+          /\ UNCHANGED ReplyPipelineLocalVars
       \/ \E item \in ReplyPipelineItemSet:
           RejectStaleFlushReceiptWithoutMutation(item))
 
 (***************************************************************************
 Exact route projection of every pipeline transition.  Local queue/ticket/
-writer transitions stutter the route carrier.  Attachment uses only the five
-route ownership actions below, while ordinary admission and flushed
+writer transitions stutter the route carrier.  Every lifecycle-changing
+branch projects to the complete V2 route action, including close, hint,
+capacity rejection, and terminal rollover; ordinary admission and flushed
 application share `AdvanceCurrentReplyAttempt`.  Keeping this projection in
-the production model makes the temporal replay and source-isolation proof a
-call-path obligation rather than an imported alias of `ReplyRouteNext`.
+the production model makes replay and source isolation explicit call-path
+obligations.
 ***************************************************************************)
 ReplyPipelineRouteStep ==
   \/ UNCHANGED ReplyRouteV2Vars
-  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
-       source \in ReplySources:
-       ObserveNewReplySourceV2(owner, semantic, source)
-  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
-       source \in ReplySources:
-       RetryExactReplySourceV2(owner, semantic, source)
-  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
-       source \in ReplySources:
-       ObserveLaterReplyDeliveryV2(owner, semantic, source)
-  \/ \E owner \in ReplyOwners, source \in ReplySources:
-       RetireReplySourceV2(owner, source)
-  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
-       source \in ReplySources:
-       ReconnectReplySourceV2(owner, semantic, source)
-  \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
-       source \in ReplySources:
-       AdvanceCurrentReplyAttemptV2(owner, semantic, source)
+  \/ ReplyRouteV2Next
 
 ReplyPipelineFairness ==
   /\ \A owner \in ReplyOwners, source \in ReplySources:
@@ -979,7 +983,12 @@ ReplyPipelineCoordinateIdentityInvariant ==
 
 ReplyPipelineSuccessorIsolationInvariant ==
   \A item \in rpItems:
-    /\ ReplyFlushIdentityMatchesCurrentOccurrence(item)
+    /\ \/ ReplyFlushIdentityMatchesCurrentOccurrence(item)
+       \/ \E reset \in rrPendingHintResets:
+            /\ item.owner = reset.requester
+            /\ item.source = reset.responder
+            /\ item.serviceGeneration = reset.oldGeneration
+            /\ item.streamEpoch = reset.oldEpoch
     /\ \A discarded \in rrDiscardedPartialIdentities:
          discarded.requestIdentity # item.requestIdentity
 

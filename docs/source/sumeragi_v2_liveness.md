@@ -1075,10 +1075,12 @@ the 589-test checkpoint. Mechanical source-to-inventory reconciliation then
 adds 115 net regressions: 3 authoritative-ingress, 57 merge-sidecar, 17
 lane-work, 3 runner, 17 worker, and 18 P2P-network tests; the daemon
 network-relay rename is cardinality neutral.
-The current source-bound inventory therefore contains 704 exact tests across
+The routed-Hint and crash-safe V3 lifecycle closure adds 26 exact regressions
+and retires eight obsolete route-free/V2 selectors. The current source-bound
+inventory therefore contains 723 exact tests across
 38 modules and 81 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`fd2176898c873bc00fae598689f6bf0ec2f9cd5de58ccf37fbe6713a061811da`.
+`66a130b892347a296ed3b447d3cf388e00a5c83fdfcd193b228b8eab67059f1a`.
 Nine of those legs execute the separate 277-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `dc6e4c3eece63441e9ba5ffdf6b603665e21cf6086a3a6a1307b45829a678510`.
@@ -1190,40 +1192,61 @@ authenticated probe. The responder returns an exact canonical
 `GenerationHint`, bound to the observed and current generations and the exact
 triggering message hash, without allocating a stream, gate, cursor, or route
 and without rewriting the lifecycle journal. An unadvertised future generation
-is rejected without a Hint or server-state mutation. A Hint is route-free
-Consensus control and never carries a reply route; CloseAck and Chunk retain
-their authenticated reply routes. The lane, runner, worker, topic selector,
-and ownership checks handle the route-free variant exhaustively. Conversely,
-the requester accepts a Hint only from the expected responder when it names the
-exact hash of an outstanding Request or Close and strictly advances the current
-generation. It first persists that generation and a fresh stream epoch. Only
-after that durability barrier succeeds may it discard old partial chunks and
-reschedule the affected work. A failed Hint write retains the old occurrence
-and latches restart before any further output drains.
+is rejected without a Hint or server-state mutation. Like CloseAck and Chunk,
+the Hint retains the exact authenticated reply route of its triggering Request
+or Close. Lane, runner, worker, daemon, topic selection, and exact-output
+ownership preserve that capability without topology fallback. A duplicate
+semantic Hint coalesces alternate authenticated sources as independent
+attempts, and a same-source refresh cannot erase a sibling. The requester
+accepts a Hint only from the expected responder when it names the exact hash of
+an outstanding Request or Close and strictly advances the current generation.
+It first persists that generation and a fresh stream epoch. Only after that
+durability barrier succeeds may it discard old partial chunks and reschedule
+the affected work. A failed Hint write retains the old occurrence and latches
+restart before any further output drains.
+
+The canonical mutation runner checks that lifecycle twice. The route trace
+exhausts 7 generated and 7 distinct states at depth 7. Its pipeline companion
+threads the old and successor identities through enqueue, durable reset, and
+stale-flush rejection, exhausting 11 generated and 10 distinct states at depth
+10. The capacity-overflow trace checks that active ownership survives rejected
+nonterminal compaction, requester-epoch exhaustion, and responder-generation
+exhaustion; it exhausts 5 generated and 5 distinct states at depth 5. Its
+pipeline companion retains the source-owned pending attachment and queued item,
+exhausting 8 generated and 7 distinct states at depth 7. These are bounded
+regression results, not deductive promotion.
+
+The asynchronous product boundary is structurally machine checked. Pinned
+strict TLAPS proves 54/54 obligations showing that every reply branch refines
+the complete V2 action, both interleaving brackets project, and the composed
+spec projects to both `AsyncSpecAt` and `ReplyRouteV2Spec`. The separately named
+V2 inductive-safety, successor-isolation, and temporal-product operators remain
+unproved; the structural result does not imply network or consensus liveness.
 
 The responder owns one bounded unified `server_streams` table and one bounded
 request-gate table; attempts are bounded within their gates. Service generation
-rolls only when the server-stream table needs compaction because it is full or
-its certified roster geometry is replaced, and every predecessor stream, gate,
-transfer, and flush is terminal. Gate pressure alone cannot force a roll.
-Active-state exhaustion and generation-counter overflow return
+advances only for a certified changed-roster geometry after every predecessor
+stream, gate, transfer, and flush is terminal. A full same-roster table, gate
+pressure, active-state exhaustion, and generation-counter overflow return
 `Capacity` atomically without advancing a floor, clearing a table, or emitting
-a Hint. A finality handoff cannot override this compaction and terminality
-gate.
+a Hint. A finality handoff cannot override this roster-transition and
+terminality gate.
 
-An eligible roll checks the successor generation, constructs the complete
-empty responder state, and persists both together before changing memory or
-emitting the triggering route-free `GenerationHint`. The sole durable schema is
-`MergeSidecarLifecycleSnapshotV2`: its integrity-bound canonical Norito payload
+An eligible changed-roster transition checks the successor generation,
+constructs the complete empty responder state, and persists both together
+before changing memory or emitting `GenerationHint` on the triggering
+authenticated reply route. The sole durable schema is
+`MergeSidecarLifecycleSnapshotV3`: its integrity-bound canonical Norito payload
 contains geometry, `next_stream_epoch`, responder generation, requester
-streams, unified server streams, and request gates. Restore validates bounds,
+streams, unified server streams, and request gates. Its inactive alternating
+slot is fsynced before the independent root high-water marker commits it.
+Restore validates the complete marker-selected candidate, including bounds,
 uniqueness, monotonic floors, gate/stream correspondence, and pending-chunk
-identity into temporary state before assigning any field. V1, corrupt, and
-unknown bytes fail closed as unsupported; there is no migration and no
-auxiliary lifecycle counter artifact. Compaction does not weaken response
-authority: live requests still require the current exact context, and
-historical serving independently rereads canonical Kura data and matching
-finality before returning a sidecar.
+identity, before assigning any field or retiring the inactive slot. V1/V2,
+corrupt, and unknown bytes fail closed as unsupported; there is no migration.
+Compaction does not weaken response authority: live requests still require the
+current exact context, and historical serving independently rereads canonical
+Kura data and matching finality before returning a sidecar.
 
 The required adversarial coverage spans nonzero generation/epoch/sequence
 roundtrips, checked epoch allocation across restart, stale and future messages,
@@ -1274,7 +1297,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 704-test inventory is a mechanically checked
+The current 723-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1330,7 +1353,7 @@ unissued future completion without replacing its owner and preserve the latest
 consumer while a missing body waits for durable recovery and retries.
 
 The earlier `SumeragiV2TypedRolloverHandoffProofs` strict and bounded receipts
-predate the sole-V2 compaction/persistence relation, so they are not current
+predate the V3 two-slot compaction/persistence relation, so they are not current
 evidence. The control partition and `NoRolloverFailure` remain specification
 structure only. The conditional rollover declaration is not promoted while its
 final persistence relation and downstream rotating-leader dependency remain
@@ -1438,7 +1461,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 704 exact production
+Before those longer scenarios, the PR gate inventories 705 exact production
 liveness tests and executes all 38 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 277-test
 focus inventory. The
@@ -1560,8 +1583,13 @@ the certified sidecar Close/CloseAck critical-bucket regression produces the
 regressions produce the 588-test checkpoint; the durable semantic-peer-history
 regression produces the 589-test checkpoint. Mechanical reconciliation adds
 115 net ingress, merge-sidecar, lane-work, runner, worker, P2P-network, and
-daemon-relay changes, bringing the current inventory to 704 tests across
-38 modules and 81 legs. The rollover slice covers
+daemon-relay changes, producing the 704-test checkpoint. The runner
+close-prefix failed-suffix handoff regression adds one exact name, bringing the
+historical inventory to 705 tests. The routed-Hint and crash-safe V3 lifecycle
+closure adds 26 exact regressions and retires eight obsolete route-free/V2
+selectors, bringing the current inventory to 723 tests across 38 modules and
+81 legs. The rollover
+slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -1585,7 +1613,7 @@ alternate source starts independently at zero.
 The durable requester-stream table and unified responder-stream table are
 bounded independently of the smaller concurrent reply-source and active-gate
 geometry. Request gates form the second bounded responder table. Crash recovery
-restores exactly those bounds from the sole V2 snapshot.
+restores exactly those bounds from the marker-selected V3 snapshot.
 These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
 unbounded broadcast admission. The integration filter remains a five-test
@@ -1832,7 +1860,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 81 pre-network corridor legs and
-their exact 704-test production inventory, the separate 277-test G-UNIT
+their exact 723-test production inventory, the separate 277-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
