@@ -36,7 +36,7 @@ impl ApplicationPolynomialV1 {
         {
             return Err(RingErrorV1::NonCanonicalApplicationCoefficient {
                 index: u8::try_from(index).expect("ring index fits u8"),
-                coefficient,
+                coefficient: u64::from(coefficient),
             });
         }
         Ok(Self { coefficients })
@@ -51,7 +51,7 @@ impl ApplicationPolynomialV1 {
         if constant >= APPLICATION_MODULUS_V1 {
             return Err(RingErrorV1::NonCanonicalApplicationCoefficient {
                 index: 0,
-                coefficient: constant,
+                coefficient: u64::from(constant),
             });
         }
         let mut coefficients = [0; APPLICATION_RING_DEGREE_V1];
@@ -81,7 +81,7 @@ impl ApplicationPolynomialV1 {
             if coefficient > 1 {
                 return Err(RingErrorV1::NonBinaryCoefficient {
                     index: u8::try_from(index).expect("ring index fits u8"),
-                    coefficient,
+                    coefficient: u64::from(coefficient),
                 });
             }
             attribute[index / 8] |=
@@ -368,7 +368,7 @@ pub enum RingErrorV1 {
         /// Coefficient index.
         index: u8,
         /// Rejected residue.
-        coefficient: u16,
+        coefficient: u64,
     },
     /// An internal proof-ring residue is not in `[0, q)`.
     #[error("proof polynomial coefficient {index} has non-canonical residue {coefficient}")]
@@ -384,7 +384,7 @@ pub enum RingErrorV1 {
         /// Coefficient index.
         index: u8,
         /// Rejected residue.
-        coefficient: u16,
+        coefficient: u64,
     },
 }
 
@@ -413,7 +413,7 @@ mod tests {
                 ApplicationPolynomialV1::new(coefficients),
                 Err(RingErrorV1::NonCanonicalApplicationCoefficient {
                     index: 63,
-                    coefficient
+                    coefficient: u64::from(coefficient)
                 })
             );
         }
