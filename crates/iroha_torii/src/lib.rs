@@ -17545,6 +17545,23 @@ async fn handler_node_capabilities(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
+/// GET /v1/privacy/capabilities — authoritative committed privacy snapshot.
+async fn handler_privacy_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/privacy/capabilities").await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let payload = crate::runtime::handle_privacy_capabilities(app.state.clone()).await?;
+    Ok(crate::utils::respond_with_format(payload, format))
+}
+
 /// GET /v1/node/query/projection/checkpoint — wrapper enforcing access policy.
 async fn handler_node_query_projection_checkpoint(
     State(app): State<SharedAppState>,
@@ -55551,6 +55568,7 @@ impl Torii {
         mount_get!(RUNTIME_ABI_HASH, handler_runtime_abi_hash);
         mount_get!(RUNTIME_METRICS, handler_runtime_metrics);
         mount_get!(NODE_CAPABILITIES, handler_node_capabilities);
+        mount_get!(PRIVACY_CAPABILITIES, handler_privacy_capabilities);
         mount_get!(
             NODE_PROJECTION_CHECKPOINT,
             handler_node_query_projection_checkpoint

@@ -432,12 +432,12 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
         privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
     );
-    registry =
-        registry.register_with_id_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>(
+    registry = registry
+        .register_with_id_slice::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>(
             privacy::SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
         );
-    registry =
-        registry.register_with_id_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>(
+    registry = registry
+        .register_with_id_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>(
             privacy::SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
         );
     registry = registry.register_with_id_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>(

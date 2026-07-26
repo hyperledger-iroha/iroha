@@ -138,14 +138,14 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         .downcast_ref::<crate::isi::privacy::RegisterPrivacyProtocolActivationV1>()
     {
         visitor.visit_register_privacy_protocol_activation_v1(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1>()
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1>()
     {
         visitor.visit_schedule_privacy_consensus_policy_tightening_v1(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1>()
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1>()
     {
         visitor.visit_schedule_privacy_protocol_limits_tightening_v1(v);
     } else if let Some(v) = isi

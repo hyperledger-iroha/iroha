@@ -7,9 +7,8 @@
 use super::*;
 use crate::privacy::{
     PrivacyConsensusLimitsV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1,
-    PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-    PrivacyRootPublicationV1,
+    PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
+    PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1,
 };
 
 isi! {
@@ -55,15 +54,11 @@ impl crate::seal::Instruction for SchedulePrivacyConsensusPolicyTighteningV1 {}
 
 impl SchedulePrivacyConsensusPolicyTighteningV1 {
     /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str =
-        "iroha.privacy.schedule_consensus_policy_tightening.v1";
+    pub const WIRE_ID: &'static str = "iroha.privacy.schedule_consensus_policy_tightening.v1";
 
     /// Construct a chain-wide privacy-policy schedule.
     #[must_use]
-    pub const fn new(
-        effective_at_height: u64,
-        next_limits: PrivacyConsensusLimitsV1,
-    ) -> Self {
+    pub const fn new(effective_at_height: u64, next_limits: PrivacyConsensusLimitsV1) -> Self {
         Self {
             effective_at_height,
             next_limits,
@@ -91,8 +86,7 @@ impl crate::seal::Instruction for SchedulePrivacyProtocolLimitsTighteningV1 {}
 
 impl SchedulePrivacyProtocolLimitsTighteningV1 {
     /// Canonical first-release Norito instruction identifier.
-    pub const WIRE_ID: &'static str =
-        "iroha.privacy.schedule_protocol_limits_tightening.v1";
+    pub const WIRE_ID: &'static str = "iroha.privacy.schedule_protocol_limits_tightening.v1";
 
     /// Construct a protocol-specific limit schedule.
     #[must_use]
@@ -297,7 +291,7 @@ mod tests {
             PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofV1,
             PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyRootRoleV1,
             PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-            PrivacyStatementV1, PrivacyVerifierDigestV1,
+            PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
         },
     };
 
@@ -337,6 +331,7 @@ mod tests {
         let context = PrivacyStatementContextV1 {
             chain_id: ChainId::from("privacy-isi-test"),
             action_index: 0,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(digest(6)),
             parameter_id: activation.parameter_id,
             parameter_digest: activation.parameter_digest,
             verifier_digest: activation.verifier_digest,

@@ -133,6 +133,50 @@ def _canonical_hash(seed: int) -> str:
     return f"hash:{body}#{crc:04X}"
 
 
+def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
+    expected = {
+        "halo2/ipa",
+        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/kaigi-usage-v1",
+        "halo2/pasta/ivm-overlay-bind",
+        "halo2/pasta/ivm-execution-v1",
+        "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+        ("halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"),
+        ("halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"),
+        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+        "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+        "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+        "stark/fri",
+        "stark/fri/sha256-goldilocks",
+        "stark/fri/poseidon2-goldilocks",
+        "stark/fri/sha256_goldilocks.v1",
+    }
+    actual = get_args(client_module.OfflineProofBackend)
+    assert len(actual) == len(expected)
+    assert set(actual) == expected
+
+    retired_or_hostile = {
+        "halo2-ipa-pasta",
+        "halo2-bn254",
+        "groth16",
+        "groth16-bls12-377",
+        "halo2-ipa-orchard",
+        "aztec-plonkish-private-kernel",
+        "zkat",
+        "silent-threshold-anoncred",
+        "penumbra-masp",
+        "sis-with-hints",
+        "unsupported",
+        "stark",
+        " halo2/ipa",
+        "halo2/ipa ",
+        "HALO2/IPA",
+        "halo2\uff0fipa",
+        "halo2/\u200bipa",
+    }
+    assert expected.isdisjoint(retired_or_hostile)
+
+
 _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
     "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 )

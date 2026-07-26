@@ -1736,11 +1736,11 @@ mod tests {
                 hex::encode(Sha256::digest(proof.encode())),
             ),
             (
-                "e6cfafc5380a4a4c248f399684a5e43df1192bc460bd4de630eea985655ec575".to_owned(),
+                "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
                 "9cacd524346b8e92765f16bd25941f661606ace6a60184f621af700500c3fadc".to_owned(),
                 "030f3b56925aa800a902be063f559e832a1f80b1a1989ffff2b5d37e9628ee7c3c".to_owned(),
                 "42878d6c1427706aca80b2e5e296554c094e2c265f9d8e76f208db20118a9758".to_owned(),
-                "c6ef321b3ab3495dc0d818bf9bd3e18e74314f8ab929138e08572501c0df3fbe".to_owned(),
+                "2788d3086bd9228860dc1f57b128eee6df7374a1c6d9e37bcf5c8cc6d3ddf69f".to_owned(),
             )
         );
     }

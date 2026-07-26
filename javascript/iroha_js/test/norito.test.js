@@ -248,27 +248,47 @@ test("block proof verification rejects direction, root, and result-pair mismatch
 });
 
 function rewriteNestedInstructionFrameCrcs(buffer) {
-  const outerPayloadLength = Number(buffer.readBigUInt64LE(23));
-  const outerPayloadStart = buffer.length - outerPayloadLength;
-  let cursor = outerPayloadStart;
-  const wireIdLength = Number(buffer.readBigUInt64LE(cursor));
-  cursor += 8 + wireIdLength;
-  const innerWrapperLength = Number(buffer.readBigUInt64LE(cursor));
-  const innerWrapperStart = cursor + 8;
-  assert.equal(innerWrapperStart + innerWrapperLength, buffer.length);
-  const innerFrameLength = Number(buffer.readBigUInt64LE(innerWrapperStart));
-  const innerFrameStart = innerWrapperStart + 8;
-  assert.equal(innerFrameStart + innerFrameLength, buffer.length);
-  const innerPayloadLength = Number(buffer.readBigUInt64LE(innerFrameStart + 23));
-  const innerPayloadStart = innerFrameStart + innerFrameLength - innerPayloadLength;
-  buffer.writeBigUInt64LE(
+  const { length: outerPayloadLength } = readU64Length(
+    buffer,
+    23,
+    "instruction.outer.payload",
+  );
+  const outerPayload = buffer.subarray(buffer.length - outerPayloadLength);
+  const compactLength = (buffer[39] & 0x02) !== 0;
+  const wireId = readNoritoFieldPayload(
+    outerPayload,
+    0,
+    "instruction.outer.wire",
+    compactLength,
+  );
+  const innerWrapper = readNoritoFieldPayload(
+    outerPayload,
+    wireId.offset,
+    "instruction.outer.inner",
+    compactLength,
+  );
+  assert.equal(innerWrapper.offset, outerPayload.length);
+  const { length: innerFrameLength } = readU64Length(
+    innerWrapper.payload,
+    0,
+    "instruction.inner.frame",
+  );
+  const innerFrame = innerWrapper.payload.subarray(8);
+  assert.equal(innerFrame.length, innerFrameLength);
+  const { length: innerPayloadLength } = readU64Length(
+    innerFrame,
+    23,
+    "instruction.inner.payload",
+  );
+  const innerPayloadStart = innerFrame.length - innerPayloadLength;
+  innerFrame.writeBigUInt64LE(
     testCrc64Ecma(
-      buffer.subarray(innerPayloadStart, innerPayloadStart + innerPayloadLength),
+      innerFrame.subarray(innerPayloadStart, innerPayloadStart + innerPayloadLength),
     ),
-    innerFrameStart + 31,
+    31,
   );
   buffer.writeBigUInt64LE(
-    testCrc64Ecma(buffer.subarray(outerPayloadStart)),
+    testCrc64Ecma(outerPayload),
     31,
   );
 }

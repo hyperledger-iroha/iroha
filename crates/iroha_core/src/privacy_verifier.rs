@@ -667,7 +667,7 @@ mod tests {
             PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
             PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofSystemIdV1,
             PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1, PrivacyStatementContextV1,
-            VeRangeTransparentRangeStatementV1,
+            PrivacyTransactionIntentDigestV1, VeRangeTransparentRangeStatementV1,
         },
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
@@ -778,6 +778,7 @@ mod tests {
         let context = PrivacyStatementContextV1 {
             chain_id: chain_id.clone(),
             action_index: 0,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xD1; 32]),
             parameter_id: compiled.parameter_id,
             parameter_digest: compiled.parameter_digest,
             verifier_digest: compiled.verifier_digest,
@@ -974,6 +975,7 @@ mod tests {
             let statement_context = PrivacyStatementContextV1 {
                 chain_id: chain_id.clone(),
                 action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xD2; 32]),
                 parameter_id: compiled.parameter_id,
                 parameter_digest: compiled.parameter_digest,
                 verifier_digest: compiled.verifier_digest,

@@ -93,6 +93,11 @@ impl VegaScalarWireV1 {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.bytes
     }
+
+    #[cfg(test)]
+    pub(super) const fn from_raw_bytes_for_test(bytes: [u8; 32]) -> Self {
+        Self { bytes }
+    }
 }
 
 /// Canonical 33-byte non-identity compressed T256 proof point.
@@ -152,6 +157,11 @@ impl VegaPointWireV1 {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 33] {
         &self.bytes
+    }
+
+    #[cfg(test)]
+    pub(super) const fn from_raw_bytes_for_test(bytes: [u8; 33]) -> Self {
+        Self { bytes }
     }
 }
 

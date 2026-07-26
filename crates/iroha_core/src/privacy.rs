@@ -8,10 +8,16 @@
 
 use std::collections::{BTreeMap, btree_map::Entry};
 
-use iroha_data_model::privacy::{
-    PrivacyActivationValidationError, PrivacyActiveLifecycleV1, PrivacyConsensusLimitsV1,
-    PrivacyConsensusLimitsValidationError, PrivacyLifecycleTransitionError,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+use iroha_data_model::{
+    ValidationFail,
+    isi::privacy::SubmitPrivacyProofV1,
+    privacy::{
+        PrivacyActivationValidationError, PrivacyActiveLifecycleV1, PrivacyConsensusLimitsV1,
+        PrivacyConsensusLimitsValidationError, PrivacyLifecycleTransitionError,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyTransactionIntentDigestV1,
+    },
+    transaction::SignedTransaction,
 };
 use thiserror::Error;
 
@@ -25,6 +31,58 @@ use crate::privacy_profiles::{
 /// chain rule is the irreducible consensus guard and therefore cannot be
 /// bypassed by a deployment tool or SDK.
 pub const PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1: u64 = 300;
+
+const PRIVACY_SIGNED_SUBMISSION_HASH_DOMAIN_V1: &[u8] = b"iroha.privacy.signed-submission-hash.v1";
+
+/// Hash the complete typed privacy submission authorized by the transaction signature.
+///
+/// Unlike the transaction-intent digest, this internal one-shot fingerprint
+/// includes the final statement digests and proof bytes. It prevents a child
+/// contract, trigger, or VM overlay from substituting another submission after
+/// admission has validated the signed direct instruction.
+pub(crate) fn privacy_signed_submission_hash_v1(
+    submission: &SubmitPrivacyProofV1,
+) -> Result<iroha_crypto::Hash, norito::Error> {
+    let encoded = norito::to_bytes(submission)?;
+    let encoded_len = u64::try_from(encoded.len())
+        .expect("Norito output length always fits u64 on supported targets");
+    let mut preimage = Vec::with_capacity(
+        PRIVACY_SIGNED_SUBMISSION_HASH_DOMAIN_V1.len()
+            + core::mem::size_of::<u64>()
+            + encoded.len(),
+    );
+    preimage.extend_from_slice(PRIVACY_SIGNED_SUBMISSION_HASH_DOMAIN_V1);
+    preimage.extend_from_slice(&encoded_len.to_le_bytes());
+    preimage.extend_from_slice(&encoded);
+    Ok(iroha_crypto::Hash::new(preimage))
+}
+
+/// Recompute and validate the optional privacy intent in one signed payload.
+///
+/// Ordinary transactions return `Ok(None)`. Any privacy-bearing payload must
+/// contain exactly one direct typed submission, have both derived digests
+/// correct, and avoid every dynamic/opaque V1 path before this function returns
+/// its one-shot state binding.
+pub(crate) fn signed_privacy_transaction_intent_binding_v1(
+    transaction: &SignedTransaction,
+) -> Result<Option<(PrivacyTransactionIntentDigestV1, iroha_crypto::Hash)>, ValidationFail> {
+    let Some((digest, submission)) = transaction
+        .privacy_transaction_intent_binding_if_present_v1()
+        .map_err(|error| {
+            ValidationFail::NotPermitted(format!(
+                "privacy transaction-intent admission failed: {error}"
+            ))
+        })?
+    else {
+        return Ok(None);
+    };
+    let submission_hash = privacy_signed_submission_hash_v1(submission).map_err(|error| {
+        ValidationFail::InternalError(format!(
+            "failed to encode the signed privacy submission: {error}"
+        ))
+    })?;
+    Ok(Some((digest, submission_hash)))
+}
 
 /// Closed first-release registry of governed privacy protocol activations.
 ///
@@ -706,12 +764,13 @@ mod tests {
             unreachable!("VeRange fixture")
         };
         next.max_aggregation_count -= 1;
-        mismatched.pending_protocol_limits_tightening =
-            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+        mismatched.pending_protocol_limits_tightening = Some(
+            iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
                 scheduled_at_height: PROPOSAL_HEIGHT,
                 effective_at_height: ACTIVATION_HEIGHT,
                 next_limits,
-            });
+            },
+        );
         assert_eq!(
             registry.register(mismatched, PROPOSAL_HEIGHT),
             Err(PrivacyRegistryError::RegistrationHasPendingProtocolLimits)

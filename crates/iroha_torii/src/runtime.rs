@@ -527,6 +527,19 @@ pub async fn handle_node_capabilities(
     })
 }
 
+/// GET /v1/privacy/capabilities — return the authoritative committed snapshot.
+pub async fn handle_privacy_capabilities(
+    state: Arc<iroha_core::state::State>,
+) -> Result<iroha_data_model::privacy::PrivacyCapabilitySnapshotV1, crate::Error> {
+    state
+        .view()
+        .privacy_capability_snapshot_v1()
+        .map_err(|source| crate::Error::AppServiceUnavailable {
+            code: "privacy_capability_snapshot_invalid",
+            message: source.to_string(),
+        })
+}
+
 /// GET /v1/node/query/projection/checkpoint — return the latest persisted checkpoint descriptor.
 #[must_use]
 pub async fn handle_node_query_projection_checkpoint(
@@ -2209,6 +2222,44 @@ mod tests {
                 .contains(&CurveId::ED25519.as_u8()),
             "expected ED25519 curve id to be advertised"
         );
+    }
+
+    #[tokio::test]
+    async fn privacy_capabilities_are_built_from_one_committed_state_view() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let world = iroha_core::state::World::default();
+        let state = State::new_for_testing(world, kura, query_handle);
+
+        let snapshot = handle_privacy_capabilities(std::sync::Arc::new(state))
+            .await
+            .expect("valid committed privacy snapshot");
+        assert_eq!(snapshot.committed_height, 0);
+        assert_eq!(
+            snapshot.consensus_policy,
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default()
+        );
+        assert_eq!(
+            snapshot
+                .protocols
+                .iter()
+                .map(|row| row.protocol_id)
+                .collect::<Vec<_>>(),
+            iroha_data_model::privacy::PrivacyProtocolIdV1::ALL
+        );
+        snapshot.validate().expect("snapshot validates");
+
+        let json = norito::json::to_json(&snapshot).expect("snapshot JSON");
+        assert!(json.contains("iroha-bootle-lantern-anoncred-v1"));
+        assert!(!json.contains("iroha-bootle-genisis-ac-stark-v0"));
+        assert!(!json.contains("production_ready"));
+        assert!(!json.contains("production_gate"));
+
+        let archive = norito::to_bytes(&snapshot).expect("snapshot Norito");
+        let decoded: iroha_data_model::privacy::PrivacyCapabilitySnapshotV1 =
+            norito::decode_from_bytes(&archive).expect("decode snapshot Norito");
+        assert_eq!(decoded, snapshot);
+        decoded.validate().expect("decoded snapshot validates");
     }
 
     #[tokio::test]

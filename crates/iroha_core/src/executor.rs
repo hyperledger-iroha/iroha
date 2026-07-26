@@ -5727,6 +5727,10 @@ impl Executor {
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
         trace!("Running transaction execution");
+        state_transaction.bind_privacy_transaction_intent_v1(None);
+        let privacy_intent_binding =
+            crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
+        state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
         let tx_bytes_len = to_bytes(transaction.payload())
             .map(|bytes| bytes.len())
             .map_err(|err| {
