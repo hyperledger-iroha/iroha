@@ -878,3 +878,442 @@ fn row_at(columns: &[Vec<F>], index: usize) -> Result<Vec<F>, ZkAceStarkError> {
         .collect()
 }
 
+const LOCAL_CONSTRAINT_COUNT: usize = 12 + LIMB_BITS + 1 + 8 + 3 * (LIMB_BITS - 32);
+const TRANSITION_CONSTRAINT_COUNT: usize = 3 + PRIVATE_LIMBS;
+const CONSTRAINT_COUNT: usize = LOCAL_CONSTRAINT_COUNT + TRANSITION_CONSTRAINT_COUNT;
+
+fn hash_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    for part in parts {
+        hasher.update((part.len() as u64).to_be_bytes());
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+fn base_transcript_seed(
+    public_digest: &[u8; 32],
+    trace_root: &[u8; 32],
+) -> [u8; 32] {
+    hash_parts(
+        TRANSCRIPT_DOMAIN,
+        &[
+            &PROOF_VERSION.to_be_bytes(),
+            &[TRACE_LOG2, BLOWUP_LOG2],
+            &(QUERY_COUNT as u64).to_be_bytes(),
+            &(SECURITY_LANES as u64).to_be_bytes(),
+            &(MASK_DEGREE as u64).to_be_bytes(),
+            public_digest,
+            trace_root,
+        ],
+    )
+}
+
+fn challenge_field(seed: &[u8; 32], label: &[u8], lane: usize, index: usize) -> F {
+    let digest = hash_parts(
+        b"iroha:privacy:zk-ace:field-challenge:v1",
+        &[
+            seed,
+            label,
+            &(lane as u64).to_be_bytes(),
+            &(index as u64).to_be_bytes(),
+        ],
+    );
+    let value = u128::from_le_bytes(
+        digest[..16]
+            .try_into()
+            .expect("SHA-256 prefix has sixteen bytes"),
+    );
+    let reduced = F::reduce(value);
+    if reduced == F::ZERO { F::ONE } else { reduced }
+}
+
+fn challenge_vector(
+    seed: &[u8; 32],
+    label: &[u8],
+    lane: usize,
+    count: usize,
+) -> Vec<F> {
+    (0..count)
+        .map(|index| challenge_field(seed, label, lane, index))
+        .collect()
+}
+
+fn composition_seed(
+    base_seed: &[u8; 32],
+    composition_roots: &[[u8; 32]],
+) -> [u8; 32] {
+    let mut encoded_roots = Vec::with_capacity(composition_roots.len() * 32);
+    for root in composition_roots {
+        encoded_roots.extend_from_slice(root);
+    }
+    hash_parts(
+        b"iroha:privacy:zk-ace:composition-transcript:v1",
+        &[base_seed, &encoded_roots],
+    )
+}
+
+fn fri_lane_seed(composition_seed: &[u8; 32], lane: usize) -> [u8; 32] {
+    hash_parts(
+        b"iroha:privacy:zk-ace:fri-lane-transcript:v1",
+        &[composition_seed, &(lane as u64).to_be_bytes()],
+    )
+}
+
+fn query_seed(
+    composition_seed: &[u8; 32],
+    lanes: &[FriLaneMaterial],
+) -> [u8; 32] {
+    let mut encoded_roots = Vec::new();
+    for lane in lanes {
+        for root in &lane.roots {
+            encoded_roots.extend_from_slice(root);
+        }
+    }
+    hash_parts(
+        b"iroha:privacy:zk-ace:query-transcript:v1",
+        &[composition_seed, &encoded_roots],
+    )
+}
+
+fn derive_query_indices(seed: &[u8; 32]) -> Result<Vec<usize>, ZkAceStarkError> {
+    let mut indices = Vec::with_capacity(QUERY_COUNT);
+    let mut seen = BTreeSet::new();
+    for counter in 0..MAX_QUERY_DERIVATION_ATTEMPTS {
+        let digest = hash_parts(
+            b"iroha:privacy:zk-ace:query-index:v1",
+            &[seed, &(counter as u64).to_be_bytes()],
+        );
+        let raw = u64::from_le_bytes(
+            digest[..8]
+                .try_into()
+                .expect("SHA-256 prefix has eight bytes"),
+        );
+        let index = (raw as usize) & (LDE_SIZE - 1);
+        if seen.insert(index) {
+            indices.push(index);
+            if indices.len() == QUERY_COUNT {
+                return Ok(indices);
+            }
+        }
+    }
+    Err(ZkAceStarkError::InternalInvariant(
+        "query sampler exhausted its compiled attempt bound",
+    ))
+}
+
+fn constraint_quotient_value(
+    x: F,
+    current: &[F],
+    next: &[F],
+    fixed: &[F],
+    public_outputs: &[F; 8],
+    alphas: &[F],
+) -> Result<F, ZkAceStarkError> {
+    if current.len() != TRACE_WIDTH
+        || next.len() != TRACE_WIDTH
+        || fixed.len() != FIXED_WIDTH
+        || alphas.len() != CONSTRAINT_COUNT
+    {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "constraint evaluation shape mismatch",
+        ));
+    }
+    let z_h = x.pow(TRACE_SIZE as u128).sub(F::ONE);
+    let inv_z_h = z_h.inv().ok_or(ZkAceStarkError::InternalInvariant(
+        "LDE point lies in the trace subgroup",
+    ))?;
+    let trace_root = primitive_root(TRACE_LOG2)?;
+    let last_trace_point = trace_root.pow((TRACE_SIZE - 1) as u128);
+    let transition_factor = x.sub(last_trace_point).mul(inv_z_h);
+    let mut alpha_index = 0usize;
+    let mut result = F::ZERO;
+    let mut absorb_local = |residue: F| {
+        result = result.add(alphas[alpha_index].mul(residue).mul(inv_z_h));
+        alpha_index += 1;
+    };
+
+    for word in 0..3 {
+        absorb_local(
+            current[A_OFFSET + word]
+                .sub(current[STATE_OFFSET + word])
+                .sub(fixed[FIX_RC_OFFSET + word]),
+        );
+        absorb_local(
+            current[X2_OFFSET + word]
+                .sub(current[A_OFFSET + word].mul(current[A_OFFSET + word])),
+        );
+        absorb_local(
+            current[X4_OFFSET + word]
+                .sub(current[X2_OFFSET + word].mul(current[X2_OFFSET + word])),
+        );
+        absorb_local(
+            current[X5_OFFSET + word]
+                .sub(current[X4_OFFSET + word].mul(current[A_OFFSET + word])),
+        );
+    }
+    for bit in 0..LIMB_BITS {
+        let value = current[BIT_OFFSET + bit];
+        absorb_local(value.mul(value.sub(F::ONE)));
+    }
+    let recomposed = (0..LIMB_BITS).fold(F::ZERO, |sum, bit| {
+        sum.add(current[BIT_OFFSET + bit].mul(F::reduce(1_u128 << bit)))
+    });
+    absorb_local(current[LIMB_OFFSET].sub(recomposed));
+    for output in 0..8 {
+        absorb_local(
+            fixed[FIX_OUTPUT_OFFSET + output]
+                .mul(current[STATE_OFFSET].sub(public_outputs[output])),
+        );
+    }
+    for limb_index in [4usize, 9, 14] {
+        for bit in 32..LIMB_BITS {
+            absorb_local(
+                fixed[FIX_LOAD_OFFSET + limb_index].mul(current[BIT_OFFSET + bit]),
+            );
+        }
+    }
+    if alpha_index != LOCAL_CONSTRAINT_COUNT {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "local constraint count drifted from the profile",
+        ));
+    }
+
+    let full = fixed[FIX_FULL];
+    let partial = fixed[FIX_PARTIAL];
+    let absorb_0 = fixed[FIX_ABSORB_0];
+    let absorb_1 = fixed[FIX_ABSORB_1];
+    let reset = fixed[FIX_RESET];
+    let hold = F::ONE
+        .sub(full)
+        .sub(partial)
+        .sub(absorb_0)
+        .sub(absorb_1)
+        .sub(reset);
+    let mut message = fixed[FIX_MESSAGE_CONST];
+    for index in 0..PRIVATE_LIMBS {
+        message = message.add(
+            fixed[FIX_MESSAGE_WITNESS_OFFSET + index].mul(current[QUEUE_OFFSET + index]),
+        );
+    }
+    let full_state = apply_mds([
+        current[X5_OFFSET],
+        current[X5_OFFSET + 1],
+        current[X5_OFFSET + 2],
+    ]);
+    let partial_state = apply_mds([
+        current[X5_OFFSET],
+        current[A_OFFSET + 1],
+        current[A_OFFSET + 2],
+    ]);
+    for word in 0..3 {
+        let absorbed = current[STATE_OFFSET + word].add(if word == 0 {
+            absorb_0.mul(message)
+        } else if word == 1 {
+            absorb_1.mul(message)
+        } else {
+            F::ZERO
+        });
+        let expected = full
+            .mul(full_state[word])
+            .add(partial.mul(partial_state[word]))
+            .add(absorb_0.add(absorb_1).mul(absorbed))
+            .add(hold.mul(current[STATE_OFFSET + word]));
+        let residue = next[STATE_OFFSET + word].sub(expected);
+        result = result.add(
+            alphas[alpha_index]
+                .mul(residue)
+                .mul(transition_factor),
+        );
+        alpha_index += 1;
+    }
+    for index in 0..PRIVATE_LIMBS {
+        let queue = current[QUEUE_OFFSET + index];
+        let expected =
+            queue.add(fixed[FIX_LOAD_OFFSET + index].mul(current[LIMB_OFFSET].sub(queue)));
+        let residue = next[QUEUE_OFFSET + index].sub(expected);
+        result = result.add(
+            alphas[alpha_index]
+                .mul(residue)
+                .mul(transition_factor),
+        );
+        alpha_index += 1;
+    }
+    if alpha_index != CONSTRAINT_COUNT {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "transition constraint count drifted from the profile",
+        ));
+    }
+    Ok(result)
+}
+
+fn trace_tree(trace_lde: &[Vec<F>]) -> Result<MerkleTree, ZkAceStarkError> {
+    let leaves = (0..LDE_SIZE)
+        .map(|index| row_at(trace_lde, index).map(|row| trace_leaf_hash(&row)))
+        .collect::<Result<Vec<_>, _>>()?;
+    MerkleTree::from_leaves(leaves)
+}
+
+fn composition_lane(
+    trace_lde: &[Vec<F>],
+    fixed_lde: &[Vec<F>],
+    public_outputs: &[F; 8],
+    alphas: &[F],
+) -> Result<Vec<F>, ZkAceStarkError> {
+    let lde_root = primitive_root(LDE_LOG2)?;
+    let coset_shift = F(FIELD_GENERATOR);
+    let mut x = coset_shift;
+    let mut values = Vec::with_capacity(LDE_SIZE);
+    for index in 0..LDE_SIZE {
+        let current = row_at(trace_lde, index)?;
+        let next = row_at(trace_lde, (index + TERMINAL_SIZE) % LDE_SIZE)?;
+        let fixed = row_at(fixed_lde, index)?;
+        values.push(constraint_quotient_value(
+            x,
+            &current,
+            &next,
+            &fixed,
+            public_outputs,
+            alphas,
+        )?);
+        x = x.mul(lde_root);
+    }
+    Ok(values)
+}
+
+fn mix_fri_base(
+    trace_lde: &[Vec<F>],
+    composition: &[F],
+    trace_mix: &[F],
+    composition_mix: F,
+) -> Result<Vec<F>, ZkAceStarkError> {
+    if trace_lde.len() != TRACE_WIDTH
+        || trace_mix.len() != TRACE_WIDTH
+        || composition.len() != LDE_SIZE
+    {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "FRI base mixing shape mismatch",
+        ));
+    }
+    (0..LDE_SIZE)
+        .map(|index| {
+            let trace_value = trace_lde
+                .iter()
+                .zip(trace_mix)
+                .fold(F::ZERO, |sum, (column, coefficient)| {
+                    sum.add(column[index].mul(*coefficient))
+                });
+            Ok(trace_value.add(composition[index].mul(composition_mix)))
+        })
+        .collect()
+}
+
+fn fri_fold_pair(low: F, high: F, beta: F, x: F) -> Result<F, ZkAceStarkError> {
+    let two_inverse = F(2)
+        .inv()
+        .ok_or(ZkAceStarkError::InternalInvariant(
+            "two must be invertible in Goldilocks",
+        ))?;
+    let inverse_two_x = F(2)
+        .mul(x)
+        .inv()
+        .ok_or(ZkAceStarkError::InternalInvariant(
+            "FRI domain point must be invertible",
+        ))?;
+    let even = low.add(high).mul(two_inverse);
+    let odd = low.sub(high).mul(inverse_two_x);
+    Ok(even.add(beta.mul(odd)))
+}
+
+fn build_fri_lane(
+    base_values: Vec<F>,
+    lane_seed: &[u8; 32],
+    lane: usize,
+) -> Result<FriLaneMaterial, ZkAceStarkError> {
+    if base_values.len() != LDE_SIZE {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "FRI base vector length mismatch",
+        ));
+    }
+    let mut layers = vec![base_values];
+    let mut trees = Vec::with_capacity(FRI_ROUNDS + 1);
+    let mut roots = Vec::with_capacity(FRI_ROUNDS + 1);
+    let mut domain_shift = F(FIELD_GENERATOR);
+    let mut domain_root = primitive_root(LDE_LOG2)?;
+
+    for round in 0..FRI_ROUNDS {
+        let current = layers
+            .last()
+            .expect("FRI starts with one base evaluation layer");
+        let leaves = current
+            .iter()
+            .copied()
+            .map(|value| fri_leaf_hash(lane, round, value))
+            .collect();
+        let tree = MerkleTree::from_leaves(leaves)?;
+        let root = tree.root();
+        let beta = challenge_field(lane_seed, b"fri-beta", lane, round);
+        let half = current.len() / 2;
+        let mut next = Vec::with_capacity(half);
+        let mut x = domain_shift;
+        for index in 0..half {
+            next.push(fri_fold_pair(
+                current[index],
+                current[index + half],
+                beta,
+                x,
+            )?);
+            x = x.mul(domain_root);
+        }
+        trees.push(tree);
+        roots.push(root);
+        layers.push(next);
+        domain_shift = domain_shift.mul(domain_shift);
+        domain_root = domain_root.mul(domain_root);
+    }
+    let terminal_values = layers
+        .last()
+        .ok_or(ZkAceStarkError::InternalInvariant(
+            "FRI terminal layer is missing",
+        ))?
+        .clone();
+    if terminal_values.len() != TERMINAL_SIZE {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "FRI terminal layer has the wrong compiled size",
+        ));
+    }
+    let terminal_tree = MerkleTree::from_leaves(
+        terminal_values
+            .iter()
+            .copied()
+            .map(|value| fri_leaf_hash(lane, FRI_ROUNDS, value))
+            .collect(),
+    )?;
+    roots.push(terminal_tree.root());
+    trees.push(terminal_tree);
+    ensure_terminal_degree(&terminal_values)?;
+    Ok(FriLaneMaterial {
+        layers,
+        trees,
+        roots,
+        terminal_values,
+    })
+}
+
+fn ensure_terminal_degree(values: &[F]) -> Result<(), ZkAceStarkError> {
+    if values.len() != TERMINAL_SIZE {
+        return Err(ZkAceStarkError::FriDegree);
+    }
+    let root = primitive_root(BLOWUP_LOG2)?;
+    let mut coefficients = values.to_vec();
+    ifft(&mut coefficients, root)?;
+    if coefficients[TERMINAL_DEGREE_BOUND + 1..]
+        .iter()
+        .any(|value| *value != F::ZERO)
+    {
+        return Err(ZkAceStarkError::FriDegree);
+    }
+    Ok(())
+}
+

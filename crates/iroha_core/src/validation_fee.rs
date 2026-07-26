@@ -3297,6 +3297,7 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::staking::SlashPublicLaneValidator,
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
+        iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
         iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer,
         iroha_data_model::isi::zk::RegisterZkAsset,
         iroha_data_model::isi::zk::RegisterAssetHiddenZkPool,
@@ -3330,17 +3331,17 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
-        // Privacy governance, the complete PGC bootstrap, and natively verified
-        // proof admission affect only typed privacy state and rollback-safe
-        // privacy budgets. They cannot move, mint, burn, lock, or delete
-        // transparent assets. Adding any effectful proof-ledger variant requires
-        // re-auditing this classification before that variant becomes executable.
+        // Privacy governance and bootstrap instructions affect only typed
+        // privacy state and rollback-safe privacy budgets. Proof admission is
+        // classified above because ZK-ACE can authorize a transparent transfer.
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
         iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
         iroha_data_model::isi::privacy::PublishPrivacyRootV1,
         iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1,
         iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1,
-        iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
+        iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1,
+        iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
+        iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
         SetKeyValueBox,
         RemoveKeyValueBox,
         iroha_data_model::isi::SetAssetKeyValue,
