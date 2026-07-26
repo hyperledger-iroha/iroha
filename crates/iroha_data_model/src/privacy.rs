@@ -2471,7 +2471,7 @@ pub struct ZkAmsActivationLimitsV1 {
     pub max_ring_size: u32,
 }
 
-/// Activation-specific Jindo multilinear-opening policy.
+/// Activation-specific Jindo batched univariate-opening policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2481,10 +2481,6 @@ pub struct ZkAmsActivationLimitsV1 {
 pub struct JindoActivationLimitsV1 {
     /// Maximum polynomial commitments per statement.
     pub max_polynomial_count: u32,
-    /// Maximum multilinear evaluation queries per statement.
-    pub max_evaluation_query_count: u32,
-    /// Maximum variables in each multilinear evaluation point.
-    pub max_multilinear_variable_count: u32,
 }
 
 /// Activation-specific Orchard action policy.
@@ -2667,23 +2663,11 @@ impl PrivacyProtocolActivationLimitsV1 {
                 }
                 Ok(())
             }
-            Self::IrohaJindoPolynomialCommitmentV0(limits) => {
-                validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::JindoPolynomialCount,
-                    limits.max_polynomial_count,
-                    IROHA_JINDO_MAX_POLYNOMIALS_V1,
-                )?;
-                validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::JindoEvaluationQueryCount,
-                    limits.max_evaluation_query_count,
-                    IROHA_JINDO_MAX_EVALUATION_QUERIES_V1,
-                )?;
-                validate_profile_limit(
-                    PrivacyActivationLimitFieldV1::JindoMultilinearVariableCount,
-                    limits.max_multilinear_variable_count,
-                    IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1,
-                )
-            }
+            Self::IrohaJindoPolynomialCommitmentV0(limits) => validate_profile_limit(
+                PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                limits.max_polynomial_count,
+                IROHA_JINDO_MAX_POLYNOMIALS_V1,
+            ),
             Self::OrchardHalo2ActionsV1(limits) => validate_profile_limit(
                 PrivacyActivationLimitFieldV1::OrchardActionCount,
                 limits.max_action_count,
@@ -2786,23 +2770,11 @@ impl PrivacyProtocolActivationLimitsV1 {
             (
                 Self::IrohaJindoPolynomialCommitmentV0(value),
                 Self::IrohaJindoPolynomialCommitmentV0(max),
-            ) => {
-                validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::JindoPolynomialCount,
-                    value.max_polynomial_count,
-                    max.max_polynomial_count,
-                )?;
-                validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::JindoEvaluationQueryCount,
-                    value.max_evaluation_query_count,
-                    max.max_evaluation_query_count,
-                )?;
-                validate_profile_limit_ceiling(
-                    PrivacyActivationLimitFieldV1::JindoMultilinearVariableCount,
-                    value.max_multilinear_variable_count,
-                    max.max_multilinear_variable_count,
-                )
-            }
+            ) => validate_profile_limit_ceiling(
+                PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                value.max_polynomial_count,
+                max.max_polynomial_count,
+            ),
             (Self::OrchardHalo2ActionsV1(value), Self::OrchardHalo2ActionsV1(max)) => {
                 validate_profile_limit_ceiling(
                     PrivacyActivationLimitFieldV1::OrchardActionCount,
@@ -2908,10 +2880,6 @@ pub enum PrivacyActivationLimitFieldV1 {
     ZkAmsRingSize,
     /// Jindo polynomial count.
     JindoPolynomialCount,
-    /// Jindo multilinear evaluation-query count.
-    JindoEvaluationQueryCount,
-    /// Jindo multilinear variable count.
-    JindoMultilinearVariableCount,
     /// Orchard one-to-one action count.
     OrchardActionCount,
     /// FCMP++ input count.
@@ -3874,16 +3842,22 @@ pub const ZK_AMS_MAX_BATCH_SIZE_V1: u32 = 8;
 pub const ZK_AMS_RING_SIZES_V1: [u32; 3] = [16, 32, 64];
 /// Maximum admitted seed-key ring size in the first release.
 pub const ZK_AMS_MAX_RING_SIZE_V1: u32 = 64;
-/// Maximum polynomials in one Jindo multilinear-opening statement.
+/// Maximum polynomials in one Jindo batched univariate-opening statement.
 pub const IROHA_JINDO_MAX_POLYNOMIALS_V1: u32 = 4;
-/// Maximum multilinear evaluation queries in one Jindo statement.
-pub const IROHA_JINDO_MAX_EVALUATION_QUERIES_V1: u32 = 8;
-/// Maximum variables in one Jindo multilinear polynomial profile.
-pub const IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1: u32 = 32;
-/// Maximum canonical byte width of one governed Jindo field element.
-pub const IROHA_JINDO_MAX_FIELD_ELEMENT_BYTES_V1: u16 = 64;
-/// Maximum canonical byte width of one governed Jindo lattice commitment.
-pub const IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1: u32 = 64 * 1024;
+/// Exact canonical byte width of one Jindo coefficient-field element.
+pub const IROHA_JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;
+/// Exact fixed-profile Jindo outer-commitment rank.
+pub const IROHA_JINDO_OUTER_COMMITMENT_RANK_V1: usize = 13;
+/// Exact fixed-profile Jindo application-ring degree.
+pub const IROHA_JINDO_RING_DEGREE_V1: usize = 256;
+/// Exact signed coefficient width in the public rounded commitment wire.
+pub const IROHA_JINDO_COMMITMENT_COEFFICIENT_BYTES_V1: usize = 4;
+/// Exact canonical byte width of one fixed-profile Jindo lattice commitment.
+pub const IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1: usize = IROHA_JINDO_OUTER_COMMITMENT_RANK_V1
+    * IROHA_JINDO_RING_DEGREE_V1
+    * IROHA_JINDO_COMMITMENT_COEFFICIENT_BYTES_V1;
+/// Maximum absolute rounded outer-commitment coefficient.
+pub const IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1: i64 = 1 << 28;
 /// Exact direct 64-bit attribute count in the Bootle/Lantern credential profile.
 pub const BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1: usize = 8;
 /// Exact byte width of one direct Bootle/Lantern attribute.
@@ -4444,43 +4418,41 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     pub certificate_nullifier: PrivacyNullifierV1,
 }
 
-/// Canonical field-element encoding selected by a governed Jindo regime.
+/// Canonical little-endian element of the fixed Jindo coefficient field.
 ///
-/// Jindo supports diverse fields, so the data model intentionally does not
-/// claim one universal scalar modulus or byte order. The statement fixes an
-/// exact byte width, and the governed parameter set plus native engine enforce
-/// canonicality against the selected field.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+/// The compiled modulus is `60272^16 + 1`. Fixed width at the type boundary
+/// eliminates ambiguous byte order, truncation, and alternate field regimes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(transparent))]
 pub struct PrivacyJindoFieldElementV1 {
-    /// Exact governed field-element encoding.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
-    pub encoding: Vec<u8>,
+    /// Exact canonical little-endian residue.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub encoding: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
 }
 
 impl PrivacyJindoFieldElementV1 {
-    /// Construct a governed field-element encoding.
+    /// Construct a fixed-width field-element encoding.
     #[must_use]
-    pub fn new(encoding: Vec<u8>) -> Self {
+    pub const fn new(encoding: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1]) -> Self {
         Self { encoding }
     }
 
     /// Borrow the exact field-element bytes.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
+    pub const fn as_bytes(&self) -> &[u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1] {
         &self.encoding
     }
 }
 
-/// Canonical public lattice-commitment encoding selected by a Jindo regime.
+/// Canonical public outer commitment in the fixed Jindo lattice profile.
 ///
-/// This bounded opaque encoding is deliberate: the revised paper permits
-/// flexible lattice parameter regimes whose exact algebraic wire is governed
-/// by the pinned parameter and engine manifests.
+/// The byte string contains 13 × 256 signed little-endian `i32`
+/// coefficients. Native verification additionally enforces the compiled
+/// rounded-coefficient bound.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -4494,7 +4466,7 @@ pub struct PrivacyJindoLatticeCommitmentV1 {
 }
 
 impl PrivacyJindoLatticeCommitmentV1 {
-    /// Construct a governed lattice-commitment encoding.
+    /// Construct a fixed-profile lattice-commitment encoding.
     #[must_use]
     pub fn new(encoding: Vec<u8>) -> Self {
         Self { encoding }
@@ -4507,37 +4479,7 @@ impl PrivacyJindoLatticeCommitmentV1 {
     }
 }
 
-/// Public shape of the governed Jindo parameter regime.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct PrivacyJindoParameterRegimeV1 {
-    /// Variables in every committed multilinear polynomial and query point.
-    pub multilinear_variable_count: u32,
-    /// Exact canonical byte width of one element of the selected field.
-    pub field_element_bytes: u16,
-    /// Exact canonical byte width of one public lattice commitment.
-    pub lattice_commitment_bytes: u32,
-    /// Whether the governed Jindo evaluation-hiding profile is enabled.
-    pub evaluation_hiding: bool,
-}
-
-/// Claimed evaluations at one multilinear Jindo point.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct PrivacyJindoEvaluationQueryV1 {
-    /// Multilinear point `(r_0, ..., r_{m-1})`.
-    pub evaluation_point: Vec<PrivacyJindoFieldElementV1>,
-    /// Claimed evaluations, in polynomial-commitment order.
-    pub claimed_evaluations: Vec<PrivacyJindoFieldElementV1>,
-}
-
-/// Native Jindo multilinear lattice polynomial-opening statement.
+/// Native Jindo batched univariate lattice polynomial-opening statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -4546,12 +4488,12 @@ pub struct PrivacyJindoEvaluationQueryV1 {
 pub struct IrohaJindoPolynomialCommitmentStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
-    /// Explicit public shape of the governed flexible parameter regime.
-    pub regime: PrivacyJindoParameterRegimeV1,
-    /// Public commitments to multilinear polynomials.
+    /// Public commitments to degree-bounded univariate polynomials.
     pub polynomial_commitments: Vec<PrivacyJindoLatticeCommitmentV1>,
-    /// Distinct multilinear points and claimed evaluation rows.
-    pub evaluation_queries: Vec<PrivacyJindoEvaluationQueryV1>,
+    /// One common univariate evaluation point.
+    pub evaluation_point: PrivacyJindoFieldElementV1,
+    /// Claimed values in exact polynomial-commitment order.
+    pub claimed_evaluations: Vec<PrivacyJindoFieldElementV1>,
 }
 
 /// One direct 64-bit attribute in the fixed Bootle/Lantern credential profile.
@@ -5836,57 +5778,15 @@ fn validate_jindo(
             max: polynomial_max,
         });
     }
-    let evaluation_query_count = u32_len(statement.evaluation_queries.len())?;
-    if evaluation_query_count == 0 || evaluation_query_count > IROHA_JINDO_MAX_EVALUATION_QUERIES_V1
-    {
-        return Err(
-            PrivacyStatementValidationError::InvalidJindoEvaluationQueryCount {
-                count: evaluation_query_count,
-                max: IROHA_JINDO_MAX_EVALUATION_QUERIES_V1,
-            },
-        );
-    }
-    if statement.regime.multilinear_variable_count == 0
-        || statement.regime.multilinear_variable_count > IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1
-    {
-        return Err(
-            PrivacyStatementValidationError::InvalidJindoMultilinearVariableCount {
-                count: statement.regime.multilinear_variable_count,
-                max: IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1,
-            },
-        );
-    }
-    if statement.regime.field_element_bytes == 0
-        || statement.regime.field_element_bytes > IROHA_JINDO_MAX_FIELD_ELEMENT_BYTES_V1
-    {
-        return Err(
-            PrivacyStatementValidationError::InvalidJindoFieldElementSize {
-                bytes: statement.regime.field_element_bytes,
-                max: IROHA_JINDO_MAX_FIELD_ELEMENT_BYTES_V1,
-            },
-        );
-    }
-    if statement.regime.lattice_commitment_bytes == 0
-        || statement.regime.lattice_commitment_bytes > IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1
-    {
-        return Err(
-            PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
-                index: None,
-                bytes: statement.regime.lattice_commitment_bytes,
-                expected: statement.regime.lattice_commitment_bytes,
-                max: IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1,
-            },
-        );
-    }
     for (index, commitment) in statement.polynomial_commitments.iter().enumerate() {
         let bytes = u32_len(commitment.encoding.len())?;
-        if bytes != statement.regime.lattice_commitment_bytes {
+        if commitment.encoding.len() != IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1 {
             return Err(
                 PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
-                    index: Some(u32_index(index)?),
+                    index: u32_index(index)?,
                     bytes,
-                    expected: statement.regime.lattice_commitment_bytes,
-                    max: IROHA_JINDO_MAX_LATTICE_COMMITMENT_BYTES_V1,
+                    expected: u32::try_from(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1)
+                        .expect("fixed Jindo commitment width fits u32"),
                 },
             );
         }
@@ -5897,45 +5797,59 @@ fn validate_jindo(
                 },
             );
         }
-    }
-    if first_duplicate_index(&statement.polynomial_commitments).is_some() {
-        return Err(PrivacyStatementValidationError::DuplicateJindoLatticeCommitment);
-    }
-    let expected_field_bytes = usize::from(statement.regime.field_element_bytes);
-    for query in &statement.evaluation_queries {
-        require_count(
-            query.evaluation_point.len(),
-            statement.regime.multilinear_variable_count,
-            PrivacyCountFieldV1::JindoEvaluationPointCoordinates,
-        )?;
-        require_count(
-            query.claimed_evaluations.len(),
-            polynomial_count,
-            PrivacyCountFieldV1::JindoClaimedEvaluations,
-        )?;
-        for element in query
-            .evaluation_point
-            .iter()
-            .chain(query.claimed_evaluations.iter())
-        {
-            if element.encoding.len() != expected_field_bytes {
+        for (coefficient_index, bytes) in commitment.encoding.chunks_exact(4).enumerate() {
+            let coefficient = i32::from_le_bytes(
+                bytes
+                    .try_into()
+                    .expect("Jindo commitment width is a multiple of four"),
+            );
+            if i64::from(coefficient).abs() > IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 {
                 return Err(
-                    PrivacyStatementValidationError::InvalidJindoFieldElementEncoding {
-                        bytes: u32_len(element.encoding.len())?,
-                        expected: u32::from(statement.regime.field_element_bytes),
+                    PrivacyStatementValidationError::JindoCommitmentCoefficientOutOfRange {
+                        commitment_index: u32_index(index)?,
+                        coefficient_index: u32_index(coefficient_index)?,
+                        value: coefficient,
+                        max: IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
                     },
                 );
             }
         }
     }
-    for later in 1..statement.evaluation_queries.len() {
-        if statement.evaluation_queries[..later].iter().any(|earlier| {
-            earlier.evaluation_point == statement.evaluation_queries[later].evaluation_point
-        }) {
-            return Err(PrivacyStatementValidationError::DuplicateJindoEvaluationPoint);
+    if first_duplicate_index(&statement.polynomial_commitments).is_some() {
+        return Err(PrivacyStatementValidationError::DuplicateJindoLatticeCommitment);
+    }
+    require_count(
+        statement.claimed_evaluations.len(),
+        polynomial_count,
+        PrivacyCountFieldV1::JindoClaimedEvaluations,
+    )?;
+    if !is_canonical_jindo_field_element(&statement.evaluation_point) {
+        return Err(PrivacyStatementValidationError::NonCanonicalJindoEvaluationPoint);
+    }
+    for (index, claimed_evaluation) in statement.claimed_evaluations.iter().enumerate() {
+        if !is_canonical_jindo_field_element(claimed_evaluation) {
+            return Err(
+                PrivacyStatementValidationError::NonCanonicalJindoClaimedEvaluation {
+                    index: u32_index(index)?,
+                },
+            );
         }
     }
     Ok(())
+}
+
+const IROHA_JINDO_FIELD_MODULUS_LE_V1: [u8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1] = [
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81, 0x32, 0x37, 0x8c, 0xdc, 0x30, 0x96, 0x8e,
+    0x55, 0x65, 0xfb, 0xe6, 0xd9, 0x43, 0x56, 0xd6, 0xc2, 0xaf, 0x62, 0x6b, 0x99, 0x45, 0x0d, 0x43,
+];
+
+fn is_canonical_jindo_field_element(element: &PrivacyJindoFieldElementV1) -> bool {
+    for index in (0..IROHA_JINDO_FIELD_ELEMENT_BYTES_V1).rev() {
+        if element.encoding[index] != IROHA_JINDO_FIELD_MODULUS_LE_V1[index] {
+            return element.encoding[index] < IROHA_JINDO_FIELD_MODULUS_LE_V1[index];
+        }
+    }
+    false
 }
 
 fn validate_bootle_lantern(
@@ -6426,23 +6340,11 @@ impl PrivacyProtocolActivationLimitsV1 {
             (
                 Self::IrohaJindoPolynomialCommitmentV0(limits),
                 PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement),
-            ) => {
-                validate_activation_statement_count(
-                    PrivacyActivationLimitFieldV1::JindoPolynomialCount,
-                    u32::try_from(statement.polynomial_commitments.len()).unwrap_or(u32::MAX),
-                    limits.max_polynomial_count,
-                )?;
-                validate_activation_statement_count(
-                    PrivacyActivationLimitFieldV1::JindoEvaluationQueryCount,
-                    u32::try_from(statement.evaluation_queries.len()).unwrap_or(u32::MAX),
-                    limits.max_evaluation_query_count,
-                )?;
-                validate_activation_statement_count(
-                    PrivacyActivationLimitFieldV1::JindoMultilinearVariableCount,
-                    statement.regime.multilinear_variable_count,
-                    limits.max_multilinear_variable_count,
-                )
-            }
+            ) => validate_activation_statement_count(
+                PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                u32::try_from(statement.polynomial_commitments.len()).unwrap_or(u32::MAX),
+                limits.max_polynomial_count,
+            ),
             (
                 Self::OrchardHalo2ActionsV1(limits),
                 PrivacyStatementV1::OrchardHalo2ActionsV1(statement),
@@ -6862,8 +6764,6 @@ pub enum PrivacyP256CiphertextComponentV1 {
 pub enum PrivacyCountFieldV1 {
     /// VeRange aggregated commitments.
     AggregatedCommitments,
-    /// Coordinates in one Jindo multilinear evaluation point.
-    JindoEvaluationPointCoordinates,
     /// Jindo claimed evaluations in polynomial-commitment order.
     JindoClaimedEvaluations,
 }
@@ -7224,51 +7124,24 @@ pub enum PrivacyStatementValidationError {
         /// Approved combined maximum.
         max: u32,
     },
-    /// Jindo evaluation-query count is outside its approved profile.
-    #[error("Jindo evaluation-query count {count} is outside 1..={max}")]
-    InvalidJindoEvaluationQueryCount {
-        /// Observed evaluation-query count.
-        count: u32,
-        /// Approved maximum.
-        max: u32,
+    /// The common Jindo evaluation point is not the canonical residue in `[0, p)`.
+    #[error("Jindo evaluation point is not a canonical coefficient-field element")]
+    NonCanonicalJindoEvaluationPoint,
+    /// A claimed Jindo evaluation is not the canonical residue in `[0, p)`.
+    #[error("Jindo claimed evaluation {index} is not a canonical coefficient-field element")]
+    NonCanonicalJindoClaimedEvaluation {
+        /// Zero-based claimed-evaluation index.
+        index: u32,
     },
-    /// Jindo multilinear variable count is outside its approved profile.
-    #[error("Jindo multilinear variable count {count} is outside 1..={max}")]
-    InvalidJindoMultilinearVariableCount {
-        /// Observed variable count.
-        count: u32,
-        /// Approved maximum.
-        max: u32,
-    },
-    /// Jindo governed field-element width is outside its approved profile.
-    #[error("Jindo field-element width {bytes} is outside 1..={max}")]
-    InvalidJindoFieldElementSize {
-        /// Observed byte width.
-        bytes: u16,
-        /// Approved maximum.
-        max: u16,
-    },
-    /// A Jindo field-element encoding has the wrong governed width.
-    #[error("Jindo field-element encoding uses {bytes} bytes; expected {expected}")]
-    InvalidJindoFieldElementEncoding {
-        /// Observed byte width.
-        bytes: u32,
-        /// Exact governed byte width.
-        expected: u32,
-    },
-    /// A Jindo lattice commitment has an invalid governed width.
-    #[error(
-        "Jindo lattice commitment {index:?} uses {bytes} bytes; expected {expected}, profile maximum {max}"
-    )]
+    /// A Jindo lattice commitment has the wrong fixed-profile width.
+    #[error("Jindo lattice commitment {index} uses {bytes} bytes; expected exactly {expected}")]
     InvalidJindoLatticeCommitmentSize {
-        /// Commitment index, or `None` when the regime itself is invalid.
-        index: Option<u32>,
-        /// Observed or declared byte width.
+        /// Zero-based commitment index.
+        index: u32,
+        /// Observed byte width.
         bytes: u32,
-        /// Exact governed byte width.
+        /// Exact fixed-profile byte width.
         expected: u32,
-        /// Approved maximum.
-        max: u32,
     },
     /// A Jindo lattice commitment is the all-zero sentinel.
     #[error("Jindo lattice commitment {index} must not be all zero")]
@@ -7279,9 +7152,20 @@ pub enum PrivacyStatementValidationError {
     /// Two Jindo lattice commitments are identical.
     #[error("Jindo polynomial commitments must be distinct")]
     DuplicateJindoLatticeCommitment,
-    /// Two Jindo openings use the same evaluation point.
-    #[error("Jindo evaluation points must be distinct")]
-    DuplicateJindoEvaluationPoint,
+    /// A rounded public Jindo commitment coefficient is outside the fixed bound.
+    #[error(
+        "Jindo commitment {commitment_index} coefficient {coefficient_index} is {value}; absolute value exceeds {max}"
+    )]
+    JindoCommitmentCoefficientOutOfRange {
+        /// Zero-based commitment index.
+        commitment_index: u32,
+        /// Zero-based coefficient index in row-major order.
+        coefficient_index: u32,
+        /// Decoded signed little-endian coefficient.
+        value: i32,
+        /// Fixed absolute-value bound.
+        max: i64,
+    },
     /// Bootle/Lantern disclosed attribute count exceeds its fixed profile.
     #[error("Bootle/Lantern disclosed attribute count {count} exceeds {max}")]
     TooManyBootleLanternDisclosures {
@@ -7858,11 +7742,15 @@ mod tests {
     }
 
     fn jindo_field(seed: u8) -> PrivacyJindoFieldElementV1 {
-        PrivacyJindoFieldElementV1::new(vec![seed; 2])
+        let mut encoding = [0; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1];
+        encoding[0] = seed;
+        PrivacyJindoFieldElementV1::new(encoding)
     }
 
     fn jindo_commitment(seed: u8) -> PrivacyJindoLatticeCommitmentV1 {
-        PrivacyJindoLatticeCommitmentV1::new(vec![seed; 4])
+        let mut encoding = vec![0; IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
+        encoding[..4].copy_from_slice(&i32::from(seed).to_le_bytes());
+        PrivacyJindoLatticeCommitmentV1::new(encoding)
     }
 
     fn encrypted_output(commitment_seed: u8, recipient_seed: u8) -> PrivacyEncryptedOutputV1 {
@@ -7872,6 +7760,52 @@ mod tests {
             commitment: commitment(commitment_seed),
             ciphertext: vec![recipient_seed, commitment_seed, 0xA5],
         }
+    }
+
+    fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
+        let entries = (0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
+            * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1)
+            .map(|entry| BootleLanternPolynomialV1 {
+                coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                    .map(|coefficient| {
+                        u16::try_from((entry * 67 + coefficient + 1) % 12_288)
+                            .expect("test residue fits u16")
+                    })
+                    .collect(),
+            })
+            .collect();
+        let allowed_values = (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
+            .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                values: if index == 1 {
+                    vec![
+                        BootleLanternAttributeValueV1::new([1; 8]),
+                        BootleLanternAttributeValueV1::new([2; 8]),
+                    ]
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect();
+        let mut record = BootleLanternIssuerPolicyV1 {
+            issuer_id: PrivacyIssuerIdV1::new(raw(171)),
+            policy_id: PrivacyPolicyIdV1::new(raw(172)),
+            epoch: 1,
+            issuer_parameter_id: PrivacyParameterIdV1::new(raw(173)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(174)),
+            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
+            required_disclosure_bitmap: 0b0001_0010,
+            allowed_values,
+            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+        };
+        redigest_bootle_lantern_policy(&mut record);
+        record
+    }
+
+    fn redigest_bootle_lantern_policy(record: &mut BootleLanternIssuerPolicyV1) {
+        record.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        record.record_digest = record
+            .computed_record_digest()
+            .expect("test issuer-policy digest");
     }
 
     fn sample_statements() -> Vec<PrivacyStatementV1> {
@@ -7980,23 +7914,9 @@ mod tests {
             PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
                 IrohaJindoPolynomialCommitmentStatementV1 {
                     context: context(),
-                    regime: PrivacyJindoParameterRegimeV1 {
-                        multilinear_variable_count: 2,
-                        field_element_bytes: 2,
-                        lattice_commitment_bytes: 4,
-                        evaluation_hiding: true,
-                    },
                     polynomial_commitments: vec![jindo_commitment(70), jindo_commitment(71)],
-                    evaluation_queries: vec![
-                        PrivacyJindoEvaluationQueryV1 {
-                            evaluation_point: vec![jindo_field(1), jindo_field(2)],
-                            claimed_evaluations: vec![jindo_field(4), jindo_field(5)],
-                        },
-                        PrivacyJindoEvaluationQueryV1 {
-                            evaluation_point: vec![jindo_field(6), jindo_field(7)],
-                            claimed_evaluations: vec![jindo_field(8), jindo_field(9)],
-                        },
-                    ],
+                    evaluation_point: jindo_field(1),
+                    claimed_evaluations: vec![jindo_field(4), jindo_field(5)],
                 },
             ),
             PrivacyStatementV1::IrohaBootleLanternAnoncredV1(
@@ -8262,8 +8182,6 @@ mod tests {
                 PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                     JindoActivationLimitsV1 {
                         max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
-                        max_evaluation_query_count: IROHA_JINDO_MAX_EVALUATION_QUERIES_V1,
-                        max_multilinear_variable_count: IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1,
                     },
                 )
             }
@@ -8913,6 +8831,8 @@ mod tests {
         check_type!(PrivacyStatementSchemaDigestV1, 4);
         check_type!(PrivacyEngineManifestDigestV1, 5);
         check_type!(PrivacyStatementDigestV1, 6);
+        check_type!(PrivacyTransactionIntentDigestV1, 17);
+        check_type!(PrivacyBootleLanternIssuerPolicyDigestV1, 18);
         check_type!(PrivacyNullifierV1, 7);
         check_type!(PrivacyCommitmentV1, 8);
         check_type!(PrivacyPoolIdV1, 9);
@@ -8954,6 +8874,38 @@ mod tests {
             let decoded: PrivacyProofEnvelopeV1 =
                 norito::decode_from_bytes(&bytes).expect("decode envelope");
             assert_eq!(decoded, envelope);
+        }
+    }
+
+    #[test]
+    fn normalization_accessors_cover_every_statement_and_nested_proof_variant() {
+        for mut statement in sample_statements() {
+            let replacement = PrivacyTransactionIntentDigestV1::new(raw(231));
+            statement.context_mut().transaction_intent_digest = replacement;
+            assert_eq!(statement.context().transaction_intent_digest, replacement);
+        }
+
+        let mut batch =
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::TransparentStarkBatchAdmission(
+                PrivacyProofBytesV1::new(vec![1, 2, 3]),
+            ));
+        batch.bytes_mut().bytes.clear();
+        assert!(batch.bytes().as_bytes().is_empty());
+
+        let mut provisioning =
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255MlsagsProvisionAccount(
+                PrivacyProofBytesV1::new(vec![4, 5, 6]),
+            ));
+        provisioning.bytes_mut().bytes.clear();
+        assert!(provisioning.bytes().as_bytes().is_empty());
+
+        for mut proof in sample_statements()
+            .into_iter()
+            .map(envelope)
+            .map(|envelope| envelope.proof)
+        {
+            proof.bytes_mut().bytes.clear();
+            assert!(proof.bytes().as_bytes().is_empty());
         }
     }
 
@@ -9065,6 +9017,13 @@ mod tests {
                 max_actions: 1
             })
         ));
+
+        value = context();
+        value.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+        assert_eq!(
+            value.validate(&limits),
+            Err(PrivacyStatementValidationError::ZeroTransactionIntentDigest)
+        );
     }
 
     #[test]
@@ -9803,8 +9762,6 @@ mod tests {
             PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1 + 1,
-                    max_evaluation_query_count: IROHA_JINDO_MAX_EVALUATION_QUERIES_V1,
-                    max_multilinear_variable_count: IROHA_JINDO_MAX_MULTILINEAR_VARIABLES_V1,
                 },
             ),
             PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
@@ -9942,106 +9899,8 @@ mod tests {
     }
 
     #[test]
-    fn jindo_multilinear_profile_rejects_malformed_shapes_and_encodings() {
+    fn jindo_univariate_profile_rejects_noncanonical_and_out_of_bound_values() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
-        let mut value = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0);
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
-            unreachable!()
-        };
-        statement.evaluation_queries[0].evaluation_point[0] =
-            PrivacyJindoFieldElementV1::new(vec![0; 2]);
-        statement.evaluation_queries[0].claimed_evaluations[0] =
-            PrivacyJindoFieldElementV1::new(vec![0; 2]);
-        value
-            .validate(&limits)
-            .expect("zero is a valid governed field element");
-
-        let mut duplicate = value.clone();
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut duplicate else {
-            unreachable!()
-        };
-        statement.evaluation_queries[1].evaluation_point =
-            statement.evaluation_queries[0].evaluation_point.clone();
-        assert!(matches!(
-            duplicate.validate(&limits),
-            Err(PrivacyStatementValidationError::DuplicateJindoEvaluationPoint)
-        ));
-
-        let mut bad_matrix = value.clone();
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut bad_matrix
-        else {
-            unreachable!()
-        };
-        statement.evaluation_queries[0].claimed_evaluations.pop();
-        assert!(matches!(
-            bad_matrix.validate(&limits),
-            Err(PrivacyStatementValidationError::DeclaredCountMismatch {
-                field: PrivacyCountFieldV1::JindoClaimedEvaluations,
-                ..
-            })
-        ));
-
-        let mut bad_point = value.clone();
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut bad_point else {
-            unreachable!()
-        };
-        statement.evaluation_queries[0].evaluation_point.pop();
-        assert!(matches!(
-            bad_point.validate(&limits),
-            Err(PrivacyStatementValidationError::DeclaredCountMismatch {
-                field: PrivacyCountFieldV1::JindoEvaluationPointCoordinates,
-                ..
-            })
-        ));
-
-        let mut bad_field_width = value.clone();
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut bad_field_width
-        else {
-            unreachable!()
-        };
-        statement.evaluation_queries[0].evaluation_point[0]
-            .encoding
-            .push(1);
-        assert!(matches!(
-            bad_field_width.validate(&limits),
-            Err(
-                PrivacyStatementValidationError::InvalidJindoFieldElementEncoding {
-                    bytes: 3,
-                    expected: 2
-                }
-            )
-        ));
-
-        let mut zero_commitment = value.clone();
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut zero_commitment
-        else {
-            unreachable!()
-        };
-        statement.polynomial_commitments[0].encoding.fill(0);
-        assert!(matches!(
-            zero_commitment.validate(&limits),
-            Err(PrivacyStatementValidationError::AllZeroJindoLatticeCommitment { index: 0 })
-        ));
-
-        let mut wrong_commitment_width = value;
-        let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
-            &mut wrong_commitment_width
-        else {
-            unreachable!()
-        };
-        statement.polynomial_commitments[0].encoding.push(1);
-        assert!(matches!(
-            wrong_commitment_width.validate(&limits),
-            Err(
-                PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
-                    index: Some(0),
-                    bytes: 5,
-                    expected: 4,
-                    ..
-                }
-            )
-        ));
-
         let base = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0);
         let mutate = |f: fn(&mut IrohaJindoPolynomialCommitmentStatementV1)| {
             let mut value = base.clone();
@@ -10051,32 +9910,84 @@ mod tests {
             f(statement);
             value.validate(&limits)
         };
+
+        mutate(|statement| {
+            statement.evaluation_point = PrivacyJindoFieldElementV1::new([0; 32]);
+            statement.claimed_evaluations[0] = PrivacyJindoFieldElementV1::new([0; 32]);
+        })
+        .expect("zero is a canonical Jindo field element");
+
+        mutate(|statement| {
+            let mut value = IROHA_JINDO_FIELD_MODULUS_LE_V1;
+            value[0] -= 1;
+            statement.evaluation_point = PrivacyJindoFieldElementV1::new(value);
+        })
+        .expect("p - 1 is the largest canonical Jindo field element");
+
         assert!(matches!(
-            mutate(|statement| statement.regime.multilinear_variable_count = 0),
-            Err(
-                PrivacyStatementValidationError::InvalidJindoMultilinearVariableCount {
-                    count: 0,
-                    ..
-                }
-            )
+            mutate(|statement| {
+                statement.evaluation_point =
+                    PrivacyJindoFieldElementV1::new(IROHA_JINDO_FIELD_MODULUS_LE_V1);
+            }),
+            Err(PrivacyStatementValidationError::NonCanonicalJindoEvaluationPoint)
         ));
         assert!(matches!(
-            mutate(|statement| statement.regime.field_element_bytes = 0),
-            Err(PrivacyStatementValidationError::InvalidJindoFieldElementSize { bytes: 0, .. })
+            mutate(|statement| {
+                let mut modulus_plus_one = IROHA_JINDO_FIELD_MODULUS_LE_V1;
+                modulus_plus_one[0] += 1;
+                statement.claimed_evaluations[1] =
+                    PrivacyJindoFieldElementV1::new(modulus_plus_one);
+            }),
+            Err(PrivacyStatementValidationError::NonCanonicalJindoClaimedEvaluation { index: 1 })
+        ));
+
+        assert!(matches!(
+            mutate(|statement| statement.claimed_evaluations.pop()),
+            Err(PrivacyStatementValidationError::DeclaredCountMismatch {
+                field: PrivacyCountFieldV1::JindoClaimedEvaluations,
+                declared: 2,
+                actual: 1
+            })
         ));
         assert!(matches!(
-            mutate(|statement| statement.regime.lattice_commitment_bytes = 0),
+            mutate(|statement| statement.polynomial_commitments.clear()),
+            Err(PrivacyStatementValidationError::InvalidBatchSize { count: 0, max: 4 })
+        ));
+        assert!(matches!(
+            mutate(|statement| {
+                statement.polynomial_commitments = (1..=5).map(jindo_commitment).collect();
+                statement.claimed_evaluations = (1..=5).map(jindo_field).collect();
+            }),
+            Err(PrivacyStatementValidationError::InvalidBatchSize { count: 5, max: 4 })
+        ));
+
+        assert!(matches!(
+            mutate(|statement| {
+                statement.polynomial_commitments[0].encoding.pop();
+            }),
             Err(
                 PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
-                    index: None,
-                    bytes: 0,
-                    ..
+                    index: 0,
+                    bytes,
+                    expected
                 }
-            )
+            ) if bytes == u32::try_from(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1 - 1).unwrap()
+                && expected == u32::try_from(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1).unwrap()
         ));
         assert!(matches!(
-            mutate(|statement| statement.evaluation_queries.clear()),
-            Err(PrivacyStatementValidationError::InvalidJindoEvaluationQueryCount { count: 0, .. })
+            mutate(|statement| statement.polynomial_commitments[0].encoding.push(0)),
+            Err(
+                PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
+                    index: 0,
+                    bytes,
+                    expected
+                }
+            ) if bytes == u32::try_from(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1 + 1).unwrap()
+                && expected == u32::try_from(IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1).unwrap()
+        ));
+        assert!(matches!(
+            mutate(|statement| statement.polynomial_commitments[0].encoding.fill(0)),
+            Err(PrivacyStatementValidationError::AllZeroJindoLatticeCommitment { index: 0 })
         ));
         assert!(matches!(
             mutate(|statement| {
@@ -10085,11 +9996,53 @@ mod tests {
             Err(PrivacyStatementValidationError::DuplicateJindoLatticeCommitment)
         ));
 
+        for boundary in [
+            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+            -IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+        ] {
+            let mut value = base.clone();
+            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
+                unreachable!()
+            };
+            statement.polynomial_commitments[0].encoding[..4].copy_from_slice(
+                &i32::try_from(boundary)
+                    .expect("Jindo rounded-coefficient bound fits i32")
+                    .to_le_bytes(),
+            );
+            value
+                .validate(&limits)
+                .expect("inclusive Jindo rounded-coefficient boundary");
+        }
+
+        for outside in [
+            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 + 1,
+            -IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 - 1,
+        ] {
+            let mut value = base.clone();
+            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
+                unreachable!()
+            };
+            statement.polynomial_commitments[0].encoding[..4].copy_from_slice(
+                &i32::try_from(outside)
+                    .expect("adversarial Jindo coefficient fits i32")
+                    .to_le_bytes(),
+            );
+            assert!(matches!(
+                value.validate(&limits),
+                Err(
+                    PrivacyStatementValidationError::JindoCommitmentCoefficientOutOfRange {
+                        commitment_index: 0,
+                        coefficient_index: 0,
+                        value: observed,
+                        max: IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1
+                    }
+                ) if i64::from(observed) == outside
+            ));
+        }
+
         let governed = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
             JindoActivationLimitsV1 {
                 max_polynomial_count: 1,
-                max_evaluation_query_count: 1,
-                max_multilinear_variable_count: 1,
             },
         );
         assert!(matches!(
@@ -10353,6 +10306,168 @@ mod tests {
         all_boundaries
             .validate(&limits)
             .expect("all eight direct zero/maximum values are canonical");
+    }
+
+    #[test]
+    fn bootle_lantern_issuer_policy_is_canonical_bounded_and_rotates_monotonically() {
+        let record = bootle_lantern_policy();
+        record.validate_initial().expect("canonical initial record");
+        assert_eq!(
+            record
+                .computed_record_digest()
+                .expect("canonical record digest"),
+            record.record_digest
+        );
+        let encoded = norito::to_bytes(&record).expect("encode policy");
+        let decoded: BootleLanternIssuerPolicyV1 =
+            norito::decode_from_bytes(&encoded).expect("decode policy");
+        assert_eq!(decoded, record);
+
+        let mut invalid = record.clone();
+        invalid.issuer_public_matrix.entries.pop();
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::InvalidIssuerMatrixEntryCount {
+                    count: 63,
+                    expected: 64
+                }
+            )
+        ));
+        invalid = record.clone();
+        invalid.issuer_public_matrix.entries[0].coefficients.pop();
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::InvalidPolynomialCoefficientCount {
+                    polynomial: 0,
+                    count: 63,
+                    expected: 64
+                }
+            )
+        ));
+        invalid = record.clone();
+        invalid.issuer_public_matrix.entries[0].coefficients[0] =
+            BOOTLE_LANTERN_APPLICATION_MODULUS_V1;
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::NonCanonicalMatrixCoefficient {
+                    row: 0,
+                    column: 0,
+                    coefficient: 0,
+                    value: BOOTLE_LANTERN_APPLICATION_MODULUS_V1
+                }
+            )
+        ));
+        invalid = record.clone();
+        for polynomial in &mut invalid.issuer_public_matrix.entries {
+            polynomial.coefficients.fill(0);
+        }
+        assert_eq!(
+            invalid.validate(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix)
+        );
+        invalid = record.clone();
+        invalid.allowed_values.pop();
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::InvalidAllowedValueRuleCount {
+                    count: 7,
+                    expected: 8
+                }
+            )
+        ));
+        invalid = record.clone();
+        invalid.allowed_values[0]
+            .values
+            .push(BootleLanternAttributeValueV1::new([1; 8]));
+        assert_eq!(
+            invalid.validate(),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::AllowedValuesForOptionalAttribute {
+                    index: 0
+                }
+            )
+        );
+        invalid = record.clone();
+        invalid.allowed_values[1].values = vec![
+            BootleLanternAttributeValueV1::new([2; 8]),
+            BootleLanternAttributeValueV1::new([2; 8]),
+        ];
+        assert_eq!(
+            invalid.validate(),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::AllowedValuesNotStrictlyIncreasing {
+                    index: 1
+                }
+            )
+        );
+        invalid = record.clone();
+        invalid.allowed_values[1].values =
+            vec![
+                BootleLanternAttributeValueV1::new([3; 8]);
+                usize::try_from(BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1 + 1)
+                    .expect("test bound fits usize")
+            ];
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::TooManyAllowedValues {
+                    index: 1,
+                    count: 33,
+                    max: 32
+                }
+            )
+        ));
+        invalid = record.clone();
+        invalid.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        assert_eq!(
+            invalid.validate(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::ZeroRecordDigest)
+        );
+        invalid = record.clone();
+        invalid.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new(raw(199));
+        assert_eq!(
+            invalid.validate(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::RecordDigestMismatch)
+        );
+
+        let mut successor = record.clone();
+        successor.epoch = 2;
+        successor.required_disclosure_bitmap |= 1;
+        redigest_bootle_lantern_policy(&mut successor);
+        successor
+            .validate_successor(&record)
+            .expect("strict policy rotation");
+
+        let mut non_increasing = successor.clone();
+        non_increasing.epoch = record.epoch;
+        redigest_bootle_lantern_policy(&mut non_increasing);
+        assert!(matches!(
+            non_increasing.validate_successor(&record),
+            Err(
+                BootleLanternIssuerPolicyValidationErrorV1::NonIncreasingEpoch {
+                    previous: 1,
+                    next: 1
+                }
+            )
+        ));
+        let mut unchanged = record.clone();
+        unchanged.epoch = 2;
+        redigest_bootle_lantern_policy(&mut unchanged);
+        assert_eq!(
+            unchanged.validate_successor(&record),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::UnchangedRotation)
+        );
+        let mut wrong_initial_epoch = record;
+        wrong_initial_epoch.epoch = 2;
+        redigest_bootle_lantern_policy(&mut wrong_initial_epoch);
+        assert_eq!(
+            wrong_initial_epoch.validate_initial(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::InvalidInitialEpoch { epoch: 2 })
+        );
     }
 
     #[test]

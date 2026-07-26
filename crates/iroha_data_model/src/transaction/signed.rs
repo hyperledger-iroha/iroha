@@ -990,6 +990,9 @@ fn validate_exact_direct_privacy_submission_v1<'a>(
     scan: &PrivacyTransactionIntentScan<'a>,
 ) -> Result<&'a SubmitPrivacyProofV1, PrivacyTransactionIntentErrorV1> {
     if scan.direct_submission_count == 0 {
+        if let Some(path) = scan.unsupported_path {
+            return Err(PrivacyTransactionIntentErrorV1::UnsupportedPath { path });
+        }
         return Err(PrivacyTransactionIntentErrorV1::MissingSubmission);
     }
     if scan.direct_submission_count != 1 {
@@ -2329,15 +2332,15 @@ mod tests {
     use crate::{
         Domain, DomainId, Level,
         account::{MultisigMember, MultisigPolicy},
-        prelude::{Log, Register},
+        prelude::{Log, Register, TriggerId},
         privacy::{
+            IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
             IrohaJindoPolynomialCommitmentStatementV1, PrivacyEngineManifestDigestV1,
-            PrivacyJindoEvaluationQueryV1, PrivacyJindoFieldElementV1,
-            PrivacyJindoLatticeCommitmentV1, PrivacyJindoParameterRegimeV1,
-            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyProofBytesV1,
-            PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolIdV1,
-            PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1,
-            PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
+            PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1, PrivacyStatementV1,
+            PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
         },
         transaction::{
             ExecutableBatchItem,
@@ -2412,17 +2415,16 @@ mod tests {
                     engine_manifest_digest,
                     transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
                 },
-                regime: PrivacyJindoParameterRegimeV1 {
-                    multilinear_variable_count: 1,
-                    field_element_bytes: 2,
-                    lattice_commitment_bytes: 4,
-                    evaluation_hiding: true,
-                },
-                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(vec![6; 4])],
-                evaluation_queries: vec![PrivacyJindoEvaluationQueryV1 {
-                    evaluation_point: vec![PrivacyJindoFieldElementV1::new(vec![7; 2])],
-                    claimed_evaluations: vec![PrivacyJindoFieldElementV1::new(vec![8; 2])],
-                }],
+                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(vec![
+                    6;
+                    IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1
+                ])],
+                evaluation_point: PrivacyJindoFieldElementV1::new(
+                    [7; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
+                ),
+                claimed_evaluations: vec![PrivacyJindoFieldElementV1::new(
+                    [8; IROHA_JINDO_FIELD_ELEMENT_BYTES_V1],
+                )],
             },
         );
         SubmitPrivacyProofV1::new(PrivacyProofEnvelopeV1 {
@@ -2632,6 +2634,12 @@ mod tests {
                 path: PrivacyTransactionIntentUnsupportedPathV1::Ivm,
             }
         );
+        assert!(
+            raw_ivm
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect("an ordinary IVM transaction has no privacy binding")
+                .is_none()
+        );
 
         let contract =
             privacy_payload_with_executable(Executable::ContractCall(privacy_test_contract_call()));
@@ -2642,6 +2650,29 @@ mod tests {
             PrivacyTransactionIntentErrorV1::UnsupportedPath {
                 path: PrivacyTransactionIntentUnsupportedPathV1::ContractCall,
             }
+        );
+        assert!(
+            contract
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect("an ordinary contract transaction has no privacy binding")
+                .is_none()
+        );
+
+        let ordinary_proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![2]),
+            overlay: vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "ordinary proved overlay".into(),
+            ))]
+            .into(),
+            events_commitment: Hash::new(b"ordinary events"),
+            gas_policy_commitment: Hash::new(b"ordinary gas"),
+        }));
+        assert!(
+            ordinary_proved
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect("an ordinary proved transaction has no privacy binding")
+                .is_none()
         );
 
         let proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
@@ -2674,6 +2705,18 @@ mod tests {
                 path: PrivacyTransactionIntentUnsupportedPathV1::BatchContractCall,
             }
         );
+        let ordinary_contract_batch = privacy_payload_with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::ContractCall(
+                privacy_test_contract_call(),
+            )]
+            .into(),
+        ));
+        assert!(
+            ordinary_contract_batch
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect("an ordinary contract batch has no privacy binding")
+                .is_none()
+        );
 
         let custom = privacy_payload_with_executable(
             vec![
@@ -2689,6 +2732,18 @@ mod tests {
             PrivacyTransactionIntentErrorV1::UnsupportedPath {
                 path: PrivacyTransactionIntentUnsupportedPathV1::CustomInstruction,
             }
+        );
+        let ordinary_custom = privacy_payload_with_executable(
+            vec![InstructionBox::from(CustomInstruction::new(Json::new(
+                "ordinary executor",
+            )))]
+            .into(),
+        );
+        assert!(
+            ordinary_custom
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect("an ordinary custom instruction has no privacy binding")
+                .is_none()
         );
 
         let trigger = privacy_payload_with_executable(
@@ -2707,6 +2762,18 @@ mod tests {
             PrivacyTransactionIntentErrorV1::UnsupportedPath {
                 path: PrivacyTransactionIntentUnsupportedPathV1::ExecuteTrigger,
             }
+        );
+        let ordinary_trigger = privacy_payload_with_executable(
+            vec![InstructionBox::from(ExecuteTrigger::new(
+                TriggerId::from_str("ordinary_dynamic").expect("trigger id"),
+            ))]
+            .into(),
+        );
+        assert!(
+            ordinary_trigger
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect("an ordinary trigger instruction has no privacy binding")
+                .is_none()
         );
 
         let submission = draft_privacy_submission();
@@ -2767,6 +2834,20 @@ mod tests {
                 .expect_err("stored intent is independently checked"),
             PrivacyTransactionIntentErrorV1::IntentDigestMismatch { .. }
         ));
+        let mut zero_intent = payload.clone();
+        mutate_direct_privacy_submission(&mut zero_intent, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+        });
+        assert_eq!(
+            zero_intent
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("zero stored intent"),
+            PrivacyTransactionIntentErrorV1::ZeroIntentDigest
+        );
 
         let mut stale_statement = payload.clone();
         mutate_direct_privacy_submission(&mut stale_statement, |submission| {
@@ -2785,6 +2866,16 @@ mod tests {
                 .expect_err("stored statement digest is independently checked"),
             PrivacyTransactionIntentErrorV1::StatementDigestMismatch { .. }
         ));
+        let mut zero_statement = payload.clone();
+        mutate_direct_privacy_submission(&mut zero_statement, |submission| {
+            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+        });
+        assert_eq!(
+            zero_statement
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("zero stored statement digest"),
+            PrivacyTransactionIntentErrorV1::ZeroStatementDigest
+        );
 
         let draft = draft_privacy_payload();
         let first_legacy = legacy_proof_only_privacy_intent_digest(&draft);
@@ -2989,17 +3080,6 @@ mod tests {
             }
         );
         assert_submission_bound!(
-            "statement regime",
-            |submission: &mut SubmitPrivacyProofV1| {
-                let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
-                    &mut submission.envelope.statement
-                else {
-                    unreachable!()
-                };
-                statement.regime.evaluation_hiding = false;
-            }
-        );
-        assert_submission_bound!(
             "statement polynomial commitment",
             |submission: &mut SubmitPrivacyProofV1| {
                 let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) =
@@ -3018,7 +3098,7 @@ mod tests {
                 else {
                     unreachable!()
                 };
-                statement.evaluation_queries[0].evaluation_point[0].encoding[0] ^= 1;
+                statement.evaluation_point.encoding[0] ^= 1;
             }
         );
         assert_submission_bound!(
@@ -3029,7 +3109,7 @@ mod tests {
                 else {
                     unreachable!()
                 };
-                statement.evaluation_queries[0].claimed_evaluations[0].encoding[0] ^= 1;
+                statement.claimed_evaluations[0].encoding[0] ^= 1;
             }
         );
     }

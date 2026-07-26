@@ -56,10 +56,26 @@ impl JindoFieldElementV1 {
 
     /// Construct from a small unsigned integer.
     pub(crate) fn from_u64(value: u64) -> Self {
+        Self::from_u128(u128::from(value))
+    }
+
+    /// Construct from an unsigned integer known to be smaller than the field
+    /// modulus.
+    pub(crate) fn from_u128(value: u128) -> Self {
         Self(Self::montgomery_mul_limbs(
-            [value, 0, 0, 0],
+            [value as u64, (value >> 64) as u64, 0, 0],
             Self::MONTGOMERY_R2,
         ))
+    }
+
+    /// Construct from a signed integer whose magnitude is smaller than the
+    /// field modulus.
+    pub(crate) fn from_i128(value: i128) -> Self {
+        if value < 0 {
+            -Self::from_u128(value.unsigned_abs())
+        } else {
+            Self::from_u128(value as u128)
+        }
     }
 
     /// Decode one canonical 32-byte little-endian residue.
@@ -73,20 +89,22 @@ impl JindoFieldElementV1 {
         if !Self::less_than(limbs, Self::MODULUS) {
             return None;
         }
-        Some(Self(Self::montgomery_mul_limbs(
-            limbs,
-            Self::MONTGOMERY_R2,
-        )))
+        Some(Self(Self::montgomery_mul_limbs(limbs, Self::MONTGOMERY_R2)))
     }
 
     /// Encode as the unique 32-byte little-endian residue in `[0, p)`.
     pub(crate) fn to_canonical_bytes(self) -> [u8; 32] {
-        let limbs = Self::montgomery_mul_limbs(self.0, [1, 0, 0, 0]);
+        let limbs = self.to_canonical_limbs();
         let mut bytes = [0_u8; 32];
         for (chunk, limb) in bytes.chunks_exact_mut(8).zip(limbs) {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
         bytes
+    }
+
+    /// Return the canonical ordinary-residue limbs.
+    pub(crate) fn to_canonical_limbs(self) -> [u64; 4] {
+        Self::montgomery_mul_limbs(self.0, [1, 0, 0, 0])
     }
 
     /// Return true exactly for the additive identity.
@@ -125,9 +143,7 @@ impl JindoFieldElementV1 {
         let mut out = [0_u64; 4];
         let mut carry = 0_u64;
         for index in 0..4 {
-            let sum = u128::from(left[index])
-                + u128::from(right[index])
-                + u128::from(carry);
+            let sum = u128::from(left[index]) + u128::from(right[index]) + u128::from(carry);
             out[index] = sum as u64;
             carry = (sum >> 64) as u64;
         }
@@ -148,8 +164,7 @@ impl JindoFieldElementV1 {
 
     fn reduce_once(value: [u64; 4], high: u64) -> [u64; 4] {
         if high != 0 || !Self::less_than(value, Self::MODULUS) {
-            let (reduced, borrow) = Self::sub_limbs(value, Self::MODULUS);
-            debug_assert_eq!(borrow, u64::from(high == 0));
+            let (reduced, _) = Self::sub_limbs(value, Self::MODULUS);
             reduced
         } else {
             value
@@ -175,8 +190,7 @@ impl JindoFieldElementV1 {
             let mut carry = 0_u64;
             for right_index in 0..4 {
                 let index = left_index + right_index;
-                let accumulation = u128::from(left[left_index])
-                    * u128::from(right[right_index])
+                let accumulation = u128::from(left[left_index]) * u128::from(right[right_index])
                     + u128::from(product[index])
                     + u128::from(carry);
                 product[index] = accumulation as u64;
@@ -201,10 +215,7 @@ impl JindoFieldElementV1 {
             debug_assert_eq!(product[offset], 0);
         }
 
-        Self::reduce_once(
-            [product[4], product[5], product[6], product[7]],
-            product[8],
-        )
+        Self::reduce_once([product[4], product[5], product[6], product[7]], product[8])
     }
 }
 
@@ -289,12 +300,8 @@ mod tests {
         );
         let mut larger = JindoFieldElementV1::MODULUS;
         larger[0] = larger[0].wrapping_add(1);
-        assert!(
-            JindoFieldElementV1::from_canonical_bytes(canonical_from_limbs(larger)).is_none()
-        );
-        assert!(
-            JindoFieldElementV1::from_canonical_bytes(canonical_from_limbs([0; 4])).is_some()
-        );
+        assert!(JindoFieldElementV1::from_canonical_bytes(canonical_from_limbs(larger)).is_none());
+        assert!(JindoFieldElementV1::from_canonical_bytes(canonical_from_limbs([0; 4])).is_some());
     }
 
     #[test]
@@ -366,6 +373,45 @@ mod tests {
                 "{left} * {right}"
             );
         }
+    }
+
+    #[test]
+    fn full_width_known_answer_vectors_match_independent_integer_arithmetic() {
+        let left_bytes = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0x88, 0x77, 0x77, 0x66, 0x66,
+            0x55, 0x55, 0x44, 0x44, 0x33, 0x33, 0x22, 0x22, 0x11, 0x11, 0xf0, 0xde, 0xbc, 0x9a,
+            0x78, 0x56, 0x34, 0x12,
+        ];
+        let right_bytes = [
+            0xbe, 0xba, 0xfe, 0xca, 0xef, 0xbe, 0xad, 0xde, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03,
+            0x02, 0x01, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22,
+            0x22, 0x22, 0x22, 0x22,
+        ];
+        let square_bytes = [
+            0x4c, 0x20, 0xb8, 0x7d, 0xc0, 0x49, 0x3c, 0x6e, 0x0e, 0xa1, 0xec, 0x4e, 0x1f, 0x1d,
+            0x6c, 0xcc, 0xee, 0x42, 0xfd, 0xa3, 0x96, 0x6d, 0x4e, 0x46, 0xed, 0xdc, 0xdb, 0xe6,
+            0xf7, 0x09, 0x87, 0x13,
+        ];
+        let product_bytes = [
+            0x17, 0x1a, 0x7e, 0x50, 0x2d, 0x7d, 0x88, 0x3d, 0x92, 0x78, 0xd7, 0x15, 0x51, 0x00,
+            0x03, 0x2a, 0xa4, 0xf2, 0xd5, 0xe0, 0xae, 0x6d, 0x74, 0x7a, 0xc5, 0xd1, 0xc8, 0xd1,
+            0xc1, 0xa6, 0xcd, 0x3c,
+        ];
+        let inverse_bytes = [
+            0x86, 0x0e, 0xd9, 0x7a, 0xcb, 0xdd, 0x0f, 0x79, 0xa0, 0xf9, 0xda, 0x90, 0x5b, 0xac,
+            0xbb, 0xd1, 0x63, 0x2e, 0x88, 0xbd, 0x59, 0xd4, 0x77, 0x49, 0xec, 0x72, 0x4f, 0x95,
+            0x4e, 0xf2, 0x33, 0x40,
+        ];
+
+        let left = JindoFieldElementV1::from_canonical_bytes(left_bytes).expect("canonical left");
+        let right =
+            JindoFieldElementV1::from_canonical_bytes(right_bytes).expect("canonical right");
+        assert_eq!((left * left).to_canonical_bytes(), square_bytes);
+        assert_eq!((left * right).to_canonical_bytes(), product_bytes);
+        assert_eq!(
+            left.invert().expect("nonzero inverse").to_canonical_bytes(),
+            inverse_bytes
+        );
     }
 
     #[test]

@@ -850,6 +850,12 @@ export function canonicalizeDomainLabel(domain) {
     );
   }
   const trimmed = domain.trim();
+  if (trimmed !== domain) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain label must not contain surrounding whitespace",
+    );
+  }
   if (trimmed.length === 0) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
@@ -878,6 +884,32 @@ export function canonicalizeDomainLabel(domain) {
       "domain label normalization failed",
       { cause: error },
     );
+  }
+  if (/[\u1E00-\u1EFF]/u.test(normalized)) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain label contains an extended Latin character rejected by the Rust policy",
+    );
+  }
+  for (const character of normalized) {
+    const code = character.charCodeAt(0);
+    const isAsciiDigit = code >= 0x30 && code <= 0x39;
+    const isAsciiUpper = code >= 0x41 && code <= 0x5a;
+    const isAsciiLower = code >= 0x61 && code <= 0x7a;
+    if (
+      code <= 0x7f &&
+      !isAsciiDigit &&
+      !isAsciiUpper &&
+      !isAsciiLower &&
+      character !== "." &&
+      character !== "_" &&
+      character !== "-"
+    ) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        "domain label contains ASCII delimiters rejected by the Rust policy",
+      );
+    }
   }
 
   let ascii;
@@ -921,17 +953,12 @@ export function canonicalizeDomainLabel(domain) {
       "domain label must not contain a double hyphen in the third and fourth position",
     );
   }
-  if (canonical.includes("_")) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-      "domain label must not include underscores (STD3 restriction)",
-    );
-  }
   for (let index = 0; index < canonical.length; index += 1) {
     const code = canonical.charCodeAt(index);
     const isDigit = code >= 0x30 && code <= 0x39;
     const isLower = code >= 0x61 && code <= 0x7a;
-    const isAllowed = isDigit || isLower || canonical[index] === "-";
+    const isAllowed =
+      isDigit || isLower || canonical[index] === "-" || canonical[index] === "_";
     if (!isAllowed) {
       throw new AccountAddressError(
         AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
@@ -950,6 +977,12 @@ function canonicalizeDomainName(domain) {
     );
   }
   const trimmed = domain.trim();
+  if (trimmed !== domain) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain label must not contain surrounding whitespace",
+    );
+  }
   if (trimmed.length === 0) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_DOMAIN_LABEL,

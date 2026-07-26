@@ -27022,15 +27022,9 @@ fn privacy_capability_schemas(schemas: &mut Map) {
             norito::json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": [
-                    "max_polynomial_count",
-                    "max_evaluation_query_count",
-                    "max_multilinear_variable_count"
-                ],
+                "required": ["max_polynomial_count"],
                 "properties": {
-                    "max_polynomial_count": { "type": "integer", "format": "uint32", "minimum": 1 },
-                    "max_evaluation_query_count": { "type": "integer", "format": "uint32", "minimum": 1 },
-                    "max_multilinear_variable_count": { "type": "integer", "format": "uint32", "minimum": 1 }
+                    "max_polynomial_count": { "type": "integer", "format": "uint32", "minimum": 1 }
                 }
             }),
         ),

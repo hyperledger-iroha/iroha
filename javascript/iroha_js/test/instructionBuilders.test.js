@@ -414,6 +414,27 @@ function withPureJsInstructionCodec(body) {
   }
 }
 
+function assertNativeAndPureInstructionParity(instruction, context) {
+  const pureEncoded = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+  );
+  const nativeEncoded = Buffer.from(
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(instruction)),
+  );
+  assert.deepEqual(pureEncoded, nativeEncoded, `${context} bytes`);
+  assert.deepEqual(
+    JSON.parse(nativeBinding.noritoDecodeInstruction(pureEncoded)),
+    instruction,
+    `${context} native decode`,
+  );
+  assert.deepEqual(
+    withPureJsInstructionCodec(() => noritoDecodeInstruction(nativeEncoded)),
+    instruction,
+    `${context} pure decode`,
+  );
+  return pureEncoded;
+}
+
 function crc16(tag, body) {
   let crc = 0xffff;
   const processByte = (byte) => {
@@ -610,6 +631,25 @@ baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape"
         `pure JS codec accepted ${expected_remaining_amount}`,
       );
     }
+    for (const escrow_id of [
+      CANCEL_ASSET_LOCK_ESCROW_ID.slice(5, 69),
+      CANCEL_ASSET_LOCK_ESCROW_ID.replace(
+        /^hash:([0-9A-F]+)#/u,
+        (_, body) => `hash:${body.toLowerCase()}#`,
+      ),
+      CANCEL_ASSET_LOCK_ESCROW_ID.toLowerCase(),
+    ]) {
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            CancelAssetLock: {
+              ...instruction.CancelAssetLock,
+              escrow_id,
+            },
+          }),
+        /canonical uppercase hash/u,
+      );
+    }
   });
 });
 
@@ -665,6 +705,23 @@ test("native and pure JS codecs byte-match and cross-decode CancelAssetLock V1",
       ),
     /must be positive/,
   );
+  for (const escrowId of [
+    instruction.CancelAssetLock.escrow_id.slice(5, 69),
+    instruction.CancelAssetLock.escrow_id.toLowerCase(),
+  ]) {
+    assert.throws(
+      () =>
+        nativeBinding.noritoEncodeInstruction(
+          JSON.stringify({
+            CancelAssetLock: {
+              ...instruction.CancelAssetLock,
+              escrow_id: escrowId,
+            },
+          }),
+        ),
+      /canonical|hash:|uppercase|checksum/u,
+    );
+  }
 });
 
 test("buildMintAssetInstruction produces canonical Norito payload", () => {
@@ -913,6 +970,43 @@ test("buildTransferNftInstruction covers nft transfer", () => {
   });
 });
 
+test("nominal DomainId pure-JS frames byte-match native V1", () => {
+  const instructions = [
+    [
+      "Register.Domain",
+      {
+        Register: {
+          Domain: {
+            id: DOMAIN_ID,
+            logo: null,
+            metadata: { purpose: "parity" },
+          },
+        },
+      },
+    ],
+    [
+      "Transfer.Domain",
+      buildTransferDomainInstruction({
+        sourceAccountId: ACCOUNT_ID,
+        domainId: DOMAIN_ID,
+        destinationAccountId: ACCOUNT_ID,
+      }),
+    ],
+    [
+      "Transfer.Nft",
+      buildTransferNftInstruction({
+        sourceAccountId: ACCOUNT_ID,
+        nftId: NFT_ID,
+        destinationAccountId: ACCOUNT_ID,
+      }),
+    ],
+  ];
+  for (const [name, instruction] of instructions) {
+    const encoded = assertNativeAndPureInstructionParity(instruction, name);
+    assert.equal(encoded[39], 0x02, `${name} must use compact Norito framing`);
+  }
+});
+
 test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
   const instruction = buildRegisterRwaInstruction({
     rwa: {
@@ -1010,6 +1104,27 @@ test("rwa scalar instruction builders cover lifecycle operations", () => {
   assert.deepEqual(encodeAndDecode(freeze), {
     FreezeRwa: { rwa: RWA_ID },
   });
+  const freezeBytes = assertNativeAndPureInstructionParity(freeze, "FreezeRwa");
+  assert.equal(freezeBytes[39], 0x02, "FreezeRwa must use compact Norito framing");
+  const evenHashRwaId = RWA_ID.replace(/ef\$/u, "ee$");
+  assert.throws(
+    () =>
+      withPureJsInstructionCodec(() =>
+        noritoEncodeInstruction({
+          FreezeRwa: { rwa: evenHashRwaId },
+        }),
+      ),
+    /marker bit/u,
+  );
+  assert.throws(
+    () =>
+      nativeBinding.noritoEncodeInstruction(
+        JSON.stringify({
+          FreezeRwa: { rwa: evenHashRwaId },
+        }),
+      ),
+    /hash|parse|marker/u,
+  );
   assert.deepEqual(encodeAndDecode(unfreeze), {
     UnfreezeRwa: { rwa: RWA_ID },
   });
@@ -2165,7 +2280,7 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
     assert.equal(innerFrame.length, innerFrameLength);
     const validatedInner = validateNoritoFrame(innerFrame, {
       expectedTypeName: "iroha_data_model::isi::governance::CastPlainBallot",
-      expectedPaddingLength: 8,
+      expectedPaddingLength: 0,
     });
     const expectedSchemaHash = createHash("sha256")
       .update(
@@ -2205,6 +2320,23 @@ baseTest("CastPlainBallot pure-JS Norito codec preserves strict fractional Quant
       );
     }
   });
+});
+
+test("CastPlainBallot pure-JS bytes match native compact framing", () => {
+  const instruction = {
+    CastPlainBallot: {
+      referendum_id: "ref-quantity",
+      owner: ACCOUNT_ID_CANONICAL,
+      amount: "18446744073709551616.25",
+      duration_blocks: 50,
+      direction: 1,
+    },
+  };
+  const encoded = assertNativeAndPureInstructionParity(
+    instruction,
+    "CastPlainBallot",
+  );
+  assert.equal(encoded[39], 0x02);
 });
 
 test("buildEnactReferendumInstruction normalizes hashes and window defaults", () => {

@@ -11,9 +11,22 @@
 //! ring parameters, proof wire, prover, verifier, and adversarial vectors in
 //! this module are all complete.
 
+#[path = "jindo/crs.rs"]
+mod crs;
+#[path = "jindo/encoding.rs"]
+mod encoding;
+#[path = "jindo/field.rs"]
 mod field;
+#[path = "jindo/parameters.rs"]
+mod parameters;
+#[path = "jindo/ring.rs"]
+mod ring;
+#[path = "jindo/sampling.rs"]
+mod sampling;
 
 pub(crate) use field::JindoFieldElementV1;
+pub(crate) use parameters::JINDO_PARAMETERS_V1;
+pub(crate) use ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoRnsPolynomialV1};
 
 /// Exact coefficient-field byte width in the first native Jindo profile.
 pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;
@@ -28,13 +41,10 @@ pub const JINDO_ENCODING_EXPONENT_V1: usize = 16;
 pub const JINDO_RING_DEGREE_V1: usize = 256;
 
 /// Number of coefficient-field slots encoded in one application-ring element.
-pub const JINDO_ENCODING_SLOTS_V1: usize =
-    JINDO_RING_DEGREE_V1 / JINDO_ENCODING_EXPONENT_V1;
+pub const JINDO_ENCODING_SLOTS_V1: usize = JINDO_RING_DEGREE_V1 / JINDO_ENCODING_EXPONENT_V1;
 
 /// Maximum polynomial coefficient count in the fixed testnet profile.
 pub const JINDO_MAX_COEFFICIENTS_V1: usize = 256;
-
-const _: () = assert!(JINDO_ENCODING_BASE_V1.pow(JINDO_ENCODING_EXPONENT_V1 as u32) == 0);
 
 #[cfg(test)]
 mod tests {

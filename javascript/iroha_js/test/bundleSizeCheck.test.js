@@ -286,7 +286,7 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 58);
-  assert.equal(result.outputFiles[0].contents.byteLength, 469_731);
+  assert.equal(result.outputFiles[0].contents.byteLength, 472_409);
   assert.ok(
     result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
     "public browser aggregate regressed more than 5% from the protected pre-reset tree",
@@ -335,9 +335,9 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
     ["canonicalRequest.js (browser)", 97_869],
   ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 969_273, modules: 60 }],
-    ["transactionCodec.js (browser)", { bytes: 297_440, modules: 46 }],
-    ["nexusApp.js (browser)", { bytes: 380_659, modules: 55 }],
+    ["toriiClient.js", { bytes: 971_954, modules: 60 }],
+    ["transactionCodec.js (browser)", { bytes: 300_116, modules: 46 }],
+    ["nexusApp.js (browser)", { bytes: 383_333, modules: 55 }],
     ["canonicalRequest.js (browser)", { bytes: 98_123, modules: 34 }],
   ]);
   const { build } = await import("esbuild");

@@ -281,11 +281,10 @@ mod tests {
     use crate::{
         ChainId,
         privacy::{
-            IrohaJindoPolynomialCommitmentStatementV1, JindoActivationLimitsV1,
-            PrivacyActiveLifecycleV1, PrivacyAssuranceV1, PrivacyConsensusLimitsV1,
-            PrivacyEngineManifestDigestV1, PrivacyJindoEvaluationQueryV1,
-            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1,
-            PrivacyJindoParameterRegimeV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+            IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IrohaJindoPolynomialCommitmentStatementV1,
+            JindoActivationLimitsV1, PrivacyActiveLifecycleV1, PrivacyAssuranceV1,
+            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyJindoFieldElementV1,
+            PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
             PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
             PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
             PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofV1,
@@ -317,8 +316,6 @@ mod tests {
             protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: 4,
-                    max_evaluation_query_count: 8,
-                    max_multilinear_variable_count: 32,
                 },
             ),
             pending_protocol_limits_tightening: None,
@@ -338,20 +335,18 @@ mod tests {
             statement_schema_digest: activation.statement_schema_digest,
             engine_manifest_digest: activation.engine_manifest_digest,
         };
+        let mut commitment = vec![0; IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1];
+        commitment[..4].copy_from_slice(&6_i32.to_le_bytes());
+        let mut evaluation_point = [0; 32];
+        evaluation_point[0] = 7;
+        let mut claimed_evaluation = [0; 32];
+        claimed_evaluation[0] = 8;
         let statement = PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(
             IrohaJindoPolynomialCommitmentStatementV1 {
                 context,
-                regime: PrivacyJindoParameterRegimeV1 {
-                    multilinear_variable_count: 1,
-                    field_element_bytes: 2,
-                    lattice_commitment_bytes: 4,
-                    evaluation_hiding: true,
-                },
-                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(vec![6; 4])],
-                evaluation_queries: vec![PrivacyJindoEvaluationQueryV1 {
-                    evaluation_point: vec![PrivacyJindoFieldElementV1::new(vec![7; 2])],
-                    claimed_evaluations: vec![PrivacyJindoFieldElementV1::new(vec![8; 2])],
-                }],
+                polynomial_commitments: vec![PrivacyJindoLatticeCommitmentV1::new(commitment)],
+                evaluation_point: PrivacyJindoFieldElementV1::new(evaluation_point),
+                claimed_evaluations: vec![PrivacyJindoFieldElementV1::new(claimed_evaluation)],
             },
         );
         let statement_digest = statement.digest().expect("fixture statement encodes");
@@ -442,7 +437,7 @@ mod tests {
         else {
             unreachable!("Jindo fixture")
         };
-        limits.max_evaluation_query_count -= 1;
+        limits.max_polynomial_count -= 1;
         assert_slice_roundtrip(SchedulePrivacyProtocolLimitsTighteningV1::new(
             activation.protocol_id,
             700,

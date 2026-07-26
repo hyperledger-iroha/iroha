@@ -4,6 +4,7 @@ import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
 import {
   AccountAddress,
+  canonicalizeDomainLabel,
   curveIdFromAlgorithm,
   curveIdToAlgorithm,
   ensureCurveIdEnabled,
@@ -219,7 +220,6 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   ),
 );
 const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
-  "iroha_data_model::isi::governance::CastPlainBallot": 8,
   "iroha_data_model::isi::zk::Shield": 8,
   "iroha_data_model::isi::zk::Unshield": 8,
 });
@@ -1677,7 +1677,6 @@ function encodePureJsInstructionPayload(instruction) {
         encodeAccountIdValue,
         encodeDomainIdValue,
         encodeAccountIdValue,
-        true,
       ),
     );
   }
@@ -2204,7 +2203,6 @@ function decodeTransferPayload(payload) {
           decodeAccountIdValue,
           decodeDomainIdValue,
           decodeAccountIdValue,
-          true,
         ),
       };
     case 1:
@@ -3615,15 +3613,10 @@ function encodeTransferObjectBody(
   encodeSource,
   encodeObject,
   encodeDestination,
-  wrapObject = false,
 ) {
   return encodeStructValue([
     [encodeSource(value.source, `${context}.source`)],
-    [
-      wrapObject
-        ? encodeNoritoField(encodeObject(value.object, `${context}.object`))
-        : encodeObject(value.object, `${context}.object`),
-    ],
+    [encodeObject(value.object, `${context}.object`)],
     [encodeDestination(value.destination, `${context}.destination`)],
   ]);
 }
@@ -3634,14 +3627,11 @@ function decodeTransferObjectBody(
   decodeSource,
   decodeObject,
   decodeDestination,
-  wrapObject = false,
 ) {
   const fields = decodeStructFields(payload, context, ["source", "object", "destination"]);
   return {
     source: decodeSource(fields.source, `${context}.source`),
-    object: wrapObject
-      ? decodeNestedValue(fields.object, decodeObject, `${context}.object`)
-      : decodeObject(fields.object, `${context}.object`),
+    object: decodeObject(fields.object, `${context}.object`),
     destination: decodeDestination(fields.destination, `${context}.destination`),
   };
 }
@@ -3839,19 +3829,37 @@ function normalizeU128Input(value, context) {
 }
 
 function encodeDomainIdValue(value, context) {
-  return encodeNoritoStringValue(assertNonEmptyString(value, context));
+  const literal = assertNonEmptyString(value, context);
+  if (literal.trim() !== literal) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
+  const segments = literal.split(".");
+  if (segments.length !== 2 || segments.some((segment) => segment.length === 0)) {
+    throw new TypeError(`${context} must use the exact domain.dataspace form`);
+  }
+  const [name, dataspace] = segments.map((segment) =>
+    canonicalizeDomainLabel(segment),
+  );
+  return encodeStructValue([
+    [encodeNameValue(name, `${context}.name`)],
+    [encodeNameValue(dataspace, `${context}.dataspace`)],
+  ]);
 }
 
 function decodeDomainIdValue(payload, context) {
-  return decodeStringValue(payload, context);
+  const fields = decodeStructFields(payload, context, ["name", "dataspace"]);
+  return `${decodeNameValue(fields.name, `${context}.name`)}.${decodeNameValue(
+    fields.dataspace,
+    `${context}.dataspace`,
+  )}`;
 }
 
 function encodeArchivedDomainIdValue(value, context) {
-  return encodeNoritoField(encodeDomainIdValue(value, context));
+  return encodeDomainIdValue(value, context);
 }
 
 function decodeArchivedDomainIdValue(payload, context) {
-  return decodeNestedValue(payload, decodeDomainIdValue, context);
+  return decodeDomainIdValue(payload, context);
 }
 
 function encodeNameValue(value, context) {
@@ -3877,16 +3885,17 @@ function encodeNftIdValue(value, context) {
     throw new Error(`${context} must use name$domain`);
   }
   return encodeTupleValue([
-    encodeNoritoField(
-      encodeDomainIdValue(literal.slice(separator + 1), `${context}.domain`),
-    ),
+    encodeDomainIdValue(literal.slice(separator + 1), `${context}.domain`),
     encodeNameValue(literal.slice(0, separator), `${context}.name`),
   ]);
 }
 
 function decodeNftIdValue(payload, context) {
   const fields = decodeTupleFields(payload, context, ["domain", "name"]);
-  return `${decodeNameValue(fields.name, `${context}.name`)}$${decodeNestedValue(fields.domain, decodeDomainIdValue, `${context}.domain`)}`;
+  return `${decodeNameValue(fields.name, `${context}.name`)}$${decodeDomainIdValue(
+    fields.domain,
+    `${context}.domain`,
+  )}`;
 }
 
 function encodeRwaIdValue(value, context) {
@@ -3922,7 +3931,7 @@ function decodeCustomInstructionPayload(payload) {
 
 function encodeNewDomainValue(value, context) {
   return encodeStructValue([
-    [encodeNoritoField(encodeDomainIdValue(value.id, `${context}.id`))],
+    [encodeDomainIdValue(value.id, `${context}.id`)],
     [encodeOptionValue(value.logo, encodeSorafsUriValue, `${context}.logo`)],
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
   ]);
@@ -3931,7 +3940,7 @@ function encodeNewDomainValue(value, context) {
 function decodeNewDomainValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["id", "logo", "metadata"]);
   return {
-    id: decodeNestedValue(fields.id, decodeDomainIdValue, `${context}.id`),
+    id: decodeDomainIdValue(fields.id, `${context}.id`),
     logo: decodeOptionValue(fields.logo, decodeSorafsUriValue, `${context}.logo`),
     metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
   };
@@ -5993,6 +6002,19 @@ function decodeHashValue(payload, context) {
 }
 
 function encodeEscrowIdValue(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical checksummed hash literal`);
+  }
+  const match = HASH_LITERAL_RE.exec(value);
+  if (
+    match === null ||
+    match[1] !== match[1].toUpperCase() ||
+    match[2] !== match[2].toUpperCase()
+  ) {
+    throw new TypeError(
+      `${context} must use canonical uppercase hash:<hex>#<checksum> syntax`,
+    );
+  }
   const bytes = encodeHashValue(value, context);
   if ((bytes[bytes.length - 1] & 1) === 0) {
     throw new TypeError(`${context} must use a native hash with its marker bit set`);
@@ -6018,28 +6040,37 @@ function encodeStringValue(value, context) {
 }
 
 function encodeHashLiteralBytes(value, context) {
+  let bytes;
   if (Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value)) {
-    return encodeFixedBytesValue(value, 32, context);
-  }
-  const literal = assertNonEmptyString(value, context);
-  const match = HASH_LITERAL_RE.exec(literal);
-  if (match) {
-    const [, body, checksum] = match;
-    const upper = body.toUpperCase();
-    const expected = computeHashLiteralCrc("hash", upper);
-    if (checksum.toUpperCase() !== expected) {
-      throw new Error(`${context} has invalid checksum; expected ${expected}`);
+    bytes = encodeFixedBytesValue(value, 32, context);
+  } else {
+    const literal = assertNonEmptyString(value, context);
+    const match = HASH_LITERAL_RE.exec(literal);
+    if (match) {
+      const [, body, checksum] = match;
+      const upper = body.toUpperCase();
+      const expected = computeHashLiteralCrc("hash", upper);
+      if (checksum.toUpperCase() !== expected) {
+        throw new Error(`${context} has invalid checksum; expected ${expected}`);
+      }
+      bytes = Buffer.from(upper, "hex");
+    } else if (/^[0-9A-Fa-f]{64}$/.test(literal)) {
+      bytes = Buffer.from(literal, "hex");
+    } else {
+      throw new Error(`${context} must be a 32-byte hash literal or hex string`);
     }
-    return Buffer.from(upper, "hex");
   }
-  if (/^[0-9A-Fa-f]{64}$/.test(literal)) {
-    return Buffer.from(literal, "hex");
+  if ((bytes[bytes.length - 1] & 1) === 0) {
+    throw new TypeError(`${context} must use a native hash with its marker bit set`);
   }
-  throw new Error(`${context} must be a 32-byte hash literal or hex string`);
+  return bytes;
 }
 
 function decodeHashLiteral(payload, context) {
   const bytes = decodeFixedBytesValue(payload, 32, context);
+  if ((bytes[bytes.length - 1] & 1) === 0) {
+    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+  }
   const body = bytes.toString("hex").toUpperCase();
   return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
 }

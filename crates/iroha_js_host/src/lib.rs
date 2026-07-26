@@ -7337,6 +7337,15 @@ fn parse_hash_value(value: json::Value, context: &str) -> napi::Result<Hash> {
     }
 }
 
+fn parse_canonical_hash_value(value: json::Value, context: &str) -> napi::Result<Hash> {
+    json::from_value(value).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be a canonical uppercase checksummed hash literal: {err}"),
+        )
+    })
+}
+
 fn parse_optional_hash(value: Option<json::Value>, context: &str) -> napi::Result<Option<Hash>> {
     match value {
         None | Some(json::Value::Null) => Ok(None),
@@ -8600,7 +8609,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let json::Value::Object(mut fields) = cancel_value else {
                     unreachable!("exact_json_object_fields accepted an object");
                 };
-                let escrow_id = EscrowId::new(parse_hash_value(
+                let escrow_id = EscrowId::new(parse_canonical_hash_value(
                     required_value(&mut fields, "escrow_id", "CancelAssetLock")?,
                     "CancelAssetLock.escrow_id",
                 )?);
@@ -25813,6 +25822,36 @@ seiyaku Privacy {
         }))
         .expect_err("CancelAssetLock must reject compatibility fields");
         assert!(error.reason.contains("unexpected field"));
+
+        let canonical_escrow = canonical_payload
+            .as_object()
+            .and_then(|payload| payload.get("escrow_id"))
+            .and_then(json::Value::as_str)
+            .expect("canonical CancelAssetLock escrow id")
+            .to_owned();
+        let bare_escrow = canonical_escrow
+            .strip_prefix("hash:")
+            .and_then(|literal| literal.split_once('#'))
+            .map(|(body, _)| body.to_owned())
+            .expect("canonical hash literal");
+        for escrow_id in [bare_escrow, canonical_escrow.to_lowercase()] {
+            let mut payload = canonical_payload.clone();
+            payload
+                .as_object_mut()
+                .expect("cancel payload object")
+                .insert("escrow_id".to_owned(), json::Value::String(escrow_id));
+            let error = value_to_instruction(norito_json!({
+                "CancelAssetLock": payload
+            }))
+            .expect_err("noncanonical CancelAssetLock escrow id must be rejected");
+            assert!(
+                error
+                    .reason
+                    .contains("canonical uppercase checksummed hash literal"),
+                "unexpected noncanonical escrow-id error: {}",
+                error.reason
+            );
+        }
 
         let error = value_to_instruction(norito_json!({
             "CancelAssetLock": canonical_payload,

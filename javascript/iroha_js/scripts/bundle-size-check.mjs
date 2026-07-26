@@ -20,7 +20,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner; the
-    // current V1 tree measures 969,273 bytes (+2.46%). The 969 KiB ceiling remains
+    // current V1 tree measures 971,954 bytes (+2.75%). The 969 KiB ceiling remains
     // below a 5% regression from that documented predecessor.
     limitKb: 969,
   }),
@@ -31,7 +31,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "es2020",
     // Browser package mapping is defined for checked-in dist paths, so audit the
     // shipped entrypoint rather than the Node-capable source graph. The protected
-    // pre-reset tree measured 290,498 bytes; current V1 is 297,440 bytes (+2.39%).
+    // pre-reset tree measured 290,498 bytes; current V1 is 300,116 bytes (+3.31%).
     // The 297 KiB ceiling remains below a 5% predecessor regression.
     limitKb: 297,
     forbidNodeInputs: true,
@@ -43,7 +43,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The shipped browser-safe Nexus facade measured 371,403 bytes in the protected
-    // pre-reset tree and 380,659 bytes in current V1 (+2.49%). The 380 KiB ceiling
+    // pre-reset tree and 383,333 bytes in current V1 (+3.21%). The 380 KiB ceiling
     // remains below a 5% predecessor regression.
     limitKb: 380,
     forbidNodeInputs: true,
@@ -88,7 +88,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // The protected pre-reset browser aggregate measured 458,081 bytes on the
-    // same pinned runner; current V1 is 469,731 bytes (+2.54%). The 469 KiB
+    // same pinned runner; current V1 is 472,409 bytes (+3.13%). The 469 KiB
     // ceiling remains below a 5% predecessor regression.
     limitKb: 469,
     forbidNodeInputs: true,
