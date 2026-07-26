@@ -1098,7 +1098,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !crate::zk::is_production_verify_backend_label(backend) {
+        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -1135,7 +1135,7 @@ pub mod isi {
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
             match (
                 normalize_halo2_circuit_id(record_id),
                 normalize_halo2_circuit_id(env_id),
@@ -1187,7 +1187,7 @@ pub mod isi {
     }
 
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
-        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
             halo2_voting_circuit_matches(record_circuit_id, expected_id)
         } else if crate::zk::is_stark_fri_v1_backend(backend) {
             // Enforce canonical vote circuit roles to avoid swapping ballot/tally VKs.
@@ -1212,11 +1212,11 @@ pub mod isi {
     }
 
     fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
-        crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
+        crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta)
     }
 
     fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
-        if crate::zk::is_production_claim_backend_label(backend) {
+        if crate::zk::is_verifier_readiness_claim_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "production-claim verifying key backends are not supported".into(),
@@ -1237,7 +1237,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_production_verify_backend_label(backend) {
+        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "unsupported verifying key backends are not supported".into(),
@@ -10679,7 +10679,7 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
-        if crate::zk::is_production_claim_backend_label(attachment.backend.as_str()) {
+        if crate::zk::is_verifier_readiness_claim_label(attachment.backend.as_str()) {
             return Err(production_claim_proof_backend_error());
         }
         if crate::zk::is_trusted_setup_backend_label(attachment.backend.as_str()) {
@@ -10696,7 +10696,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_production_verify_backend_label(attachment.backend.as_str()) {
+        if !crate::zk::is_verifier_backend_registry_label_v1(attachment.backend.as_str()) {
             return Err(unsupported_proof_backend_error());
         }
         if expects_envelope && envelope_meta.is_none() {
@@ -10718,12 +10718,12 @@ pub mod isi {
     }
 
     fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
-        crate::zk::production_verify_backend_tag(backend).is_some_and(|expected| expected == tag)
+        crate::zk::verifier_backend_registry_tag_v1(backend).is_some_and(|expected| expected == tag)
     }
 
     fn backend_requires_open_verify_envelope(backend: &str) -> bool {
         matches!(
-            crate::zk::production_verify_backend_tag(backend),
+            crate::zk::verifier_backend_registry_tag_v1(backend),
             Some(BackendTag::Halo2IpaPasta | BackendTag::Stark)
         )
     }

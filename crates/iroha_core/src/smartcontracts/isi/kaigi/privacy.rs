@@ -458,7 +458,7 @@ fn validate_privacy_proof_envelope_metadata(
     record_circuit_id: &str,
     record_commitment: [u8; Hash::LENGTH],
 ) -> Result<(), Error> {
-    let Some(expected_backend) = zk::production_verify_backend_tag(configured_backend) else {
+    let Some(expected_backend) = zk::verifier_backend_registry_tag_v1(configured_backend) else {
         return Err(privacy_error(
             "privacy proof verifier backend is not admitted by the production verifier registry",
         ));

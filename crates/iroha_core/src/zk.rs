@@ -241,13 +241,10 @@ const MAX_INST_ROWS: usize = 8192;
 pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = iroha_data_model::zk::ZK_BACKEND_STARK_FRI_V1;
-const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
-    "sha256-goldilocks",
-    "poseidon2-goldilocks",
-    "sha256_goldilocks.v1",
-];
 /// Canonical circuit identifier suffix for proved IVM execution commitments.
 pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
+/// Exact Halo2/Pasta verifier-registry label for IVM execution commitments.
+pub const IVM_EXECUTION_V1_HALO2_BACKEND: &str = "halo2/pasta/ivm-execution-v1";
 /// Halo2 IPA parameter degree used by the canonical IVM execution binding circuit.
 pub const IVM_EXECUTION_V1_IPA_K: u32 = 7;
 /// Maximum encoded proof payload accepted for IVM execution proofs.
@@ -416,10 +413,7 @@ pub(crate) fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 /// STARK/FRI verifier profile.
 #[inline]
 pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    backend == ZK_BACKEND_STARK_FRI_V1
-        || backend
-            .strip_prefix("stark/fri/")
-            .is_some_and(|profile| STARK_FRI_V1_PRODUCTION_PROFILES.contains(&profile))
+    iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
 
 /// Returns `true` for backend labels that require a trusted setup and are not
@@ -617,7 +611,7 @@ pub fn is_developer_only_backend_label(backend: &str) -> bool {
 /// or audit readiness instead of matching an explicitly admitted verifier id.
 #[inline]
 #[must_use]
-pub fn is_production_claim_backend_label(backend: &str) -> bool {
+pub fn is_verifier_readiness_claim_label(backend: &str) -> bool {
     let compact = compact_ascii_lowercase_label(backend);
     PRODUCTION_CLAIM_BACKEND_FRAGMENTS
         .iter()
@@ -628,100 +622,25 @@ pub fn is_production_claim_backend_label(backend: &str) -> bool {
 #[inline]
 #[must_use]
 pub fn is_ivm_execution_backend(backend: &str) -> bool {
-    backend == ZK_BACKEND_HALO2_IPA || is_stark_fri_v1_backend(backend)
+    matches!(
+        backend,
+        ZK_BACKEND_HALO2_IPA | IVM_EXECUTION_V1_HALO2_BACKEND
+    ) || is_stark_fri_v1_backend(backend)
 }
 
 /// Return the expected OpenVerify backend tag for labels admitted by native
 /// production verifier dispatch.
 #[must_use]
-pub fn production_verify_backend_tag(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
-    if !production_verify_backend_label_is_portable(backend)
-        || is_production_claim_backend_label(backend)
-        || is_trusted_setup_backend_label(backend)
-        || is_developer_only_backend_label(backend)
-    {
-        return None;
-    }
-
-    if is_stark_fri_v1_backend(backend) {
-        return Some(iroha_data_model::zk::BackendTag::Stark);
-    }
-    if backend == ZK_BACKEND_HALO2_IPA
-        || verifier_registry_accepts_backend(backend)
-        || is_native_halo2_pasta_backend_label(backend)
-    {
-        return Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta);
-    }
-    None
-}
-
-fn production_verify_backend_label_is_portable(backend: &str) -> bool {
-    if backend.is_empty() || backend.trim() != backend {
-        return false;
-    }
-    let Some(first) = backend.as_bytes().first() else {
-        return false;
-    };
-    let Some(last) = backend.as_bytes().last() else {
-        return false;
-    };
-    if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
-        return false;
-    }
-    if backend.as_bytes().iter().any(|&byte| {
-        !matches!(
-            byte,
-            b'a'..=b'z' | b'0'..=b'9' | b'/' | b':' | b'-' | b'_' | b'.'
-        )
-    }) {
-        return false;
-    }
-    !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]
-        .iter()
-        .any(|separator| backend.contains(separator))
+pub fn verifier_backend_registry_tag_v1(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
+    iroha_data_model::zk::verifier_backend_registry_tag_v1(backend)
 }
 
 /// Returns `true` when `backend` names a verifier family that can reach native
 /// production verifier dispatch.
 #[inline]
 #[must_use]
-pub fn is_production_verify_backend_label(backend: &str) -> bool {
-    production_verify_backend_tag(backend).is_some()
-}
-
-fn is_native_halo2_pasta_backend_label(backend: &str) -> bool {
-    let Some(normalized) = normalize_native_halo2_pasta_backend_label(backend) else {
-        return false;
-    };
-    // Native dispatch still contains developer fixtures for local proof tests;
-    // production backend admission must never advertise those circuit ids or
-    // retired unqualified profile roots.
-    let profile = normalized.rsplit('/').next().unwrap_or("");
-    !profile.starts_with("tiny-")
-        && !is_developer_only_backend_label(&normalized)
-        && !is_retired_unqualified_vote_bool_backend_profile(profile)
-        && !is_retired_unqualified_anon_transfer_backend_profile(profile)
-        && is_native_halo2_pasta_circuit_id(&normalized)
-}
-
-fn is_retired_unqualified_vote_bool_backend_profile(profile: &str) -> bool {
-    matches!(
-        profile,
-        "vote-bool-commit"
-            | "vote-bool-commit-merkle2"
-            | "vote-bool-commit-merkle8"
-            | "vote-bool-commit-merkle16"
-    )
-}
-
-fn is_retired_unqualified_anon_transfer_backend_profile(profile: &str) -> bool {
-    matches!(
-        profile,
-        "anon-transfer-2x2"
-            | "anon-transfer-2x2-merkle2"
-            | "anon-transfer-2x2-merkle8"
-            | "anon-transfer-2x2-merkle16"
-    )
+pub fn is_verifier_backend_registry_label_v1(backend: &str) -> bool {
+    verifier_backend_registry_tag_v1(backend).is_some()
 }
 
 fn normalize_native_halo2_pasta_backend_label(backend: &str) -> Option<String> {
@@ -747,7 +666,7 @@ fn normalize_native_halo2_pasta_backend_label(backend: &str) -> Option<String> {
 }
 
 fn halo2_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
-    if production_verify_backend_tag(backend)
+    if verifier_backend_registry_tag_v1(backend)
         != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
         return false;
@@ -790,42 +709,6 @@ fn halo2_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> 
             .strip_prefix("stark")
             .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
         || is_trusted_setup_backend_label(&lower)
-}
-
-fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
-    // Confidential relation identifiers are inner `OpenVerifyEnvelope` CIDs;
-    // their outer proof backend is the generic `halo2/ipa`, so they must not
-    // be advertised as independently reachable backend labels here.
-    matches!(
-        circuit_id,
-        "halo2/pasta/tiny-add"
-            | "halo2/pasta/tiny-mul"
-            | "halo2/pasta/tiny-add-2rows"
-            | "halo2/pasta/tiny-add-public"
-            | "halo2/pasta/tiny-mul-public"
-            | "halo2/pasta/tiny-id-public"
-            | "halo2/pasta/tiny-add3"
-            | "halo2/pasta/tiny-add2inst-public"
-            | "halo2/pasta/asset-hidden-transfer-public-test"
-            | "halo2/pasta/asset-hidden-transfer-public-v1"
-            | "halo2/pasta/tiny-anon-transfer-2x2"
-            | "halo2/pasta/kaigi-roster-v1"
-            | "halo2/pasta/kaigi-usage-v1"
-            | "halo2/pasta/tiny-vote-bool"
-            | "halo2/pasta/ivm-overlay-bind"
-            | "halo2/pasta/ivm-execution-v1"
-            | "halo2/pasta/tiny-commit-open"
-            | "halo2/pasta/tiny-merkle2"
-            | "halo2/pasta/vote-bool-commit"
-            | "halo2/pasta/vote-bool-commit-merkle2"
-            | "halo2/pasta/vote-bool-commit-merkle8"
-            | "halo2/pasta/vote-bool-commit-merkle16"
-            | "halo2/pasta/anon-transfer-2x2"
-            | "halo2/pasta/anon-transfer-2x2-merkle2"
-            | "halo2/pasta/anon-transfer-2x2-merkle8"
-            | "halo2/pasta/anon-transfer-2x2-merkle16"
-    ) || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
-        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
 }
 
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
@@ -6142,7 +6025,7 @@ impl DedupCache {
 fn expected_preverify_envelope_backend_tag(
     backend: &str,
 ) -> Option<iroha_data_model::zk::BackendTag> {
-    production_verify_backend_tag(backend)
+    verifier_backend_registry_tag_v1(backend)
 }
 
 fn preverify_open_verify_envelope_metadata(
@@ -6311,7 +6194,7 @@ pub fn preverify_with_budget(
     if proof.backend.is_empty() {
         return PreverifyResult::UnsupportedBackend;
     }
-    if is_production_claim_backend_label(proof.backend.as_str()) {
+    if is_verifier_readiness_claim_label(proof.backend.as_str()) {
         return PreverifyResult::UnsupportedBackend;
     }
     if is_trusted_setup_backend_label(proof.backend.as_str()) {
@@ -6710,7 +6593,7 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     if proof.backend.as_str() != backend {
         return false;
     }
-    if !is_production_verify_backend_label(backend) {
+    if !is_verifier_backend_registry_label_v1(backend) {
         return false;
     }
 
@@ -6738,7 +6621,7 @@ pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyB
     }
 
     // Halo2 family (external halo2 backends)
-    if production_verify_backend_tag(backend)
+    if verifier_backend_registry_tag_v1(backend)
         == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
         // Transparent IPA over Pasta (default-on)
@@ -6856,8 +6739,8 @@ mod debug_backend_tests {
 mod stark_backend_tag_tests {
     use super::{
         ZK_BACKEND_STARK_FRI_V1, is_developer_only_backend_label, is_ivm_execution_backend,
-        is_production_claim_backend_label, is_production_verify_backend_label,
-        is_stark_fri_v1_backend, is_trusted_setup_backend_label, production_verify_backend_tag,
+        is_verifier_readiness_claim_label, is_verifier_backend_registry_label_v1,
+        is_stark_fri_v1_backend, is_trusted_setup_backend_label, verifier_backend_registry_tag_v1,
         stark_open_verify_circuit_id_matches_backend, verify_backend,
     };
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
@@ -6965,7 +6848,7 @@ mod stark_backend_tag_tests {
             "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
         ] {
             assert!(
-                is_production_claim_backend_label(backend),
+                is_verifier_readiness_claim_label(backend),
                 "production-claim backend {backend} must be classified before allowlists"
             );
             assert!(
@@ -6973,12 +6856,12 @@ mod stark_backend_tag_tests {
                 "production-claim backend {backend} must not match the STARK family allowlist"
             );
             assert_eq!(
-                production_verify_backend_tag(backend),
+                verifier_backend_registry_tag_v1(backend),
                 None,
                 "production-claim backend {backend} must not map to an OpenVerify tag"
             );
             assert!(
-                !is_production_verify_backend_label(backend),
+                !is_verifier_backend_registry_label_v1(backend),
                 "production-claim backend {backend} must stay fail-closed"
             );
         }
@@ -6992,7 +6875,7 @@ mod stark_backend_tag_tests {
             "stark/fri/audit-proof-v1",
         ] {
             assert!(
-                !is_production_claim_backend_label(backend),
+                !is_verifier_readiness_claim_label(backend),
                 "backend {backend} must not be rejected by production-claim text alone"
             );
         }
@@ -7001,11 +6884,16 @@ mod stark_backend_tag_tests {
     #[test]
     fn ivm_execution_backend_allowlist_is_explicit() {
         assert!(is_ivm_execution_backend("halo2/ipa"));
+        assert!(is_ivm_execution_backend("halo2/pasta/ivm-execution-v1"));
         assert!(is_ivm_execution_backend("stark/fri"));
         assert!(is_ivm_execution_backend("stark/fri/sha256-goldilocks"));
         assert!(is_ivm_execution_backend("stark/fri/poseidon2-goldilocks"));
         assert!(is_ivm_execution_backend("stark/fri/sha256_goldilocks.v1"));
         assert!(!is_ivm_execution_backend("halo2/ipa/orchard"));
+        assert!(!is_ivm_execution_backend("halo2/ipa:ivm-execution-v1"));
+        assert!(!is_ivm_execution_backend(
+            "halo2/pasta/ipa/ivm-execution-v1"
+        ));
         assert!(!is_ivm_execution_backend(
             "halo2/ipa/orchard:production-ready"
         ));
@@ -7036,25 +6924,50 @@ mod stark_backend_tag_tests {
     }
 
     #[test]
-    fn production_verify_backend_allowlist_is_explicit() {
+    fn verifier_backend_registry_is_exact_and_closed() {
         for (backend, expected_tag) in [
             ("halo2/ipa", BackendTag::Halo2IpaPasta),
-            ("halo2/ipa:ivm-execution-v1", BackendTag::Halo2IpaPasta),
             ("halo2/pasta/ivm-execution-v1", BackendTag::Halo2IpaPasta),
             ("halo2/pasta/kaigi-roster-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/kaigi-usage-v1", BackendTag::Halo2IpaPasta),
+            ("halo2/pasta/ivm-overlay-bind", BackendTag::Halo2IpaPasta),
+            (
+                "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+                BackendTag::Halo2IpaPasta,
+            ),
+            (
+                "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+                BackendTag::Halo2IpaPasta,
+            ),
             ("stark/fri", BackendTag::Stark),
             ("stark/fri/sha256-goldilocks", BackendTag::Stark),
             ("stark/fri/poseidon2-goldilocks", BackendTag::Stark),
             ("stark/fri/sha256_goldilocks.v1", BackendTag::Stark),
         ] {
             assert_eq!(
-                production_verify_backend_tag(backend),
+                verifier_backend_registry_tag_v1(backend),
                 Some(expected_tag),
-                "production backend {backend} must map to its OpenVerify tag"
+                "registry label {backend} must map to its OpenVerify tag"
             );
             assert!(
-                is_production_verify_backend_label(backend),
-                "production backend {backend} must be admitted"
+                is_verifier_backend_registry_label_v1(backend),
+                "registry label {backend} must be admitted"
             );
         }
 
@@ -7062,14 +6975,11 @@ mod stark_backend_tag_tests {
             "unknown/privacy/backend",
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
             "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "halo2/ipa:ivm-execution-v1",
             "HALO2/IPA",
             "stark/FRI",
             " halo2/ipa",
@@ -7166,12 +7076,12 @@ mod stark_backend_tag_tests {
             "halo2/mock",
         ] {
             assert_eq!(
-                production_verify_backend_tag(backend),
+                verifier_backend_registry_tag_v1(backend),
                 None,
                 "unsupported backend {backend} must not map to an OpenVerify tag"
             );
             assert!(
-                !is_production_verify_backend_label(backend),
+                !is_verifier_backend_registry_label_v1(backend),
                 "unsupported backend {backend} must stay fail-closed"
             );
         }
@@ -8507,7 +8417,7 @@ pub fn verify_backend_with_timing_guardrails(
     vk: Option<&VerifyingKeyBox>,
     guardrails: ZkVerifyGuardrails,
 ) -> VerifyReport {
-    if is_production_claim_backend_label(backend) {
+    if is_verifier_readiness_claim_label(backend) {
         iroha_logger::debug!(
             backend,
             "production-claim proof backends are not admitted by production guardrails"
@@ -8537,7 +8447,7 @@ pub fn verify_backend_with_timing_guardrails(
             elapsed: Duration::ZERO,
         };
     }
-    if !is_production_verify_backend_label(backend) {
+    if !is_verifier_backend_registry_label_v1(backend) {
         iroha_logger::debug!(
             backend,
             "unsupported proof backends are not admitted by production guardrails"
@@ -8572,7 +8482,7 @@ pub fn verify_backend_with_timing_guardrails(
         };
     }
 
-    if production_verify_backend_tag(backend)
+    if verifier_backend_registry_tag_v1(backend)
         == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
         if !guardrails.halo2_enabled {

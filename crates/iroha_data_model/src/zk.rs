@@ -18,6 +18,31 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND: &str = "stark/fri/sha256-goldilock
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
 
+/// Exact verifier-registry labels admitted by native Rust dispatch.
+///
+/// This closed set is intentionally separate from [`BackendTag`]. A registry
+/// label selects one concrete verifier configuration, while [`BackendTag`]
+/// identifies the low-level proof engine encoded in an [`OpenVerifyEnvelope`].
+/// Callers must compare these labels byte-for-byte: aliases, normalization,
+/// case folding, and surrounding whitespace are never accepted.
+pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
+    "halo2/ipa",
+    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-usage-v1",
+    "halo2/pasta/ivm-overlay-bind",
+    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    "stark/fri",
+    "stark/fri/sha256-goldilocks",
+    "stark/fri/poseidon2-goldilocks",
+    "stark/fri/sha256_goldilocks.v1",
+];
+
 const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
     "sha256-goldilocks",
     "poseidon2-goldilocks",
@@ -99,6 +124,43 @@ impl BackendTag {
             _ => None,
         }
     }
+}
+
+/// Return the low-level engine for one exact verifier-registry label.
+///
+/// This function deliberately has no fallback family matching. Adding a new
+/// verifier configuration therefore requires an explicit consensus-visible
+/// source change and corresponding cross-SDK update.
+#[inline]
+#[must_use]
+pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
+    match label {
+        "halo2/ipa"
+        | "halo2/pasta/kaigi-roster-v1"
+        | "halo2/pasta/kaigi-usage-v1"
+        | "halo2/pasta/ivm-overlay-bind"
+        | "halo2/pasta/ivm-execution-v1"
+        | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
+        | "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
+        | "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"
+        | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
+        | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
+        | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
+            Some(BackendTag::Halo2IpaPasta)
+        }
+        "stark/fri"
+        | "stark/fri/sha256-goldilocks"
+        | "stark/fri/poseidon2-goldilocks"
+        | "stark/fri/sha256_goldilocks.v1" => Some(BackendTag::Stark),
+        _ => None,
+    }
+}
+
+/// Return whether `label` is one exact native verifier-registry label.
+#[inline]
+#[must_use]
+pub fn is_verifier_backend_registry_label_v1(label: &str) -> bool {
+    verifier_backend_registry_tag_v1(label).is_some()
 }
 
 #[cfg(feature = "json")]
@@ -915,6 +977,65 @@ mod tests {
                 BackendTag::from_canonical_label(label),
                 Some(expected),
                 "{label} must parse exactly",
+            );
+        }
+    }
+
+    #[test]
+    fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 15);
+        let mut unique = std::collections::BTreeSet::new();
+        for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
+            assert!(unique.insert(label), "duplicate registry label: {label}");
+            let tag = verifier_backend_registry_tag_v1(label)
+                .unwrap_or_else(|| panic!("listed registry label must resolve: {label}"));
+            assert!(is_verifier_backend_registry_label_v1(label));
+            if label.starts_with("halo2/") {
+                assert_eq!(tag, BackendTag::Halo2IpaPasta, "{label}");
+            } else {
+                assert!(label.starts_with("stark/fri"), "{label}");
+                assert_eq!(tag, BackendTag::Stark, "{label}");
+            }
+        }
+
+        for rejected in [
+            "",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "HALO2/IPA",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa/ivm-execution-v1",
+            "halo2/pasta/ipa/ivm-execution-v1",
+            "halo2/pasta/ivm_execution_v1",
+            "halo2/pasta/ivm-execution-v1/",
+            "halo2/pasta/ivm-execution-v1\0",
+            "halo2/pasta/ipa-pasta-cycle-v1",
+            "halo2/pasta/tiny-add",
+            "stark",
+            "STARK/FRI",
+            "stark/fri/",
+            "stark/fri/latest",
+            "stark/fri/sha256-goldilocks/extra",
+            "stark/fri/sha256-goldilocks\u{200b}",
+            "groth16",
+            "groth16/bn254",
+            "halo2/bn254",
+            "halo2/kzg",
+            "aztec-plonkish-private-kernel",
+            "zkat",
+            "silent-threshold-anoncred",
+        ] {
+            assert_eq!(
+                verifier_backend_registry_tag_v1(rejected),
+                None,
+                "{rejected:?} must not resolve",
+            );
+            assert!(
+                !is_verifier_backend_registry_label_v1(rejected),
+                "{rejected:?} must be rejected",
             );
         }
     }

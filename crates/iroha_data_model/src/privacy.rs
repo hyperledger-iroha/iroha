@@ -126,9 +126,7 @@ impl PrivacyProtocolIdV1 {
             Self::IrohaZkAmsV1 => "iroha-zk-ams-v1",
             Self::VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
             Self::IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
-            Self::IrohaJindoPolynomialCommitmentV0 => {
-                "iroha-jindo-polynomial-commitment-v0"
-            }
+            Self::IrohaJindoPolynomialCommitmentV0 => "iroha-jindo-polynomial-commitment-v0",
             Self::IrohaBootleGenisisAcStarkV0 => "iroha-bootle-genisis-ac-stark-v0",
             Self::OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
             Self::MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
@@ -150,12 +148,8 @@ impl PrivacyProtocolIdV1 {
             b"iroha-zk-ams-v1" => Some(Self::IrohaZkAmsV1),
             b"vega-existing-credential-zk-v0" => Some(Self::VegaExistingCredentialZkV0),
             b"iroha-zk-x509-stark-p256-v0" => Some(Self::IrohaZkX509StarkP256V0),
-            b"iroha-jindo-polynomial-commitment-v0" => {
-                Some(Self::IrohaJindoPolynomialCommitmentV0)
-            }
-            b"iroha-bootle-genisis-ac-stark-v0" => {
-                Some(Self::IrohaBootleGenisisAcStarkV0)
-            }
+            b"iroha-jindo-polynomial-commitment-v0" => Some(Self::IrohaJindoPolynomialCommitmentV0),
+            b"iroha-bootle-genisis-ac-stark-v0" => Some(Self::IrohaBootleGenisisAcStarkV0),
             b"orchard-halo2-actions-v1" => Some(Self::OrchardHalo2ActionsV1),
             b"monero-fcmp-plus-plus-v1" => Some(Self::MoneroFcmpPlusPlusV1),
             b"iroha-ivm-private-note-stark-v1" => Some(Self::IrohaIvmPrivateNoteStarkV1),
@@ -2295,6 +2289,149 @@ impl PrivacyProtocolActivationLimitsV1 {
             _ => Ok(()),
         }
     }
+
+    /// Validate this governed protocol policy against a compiled ceiling.
+    ///
+    /// Both values first undergo their intrinsic nonzero, hard-maximum, and
+    /// closed-set validation. The protocol variants must then match exactly,
+    /// and every governed component must be less than or equal to its compiled
+    /// counterpart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyProtocolActivationLimitsValidationError`] for an
+    /// intrinsically invalid value or ceiling, a protocol-variant mismatch, or
+    /// a component exceeding its configured ceiling.
+    pub fn validate_with_ceiling(
+        &self,
+        ceiling: &Self,
+    ) -> Result<(), PrivacyProtocolActivationLimitsValidationError> {
+        self.validate()?;
+        ceiling.validate()?;
+        match (*self, *ceiling) {
+            (Self::ZkAcePqAuthorizationV0, Self::ZkAcePqAuthorizationV0)
+            | (Self::VegaExistingCredentialZkV0, Self::VegaExistingCredentialZkV0)
+            | (Self::IrohaZkX509StarkP256V0, Self::IrohaZkX509StarkP256V0)
+            | (Self::IrohaBootleGenisisAcStarkV0, Self::IrohaBootleGenisisAcStarkV0) => Ok(()),
+            (Self::AnonymousPgcKOutOfNV1(value), Self::AnonymousPgcKOutOfNV1(max)) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::AnonymousPgcAnonymitySetSize,
+                    value.max_anonymity_set_size,
+                    max.max_anonymity_set_size,
+                )?;
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::AnonymousPgcRecipientCount,
+                    value.max_recipient_count,
+                    max.max_recipient_count,
+                )
+            }
+            (Self::VeRangeTransparentRangeV1(value), Self::VeRangeTransparentRangeV1(max)) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::VeRangeAggregationCount,
+                    value.max_aggregation_count,
+                    max.max_aggregation_count,
+                )
+            }
+            (Self::IrohaZkAmsV1(value), Self::IrohaZkAmsV1(max)) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::ZkAmsBatchSize,
+                    value.max_batch_size,
+                    max.max_batch_size,
+                )?;
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+                    value.max_ring_size,
+                    max.max_ring_size,
+                )
+            }
+            (
+                Self::IrohaJindoPolynomialCommitmentV0(value),
+                Self::IrohaJindoPolynomialCommitmentV0(max),
+            ) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                    value.max_polynomial_count,
+                    max.max_polynomial_count,
+                )?;
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::JindoEvaluationQueryCount,
+                    value.max_evaluation_query_count,
+                    max.max_evaluation_query_count,
+                )?;
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::JindoMultilinearVariableCount,
+                    value.max_multilinear_variable_count,
+                    max.max_multilinear_variable_count,
+                )
+            }
+            (Self::OrchardHalo2ActionsV1(value), Self::OrchardHalo2ActionsV1(max)) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::OrchardActionCount,
+                    value.max_action_count,
+                    max.max_action_count,
+                )
+            }
+            (Self::MoneroFcmpPlusPlusV1(value), Self::MoneroFcmpPlusPlusV1(max)) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::FcmpInputCount,
+                    value.max_input_count,
+                    max.max_input_count,
+                )?;
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::FcmpOutputCount,
+                    value.max_output_count,
+                    max.max_output_count,
+                )
+            }
+            (Self::IrohaIvmPrivateNoteStarkV1(value), Self::IrohaIvmPrivateNoteStarkV1(max)) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::IvmPrivateNoteInputCount,
+                    value.max_input_count,
+                    max.max_input_count,
+                )?;
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::IvmPrivateNoteOutputCount,
+                    value.max_output_count,
+                    max.max_output_count,
+                )
+            }
+            (Self::PqMaspStarkV0(value), Self::PqMaspStarkV0(max)) => {
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::PqMaspInputCount,
+                    value.max_input_count,
+                    max.max_input_count,
+                )?;
+                validate_profile_limit_ceiling(
+                    PrivacyActivationLimitFieldV1::PqMaspOutputCount,
+                    value.max_output_count,
+                    max.max_output_count,
+                )
+            }
+            _ => Err(
+                PrivacyProtocolActivationLimitsValidationError::ProtocolMismatch {
+                    actual: self.protocol_id(),
+                    ceiling: ceiling.protocol_id(),
+                },
+            ),
+        }
+    }
+}
+
+fn validate_profile_limit_ceiling(
+    field: PrivacyActivationLimitFieldV1,
+    value: u32,
+    ceiling: u32,
+) -> Result<(), PrivacyProtocolActivationLimitsValidationError> {
+    if value > ceiling {
+        return Err(
+            PrivacyProtocolActivationLimitsValidationError::ExceedsConfiguredCeiling {
+                field,
+                value,
+                ceiling,
+            },
+        );
+    }
+    Ok(())
 }
 
 fn validate_profile_limit(
@@ -2370,6 +2507,28 @@ pub enum PrivacyProtocolActivationLimitsValidationError {
         value: u32,
         /// First-release hard maximum.
         hard_max: u32,
+    },
+    /// Activation limits and their configured ceiling target different protocols.
+    #[error(
+        "privacy activation limit protocol {actual:?} differs from ceiling protocol {ceiling:?}"
+    )]
+    ProtocolMismatch {
+        /// Governed protocol variant.
+        actual: PrivacyProtocolIdV1,
+        /// Compiled-ceiling protocol variant.
+        ceiling: PrivacyProtocolIdV1,
+    },
+    /// One activation-specific limit exceeds a valid configured ceiling.
+    #[error(
+        "privacy activation limit {field:?} value {value} exceeds configured ceiling {ceiling}"
+    )]
+    ExceedsConfiguredCeiling {
+        /// Invalid field.
+        field: PrivacyActivationLimitFieldV1,
+        /// Governed value.
+        value: u32,
+        /// Component-wise ceiling.
+        ceiling: u32,
     },
     /// Anonymous PGC activation size is not one of the closed set sizes.
     #[error("Anonymous PGC anonymity-set size {size} is not one of 16, 32, or 64")]

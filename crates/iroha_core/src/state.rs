@@ -50981,7 +50981,7 @@ impl StateTransaction<'_, '_> {
         // Only apply curve gating after production backend admission; unsupported
         // Halo2-looking labels must fail as UnsupportedBackend in the pre-verifier.
         if matches!(
-            crate::zk::production_verify_backend_tag(backend),
+            crate::zk::verifier_backend_registry_tag_v1(backend),
             Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
         ) {
             // Extract curve segment (e.g., "pasta" or "bn254") if present

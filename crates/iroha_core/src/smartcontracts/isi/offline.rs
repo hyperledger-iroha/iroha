@@ -2957,7 +2957,7 @@ pub mod isi {
         backend: &str,
         backend_tag: BackendTag,
     ) -> Result<(), Error> {
-        if crate::zk::is_production_claim_backend_label(backend) {
+        if crate::zk::is_verifier_readiness_claim_label(backend) {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
                 "offline transparent proofs may not use production-claim proof backends",
@@ -2971,7 +2971,7 @@ pub mod isi {
             )
             .into());
         }
-        let expected_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
+        let expected_tag = crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
             labeled_invariant(
                 "verifier_key_invalid",
                 "offline recursive proof backend is not admitted by the production verifier registry",
@@ -3005,7 +3005,7 @@ pub mod isi {
             .into());
         }
         let backend = attachment.backend.as_str();
-        let backend_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
+        let backend_tag = crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
             labeled_invariant(
                 "verifier_key_invalid",
                 "Kagemusha proof backend is not a supported generic OpenVerify engine",

@@ -10725,7 +10725,7 @@ where
         ));
     }
     let expected_record_backend =
-        crate::zk::production_verify_backend_tag(attachment.backend.as_str()).ok_or_else(|| {
+        crate::zk::verifier_backend_registry_tag_v1(attachment.backend.as_str()).ok_or_else(|| {
             OverlayBuildError::ZkProof(
                 "proof attachment backend is not admitted by the production verifier registry"
                     .to_owned(),

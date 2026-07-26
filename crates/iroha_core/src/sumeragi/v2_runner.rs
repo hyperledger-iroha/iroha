@@ -5731,7 +5731,9 @@ mod tests {
         assert_eq!(replayed_proposal_sign(&effects[..1]), None);
         assert_eq!(replayed_proposal_sign(&[]), None);
 
-        let directive = |locked_subject, decided_subject| LocalProposalDirective {
+        let directive =
+            |locked_subject: Option<wire::BlockSubject>,
+             decided_subject: Option<wire::BlockSubject>| LocalProposalDirective {
             tag,
             leader: context.leader(tag.view()),
             locked_round: locked_subject.map(|_| wire::ConsensusRound {

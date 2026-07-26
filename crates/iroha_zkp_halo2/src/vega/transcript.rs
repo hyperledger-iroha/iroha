@@ -96,6 +96,48 @@ impl VegaTranscriptV1 {
         self.absorb_raw(label, &commitment.transcript_bytes()?)
     }
 
+    pub(super) fn absorb_r1cs_instance(
+        &mut self,
+        label: &'static [u8],
+        commitment: &Commitment,
+        public_inputs: &[VegaT256ScalarV1],
+    ) -> Result<(), VegaTranscriptError> {
+        let mut representation = commitment.transcript_bytes()?;
+        representation.reserve(
+            public_inputs
+                .len()
+                .checked_mul(32)
+                .ok_or(VegaTranscriptError::PendingMaterialTooLarge)?,
+        );
+        for input in public_inputs {
+            representation.extend_from_slice(&input.to_be_bytes());
+        }
+        self.absorb_raw(label, &representation)
+    }
+
+    pub(super) fn absorb_relaxed_r1cs_instance(
+        &mut self,
+        label: &'static [u8],
+        witness_commitment: &Commitment,
+        error_commitment: &Commitment,
+        relaxation: VegaT256ScalarV1,
+        public_inputs: &[VegaT256ScalarV1],
+    ) -> Result<(), VegaTranscriptError> {
+        let mut representation = witness_commitment.transcript_bytes()?;
+        representation.extend_from_slice(&error_commitment.transcript_bytes()?);
+        representation.extend_from_slice(&relaxation.to_be_bytes());
+        representation.reserve(
+            public_inputs
+                .len()
+                .checked_mul(32)
+                .ok_or(VegaTranscriptError::PendingMaterialTooLarge)?,
+        );
+        for input in public_inputs {
+            representation.extend_from_slice(&input.to_be_bytes());
+        }
+        self.absorb_raw(label, &representation)
+    }
+
     pub(super) fn absorb_univariate(
         &mut self,
         label: &'static [u8],

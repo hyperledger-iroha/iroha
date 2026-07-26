@@ -1683,7 +1683,7 @@ fn ensure_production_verify_backend_label<'a>(backend: &'a str, field: &str) -> 
     if backend.is_empty() {
         eyre::bail!("{field} must be non-empty");
     }
-    if !iroha_core::zk::is_production_verify_backend_label(backend) {
+    if !iroha_core::zk::is_verifier_backend_registry_label_v1(backend) {
         eyre::bail!("{field} uses unsupported production verifier backend `{backend}`");
     }
     Ok(backend)
@@ -2661,7 +2661,7 @@ fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
 }
 
 fn vk_backend_tag_from_label(label: &str) -> Result<iroha::data_model::zk::BackendTag> {
-    iroha_core::zk::production_verify_backend_tag(label)
+    iroha_core::zk::verifier_backend_registry_tag_v1(label)
         .ok_or_else(|| eyre!("unsupported generic OpenVerify backend `{label}`"))
 }
 

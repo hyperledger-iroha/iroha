@@ -43,8 +43,8 @@ use crate::{
         PrivacyActivationKeyV1, PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1,
         PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
-        compute_privacy_pgc_account_state_root_v1, load_privacy_pgc_pool_snapshot_v1,
-        plan_privacy_root_history_update_v1,
+        PrivacyRootRetentionAnchorV1, compute_privacy_pgc_account_state_root_v1,
+        load_privacy_pgc_pool_snapshot_v1, plan_privacy_root_history_update_v1,
     },
     privacy_verifier::{
         PrivacyAnonymousPgcStateFailureCodeV1, PrivacyPgcVerificationStateV1,
@@ -292,9 +292,6 @@ impl Execute for PublishPrivacyRootV1 {
         })?;
         let provenance = PrivacyRootProvenanceV1::governance(publication_digest, current_height)
             .map_err(invalid_privacy_parameter)?;
-        let next_head =
-            PrivacyRootHeadRecordV1::new(self.publication.epoch, self.publication.root, provenance)
-                .map_err(invalid_privacy_parameter)?;
         let removals = plan_privacy_root_history_update_v1(
             &state_transaction.world.privacy_roots,
             &[root_key],
@@ -303,6 +300,24 @@ impl Execute for PublishPrivacyRootV1 {
         .map_err(|error| {
             invalid_privacy_parameter(format!("privacy root publication rejected: {error}"))
         })?;
+        if !removals.is_empty() {
+            return Err(invalid_privacy_parameter(
+                "non-PGC privacy root retention rollover is unavailable without a typed anchor-chain validator",
+            ));
+        }
+        let retention_anchor = removals
+            .last()
+            .map(|key| PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root()))
+            .transpose()
+            .map_err(invalid_privacy_parameter)?
+            .or_else(|| current_head.and_then(PrivacyRootHeadRecordV1::retention_anchor));
+        let next_head = PrivacyRootHeadRecordV1::new(
+            self.publication.epoch,
+            self.publication.root,
+            provenance,
+            retention_anchor,
+        )
+        .map_err(invalid_privacy_parameter)?;
 
         for key in removals {
             state_transaction.world.privacy_roots.remove(key);
@@ -587,6 +602,7 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
             self.bootstrap.initial_epoch,
             self.bootstrap.initial_root,
             root_provenance,
+            None,
         )
         .map_err(invalid_privacy_parameter)?;
         let removals = plan_privacy_root_history_update_v1(
@@ -781,10 +797,8 @@ impl Execute for SubmitPrivacyProofV1 {
                     .digest(effect.namespace())
                     .map_err(|error| {
                         Error::InvariantViolation(
-                            format!(
-                                "verified Anonymous PGC pool invariant digest failed: {error}"
-                            )
-                            .into(),
+                            format!("verified Anonymous PGC pool invariant digest failed: {error}")
+                                .into(),
                         )
                     })?;
                 let root_provenance = PrivacyRootProvenanceV1::verified_pgc_successor(
@@ -826,12 +840,6 @@ impl Execute for SubmitPrivacyProofV1 {
                     PrivacyRootRoleV1::PgcAccountState,
                 )
                 .map_err(invalid_privacy_parameter)?;
-                let root_head = PrivacyRootHeadRecordV1::new(
-                    effect.next_epoch(),
-                    effect.next_root(),
-                    root_provenance,
-                )
-                .map_err(invalid_privacy_parameter)?;
                 let removals = plan_privacy_root_history_update_v1(
                     &state_transaction.world.privacy_roots,
                     &[root_key],
@@ -842,6 +850,19 @@ impl Execute for SubmitPrivacyProofV1 {
                         "Anonymous PGC successor root rejected: {error}"
                     ))
                 })?;
+                let retention_anchor = removals
+                    .last()
+                    .map(|key| PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root()))
+                    .transpose()
+                    .map_err(invalid_privacy_parameter)?
+                    .or(snapshot.retention_anchor());
+                let root_head = PrivacyRootHeadRecordV1::new(
+                    effect.next_epoch(),
+                    effect.next_root(),
+                    root_provenance,
+                    retention_anchor,
+                )
+                .map_err(invalid_privacy_parameter)?;
 
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
@@ -1500,6 +1521,7 @@ mod tests {
             instruction.bootstrap.initial_epoch,
             instruction.bootstrap.initial_root,
             root_provenance,
+            None,
         )
         .expect("root head");
 

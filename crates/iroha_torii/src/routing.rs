@@ -29125,7 +29125,7 @@ fn mk_record_from_inputs(
         withdraw_height,
     } = inputs;
     let backend_tag =
-        iroha_core::zk::production_verify_backend_tag(backend.as_str()).ok_or_else(|| {
+        iroha_core::zk::verifier_backend_registry_tag_v1(backend.as_str()).ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                     "unsupported generic OpenVerify backend `{backend}`"

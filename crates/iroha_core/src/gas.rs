@@ -177,7 +177,7 @@ fn zk_gas_per_commitment() -> u64 {
 
 fn halo2_public_input_count(attachment: &ProofAttachment) -> Option<u64> {
     let backend = attachment.backend.as_str();
-    if crate::zk::production_verify_backend_tag(backend)
+    if crate::zk::verifier_backend_registry_tag_v1(backend)
         != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
         return None;

@@ -27,6 +27,12 @@ mod commitment;
 mod curve;
 #[path = "vega/hyrax.rs"]
 mod hyrax;
+#[path = "vega/nifs.rs"]
+mod nifs;
+#[path = "vega/r1cs.rs"]
+mod r1cs;
+#[path = "vega/spartan.rs"]
+mod spartan;
 #[path = "vega/sponge.rs"]
 mod sponge;
 #[path = "vega/sumcheck.rs"]

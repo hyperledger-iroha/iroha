@@ -5916,7 +5916,7 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
-                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
+                    if crate::zk::is_verifier_readiness_claim_label(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "production-claim proof backends are not supported".to_owned(),
                         ));
@@ -5931,7 +5931,7 @@ impl Executor {
                             "developer-only proof backends are not supported".to_owned(),
                         ));
                     }
-                    if !crate::zk::is_production_verify_backend_label(backend.as_str()) {
+                    if !crate::zk::is_verifier_backend_registry_label_v1(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "unsupported proof backends are not supported".to_owned(),
                         ));

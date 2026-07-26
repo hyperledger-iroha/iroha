@@ -732,7 +732,7 @@ pub mod isi {
             ));
         }
         let expected_backend_tag =
-            crate::zk::production_verify_backend_tag(&verifier.proof_backend).ok_or_else(|| {
+            crate::zk::verifier_backend_registry_tag_v1(&verifier.proof_backend).ok_or_else(|| {
                 Error::InvariantViolation(
                     format!(
                         "RAM-LFE proof verifier backend {} is not admitted by the production verifier registry",

@@ -15,6 +15,18 @@ pub(super) enum AlgebraError {
 
 const MAX_EVALUATION_TABLE_ITEMS: usize = 1 << 20;
 
+pub(super) fn evaluation_table_size(variable_count: usize) -> Result<usize, AlgebraError> {
+    let size = 1_usize
+        .checked_shl(
+            u32::try_from(variable_count).map_err(|_| AlgebraError::EvaluationTableTooLarge)?,
+        )
+        .ok_or(AlgebraError::EvaluationTableTooLarge)?;
+    if size > MAX_EVALUATION_TABLE_ITEMS {
+        return Err(AlgebraError::EvaluationTableTooLarge);
+    }
+    Ok(size)
+}
+
 pub(super) fn log2_ceil(value: usize) -> Result<usize, AlgebraError> {
     if value == 0 {
         return Err(AlgebraError::InvalidDimension);
@@ -30,12 +42,7 @@ pub(super) fn log2_exact(value: usize) -> Result<usize, AlgebraError> {
 }
 
 pub(super) fn eq_evals(point: &[Scalar]) -> Result<Vec<Scalar>, AlgebraError> {
-    let size = 1_usize
-        .checked_shl(u32::try_from(point.len()).map_err(|_| AlgebraError::EvaluationTableTooLarge)?)
-        .ok_or(AlgebraError::EvaluationTableTooLarge)?;
-    if size > MAX_EVALUATION_TABLE_ITEMS {
-        return Err(AlgebraError::EvaluationTableTooLarge);
-    }
+    let size = evaluation_table_size(point.len())?;
     let mut evaluations = vec![Scalar::zero(); size];
     evaluations[0] = Scalar::one();
     let mut populated = 1;
