@@ -4077,6 +4077,36 @@ MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS = {
     "out_of_scope": 1,
 }
 
+# The replenishment-lasso repair has a deliberately named source surface.
+# Keeping this list code-owned makes deleting or renaming one of the ownership
+# operators a checker failure even while the full normalized operator bodies
+# are pinned below.  In particular, an arbitrary proof parameter must never
+# return as a substitute for durable protocol state.
+SERVE_LIFECYCLE_REQUIRED_OPERATORS = {
+    "SumeragiV2AsyncNetwork": (
+        "AsyncServeLogicalRequestIdentity",
+        "AsyncServeAdmissionOrdinal",
+        "ReserveExactServeCapacity",
+        "AsyncServeLifecycleOwned",
+        "AsyncServeLifecycleTombstone",
+        "AsyncServeFrozenPredecessorSet",
+    ),
+    "SumeragiV2ExactDecisionStageServiceClosureProofs": (
+        "ExactDecisionRequestLifecycleIngressRank",
+    ),
+    "SumeragiV2AdequateLeaderServiceClosureProofs": (
+        "AdequateLeaderFrozenOwnerUniverse",
+        "AdequateLeaderTargetEqualCountOwnerReplacementAction",
+        "AdequateLeaderTargetCountIncreasingReplenishmentAction",
+        "AdequateLeaderTargetNonDescentEpisodeBudget",
+        "AdequateLeaderTargetNonDescentEpisodeClosureProperty",
+        "AdequateLeaderTargetComposedRankDescentProperty",
+    ),
+}
+RETIRED_ARBITRARY_PRODUCER_BUDGET_SYMBOLS = (
+    "ExactDecisionRequestIngressProducerBudgetResidual",
+)
+
 REQUIRED_MODEL_MODULES = (
     "SumeragiV2",
     "SumeragiV2Quorums",
@@ -13837,6 +13867,65 @@ def _proof_obligation_inventory_errors(obligations: list[Any]) -> list[str]:
             "proof ledger obligations must follow the reviewed canonical order; "
             f"expected {expected_ids}, found {observed_ids}"
         )
+    return errors
+
+
+def _serve_lifecycle_temporal_contract_errors(formal_dir: Path) -> list[str]:
+    """Require the durable, finite ownership surface that closes replenishment."""
+
+    errors: list[str] = []
+    for module, operators in SERVE_LIFECYCLE_REQUIRED_OPERATORS.items():
+        path = formal_dir / f"{module}.tla"
+        if not path.is_file():
+            errors.append(
+                f"{path}: missing Serve lifecycle temporal-contract module"
+            )
+            continue
+        source = path.read_text(encoding="utf-8")
+        for operator in operators:
+            extracted = _top_level_operator_body(
+                source,
+                operator,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{path}: missing required Serve lifecycle operator {operator}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized in {"TRUE", "FALSE"}:
+                errors.append(
+                    f"{path}:{line}: Serve lifecycle operator {operator} "
+                    "may not be a constant placeholder"
+                )
+
+    exact_path = (
+        formal_dir / "SumeragiV2ExactDecisionStageServiceClosureProofs.tla"
+    )
+    if exact_path.is_file():
+        exact_source = strip_tla_comments(
+            exact_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        arbitrary_budget = re.search(r"\bproducerBudget\b", exact_source)
+        if arbitrary_budget is not None:
+            line = exact_source.count("\n", 0, arbitrary_budget.start()) + 1
+            errors.append(
+                f"{exact_path}:{line}: exact-request closure may not use an "
+                "arbitrary producerBudget; derive the finite episode budget "
+                "from durable lifecycle state"
+            )
+        for symbol in RETIRED_ARBITRARY_PRODUCER_BUDGET_SYMBOLS:
+            match = re.search(rf"\b{re.escape(symbol)}\b", exact_source)
+            if match is None:
+                continue
+            line = exact_source.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{exact_path}:{line}: retired arbitrary-budget residual "
+                f"{symbol} is prohibited"
+            )
     return errors
 
 
@@ -61145,6 +61234,7 @@ def validate_ledger(
         _locked_body_reproposal_mutation_runner_errors(formal_dir, ROOT_DIR)
     )
     errors.extend(_async_source_fidelity_errors(formal_dir))
+    errors.extend(_serve_lifecycle_temporal_contract_errors(formal_dir))
     errors.extend(
         _local_runner_service_contract_source_fidelity_errors(
             ledger,

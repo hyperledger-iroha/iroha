@@ -41,8 +41,7 @@ pub const ZK_AMS_REGISTRY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
 pub const ZK_AMS_REGISTRY_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-ams:registry-bootstrap:v1";
 /// Domain separator for canonical authoritative ZK-ACE policy records.
-pub const ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-ace:policy-record:v1";
+pub const ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:policy-record:v1";
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -4058,10 +4057,7 @@ pub struct PrivacyEncryptedOutputV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "state", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "state", content = "value")]
 pub enum PrivacyZkAcePolicyLifecycleV1 {
     /// The policy can authorize a matching proof action.
     #[cfg_attr(feature = "json", norito(rename = "active"))]
@@ -4151,9 +4147,7 @@ impl PrivacyZkAcePolicyRecordV1 {
     /// # Errors
     ///
     /// Requires a valid active record at the canonical origin epoch.
-    pub fn validate_initial(
-        &self,
-    ) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
+    pub fn validate_initial(&self) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
         self.validate()?;
         if self.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
             return Err(PrivacyZkAcePolicyRecordValidationErrorV1::InitialPolicyNotActive);
@@ -4246,9 +4240,7 @@ impl PrivacyZkAcePolicyRecordV1 {
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
         {
-            return Err(
-                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist,
-            );
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist);
         }
         Ok(())
     }
@@ -4380,14 +4372,10 @@ pub fn validate_zk_ace_policy_rotation_v1(
         );
     }
     if successor.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive);
     }
     if successor.identity_commitment == current.identity_commitment {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged);
     }
     Ok(())
 }
@@ -4427,18 +4415,14 @@ pub fn validate_zk_ace_policy_revocation_v1(
         );
     }
     if successor.lifecycle != PrivacyZkAcePolicyLifecycleV1::Revoked {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked);
     }
     if successor.identity_commitment != current.identity_commitment
         || successor.policy_digest != current.policy_digest
         || successor.asset_definition_id != current.asset_definition_id
         || successor.source_allowlist != current.source_allowlist
     {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged);
     }
     Ok(())
 }
@@ -8464,6 +8448,36 @@ mod tests {
         PrivacyCommitmentV1::new(raw(seed))
     }
 
+    fn zk_ace_allowlist() -> Vec<AccountId> {
+        let mut allowlist = vec![account(13), account(14), account(15)];
+        allowlist.sort_unstable();
+        allowlist
+    }
+
+    fn zk_ace_policy(
+        epoch: u64,
+        identity_seed: u8,
+        lifecycle: PrivacyZkAcePolicyLifecycleV1,
+    ) -> PrivacyZkAcePolicyRecordV1 {
+        PrivacyZkAcePolicyRecordV1::new(
+            PrivacyPolicyIdV1::new(raw(10)),
+            commitment(identity_seed),
+            PrivacyPolicyDigestV1::new(raw(12)),
+            epoch,
+            asset_definition_id(),
+            zk_ace_allowlist(),
+            lifecycle,
+        )
+        .expect("canonical ZK-ACE policy fixture")
+    }
+
+    fn redigest_zk_ace_policy(record: &mut PrivacyZkAcePolicyRecordV1) {
+        record.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
+        record.record_digest = record
+            .compute_record_digest()
+            .expect("canonical ZK-ACE policy digest material");
+    }
+
     fn nullifier(seed: u8) -> PrivacyNullifierV1 {
         PrivacyNullifierV1::new(raw(seed))
     }
@@ -11053,6 +11067,364 @@ mod tests {
         all_boundaries
             .validate(&limits)
             .expect("all eight direct zero/maximum values are canonical");
+    }
+
+    #[test]
+    fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
+        let record = zk_ace_policy(
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
+            11,
+            PrivacyZkAcePolicyLifecycleV1::Active,
+        );
+        record.validate_initial().expect("canonical initial policy");
+        assert_eq!(
+            record
+                .compute_record_digest()
+                .expect("recompute canonical policy digest"),
+            record.record_digest
+        );
+
+        let encoded = norito::to_bytes(&record).expect("encode ZK-ACE policy");
+        let decoded: PrivacyZkAcePolicyRecordV1 =
+            norito::decode_from_bytes(&encoded).expect("decode ZK-ACE policy");
+        assert_eq!(decoded, record);
+        decoded.validate_initial().expect("decoded policy validates");
+
+        let json = norito::json::to_json(&record).expect("encode ZK-ACE policy JSON");
+        let decoded_json: PrivacyZkAcePolicyRecordV1 =
+            norito::json::from_json(&json).expect("decode ZK-ACE policy JSON");
+        assert_eq!(decoded_json, record);
+        decoded_json
+            .validate_initial()
+            .expect("JSON-decoded policy validates");
+
+        let mut zero_digest = record.clone();
+        zero_digest.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
+        assert_eq!(
+            zero_digest.validate(),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroRecordDigest)
+        );
+
+        let mut tampered = record;
+        tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(99));
+        assert_eq!(
+            tampered.validate(),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch)
+        );
+    }
+
+    #[test]
+    fn zk_ace_policy_registration_rejects_every_noncanonical_boundary() {
+        let policy_id = PrivacyPolicyIdV1::new(raw(10));
+        let identity = commitment(11);
+        let digest = PrivacyPolicyDigestV1::new(raw(12));
+        let asset = asset_definition_id();
+        let allowlist = zk_ace_allowlist();
+        let construct = |
+            policy_id,
+            identity_commitment,
+            policy_digest,
+            authorization_epoch,
+            source_allowlist,
+            lifecycle,
+        | {
+            PrivacyZkAcePolicyRecordV1::new(
+                policy_id,
+                identity_commitment,
+                policy_digest,
+                authorization_epoch,
+                asset.clone(),
+                source_allowlist,
+                lifecycle,
+            )
+        };
+
+        assert_eq!(
+            construct(
+                PrivacyPolicyIdV1::new([0; 32]),
+                identity,
+                digest,
+                1,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyId)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                PrivacyCommitmentV1::new([0; 32]),
+                digest,
+                1,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroIdentityCommitment)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                PrivacyPolicyDigestV1::new([0; 32]),
+                1,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyDigest)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                0,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroAuthorizationEpoch)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                Vec::new(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::EmptySourceAllowlist)
+        );
+
+        let over_limit = vec![account(20); PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1 + 1];
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                over_limit,
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::SourceAllowlistTooLarge {
+                    actual: PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1 + 1,
+                    max: PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1,
+                }
+            )
+        );
+
+        let mut reversed = allowlist.clone();
+        reversed.reverse();
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                reversed,
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist
+            )
+        );
+        let duplicate = vec![allowlist[0].clone(), allowlist[0].clone()];
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                duplicate,
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist
+            )
+        );
+
+        let noncanonical_epoch =
+            zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            noncanonical_epoch.validate_initial(),
+            Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalInitialEpoch {
+                    actual: 2
+                }
+            )
+        );
+        let initially_revoked = zk_ace_policy(
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
+            11,
+            PrivacyZkAcePolicyLifecycleV1::Revoked,
+        );
+        assert_eq!(
+            initially_revoked.validate_initial(),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::InitialPolicyNotActive)
+        );
+    }
+
+    #[test]
+    fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
+        let current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let successor = zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Active);
+        validate_zk_ace_policy_rotation_v1(&current, &successor)
+            .expect("canonical one-epoch identity rotation");
+
+        let mut invalid_current = current.clone();
+        invalid_current.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(raw(90));
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&invalid_current, &successor),
+            Err(
+                PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidCurrent(
+                    PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch
+                )
+            )
+        );
+        let mut invalid_successor = successor.clone();
+        invalid_successor.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(raw(91));
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &invalid_successor),
+            Err(
+                PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidSuccessor(
+                    PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch
+                )
+            )
+        );
+
+        let mut different_policy = successor.clone();
+        different_policy.policy_id = PrivacyPolicyIdV1::new(raw(92));
+        redigest_zk_ace_policy(&mut different_policy);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &different_policy),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch)
+        );
+
+        for epoch in [1, 3] {
+            let candidate = zk_ace_policy(epoch, 21, PrivacyZkAcePolicyLifecycleV1::Active);
+            assert!(matches!(
+                validate_zk_ace_policy_rotation_v1(&current, &candidate),
+                Err(
+                    PrivacyZkAcePolicyTransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                        expected: 2,
+                        actual
+                    }
+                ) if actual == epoch
+            ));
+        }
+
+        let revoked_successor =
+            zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &revoked_successor),
+            Err(
+                PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive
+            )
+        );
+        let no_op = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &no_op),
+            Err(
+                PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged
+            )
+        );
+
+        let revoked_current =
+            zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&revoked_current, &successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive)
+        );
+        let max_epoch =
+            zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let max_successor =
+            zk_ace_policy(u64::MAX, 21, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&max_epoch, &max_successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)
+        );
+    }
+
+    #[test]
+    fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
+        let current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let successor = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        validate_zk_ace_policy_revocation_v1(&current, &successor)
+            .expect("canonical one-epoch revocation");
+
+        let active_successor =
+            zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&current, &active_successor),
+            Err(
+                PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked
+            )
+        );
+
+        let mut mutations = Vec::new();
+        let mut changed_identity = successor.clone();
+        changed_identity.identity_commitment = commitment(21);
+        redigest_zk_ace_policy(&mut changed_identity);
+        mutations.push(changed_identity);
+        let mut changed_policy_digest = successor.clone();
+        changed_policy_digest.policy_digest = PrivacyPolicyDigestV1::new(raw(22));
+        redigest_zk_ace_policy(&mut changed_policy_digest);
+        mutations.push(changed_policy_digest);
+        let mut changed_asset = successor.clone();
+        changed_asset.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("other_asset").expect("asset name"),
+        );
+        redigest_zk_ace_policy(&mut changed_asset);
+        mutations.push(changed_asset);
+        let mut changed_allowlist = successor.clone();
+        changed_allowlist.source_allowlist.push(account(99));
+        changed_allowlist.source_allowlist.sort_unstable();
+        redigest_zk_ace_policy(&mut changed_allowlist);
+        mutations.push(changed_allowlist);
+        for mutation in mutations {
+            assert_eq!(
+                validate_zk_ace_policy_revocation_v1(&current, &mutation),
+                Err(
+                    PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged
+                )
+            );
+        }
+
+        let mut different_policy = successor.clone();
+        different_policy.policy_id = PrivacyPolicyIdV1::new(raw(92));
+        redigest_zk_ace_policy(&mut different_policy);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&current, &different_policy),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch)
+        );
+        for epoch in [1, 3] {
+            let candidate =
+                zk_ace_policy(epoch, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+            assert!(matches!(
+                validate_zk_ace_policy_revocation_v1(&current, &candidate),
+                Err(
+                    PrivacyZkAcePolicyTransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                        expected: 2,
+                        actual
+                    }
+                ) if actual == epoch
+            ));
+        }
+        let revoked_current =
+            zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&revoked_current, &successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive)
+        );
+        let max_epoch =
+            zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let max_successor =
+            zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&max_epoch, &max_successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)
+        );
     }
 
     #[test]

@@ -12314,6 +12314,54 @@ def test_target_local_temporal_closure_operator_contracts_reject_weakening(
     assert any(f"{symbol} must equal only" in error for error in errors), errors
 
 
+def test_serve_lifecycle_contract_rejects_missing_operator_and_arbitrary_budget(
+    tmp_path: Path,
+) -> None:
+    """The lasso repair cannot lose ownership state or restore a proof parameter."""
+
+    module = load_checker()
+    for module_name, operators in module.SERVE_LIFECYCLE_REQUIRED_OPERATORS.items():
+        declarations = "\n\n".join(
+            f"{operator} ==\n  lifecycleState = lifecycleState"
+            for operator in operators
+        )
+        (tmp_path / f"{module_name}.tla").write_text(
+            f"---- MODULE {module_name} ----\n\n"
+            f"{declarations}\n\n"
+            "====\n",
+            encoding="utf-8",
+        )
+
+    assert module._serve_lifecycle_temporal_contract_errors(tmp_path) == []
+
+    exact_module = "SumeragiV2ExactDecisionStageServiceClosureProofs"
+    exact_path = tmp_path / f"{exact_module}.tla"
+    exact_source = exact_path.read_text(encoding="utf-8")
+    rank = "ExactDecisionRequestLifecycleIngressRank"
+    exact_path.write_text(
+        exact_source.replace(rank, f"{rank}Weakened", 1),
+        encoding="utf-8",
+    )
+    errors = module._serve_lifecycle_temporal_contract_errors(tmp_path)
+    assert any(
+        f"missing required Serve lifecycle operator {rank}" in error
+        for error in errors
+    ), errors
+
+    exact_path.write_text(
+        exact_source.replace(
+            "lifecycleState = lifecycleState",
+            "producerBudget = producerBudget",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._serve_lifecycle_temporal_contract_errors(tmp_path)
+    assert any(
+        "may not use an arbitrary producerBudget" in error for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     ("target_module", "symbol", "old", "new"),
     (
@@ -26872,42 +26920,39 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
 ) -> None:
     """The standalone inventory guard rejects a lower production count."""
 
-    overlay = tmp_path / "repo"
-    overlay.mkdir()
-    copied_paths = {
-        Path("ci/check_sumeragi_v2_multilane_release_inventory.sh"),
-        Path("scripts/run_sumeragi_v2_release_gates.sh"),
-    }
-    for source in ROOT_DIR.iterdir():
-        if source.name in {"ci", "scripts"}:
-            continue
-        (overlay / source.name).symlink_to(
-            source,
-            target_is_directory=source.is_dir(),
-        )
-    for directory in ("ci", "scripts"):
-        destination_dir = overlay / directory
-        destination_dir.mkdir()
-        for source in (ROOT_DIR / directory).iterdir():
-            relative = Path(directory) / source.name
-            destination = overlay / relative
-            if relative in copied_paths:
-                shutil.copy2(source, destination)
-            elif source.is_file() and not source.is_symlink():
-                os.link(source, destination)
-            else:
-                destination.symlink_to(
-                    source,
-                    target_is_directory=source.is_dir(),
-                )
+    checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
+    checker_source = checker.read_text(encoding="utf-8")
+    helper_start = checker_source.index("require_exact_token() {")
+    helper_end = checker_source.index("\n}\n", helper_start) + 3
+    helper = checker_source[helper_start:helper_end]
+    canonical_declaration = "readonly canonical_production_test_count=733"
+    count_guard = (
+        "require_exact_token \\\n"
+        '  "$release_runner" \\\n'
+        '  "readonly expected_production_liveness_test_count='
+        '${canonical_production_test_count}"'
+    )
+    assert checker_source.count(canonical_declaration) == 1
+    assert checker_source.count(count_guard) == 1
 
-    checker = overlay / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
+    probe = "\n".join(
+        (
+            "set -euo pipefail",
+            helper,
+            canonical_declaration,
+            'readonly release_runner="$1"',
+            count_guard,
+        )
+    )
     bash = shutil.which("bash")
     assert bash is not None
+    runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
+    canonical = "readonly expected_production_liveness_test_count=733"
+    weakened = "readonly expected_production_liveness_test_count=732"
+    runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(
-        [bash, str(checker)],
-        cwd=overlay,
+        [bash, "-c", probe, "inventory-count-probe", str(runner)],
         check=False,
         capture_output=True,
         text=True,
@@ -26915,16 +26960,10 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     )
     assert baseline.returncode == 0, baseline.stderr
 
-    runner = overlay / "scripts" / "run_sumeragi_v2_release_gates.sh"
-    source = runner.read_text(encoding="utf-8")
-    canonical = "readonly expected_production_liveness_test_count=733"
-    weakened = "readonly expected_production_liveness_test_count=732"
-    assert source.count(canonical) == 1
-    runner.write_text(source.replace(canonical, weakened, 1), encoding="utf-8")
+    runner.write_text(f"{weakened}\n", encoding="utf-8")
 
     mutated = subprocess.run(
-        [bash, str(checker)],
-        cwd=overlay,
+        [bash, "-c", probe, "inventory-count-probe", str(runner)],
         check=False,
         capture_output=True,
         text=True,

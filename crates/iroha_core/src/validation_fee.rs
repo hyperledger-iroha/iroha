@@ -4,6 +4,11 @@ use core::fmt;
 
 use hex;
 use iroha_crypto::{Hash, HashOf, blake2::Blake2b512};
+#[cfg(test)]
+use iroha_data_model::validation_fee::{
+    VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
+    ValidationFeePlainElectorateRulesV1,
+};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -33,11 +38,6 @@ use iroha_data_model::{
         ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
         ValidationFeeTreasuryPayoutBindingV1,
     },
-};
-#[cfg(test)]
-use iroha_data_model::validation_fee::{
-    VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
-    ValidationFeePlainElectorateRulesV1,
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
@@ -3354,7 +3354,6 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
         iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
-        iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer,
         iroha_data_model::isi::zk::RegisterZkAsset,
         iroha_data_model::isi::zk::RegisterAssetHiddenZkPool,
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,

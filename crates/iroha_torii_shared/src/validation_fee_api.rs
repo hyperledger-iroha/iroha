@@ -1029,7 +1029,22 @@ pub struct ValidationFeeProposalDraftResponseV1 {
 }
 
 /// Closed direction accepted by the typed validation-fee PLAIN ballot draft.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(
+    tag = "direction",
+    content = "value",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
 pub enum ValidationFeePlainBallotDirectionV1 {
     /// Vote in favor of the proposal.
     Aye,

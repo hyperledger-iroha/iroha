@@ -229,6 +229,9 @@ AsyncActiveCommitRequestBudget == N
 AsyncActiveRequestBudget ==
   AsyncActiveCertifiedRequestBudget + AsyncActiveCommitRequestBudget
 
+AsyncServeLifecycleFamilyBudget ==
+  AsyncActiveRequestBudget * Cardinality(Phases)
+
 AsyncRetransmitEmissionBudget ==
   AsyncRetainedControlBudget
     + AsyncRetainedProposalChunkBudget
@@ -405,6 +408,53 @@ AsyncReplySemanticIdentities ==
   \cup
   {AsyncReplySemanticIdentity("CommitCertificateRequest", envelope):
      envelope \in AsyncCommitCertificateRequestEnvelopeSet}
+
+(***************************************************************************
+Serve ownership is internal to one archive process.  The exact signed request
+identity is route-neutral for certified-body recovery, while the archive
+process remains an explicit owner coordinate.  Consequently retransmission to
+the same archive retains one logical identity, but the same fanout request at
+two different archives owns two independent bounded Serve lifecycles.
+***************************************************************************)
+AsyncServeLogicalRequestIdentity(node, request) ==
+  [owner |-> node,
+   request |->
+     AsyncReplySemanticIdentity(request.kind, request.envelope)]
+
+AsyncServeLogicalRequestIdentities ==
+  {[owner |-> node, request |-> requestIdentity]:
+     node \in ValidatorIds,
+     requestIdentity \in AsyncReplySemanticIdentities}
+
+AsyncServeLifecycleFamily(node, request) ==
+  IF request.kind = "CertifiedRequest"
+  THEN [owner |-> node,
+        kind |-> request.kind,
+        context |-> request.envelope.certificate.context,
+        requester |-> request.source,
+        phase |-> request.envelope.certificate.phase]
+  ELSE [owner |-> node,
+        kind |-> request.kind,
+        context |-> context,
+        requester |-> request.source,
+        phase |-> "Commit"]
+
+AsyncServeLifecycleFamilies ==
+  [owner: ValidatorIds,
+   kind: AsyncReplyRequestKinds,
+   context: ContextRecords,
+   requester: ValidatorIds,
+   phase: Phases]
+
+AsyncServeRequestView(request) == request.envelope.view
+
+AsyncServeLifecycleCoordinates(node, identity, family, roundView) ==
+  \E request \in
+       AsyncCertifiedRequestItems \cup
+         AsyncCommitCertificateRequestItems:
+    /\ identity = AsyncServeLogicalRequestIdentity(node, request)
+    /\ family = AsyncServeLifecycleFamily(node, request)
+    /\ roundView = AsyncServeRequestView(request)
 
 (***************************************************************************
 The production request hash covers the exact signed request: round, subject,
@@ -662,6 +712,23 @@ AsyncIoJob(commandClass, candidate, nonce) ==
 AsyncIoConsensusJob(candidate) == AsyncIoJob("Consensus", candidate, 0)
 AsyncIoControlJob == AsyncIoJob("Control", NoAsyncCandidate, 0)
 
+AsyncServeAdmission(node, identity, family, roundView, ordinal) ==
+  [node |-> node, identity |-> identity, family |-> family,
+   view |-> roundView, ordinal |-> ordinal]
+
+AsyncServeReservation(
+    node, identity, family, roundView, ordinal,
+    predecessors, ingressPredecessors) ==
+  [node |-> node, identity |-> identity, family |-> family,
+   view |-> roundView, ordinal |-> ordinal,
+   predecessors |-> predecessors,
+   ingressPredecessors |-> ingressPredecessors]
+
+AsyncServeTombstone(
+    node, identity, family, roundView, ordinal, outputs) ==
+  [node |-> node, identity |-> identity, family |-> family,
+   view |-> roundView, ordinal |-> ordinal, outputs |-> outputs]
+
 AsyncPacket(item, sentAt, deadline) ==
   [item |-> item, sentAt |-> sentAt, deadline |-> deadline]
 
@@ -853,6 +920,10 @@ VARIABLES
   asyncCausalAdmissionOwed,
   asyncNextLocalSource,
   asyncIoQueues,
+  asyncNextServeAdmissionOrdinal,
+  asyncServeAdmissions,
+  asyncServeReservations,
+  asyncServeTombstones,
   asyncOutstandingWork,
   asyncIoReadyCompletions,
   asyncLocalReadyCompletions,
@@ -888,6 +959,8 @@ AsyncSchedulerVars ==
     asyncFifoOwed, asyncTimeoutEmitted,
     asyncRunnerPhase, asyncRunnerBudget,
     asyncCausalAdmissionOwed, asyncNextLocalSource, asyncIoQueues,
+    asyncNextServeAdmissionOrdinal, asyncServeAdmissions,
+    asyncServeReservations, asyncServeTombstones,
     asyncOutstandingWork, asyncIoReadyCompletions,
     asyncLocalReadyCompletions, asyncNextCompletionSource,
     asyncIoControlAvailable, asyncDeferredCompletionQueues,
@@ -907,6 +980,8 @@ AsyncSchedulerExceptHistoricalRecoveryTargets ==
     asyncFifoOwed, asyncTimeoutEmitted,
     asyncRunnerPhase, asyncRunnerBudget,
     asyncCausalAdmissionOwed, asyncNextLocalSource, asyncIoQueues,
+    asyncNextServeAdmissionOrdinal, asyncServeAdmissions,
+    asyncServeReservations, asyncServeTombstones,
     asyncOutstandingWork, asyncIoReadyCompletions,
     asyncLocalReadyCompletions, asyncNextCompletionSource,
     asyncIoControlAvailable, asyncDeferredCompletionQueues,
@@ -933,8 +1008,20 @@ AsyncRecoveryVars ==
 
 AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>
 
+AsyncServeLifecycleVars ==
+  <<asyncNextServeAdmissionOrdinal, asyncServeAdmissions,
+    asyncServeReservations, asyncServeTombstones>>
+
 AsyncIoVars ==
-  <<asyncIoQueues, asyncOutstandingWork, asyncIoReadyCompletions,
+  <<asyncIoQueues, AsyncServeLifecycleVars,
+    asyncOutstandingWork, asyncIoReadyCompletions,
+    asyncLocalReadyCompletions, asyncNextCompletionSource,
+    asyncIoControlAvailable>>
+
+AsyncIoExceptServeReservationsVars ==
+  <<asyncIoQueues, asyncNextServeAdmissionOrdinal,
+    asyncServeAdmissions, asyncServeTombstones,
+    asyncOutstandingWork, asyncIoReadyCompletions,
     asyncLocalReadyCompletions, asyncNextCompletionSource,
     asyncIoControlAvailable>>
 
@@ -1002,11 +1089,179 @@ AsyncIoAdmissionLimit(commandClass) ==
          AsyncIoAuxCapacity + AsyncIoWorkCapacity
     [] commandClass = "Control" -> AsyncIoCapacity
 
-CanEnqueueIoClass(node, commandClass) ==
-  AsyncIoQueueDepth(node) < AsyncIoAdmissionLimit(commandClass)
-
 AsyncIoServeIndices(queue) ==
   {index \in 1..Len(queue): queue[index].class = "Serve"}
+
+AsyncIoServeJobIdentity(node, job) ==
+  AsyncServeLogicalRequestIdentity(node, job.candidate.item)
+
+AsyncIoServeIdentities(node) ==
+  {AsyncIoServeJobIdentity(node, asyncIoQueues[node][index]):
+     index \in AsyncIoServeIndices(asyncIoQueues[node])}
+
+AsyncIoServeIdentityIndices(node, identity) ==
+  {index \in AsyncIoServeIndices(asyncIoQueues[node]):
+     AsyncIoServeJobIdentity(
+       node, asyncIoQueues[node][index]) = identity}
+
+AsyncIoJobsBeforeServeIdentity(node, identity) ==
+  {asyncIoQueues[node][index]:
+     index \in
+       {position \in 1..Len(asyncIoQueues[node]):
+          \E targetIndex \in
+               AsyncIoServeIdentityIndices(node, identity):
+            position < targetIndex}}
+
+AsyncServeAdmissionRecords(node, identity) ==
+  {admission \in asyncServeAdmissions:
+     /\ admission.node = node
+     /\ admission.identity = identity}
+
+AsyncServeReservationRecords(node, identity) ==
+  {reservation \in asyncServeReservations:
+     /\ reservation.node = node
+     /\ reservation.identity = identity}
+
+AsyncServeTombstoneRecords(node, identity) ==
+  {tombstone \in asyncServeTombstones:
+     /\ tombstone.node = node
+     /\ tombstone.identity = identity}
+
+AsyncServeFamilyReservationRecords(node, family) ==
+  {reservation \in asyncServeReservations:
+     /\ reservation.node = node
+     /\ reservation.family = family}
+
+AsyncServeFamilyTombstoneRecords(node, family) ==
+  {tombstone \in asyncServeTombstones:
+     /\ tombstone.node = node
+     /\ tombstone.family = family}
+
+AsyncServeLifecycleOwned(node, identity) ==
+  \/ AsyncServeReservationRecords(node, identity) # {}
+  \/ AsyncServeTombstoneRecords(node, identity) # {}
+
+AsyncServeLifecycleFamilyOwned(node, family) ==
+  \/ AsyncServeFamilyReservationRecords(node, family) # {}
+  \/ AsyncServeFamilyTombstoneRecords(node, family) # {}
+
+AsyncServeLifecycleTombstone(node, identity) ==
+  AsyncServeTombstoneRecords(node, identity) # {}
+
+AsyncServeLiveReservationOwned(node, identity) ==
+  AsyncServeReservationRecords(node, identity) # {}
+
+AsyncServeAdmissionRecord(node, identity) ==
+  CHOOSE admission \in AsyncServeAdmissionRecords(node, identity): TRUE
+
+AsyncServeReservationRecord(node, identity) ==
+  CHOOSE reservation \in AsyncServeReservationRecords(node, identity): TRUE
+
+AsyncServeTombstoneRecord(node, identity) ==
+  CHOOSE tombstone \in AsyncServeTombstoneRecords(node, identity): TRUE
+
+AsyncServeAdmissionOrdinal(node, identity) ==
+  IF AsyncServeLiveReservationOwned(node, identity)
+  THEN AsyncServeReservationRecord(node, identity).ordinal
+  ELSE AsyncServeTombstoneRecord(node, identity).ordinal
+
+AsyncServeFrozenPredecessorSet(node, identity) ==
+  IF AsyncServeLiveReservationOwned(node, identity)
+  THEN AsyncServeReservationRecord(node, identity).predecessors
+  ELSE {}
+
+AsyncServeFrozenIngressPredecessorCounts(node, identity) ==
+  IF AsyncServeLiveReservationOwned(node, identity)
+  THEN AsyncServeReservationRecord(
+         node, identity).ingressPredecessors
+  ELSE [source \in AsyncIngressSources |-> 0]
+
+AsyncServeFrozenIngressPredecessorSet(node, identity) ==
+  UNION {
+    {[
+       source |-> source,
+       index |-> index,
+       item |-> asyncIngressLanes[node][source][index]
+     ]:
+       index \in
+         1..AsyncServeFrozenIngressPredecessorCounts(
+              node, identity)[source]}:
+    source \in AsyncIngressSources}
+
+AsyncServeTombstoneOutputs(node, identity) ==
+  IF AsyncServeLifecycleTombstone(node, identity)
+  THEN AsyncServeTombstoneRecord(node, identity).outputs
+  ELSE {}
+
+AsyncServeJobQueued(node, identity) ==
+  identity \in AsyncIoServeIdentities(node)
+
+AsyncServeOffQueueReservations(node) ==
+  {reservation \in asyncServeReservations:
+     /\ reservation.node = node
+     /\ ~AsyncServeJobQueued(node, reservation.identity)}
+
+AsyncIoEffectiveQueueDepth(node) ==
+  IF AsyncServeOffQueueReservations(node) # {}
+  THEN AsyncIoCapacity
+  ELSE AsyncIoQueueDepth(node)
+
+CanEnqueueIoClass(node, commandClass) ==
+  AsyncIoEffectiveQueueDepth(node) <
+    AsyncIoAdmissionLimit(commandClass)
+
+CanResumeExactServeCapacity(node, identity) ==
+  /\ AsyncServeLiveReservationOwned(node, identity)
+  /\ ~AsyncServeJobQueued(node, identity)
+  /\ AsyncIoQueueDepth(node) < AsyncIoCapacity
+
+AsyncServeFamilyReservationRecord(node, family) ==
+  CHOOSE reservation \in
+    AsyncServeFamilyReservationRecords(node, family): TRUE
+
+AsyncServeFamilyTombstoneRecord(node, family) ==
+  CHOOSE tombstone \in
+    AsyncServeFamilyTombstoneRecords(node, family): TRUE
+
+AsyncServeFamilyOwnerIdentity(node, family) ==
+  IF AsyncServeFamilyReservationRecords(node, family) # {}
+  THEN AsyncServeFamilyReservationRecord(node, family).identity
+  ELSE AsyncServeFamilyTombstoneRecord(node, family).identity
+
+AsyncServeFamilyHighWatermark(node, family) ==
+  IF AsyncServeFamilyReservationRecords(node, family) # {}
+  THEN AsyncServeFamilyReservationRecord(node, family).view
+  ELSE AsyncServeFamilyTombstoneRecord(node, family).view
+
+AsyncServeActiveFamilyRequests(node, family) ==
+  {request \in asyncActiveRequests:
+     /\ request.kind \in AsyncReplyRequestKinds
+     /\ request.envelope.recipient = node
+     /\ AsyncServeLifecycleFamily(node, request) = family}
+
+AsyncServeFamilyAdvanceRetiresPriorRequests(node, request) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, request)
+      family == AsyncServeLifecycleFamily(node, request)
+  IN \A active \in AsyncServeActiveFamilyRequests(node, family):
+       \/ AsyncServeRequestView(active) >=
+            AsyncServeRequestView(request)
+       \/ AsyncServeLogicalRequestIdentity(node, active) = identity
+
+AsyncServeRequestRespectsHighWatermark(request) ==
+  LET node == request.envelope.recipient
+      family == AsyncServeLifecycleFamily(node, request)
+  IN IF AsyncServeLifecycleFamilyOwned(node, family)
+     THEN AsyncServeRequestView(request) >=
+            AsyncServeFamilyHighWatermark(node, family)
+     ELSE TRUE
+
+AsyncServePublicationRespectsHighWatermarks(items) ==
+  \A request \in items:
+    AsyncServeRequestRespectsHighWatermark(request)
+
+AsyncServeIngressPredecessorCounts(node) ==
+  [source \in AsyncIngressSources |->
+     Len(asyncIngressLanes[node][source])]
 
 AsyncIoServeNonces(node) ==
   {asyncIoQueues[node][index].nonce:
@@ -1019,6 +1274,111 @@ FreshAsyncIoServeNonce(node) ==
 AsyncIoCertifiedServeJob(node, candidate) ==
   AsyncIoJob("Serve", candidate, FreshAsyncIoServeNonce(node))
 
+AsyncServeReservationsWithout(node, identity) ==
+  {reservation \in asyncServeReservations:
+     \/ reservation.node # node
+     \/ reservation.identity # identity}
+
+AsyncServeAdmissionsWithout(node, identity) ==
+  {admission \in asyncServeAdmissions:
+     \/ admission.node # node
+     \/ admission.identity # identity}
+
+AsyncServeTombstonesWithoutFamily(node, family) ==
+  {tombstone \in asyncServeTombstones:
+     \/ tombstone.node # node
+     \/ tombstone.family # family}
+
+AsyncServeAdmissionsWithoutNode(node) ==
+  {admission \in asyncServeAdmissions:
+     admission.node # node}
+
+AsyncServeReservationsWithoutNode(node) ==
+  {reservation \in asyncServeReservations:
+     reservation.node # node}
+
+AsyncServeTombstonesWithoutNode(node) ==
+  {tombstone \in asyncServeTombstones:
+     tombstone.node # node}
+
+AsyncServeRemainingPredecessorIndices(node, identity) ==
+  {index \in 1..Len(asyncIoQueues[node]):
+     asyncIoQueues[node][index]
+       \in AsyncServeFrozenPredecessorSet(node, identity)}
+
+AsyncServeEarlierOrdinalIndices(node, identity) ==
+  {index \in AsyncIoServeIndices(asyncIoQueues[node]):
+     LET earlierIdentity ==
+           AsyncIoServeJobIdentity(
+             node, asyncIoQueues[node][index])
+     IN AsyncServeAdmissionOrdinal(node, earlierIdentity)
+          < AsyncServeAdmissionOrdinal(node, identity)}
+
+AsyncServeEarlierLiveReservationIdentities(node, identity) ==
+  IF AsyncServeLifecycleOwned(node, identity)
+  THEN {reservation.identity:
+          reservation \in
+            {owned \in asyncServeReservations:
+               /\ owned.node = node
+               /\ owned.ordinal
+                    < AsyncServeAdmissionOrdinal(node, identity)}}
+  ELSE {}
+
+AsyncServeMaterializationPredecessorIndices(node, identity) ==
+  AsyncServeRemainingPredecessorIndices(node, identity)
+    \cup AsyncServeEarlierOrdinalIndices(node, identity)
+
+AsyncServeMaterializationPredecessorJobs(node, identity) ==
+  {asyncIoQueues[node][index]:
+     index \in
+       AsyncServeMaterializationPredecessorIndices(node, identity)}
+
+AsyncServeResumeInsertionIndex(node, identity) ==
+  Cardinality(
+    AsyncServeMaterializationPredecessorIndices(
+      node, identity)) + 1
+
+AsyncIoQueueWithResumedServe(node, identity, job) ==
+  LET insertionIndex ==
+        AsyncServeResumeInsertionIndex(node, identity)
+  IN SubSeq(asyncIoQueues[node], 1, insertionIndex - 1)
+       \o <<job>>
+       \o SubSeq(
+            asyncIoQueues[node], insertionIndex,
+            Len(asyncIoQueues[node]))
+
+AsyncServeReservationsAfterIoService(node, job, completedIdentity) ==
+  {AsyncServeReservation(
+     reservation.node,
+     reservation.identity,
+     reservation.family,
+     reservation.view,
+     reservation.ordinal,
+     IF reservation.node = node
+     THEN reservation.predecessors \ {job}
+     ELSE reservation.predecessors,
+     reservation.ingressPredecessors):
+     reservation \in
+       {owned \in asyncServeReservations:
+          \/ completedIdentity = NoAsyncItem
+          \/ owned.node # node
+          \/ owned.identity # completedIdentity}}
+
+AsyncServeReservationsAfterIngressDrain(node, source, laneIndex) ==
+  {AsyncServeReservation(
+     reservation.node,
+     reservation.identity,
+     reservation.family,
+     reservation.view,
+     reservation.ordinal,
+     reservation.predecessors,
+     IF /\ reservation.node = node
+           /\ laneIndex <=
+                reservation.ingressPredecessors[source]
+     THEN [reservation.ingressPredecessors EXCEPT ![source] = @ - 1]
+     ELSE reservation.ingressPredecessors):
+     reservation \in asyncServeReservations}
+
 AsyncIoServeNonceOwnership(queue) ==
   \A left, right \in AsyncIoServeIndices(queue):
     queue[left].nonce = queue[right].nonce => left = right
@@ -1027,6 +1387,122 @@ AsyncIoSequenceTyped(queue) ==
   /\ queue \in Seq(Range(queue))
   /\ DOMAIN queue = 1..Len(queue)
   /\ \A index \in 1..Len(queue): AsyncIoJobTyped(queue[index])
+
+(***************************************************************************
+Hidden-ingress acceptance and the auxiliary-I/O reservation are one action.  A
+new exact request receives the next immutable process-local ordinal and
+freezes the complete current I/O FIFO and each current ingress-lane prefix
+before it becomes visible to the fair ingress runner.  The reservation is a
+logical future-slot ticket even when the physical I/O queue is full: while
+any ticket remains off-queue, ordinary producers observe full effective
+capacity, and the next physical slot belongs to the least admission ordinal.
+Later causal, Consensus, Control, Completion, priority, and Serve work
+therefore cannot acquire a position ahead of it.  A retry either observes the
+existing reservation or terminal tombstone; neither allocates another
+ordinal.
+***************************************************************************)
+ReserveExactServeCapacity(node, candidate) ==
+  LET identity ==
+        AsyncServeLogicalRequestIdentity(node, candidate.item)
+      family ==
+        AsyncServeLifecycleFamily(node, candidate.item)
+      roundView == AsyncServeRequestView(candidate.item)
+      ordinal == asyncNextServeAdmissionOrdinal[node]
+  IN /\ candidate.kind = "AcceptCertifiedRequest"
+     /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ ~AsyncServeLifecycleFamilyOwned(node, family)
+     /\ AsyncServeFamilyAdvanceRetiresPriorRequests(
+          node, candidate.item)
+     /\ UNCHANGED asyncIoQueues
+     /\ asyncNextServeAdmissionOrdinal' =
+          [asyncNextServeAdmissionOrdinal EXCEPT ![node] = @ + 1]
+     /\ asyncServeAdmissions' =
+          asyncServeAdmissions
+            \cup {AsyncServeAdmission(
+                    node, identity, family, roundView, ordinal)}
+     /\ asyncServeReservations' =
+          asyncServeReservations
+            \cup {AsyncServeReservation(
+                    node, identity, family, roundView, ordinal,
+                    {asyncIoQueues[node][index]:
+                       index \in 1..Len(asyncIoQueues[node])},
+                    AsyncServeIngressPredecessorCounts(node))}
+     /\ UNCHANGED asyncServeTombstones
+
+AdvanceExactServeCapacity(node, candidate) ==
+  LET identity ==
+        AsyncServeLogicalRequestIdentity(node, candidate.item)
+      family ==
+        AsyncServeLifecycleFamily(node, candidate.item)
+      roundView == AsyncServeRequestView(candidate.item)
+      ordinal == asyncNextServeAdmissionOrdinal[node]
+  IN /\ candidate.kind = "AcceptCertifiedRequest"
+     /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ ~AsyncServeLifecycleOwned(node, identity)
+     /\ AsyncServeFamilyTombstoneRecords(node, family) # {}
+     /\ roundView > AsyncServeFamilyHighWatermark(node, family)
+     /\ AsyncServeFamilyAdvanceRetiresPriorRequests(
+          node, candidate.item)
+     /\ UNCHANGED asyncIoQueues
+     /\ asyncNextServeAdmissionOrdinal' =
+          [asyncNextServeAdmissionOrdinal EXCEPT ![node] = @ + 1]
+     /\ asyncServeAdmissions' =
+          asyncServeAdmissions
+            \cup {AsyncServeAdmission(
+                    node, identity, family, roundView, ordinal)}
+     /\ asyncServeReservations' =
+          asyncServeReservations
+            \cup {AsyncServeReservation(
+                    node, identity, family, roundView, ordinal,
+                    {asyncIoQueues[node][index]:
+                       index \in 1..Len(asyncIoQueues[node])},
+                    AsyncServeIngressPredecessorCounts(node))}
+     /\ asyncServeTombstones' =
+          AsyncServeTombstonesWithoutFamily(node, family)
+
+CoalesceExactServeIngressCapacity(node, candidate) ==
+  LET identity ==
+        AsyncServeLogicalRequestIdentity(node, candidate.item)
+      family ==
+        AsyncServeLifecycleFamily(node, candidate.item)
+      roundView == AsyncServeRequestView(candidate.item)
+  IN /\ candidate.kind = "AcceptCertifiedRequest"
+     /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ \/ AsyncServeLifecycleOwned(node, identity)
+        \/ /\ AsyncServeLifecycleFamilyOwned(node, family)
+              /\ roundView <=
+                   AsyncServeFamilyHighWatermark(node, family)
+     /\ UNCHANGED <<asyncIoQueues, AsyncServeLifecycleVars>>
+
+AcceptOrReserveExactServeIngress(node, candidate) ==
+  \/ ReserveExactServeCapacity(node, candidate)
+  \/ AdvanceExactServeCapacity(node, candidate)
+  \/ CoalesceExactServeIngressCapacity(node, candidate)
+
+ResumeExactServeCapacity(node, candidate) ==
+  LET identity ==
+        AsyncServeLogicalRequestIdentity(node, candidate.item)
+      job == AsyncIoCertifiedServeJob(node, candidate)
+  IN /\ candidate.kind = "AcceptCertifiedRequest"
+     /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ CanResumeExactServeCapacity(node, identity)
+     /\ asyncIoQueues' =
+          [asyncIoQueues EXCEPT
+             ![node] =
+               AsyncIoQueueWithResumedServe(node, identity, job)]
+     /\ UNCHANGED <<asyncNextServeAdmissionOrdinal,
+                     asyncServeAdmissions, asyncServeTombstones>>
+
+CoalesceExactServeCapacity(node, candidate) ==
+  LET identity ==
+        AsyncServeLogicalRequestIdentity(node, candidate.item)
+  IN /\ candidate.kind = "AcceptCertifiedRequest"
+     /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ AsyncServeLifecycleOwned(node, identity)
+     /\ \/ AsyncServeLifecycleTombstone(node, identity)
+        \/ AsyncServeJobQueued(node, identity)
+     /\ UNCHANGED <<asyncIoQueues, asyncNextServeAdmissionOrdinal,
+                     asyncServeAdmissions, asyncServeTombstones>>
 
 AsyncCompletionSequenceTyped(queue) ==
   /\ queue \in Seq(Range(queue))
@@ -2368,14 +2844,6 @@ IngressUsableCapacityAfterAdmission(item) ==
   AsyncIngressCapacity
     - IngressProtectedSlotCountAfterAdmission(item)
 
-CanAdmitIngressItem(item) ==
-  /\ IngressDepth(item.envelope.recipient)
-       < IngressUsableCapacityAfterAdmission(item)
-  /\ AsyncTimeoutVoteByteGateAllows(item)
-  /\ AsyncTransportCompletionOwnerGateAllows(item)
-  /\ CertifiedResponseFreshClaimGateAllows(item)
-  /\ AsyncUntrustedGenericCompletionGateAllows(item)
-
 ItemInIngress(item) ==
   \E recipient \in ValidatorIds, source \in AsyncIngressSources:
     item \in SequenceSet(IngressLane(recipient, source))
@@ -2531,6 +2999,7 @@ PublishCertifiedRequests(items) ==
   /\ AsyncCertifiedRequestLogicalIndexConsistent(asyncActiveRequests)
   /\ AsyncCertifiedRequestLogicalIndexConsistent(items)
   /\ AsyncCertifiedRequestSetsCompatible(asyncActiveRequests, items)
+  /\ AsyncServePublicationRespectsHighWatermarks(items)
   /\ asyncActiveRequests' = asyncActiveRequests \cup items
   /\ asyncSentItems' = asyncSentItems \cup items
   /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
@@ -2539,6 +3008,7 @@ PublishCertifiedRequests(items) ==
 
 PublishCommitCertificateRequests(items) ==
   /\ \A item \in items: item.kind = "CommitCertificateRequest"
+  /\ AsyncServePublicationRespectsHighWatermarks(items)
   /\ asyncActiveRequests' = asyncActiveRequests \cup items
   /\ asyncSentItems' = asyncSentItems \cup items
   /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
@@ -3928,16 +4398,119 @@ IngressPacketPolicyRejected(item) ==
   \/ CertifiedResponsePacketPolicyRejected(item)
   \/ UntrustedGenericCompletionPacketPolicyRejected(item)
 
+CommitCertificateRequestAuthorized(item) ==
+  /\ item.kind = "CommitCertificateRequest"
+  /\ item.source
+       \in CurrentVoters \cup asyncHistoricalRecoveryTargets
+  /\ item.envelope.recipient \in CurrentVoters
+  /\ item.envelope.height = context.height
+
+AsyncServeRequestAuthorized(item) ==
+  /\ item.kind \in AsyncReplyRequestKinds
+  /\ IngressItemHasAuthenticatedHistory(item)
+  /\ IF item.kind = "CertifiedRequest"
+     THEN CertifiedRequestAuthorized(item)
+     ELSE CommitCertificateRequestAuthorized(item)
+
+AsyncServeRequestServiceable(node, item) ==
+  /\ item.kind \in AsyncReplyRequestKinds
+  /\ IF item.kind = "CertifiedRequest"
+     THEN CertifiedServeCanRespond(node, item)
+     ELSE CommitCertificateServeCanRespond(item)
+
+AsyncServeLifecycleAdmissionRequired(node, item) ==
+  AsyncServeRequestAuthorized(item)
+    /\ AsyncServeRequestServiceable(node, item)
+
+AsyncServeLifecycleDrainRequired(node, item) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, item)
+  IN \/ AsyncServeLifecycleOwned(node, identity)
+     \/ AsyncServeLifecycleAdmissionRequired(node, item)
+
+AsyncServeRequestLifecycleRetired(item) ==
+  /\ item.kind \in AsyncReplyRequestKinds
+  /\ \/ item \notin asyncActiveRequests
+     \/ /\ item.source \in ValidatorIds
+           /\ NodeHasDecision(item.source)
+
+AsyncServeLifecycleSuperseded(node, item) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, item)
+      family == AsyncServeLifecycleFamily(node, item)
+  IN /\ ~AsyncServeLifecycleOwned(node, identity)
+     /\ AsyncServeLifecycleFamilyOwned(node, family)
+     /\ AsyncServeRequestView(item) <
+          AsyncServeFamilyHighWatermark(node, family)
+     /\ AsyncServeRequestLifecycleRetired(item)
+
+AsyncServeLifecycleConflict(node, item) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, item)
+      family == AsyncServeLifecycleFamily(node, item)
+  IN /\ ~AsyncServeLifecycleOwned(node, identity)
+     /\ AsyncServeLifecycleFamilyOwned(node, family)
+     /\ AsyncServeRequestView(item) =
+          AsyncServeFamilyHighWatermark(node, family)
+
+(***************************************************************************
+An authorized exact request without an existing lifecycle does not leave
+transport until its immutable local retention owner can answer it.  This
+keeps an initially unserviceable request out of the coalescing ingress lanes:
+if StoreBody, Apply, or historical recovery later makes it serviceable, the
+same retained packet crosses the atomic admission/reservation cut then.
+Existing lifecycle, superseded, and same-view conflict identities may still
+enter so retries can replay, retire, or be rejected deterministically.
+***************************************************************************)
+AsyncServeTransportAdmissionGateAllows(node, item) ==
+  IF AsyncServeRequestAuthorized(item)
+  THEN \/ AsyncServeRequestServiceable(node, item)
+       \/ AsyncServeLifecycleOwned(
+            node, AsyncServeLogicalRequestIdentity(node, item))
+       \/ AsyncServeLifecycleSuperseded(node, item)
+       \/ AsyncServeLifecycleConflict(node, item)
+  ELSE TRUE
+
+CanAdmitIngressItem(item) ==
+  /\ AsyncServeTransportAdmissionGateAllows(
+       item.envelope.recipient, item)
+  /\ IngressDepth(item.envelope.recipient)
+       < IngressUsableCapacityAfterAdmission(item)
+  /\ AsyncTimeoutVoteByteGateAllows(item)
+  /\ AsyncTransportCompletionOwnerGateAllows(item)
+  /\ CertifiedResponseFreshClaimGateAllows(item)
+  /\ AsyncUntrustedGenericCompletionGateAllows(item)
+
+ExactServeTransportAdmissionCanAdvance(node, request) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, request)
+      family == AsyncServeLifecycleFamily(node, request)
+      roundView == AsyncServeRequestView(request)
+  IN IF AsyncServeLifecycleOwned(node, identity)
+     THEN TRUE
+     ELSE IF AsyncServeLifecycleSuperseded(node, request)
+          THEN TRUE
+          ELSE IF AsyncServeLifecycleConflict(node, request)
+               THEN TRUE
+               ELSE IF ~AsyncServeLifecycleFamilyOwned(node, family)
+                    THEN TRUE
+                    ELSE /\ AsyncServeFamilyTombstoneRecords(
+                                 node, family) # {}
+                         /\ roundView >
+                              AsyncServeFamilyHighWatermark(node, family)
+                         /\ AsyncServeFamilyAdvanceRetiresPriorRequests(
+                              node, request)
+
 AdmitHiddenPacket(recipient, source) ==
   LET packet == OldestDueSourcePacket(recipient, source)
       item == packet.item
       resourceSource == IngressResourceSource(item)
       lane == IngressLane(recipient, resourceSource)
+      candidate == DeliveryCandidate(item)
   IN /\ recipient \in up
      /\ ~ResponsiveReplayQuarantined(recipient)
      /\ DueSourcePackets(recipient, source) # {}
      /\ ~IngressHasCoalescingOwner(item)
      /\ CanAdmitIngressItem(item)
+     /\ IF AsyncServeLifecycleAdmissionRequired(recipient, item)
+        THEN ExactServeTransportAdmissionCanAdvance(recipient, item)
+        ELSE TRUE
      /\ asyncTransport' = asyncTransport \ {packet}
      /\ asyncIngressLanes' =
           [asyncIngressLanes EXCEPT
@@ -3952,13 +4525,19 @@ AdmitHiddenPacket(recipient, source) ==
           THEN asyncCertifiedResponseClaim
                  \cup {AsyncCertifiedResponseCanonicalWireIdentity(item)}
           ELSE asyncCertifiedResponseClaim
+     /\ IF AsyncServeLifecycleAdmissionRequired(recipient, item)
+        THEN AcceptOrReserveExactServeIngress(recipient, candidate)
+        ELSE UNCHANGED AsyncServeLifecycleVars
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
      /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
-                    asyncRunnerBudget, AsyncIoVars, asyncOutstandingTags,
+                    asyncRunnerBudget, asyncIoQueues,
+                    asyncOutstandingWork, asyncIoReadyCompletions,
+                    asyncLocalReadyCompletions, asyncNextCompletionSource,
+                    asyncIoControlAvailable, asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncSentItems, asyncRetainedControl, asyncActiveRequests,
@@ -4035,13 +4614,6 @@ HeadIngressItem(node) ==
 IngressItemAt(node, index) ==
   Head(IngressLane(node, asyncIngressReady[node][index]))
 
-CommitCertificateRequestAuthorized(item) ==
-  /\ item.kind = "CommitCertificateRequest"
-  /\ item.source
-       \in CurrentVoters \cup asyncHistoricalRecoveryTargets
-  /\ item.envelope.recipient \in CurrentVoters
-  /\ item.envelope.height = context.height
-
 MatchingCommitCertificateRequests(response) ==
   {request \in asyncActiveRequests:
      /\ request.kind = "CommitCertificateRequest"
@@ -4058,6 +4630,68 @@ CommitCertificateResponseAuthorized(item) ==
   /\ item.envelope.qc.context = context
   /\ item.envelope.qc.phase = "Commit"
   /\ MatchingCommitCertificateRequests(item) # {}
+
+(***************************************************************************
+One finite high-watermark owner represents each
+archive/kind/context/requester/phase family.  The certified subject remains in
+the full exact identity, while certificate uniqueness rejects a different
+same-view subject or request hash instead of allocating another tombstone.  A
+delayed lower-view retry is absorbed only after its requester has retired that
+exact active request (or already reached Decision); it is therefore an
+already-reached lifecycle goal, not a silently dropped live request.  A
+higher-view request may replace only a terminal family tombstone and receives
+a new immutable admission ordinal.
+***************************************************************************)
+CoalesceSupersededExactServeRequest(node, candidate) ==
+  /\ candidate.kind = "AcceptCertifiedRequest"
+  /\ candidate.item.kind \in AsyncReplyRequestKinds
+  /\ AsyncServeLifecycleSuperseded(node, candidate.item)
+  /\ UNCHANGED <<asyncIoQueues, asyncNextServeAdmissionOrdinal,
+                  asyncServeAdmissions, asyncServeTombstones>>
+
+RejectConflictingExactServeRequest(node, candidate) ==
+  /\ candidate.kind = "AcceptCertifiedRequest"
+  /\ candidate.item.kind \in AsyncReplyRequestKinds
+  /\ AsyncServeLifecycleConflict(node, candidate.item)
+  /\ UNCHANGED <<asyncIoQueues, asyncNextServeAdmissionOrdinal,
+                  asyncServeAdmissions, asyncServeTombstones>>
+
+AcceptOrCoalesceExactServeRequest(node, candidate) ==
+  \/ ResumeExactServeCapacity(node, candidate)
+  \/ CoalesceExactServeCapacity(node, candidate)
+  \/ CoalesceSupersededExactServeRequest(node, candidate)
+  \/ RejectConflictingExactServeRequest(node, candidate)
+
+ExactServeIngressCanAdvance(node, request) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, request)
+  IN IF AsyncServeLifecycleOwned(node, identity)
+     THEN \/ AsyncServeLifecycleTombstone(node, identity)
+          \/ AsyncServeJobQueued(node, identity)
+          \/ CanResumeExactServeCapacity(node, identity)
+     ELSE IF AsyncServeLifecycleSuperseded(node, request)
+          THEN TRUE
+          ELSE IF AsyncServeLifecycleConflict(node, request)
+               THEN TRUE
+               ELSE FALSE
+
+ExactServeIngressNeedsQueueSlot(node, request) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, request)
+  IN AsyncServeLiveReservationOwned(node, identity)
+       /\ ~AsyncServeJobQueued(node, identity)
+       /\ ~AsyncServeLifecycleSuperseded(node, request)
+       /\ ~AsyncServeLifecycleConflict(node, request)
+
+(***************************************************************************
+A terminal lifecycle is a retained response cache, not a request sink.  An
+exact retransmission re-emits the cached output into the ordinary bounded
+transport corridor while the old ingress/Serve stage remains retired.
+***************************************************************************)
+AsyncServeCachedReplayItems(node, item) ==
+  LET identity == AsyncServeLogicalRequestIdentity(node, item)
+  IN IF /\ AsyncServeRequestAuthorized(item)
+           /\ AsyncServeLifecycleTombstone(node, identity)
+     THEN AsyncServeTombstoneOutputs(node, identity)
+     ELSE {}
 
 (***************************************************************************
 The authenticated archive hop is not a historical vote authority.  The
@@ -4135,11 +4769,9 @@ IngressItemCanDrain(node, item) ==
        \/ ~IngressItemHasAuthenticatedHistory(item)
        \/ IF item.kind \in {"CertifiedRequest",
                              "CommitCertificateRequest"}
-          THEN \/ ~(IF item.kind = "CertifiedRequest"
-                    THEN CertifiedRequestAuthorized(item)
-                    ELSE CommitCertificateRequestAuthorized(item))
-               \/ /\ ~CompletionCausalAdmissionDebt(node)
-                     /\ CanEnqueueIoClass(node, "Serve")
+          THEN IF AsyncServeLifecycleDrainRequired(node, item)
+               THEN ExactServeIngressCanAdvance(node, item)
+               ELSE TRUE
           ELSE IF item.kind = "Chunk"
                THEN TRUE
                ELSE IF item.kind = "CertifiedResponse"
@@ -4161,9 +4793,52 @@ IngressItemCanDrain(node, item) ==
                     \/ /\ ~NonCompletionCausalAdmissionDebt(node)
                           /\ CanEnqueueClass(node, candidate.class)
 
+AsyncServeIngressReservationIdentities(node) ==
+  UNION {
+    {AsyncServeLogicalRequestIdentity(
+       node, asyncIngressLanes[node][source][index]):
+       index \in
+         {position \in 1..Len(asyncIngressLanes[node][source]):
+            asyncIngressLanes[node][source][position].kind
+              \in AsyncReplyRequestKinds}}:
+    source \in AsyncIngressSources}
+
+AsyncServeIngressLiveReservations(node) ==
+  {reservation \in asyncServeReservations:
+     /\ reservation.node = node
+     /\ reservation.identity
+          \in AsyncServeIngressReservationIdentities(node)
+     /\ ~AsyncServeJobQueued(node, reservation.identity)}
+
+AsyncServeEarliestIngressReservation(node) ==
+  CHOOSE reservation \in AsyncServeIngressLiveReservations(node):
+    \A other \in AsyncServeIngressLiveReservations(node):
+      reservation.ordinal <= other.ordinal
+
+(***************************************************************************
+The hidden-ingress acceptance cut freezes one prefix length per physical
+source lane.  Removing an occurrence inside a frozen prefix decrements that
+prefix; appending later traffic never increases it.  While an off-queue Serve
+reservation remains in ingress, only one of those frozen predecessors or the
+least-admission-ordinal target itself is selectable.  In particular a later
+claimed response, fenced completion, Control producer, or exact request
+cannot acquire a selector position ahead of the admitted target.
+***************************************************************************)
+AsyncServeIngressIndexMayPrecedeAdmittedTarget(node, source, index) ==
+  IF AsyncServeIngressLiveReservations(node) = {}
+  THEN TRUE
+  ELSE LET owner == AsyncServeEarliestIngressReservation(node)
+           item == asyncIngressLanes[node][source][index]
+       IN \/ index <= owner.ingressPredecessors[source]
+          \/ /\ item.kind \in AsyncReplyRequestKinds
+             /\ AsyncServeLogicalRequestIdentity(node, item)
+                  = owner.identity
+
 DrainableIngressLaneIndices(node, source) ==
   {index \in 1..Len(IngressLane(node, source)):
-     IngressItemCanDrain(node, IngressLane(node, source)[index])}
+     /\ AsyncServeIngressIndexMayPrecedeAdmittedTarget(
+          node, source, index)
+     /\ IngressItemCanDrain(node, IngressLane(node, source)[index])}
 
 DrainableClaimedResponseLaneIndices(node, source) ==
   {index \in DrainableIngressLaneIndices(node, source):
@@ -4249,6 +4924,9 @@ PopSelectedIngress(node, index, laneIndex) ==
      /\ asyncIngressReady' =
           [asyncIngressReady EXCEPT
              ![node] = ReadyAfterSelectedDrain(node, index)]
+     /\ asyncServeReservations' =
+          AsyncServeReservationsAfterIngressDrain(
+            node, source, laneIndex)
 
 (***************************************************************************
 The serialized Rust ingress authenticates every reducer-directed envelope
@@ -4278,19 +4956,14 @@ DrainFairIngressSelected(node) ==
      /\ IF item.kind = "Noise" \/ ~IngressItemHasAuthenticatedHistory(item)
         THEN /\ UNCHANGED <<asyncCommandQueues,
                             asyncNextCommandClass>>
-             /\ UNCHANGED AsyncIoVars
+             /\ UNCHANGED AsyncIoExceptServeReservationsVars
              /\ UNCHANGED <<asyncSentItems, asyncRetainedControl,
                             asyncActiveRequests,
                             asyncCertifiedResponseClaim>>
         ELSE IF item.kind \in {"CertifiedRequest",
                                 "CommitCertificateRequest"}
-             THEN IF (IF item.kind = "CertifiedRequest"
-                      THEN CertifiedRequestAuthorized(item)
-                      ELSE CommitCertificateRequestAuthorized(item))
-                  THEN /\ asyncIoQueues' =
-                             [asyncIoQueues EXCEPT
-                                ![node] = Append(
-                                  @, AsyncIoCertifiedServeJob(node, candidate))]
+             THEN IF AsyncServeLifecycleDrainRequired(node, item)
+                  THEN /\ AcceptOrCoalesceExactServeRequest(node, candidate)
                        /\ UNCHANGED <<asyncOutstandingWork,
                                        asyncIoReadyCompletions,
                                        asyncLocalReadyCompletions,
@@ -4302,14 +4975,16 @@ DrainFairIngressSelected(node) ==
                                       asyncActiveRequests,
                                       asyncCertifiedResponseClaim>>
                   ELSE /\ UNCHANGED <<asyncCommandQueues,
-                                      asyncNextCommandClass, AsyncIoVars>>
+                                      asyncNextCommandClass,
+                                      AsyncIoExceptServeReservationsVars>>
                        /\ UNCHANGED <<asyncSentItems,
                                       asyncRetainedControl,
                                       asyncActiveRequests,
                                       asyncCertifiedResponseClaim>>
              ELSE IF item.kind = "Chunk"
                   THEN /\ UNCHANGED <<asyncCommandQueues,
-                                       asyncNextCommandClass, AsyncIoVars>>
+                                       asyncNextCommandClass,
+                                       AsyncIoExceptServeReservationsVars>>
                        /\ UNCHANGED <<asyncSentItems,
                                       asyncRetainedControl,
                                       asyncActiveRequests,
@@ -4319,11 +4994,13 @@ DrainFairIngressSelected(node) ==
                        THEN LET completion ==
                                   CertifiedResponseCandidate(item)
                             IN /\ IF CandidateScheduled(completion)
-                                  THEN UNCHANGED <<AsyncIoVars,
+                                  THEN UNCHANGED <<
+                                                    AsyncIoExceptServeReservationsVars,
                                                     asyncCommandQueues,
                                                     asyncNextCommandClass>>
                                   ELSE /\ EnqueueCandidate(completion)
-                                       /\ UNCHANGED AsyncIoVars
+                                       /\ UNCHANGED
+                                            AsyncIoExceptServeReservationsVars
                                /\ asyncActiveRequests' =
                                     asyncActiveRequests \
                                       MatchingCertifiedRequests(item)
@@ -4334,7 +5011,7 @@ DrainFairIngressSelected(node) ==
                                               asyncRetainedControl>>
                        ELSE /\ UNCHANGED <<asyncCommandQueues,
                                            asyncNextCommandClass,
-                                           AsyncIoVars>>
+                                           AsyncIoExceptServeReservationsVars>>
                             /\ UNCHANGED <<asyncSentItems,
                                            asyncRetainedControl,
                                            asyncActiveRequests,
@@ -4351,7 +5028,8 @@ DrainFairIngressSelected(node) ==
                                                           asyncNextCommandClass>>
                                         ELSE EnqueueCandidate(
                                                discoveredCandidate)
-                                    /\ UNCHANGED AsyncIoVars
+                                    /\ UNCHANGED
+                                         AsyncIoExceptServeReservationsVars
                                     /\ asyncActiveRequests' =
                                          asyncActiveRequests \
                                            MatchingCommitCertificateRequests(item)
@@ -4361,7 +5039,7 @@ DrainFairIngressSelected(node) ==
                                     /\ UNCHANGED asyncRetainedControl
                             ELSE /\ UNCHANGED <<asyncCommandQueues,
                                                 asyncNextCommandClass,
-                                                AsyncIoVars>>
+                                                AsyncIoExceptServeReservationsVars>>
                                  /\ UNCHANGED <<asyncSentItems,
                                                 asyncRetainedControl,
                                                 asyncActiveRequests,
@@ -4370,7 +5048,7 @@ DrainFairIngressSelected(node) ==
                           THEN UNCHANGED <<asyncCommandQueues,
                                            asyncNextCommandClass>>
                           ELSE EnqueueCandidate(candidate)
-                       /\ UNCHANGED AsyncIoVars
+                       /\ UNCHANGED AsyncIoExceptServeReservationsVars
                        /\ UNCHANGED <<asyncSentItems,
                                       asyncRetainedControl,
                                       asyncActiveRequests,
@@ -4384,9 +5062,12 @@ DrainFairIngressSelected(node) ==
                                     item.envelope.subject,
                                     item.envelope.chunk)}
           ELSE asyncHeldChunks
+     /\ asyncTransport' =
+          asyncTransport
+            \cup PacketsForItems(AsyncServeCachedReplayItems(node, item))
      /\ UNCHANGED <<asyncFifoOwed, asyncTimeoutEmitted,
                     asyncOutstandingTags, asyncNodeDeadlines,
-                    asyncRetransmitDeadlines, asyncTransport,
+                    asyncRetransmitDeadlines,
                     asyncHistoricalRecoveryTargets
                     >>
 
@@ -4401,17 +5082,19 @@ Serve reservation as the live-height implementation.
 
 HistoricalIngressItemCanDrain(node, item) ==
   IF item.kind = "CertifiedRequest"
-     THEN \/ ~CertifiedRequestAuthorized(item)
-          \/ CanEnqueueIoClass(node, "Serve")
+     THEN \/ ~AsyncServeLifecycleDrainRequired(node, item)
+          \/ ExactServeIngressCanAdvance(node, item)
      ELSE IF item.kind = "CommitCertificateRequest"
-          THEN \/ ~CommitCertificateRequestAuthorized(item)
-               \/ CanEnqueueIoClass(node, "Serve")
+          THEN \/ ~AsyncServeLifecycleDrainRequired(node, item)
+               \/ ExactServeIngressCanAdvance(node, item)
           ELSE TRUE
 
 HistoricalDrainableIngressLaneIndices(node, source) ==
   {index \in 1..Len(IngressLane(node, source)):
-     HistoricalIngressItemCanDrain(
-       node, IngressLane(node, source)[index])}
+     /\ AsyncServeIngressIndexMayPrecedeAdmittedTarget(
+          node, source, index)
+     /\ HistoricalIngressItemCanDrain(
+          node, IngressLane(node, source)[index])}
 
 FirstHistoricalDrainableIngressLaneIndex(node, source) ==
   CHOOSE index \in HistoricalDrainableIngressLaneIndices(node, source):
@@ -4445,31 +5128,26 @@ DrainHistoricalIngressSelected(node) ==
       item == HistoricalSelectedIngressItemAt(node, index)
       candidate == DeliveryCandidate(item)
       authorizedRequest ==
-        \/ /\ item.kind = "CertifiedRequest"
-              /\ item \in asyncSentItems
-              /\ CertifiedRequestAuthorized(item)
-        \/ /\ item.kind = "CommitCertificateRequest"
-              /\ item \in asyncSentItems
-              /\ CommitCertificateRequestAuthorized(item)
+        AsyncServeLifecycleDrainRequired(node, item)
   IN /\ HistoricalDrainableIngressIndices(node) # {}
      /\ PopSelectedIngress(node, index, laneIndex)
      /\ IF authorizedRequest
-        THEN /\ asyncIoQueues' =
-                   [asyncIoQueues EXCEPT
-                      ![node] = Append(
-                        @, AsyncIoCertifiedServeJob(node, candidate))]
+        THEN /\ AcceptOrCoalesceExactServeRequest(node, candidate)
              /\ UNCHANGED <<asyncOutstandingWork,
                              asyncIoReadyCompletions,
                              asyncLocalReadyCompletions,
                              asyncNextCompletionSource,
                              asyncIoControlAvailable>>
-        ELSE UNCHANGED AsyncIoVars
+        ELSE UNCHANGED AsyncIoExceptServeReservationsVars
      /\ asyncCertifiedResponseClaim' =
           IF item.kind = "CertifiedResponse"
                /\ CertifiedResponseClaimMatches(item)
           THEN asyncCertifiedResponseClaim \
                  {AsyncCertifiedResponseCanonicalWireIdentity(item)}
           ELSE asyncCertifiedResponseClaim
+     /\ asyncTransport' =
+          asyncTransport
+            \cup PacketsForItems(AsyncServeCachedReplayItems(node, item))
      /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
                     asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -4478,7 +5156,7 @@ DrainHistoricalIngressSelected(node) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncSentItems, asyncRetainedControl,
                     asyncActiveRequests,
-                    asyncTransport, asyncHeldChunks,
+                    asyncHeldChunks,
                     asyncHistoricalRecoveryTargets>>
 
 AdmitCausalHead(node) ==
@@ -4494,7 +5172,8 @@ AdmitCausalHead(node) ==
                              asyncIoReadyCompletions,
                              asyncLocalReadyCompletions,
                              asyncNextCompletionSource,
-                             asyncIoControlAvailable>>
+                             asyncIoControlAvailable,
+                             AsyncServeLifecycleVars>>
         ELSE IF candidate.class = "Completion"
              THEN /\ asyncIoQueues' =
                        [asyncIoQueues EXCEPT
@@ -4507,7 +5186,8 @@ AdmitCausalHead(node) ==
                                   asyncIoReadyCompletions,
                                   asyncLocalReadyCompletions,
                                   asyncNextCompletionSource,
-                                  asyncIoControlAvailable>>
+                                  asyncIoControlAvailable,
+                                  AsyncServeLifecycleVars>>
              ELSE /\ EnqueueCandidate(candidate)
                   /\ UNCHANGED AsyncIoVars
      /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
@@ -4616,7 +5296,8 @@ AdmitProducerCompletion(node) ==
              ![node] = IF source = "Io" THEN "Local" ELSE "Io"]
      /\ asyncOutstandingWork' =
           [asyncOutstandingWork EXCEPT ![node] = @ \ {candidate}]
-     /\ UNCHANGED <<asyncIoQueues, asyncIoControlAvailable>>
+     /\ UNCHANGED <<asyncIoQueues, asyncIoControlAvailable,
+                     AsyncServeLifecycleVars>>
      /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncSentItems,
@@ -4636,11 +5317,44 @@ ServiceIoWorkerWork(node) ==
              ELSE IF CommitCertificateServeCanRespond(job.candidate.item)
                   THEN CommitCertificateResponseItems(job.candidate.item)
                   ELSE {}
+      serveIdentity ==
+        IF job.class = "Serve"
+        THEN AsyncIoServeJobIdentity(node, job)
+        ELSE NoAsyncItem
+      completedIdentity ==
+        IF job.class = "Serve" /\ responseItems # {}
+        THEN serveIdentity
+        ELSE NoAsyncItem
   IN /\ node \in up
      /\ ResponsiveReplayExecutorAllowed(node)
      /\ AsyncIoQueueDepth(node) > 0
+     \* A reserved Serve is admitted only for a durable retention owner.
+     \* Missing output is therefore a broken local retention contract and
+     \* fail-stops this worker action instead of recreating the request.
+     /\ (job.class = "Serve" => responseItems # {})
      /\ asyncIoQueues' =
           [asyncIoQueues EXCEPT ![node] = Tail(@)]
+     /\ asyncServeReservations' =
+          AsyncServeReservationsAfterIoService(
+            node, job, completedIdentity)
+     /\ asyncServeAdmissions' =
+          IF completedIdentity # NoAsyncItem
+          THEN AsyncServeAdmissionsWithout(
+                 node, completedIdentity)
+          ELSE asyncServeAdmissions
+     /\ asyncServeTombstones' =
+          IF completedIdentity # NoAsyncItem
+          THEN LET reservation ==
+                     AsyncServeReservationRecord(
+                       node, completedIdentity)
+               IN AsyncServeTombstonesWithoutFamily(
+                    node, reservation.family)
+                    \cup {AsyncServeTombstone(
+                            node, completedIdentity,
+                            reservation.family, reservation.view,
+                            reservation.ordinal, responseItems)}
+          ELSE asyncServeTombstones
+     /\ UNCHANGED asyncNextServeAdmissionOrdinal
      /\ asyncIoReadyCompletions' =
           IF job.class = "Consensus"
           THEN [asyncIoReadyCompletions EXCEPT
@@ -4689,6 +5403,7 @@ EnqueueIoLocalControlWork(node) ==
        [asyncIoQueues EXCEPT ![node] = Append(@, AsyncIoControlJob)]
   /\ asyncIoControlAvailable' =
        [asyncIoControlAvailable EXCEPT ![node] = FALSE]
+  /\ UNCHANGED AsyncServeLifecycleVars
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
   /\ UNCHANGED AsyncLocalAdmissionVars
@@ -5536,6 +6251,14 @@ RestartRetainedControl(node) ==
         RememberedControl(withPrepare, RestartDecisionControl(node))
   IN RememberedControl(withDecision, RestartLastTCControl(node))
 
+(***************************************************************************
+Serve ordinals and response tombstones are process-local, not invented WAL
+records.  A pre-GST crash starts a new process incarnation and clears that
+node's lifecycle table together with its volatile ingress/I/O queues.
+Durable bodies and Kura certificates survive, so a still-active remote
+request is deterministically re-admitted under a fresh incarnation ordinal
+when retransmitted.  Responsive peers do not crash after GST.
+***************************************************************************)
 ResetNodeSchedulerForRestart(node, replay) ==
   /\ asyncNow' = asyncNow
   /\ asyncCommandQueues' =
@@ -5554,6 +6277,11 @@ ResetNodeSchedulerForRestart(node, replay) ==
   /\ asyncNextLocalSource' =
        [asyncNextLocalSource EXCEPT ![node] = "Producer"]
   /\ asyncIoQueues' = [asyncIoQueues EXCEPT ![node] = <<>>]
+  /\ asyncNextServeAdmissionOrdinal' =
+       [asyncNextServeAdmissionOrdinal EXCEPT ![node] = 1]
+  /\ asyncServeAdmissions' = AsyncServeAdmissionsWithoutNode(node)
+  /\ asyncServeReservations' = AsyncServeReservationsWithoutNode(node)
+  /\ asyncServeTombstones' = AsyncServeTombstonesWithoutNode(node)
   /\ asyncOutstandingWork' =
        [asyncOutstandingWork EXCEPT ![node] = {}]
   /\ asyncIoReadyCompletions' =
@@ -6260,6 +6988,11 @@ AsyncRuntimeInit ==
 
 AsyncIoInit ==
   /\ asyncIoQueues = [node \in ValidatorIds |-> <<>>]
+  /\ asyncNextServeAdmissionOrdinal =
+       [node \in ValidatorIds |-> 1]
+  /\ asyncServeAdmissions = {}
+  /\ asyncServeReservations = {}
+  /\ asyncServeTombstones = {}
   /\ asyncOutstandingWork = [node \in ValidatorIds |-> {}]
   /\ asyncIoReadyCompletions = [node \in ValidatorIds |-> <<>>]
   /\ asyncLocalReadyCompletions = [node \in ValidatorIds |-> <<>>]
@@ -6404,6 +7137,230 @@ AsyncCausalTypeInvariant ==
 AsyncRuntimeTypeInvariant ==
   /\ AsyncRuntimeScalarTypeInvariant
   /\ AsyncCausalTypeInvariant
+
+AsyncServeAdmissionTyped(admission) ==
+  /\ DOMAIN admission =
+       {"node", "identity", "family", "view", "ordinal"}
+  /\ admission.node \in ValidatorIds
+  /\ admission.identity \in AsyncServeLogicalRequestIdentities
+  /\ admission.family \in AsyncServeLifecycleFamilies
+  /\ admission.identity.owner = admission.node
+  /\ admission.family.owner = admission.node
+  /\ admission.view \in Views
+  /\ AsyncServeLifecycleCoordinates(
+       admission.node, admission.identity,
+       admission.family, admission.view)
+  /\ admission.ordinal \in Nat \ {0}
+
+AsyncServeReservationTyped(reservation) ==
+  /\ DOMAIN reservation =
+       {"node", "identity", "family", "view", "ordinal",
+        "predecessors", "ingressPredecessors"}
+  /\ reservation.node \in ValidatorIds
+  /\ reservation.identity \in AsyncServeLogicalRequestIdentities
+  /\ reservation.family \in AsyncServeLifecycleFamilies
+  /\ reservation.identity.owner = reservation.node
+  /\ reservation.family.owner = reservation.node
+  /\ reservation.view \in Views
+  /\ AsyncServeLifecycleCoordinates(
+       reservation.node, reservation.identity,
+       reservation.family, reservation.view)
+  /\ reservation.ordinal \in Nat \ {0}
+  /\ IsFiniteSet(reservation.predecessors)
+  /\ Cardinality(reservation.predecessors) <= AsyncIoCapacity
+  /\ \A job \in reservation.predecessors: AsyncIoJobTyped(job)
+  /\ reservation.ingressPredecessors
+       \in [AsyncIngressSources -> 0..AsyncIngressCapacity]
+
+AsyncServeTombstoneTyped(tombstone) ==
+  /\ DOMAIN tombstone =
+       {"node", "identity", "family", "view", "ordinal", "outputs"}
+  /\ tombstone.node \in ValidatorIds
+  /\ tombstone.identity \in AsyncServeLogicalRequestIdentities
+  /\ tombstone.family \in AsyncServeLifecycleFamilies
+  /\ tombstone.identity.owner = tombstone.node
+  /\ tombstone.family.owner = tombstone.node
+  /\ tombstone.view \in Views
+  /\ AsyncServeLifecycleCoordinates(
+       tombstone.node, tombstone.identity,
+       tombstone.family, tombstone.view)
+  /\ tombstone.ordinal \in Nat \ {0}
+  /\ IsFiniteSet(tombstone.outputs)
+  /\ tombstone.outputs # {}
+  /\ tombstone.outputs \subseteq
+       {item \in AsyncNetworkItems:
+          item.kind \in {"CertifiedResponse",
+                         "CommitCertificateResponse"}}
+
+AsyncServeAdmissionUniquenessInvariant ==
+  /\ \A left, right \in asyncServeAdmissions:
+       /\ left.node = right.node
+       /\ left.identity = right.identity
+       => left = right
+  /\ \A left, right \in asyncServeAdmissions:
+       /\ left.node = right.node
+       /\ left.ordinal = right.ordinal
+       => left = right
+
+AsyncServeLifecyclePartitionInvariant ==
+  /\ \A admission \in asyncServeAdmissions:
+       AsyncServeReservationRecords(
+         admission.node, admission.identity) =
+           {AsyncServeReservation(
+              admission.node, admission.identity, admission.family,
+              admission.view, admission.ordinal,
+              AsyncServeFrozenPredecessorSet(
+                admission.node, admission.identity),
+              AsyncServeFrozenIngressPredecessorCounts(
+                admission.node, admission.identity))}
+  /\ \A reservation \in asyncServeReservations:
+       AsyncServeAdmissionRecords(
+         reservation.node, reservation.identity) =
+           {AsyncServeAdmission(
+              reservation.node, reservation.identity, reservation.family,
+              reservation.view,
+              reservation.ordinal)}
+  /\ \A tombstone \in asyncServeTombstones:
+       /\ AsyncServeAdmissionRecords(
+            tombstone.node, tombstone.identity) = {}
+       /\ AsyncServeReservationRecords(
+            tombstone.node, tombstone.identity) = {}
+
+AsyncServeFamilyHighWatermarkInvariant ==
+  \A node \in ValidatorIds,
+     family \in AsyncServeLifecycleFamilies:
+    /\ Cardinality(
+         AsyncServeFamilyReservationRecords(node, family)) +
+         Cardinality(
+           AsyncServeFamilyTombstoneRecords(node, family)) <= 1
+    /\ \A left, right \in
+         AsyncServeFamilyReservationRecords(node, family)
+           \cup AsyncServeFamilyTombstoneRecords(node, family):
+         left.view = right.view
+
+AsyncServeHighWatermarkActiveRequestInvariant ==
+  \A request \in asyncActiveRequests:
+    AsyncServeRequestRespectsHighWatermark(request)
+
+AsyncServeReservationOwnershipInvariant ==
+  \A node \in ValidatorIds:
+    /\ Cardinality(
+         {reservation \in asyncServeReservations:
+            reservation.node = node})
+           <= AsyncServeLifecycleFamilyBudget
+    /\ \A identity \in AsyncIoServeIdentities(node):
+         Cardinality(
+           AsyncServeReservationRecords(node, identity)) = 1
+    /\ \A reservation \in
+         {owned \in asyncServeReservations: owned.node = node}:
+         LET predecessorIndices ==
+               AsyncServeRemainingPredecessorIndices(
+                 node, reservation.identity)
+             materializationPredecessorIndices ==
+               AsyncServeMaterializationPredecessorIndices(
+                 node, reservation.identity)
+         IN /\ Cardinality(
+                  AsyncIoServeIdentityIndices(
+                    node, reservation.identity)) <= 1
+            /\ predecessorIndices =
+                 1..Cardinality(predecessorIndices)
+            /\ materializationPredecessorIndices =
+                 1..Cardinality(materializationPredecessorIndices)
+            /\ reservation.predecessors =
+                 {asyncIoQueues[node][index]:
+                    index \in predecessorIndices}
+            /\ AsyncIoJobsBeforeServeIdentity(
+                 node, reservation.identity)
+                 \subseteq
+                   reservation.predecessors
+                     \cup
+                       AsyncServeMaterializationPredecessorJobs(
+                         node, reservation.identity)
+            /\ \A index \in
+                 AsyncIoServeIdentityIndices(
+                   node, reservation.identity):
+                 asyncIoQueues[node][index]
+                   \notin reservation.predecessors
+
+AsyncServeOrdinalQueueInvariant ==
+  \A node \in ValidatorIds:
+    \A left, right \in
+         AsyncIoServeIndices(asyncIoQueues[node]):
+      left < right =>
+        AsyncServeAdmissionOrdinal(
+          node,
+          AsyncIoServeJobIdentity(
+            node, asyncIoQueues[node][left]))
+          <
+        AsyncServeAdmissionOrdinal(
+          node,
+          AsyncIoServeJobIdentity(
+            node, asyncIoQueues[node][right]))
+
+AsyncServeIngressPredecessorInvariant ==
+  /\ \A reservation \in asyncServeReservations:
+       \A source \in AsyncIngressSources:
+         reservation.ingressPredecessors[source]
+           <= Len(asyncIngressLanes[reservation.node][source])
+  /\ \A node \in ValidatorIds:
+       AsyncServeIngressLiveReservations(node) # {} =>
+         LET owner == AsyncServeEarliestIngressReservation(node)
+         IN \A source \in AsyncIngressSources:
+              \A index \in
+                   DrainableIngressLaneIndices(node, source):
+                \/ index <= owner.ingressPredecessors[source]
+                \/ /\ asyncIngressLanes[node][source][index].kind
+                         \in AsyncReplyRequestKinds
+                   /\ AsyncServeLogicalRequestIdentity(
+                        node,
+                        asyncIngressLanes[node][source][index])
+                        = owner.identity
+
+AsyncServeServiceabilityInvariant ==
+  \A node \in ValidatorIds:
+    /\ \A source \in AsyncIngressSources:
+         \A index \in 1..Len(asyncIngressLanes[node][source]):
+           LET item == asyncIngressLanes[node][source][index]
+           IN (/\ item.kind \in AsyncReplyRequestKinds
+               /\ AsyncServeLiveReservationOwned(
+                    node,
+                    AsyncServeLogicalRequestIdentity(node, item)))
+                => AsyncServeRequestServiceable(node, item)
+    /\ \A index \in AsyncIoServeIndices(asyncIoQueues[node]):
+         AsyncServeRequestServiceable(
+           node, asyncIoQueues[node][index].candidate.item)
+
+AsyncServeOrdinalInvariant ==
+  /\ asyncNextServeAdmissionOrdinal
+       \in [ValidatorIds -> Nat \ {0}]
+  /\ \A admission \in asyncServeAdmissions:
+       admission.ordinal <
+         asyncNextServeAdmissionOrdinal[admission.node]
+  /\ \A tombstone \in asyncServeTombstones:
+       tombstone.ordinal <
+         asyncNextServeAdmissionOrdinal[tombstone.node]
+
+AsyncServeLifecycleTypeInvariant ==
+  /\ IsFiniteSet(asyncServeAdmissions)
+  /\ IsFiniteSet(asyncServeReservations)
+  /\ IsFiniteSet(asyncServeTombstones)
+  /\ Cardinality(asyncServeTombstones) <=
+       Cardinality(AsyncServeLifecycleFamilies)
+  /\ \A admission \in asyncServeAdmissions:
+       AsyncServeAdmissionTyped(admission)
+  /\ \A reservation \in asyncServeReservations:
+       AsyncServeReservationTyped(reservation)
+  /\ \A tombstone \in asyncServeTombstones:
+       AsyncServeTombstoneTyped(tombstone)
+  /\ AsyncServeAdmissionUniquenessInvariant
+  /\ AsyncServeLifecyclePartitionInvariant
+  /\ AsyncServeFamilyHighWatermarkInvariant
+  /\ AsyncServeHighWatermarkActiveRequestInvariant
+  /\ AsyncServeReservationOwnershipInvariant
+  /\ AsyncServeOrdinalQueueInvariant
+  /\ AsyncServeIngressPredecessorInvariant
+  /\ AsyncServeServiceabilityInvariant
+  /\ AsyncServeOrdinalInvariant
 
 AsyncIoTopologyTypeInvariant ==
   /\ DOMAIN asyncIoQueues = ValidatorIds
@@ -6632,10 +7589,12 @@ AsyncIoCapacityTypeInvariant ==
   \A node \in ValidatorIds:
        /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
        /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
+       /\ AsyncIoEffectiveQueueDepth(node) <= AsyncIoCapacity
        /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
 
 AsyncIoTypeInvariant ==
   /\ AsyncIoTopologyTypeInvariant
+  /\ AsyncServeLifecycleTypeInvariant
   /\ AsyncIoContentTypeInvariant
   /\ AsyncIoCapacityTypeInvariant
 
@@ -6833,10 +7792,27 @@ AsyncIngressContentTypeInvariant ==
                  /\ IngressResourceSource(
                       IngressLane(recipient, source)[index]) = source
 
+AsyncServeIngressReservationInvariant ==
+  \A recipient \in ValidatorIds:
+    \A source \in AsyncIngressSources:
+      \A index \in 1..IngressLaneDepth(recipient, source):
+        LET item == IngressLane(recipient, source)[index]
+            identity ==
+              AsyncServeLogicalRequestIdentity(recipient, item)
+        IN /\ AsyncServeRequestAuthorized(item)
+                => AsyncServeTransportAdmissionGateAllows(
+                     recipient, item)
+           /\ IF AsyncServeLifecycleAdmissionRequired(recipient, item)
+              THEN \/ AsyncServeLifecycleOwned(recipient, identity)
+                   \/ AsyncServeLifecycleSuperseded(recipient, item)
+                   \/ AsyncServeLifecycleConflict(recipient, item)
+              ELSE TRUE
+
 AsyncIngressTypeInvariant ==
   /\ AsyncIngressTopologyTypeInvariant
   /\ AsyncIngressCapacityTypeInvariant
   /\ AsyncIngressContentTypeInvariant
+  /\ AsyncServeIngressReservationInvariant
 
 AsyncRecoveryTypeInvariant ==
   /\ asyncRecoveryPhase \in AsyncRecoveryPhases
@@ -6941,10 +7917,15 @@ AsyncIoReservationInvariant ==
   /\ AsyncIoWorkCapacity <= AsyncCompletionReserve
   /\ \A node \in ValidatorIds:
        /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
+       /\ AsyncIoEffectiveQueueDepth(node) <= AsyncIoCapacity
        /\ Cardinality(
             {index \in 1..AsyncIoQueueDepth(node):
                asyncIoQueues[node][index].class = "Serve"})
             <= AsyncIoAuxCapacity
+       /\ Cardinality(
+            {reservation \in asyncServeReservations:
+               reservation.node = node})
+            <= AsyncServeLifecycleFamilyBudget
        /\ Cardinality(
             {index \in 1..AsyncIoQueueDepth(node):
                asyncIoQueues[node][index].class # "Control"})

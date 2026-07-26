@@ -25,11 +25,12 @@
 
 use std::collections::BTreeSet;
 
-use fastpq_isi::poseidon::{MDS, ROUND_CONSTANTS};
+use fastpq_prover::poseidon_manifest;
 use iroha_data_model::zk::{
-    ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+    ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+    ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
     ZkAcePublicInputsV1, ZkAceWitnessV1, derive_zk_ace_air_public_digest,
-    zk_ace_pack_bytes_to_field_limbs,
+    derive_zk_ace_transfer_digest, zk_ace_pack_bytes_to_field_limbs,
 };
 use norito::{Decode, Encode};
 use rand::TryRngCore;
@@ -49,6 +50,8 @@ pub(crate) const BLOWUP_LOG2: u8 = 4;
 pub(crate) const QUERY_COUNT: usize = 32;
 /// Independent constraint/FRI lanes sharing one trace commitment.
 pub(crate) const SECURITY_LANES: usize = 3;
+/// Hard ceiling enforced before Norito decoding allocates proof vectors.
+pub(crate) const MAX_PROOF_BYTES: usize = 2 * 1024 * 1024;
 /// Degree of the random trace masking polynomial.
 const MASK_DEGREE: usize = 255;
 /// FRI stops on the complete compiled blow-up domain.
@@ -62,7 +65,7 @@ const FRI_ROUNDS: usize = TRACE_LOG2 as usize;
 const PRIVATE_LIMBS: usize = 15;
 const LIMB_BITS: usize = 56;
 const POSEIDON_FULL_ROUNDS_HALF: usize = 4;
-const POSEIDON_ROUNDS: usize = ROUND_CONSTANTS.len();
+const POSEIDON_ROUNDS: usize = 65;
 const PROOF_VERSION: u16 = 1;
 const MAX_QUERY_DERIVATION_ATTEMPTS: usize = LDE_SIZE * 2;
 
@@ -73,7 +76,8 @@ const X4_OFFSET: usize = X2_OFFSET + 3;
 const X5_OFFSET: usize = X4_OFFSET + 3;
 const QUEUE_OFFSET: usize = X5_OFFSET + 3;
 const LIMB_OFFSET: usize = QUEUE_OFFSET + PRIVATE_LIMBS;
-const BIT_OFFSET: usize = LIMB_OFFSET + 1;
+const MESSAGE_OFFSET: usize = LIMB_OFFSET + 1;
+const BIT_OFFSET: usize = MESSAGE_OFFSET + 1;
 const TRACE_WIDTH: usize = BIT_OFFSET + LIMB_BITS;
 
 const FIX_FULL: usize = 0;
@@ -118,14 +122,6 @@ impl F {
             Self(self.0 - rhs.0)
         } else {
             Self(FIELD_MODULUS - (rhs.0 - self.0))
-        }
-    }
-
-    fn neg(self) -> Self {
-        if self == Self::ZERO {
-            self
-        } else {
-            Self(FIELD_MODULUS - self.0)
         }
     }
 
@@ -193,9 +189,7 @@ impl MerkleTree {
         }
         let mut levels = vec![leaves];
         while levels.last().map_or(0, Vec::len) > 1 {
-            let previous = levels
-                .last()
-                .expect("non-empty Merkle level collection");
+            let previous = levels.last().expect("non-empty Merkle level collection");
             let next = previous
                 .chunks_exact(2)
                 .map(|pair| merkle_node_hash(&pair[0], &pair[1]))
@@ -279,6 +273,8 @@ struct ZkAceFriRoundOpeningV1 {
 /// Failure returned by the dedicated ZK-ACE STARK.
 #[derive(Debug, Error)]
 pub(crate) enum ZkAceStarkError {
+    #[error("ZK-ACE public inputs do not match the compiled transfer relation")]
+    InvalidPublicInputs,
     #[error("ZK-ACE public input cannot be encoded canonically")]
     PublicInputEncoding,
     #[error("ZK-ACE public digest is not a canonical Goldilocks field encoding")]
@@ -289,8 +285,12 @@ pub(crate) enum ZkAceStarkError {
     WitnessRelation,
     #[error("operating-system randomness is unavailable for ZK-ACE trace masking")]
     RandomnessUnavailable,
+    #[error("ZK-ACE proof exceeds the compiled byte ceiling")]
+    ProofTooLarge,
     #[error("ZK-ACE proof is malformed")]
     MalformedProof,
+    #[error("ZK-ACE proof is not a canonical Norito encoding")]
+    NonCanonicalProof,
     #[error("ZK-ACE proof shape does not match the compiled profile")]
     ProfileMismatch,
     #[error("ZK-ACE proof contains a non-canonical field element")]
@@ -517,8 +517,7 @@ fn replay_message_words(public_inputs: &ZkAcePublicInputsV1) -> Vec<MessageWord>
 
 fn append_poseidon_permutation(schedule: &mut Vec<ScheduleRow>) {
     for round in 0..POSEIDON_ROUNDS {
-        let full = round < POSEIDON_FULL_ROUNDS_HALF
-            || round >= POSEIDON_FULL_ROUNDS_HALF + 57;
+        let full = round < POSEIDON_FULL_ROUNDS_HALF || round >= POSEIDON_FULL_ROUNDS_HALF + 57;
         schedule.push(ScheduleRow {
             op: if full {
                 ScheduleOp::FullRound { round }
@@ -586,7 +585,9 @@ fn append_poseidon_hash(
     }
 }
 
-fn build_schedule(public_inputs: &ZkAcePublicInputsV1) -> Result<Vec<ScheduleRow>, ZkAceStarkError> {
+fn build_schedule(
+    public_inputs: &ZkAcePublicInputsV1,
+) -> Result<Vec<ScheduleRow>, ZkAceStarkError> {
     let mut schedule = Vec::with_capacity(TRACE_SIZE);
     for index in 0..PRIVATE_LIMBS {
         schedule.push(ScheduleRow {
@@ -651,17 +652,17 @@ fn public_output_words(public_inputs: &ZkAcePublicInputsV1) -> Result<[F; 8], Zk
                 .try_into()
                 .expect("chunks_exact produces eight-byte digest words"),
         );
-        words[word_index] =
-            F::canonical(raw).ok_or(ZkAceStarkError::NonCanonicalPublicDigest)?;
+        words[word_index] = F::canonical(raw).ok_or(ZkAceStarkError::NonCanonicalPublicDigest)?;
     }
     Ok(words)
 }
 
 fn apply_mds(state: [F; 3]) -> [F; 3] {
+    let mds = poseidon_manifest().mds();
     let mut result = [F::ZERO; 3];
     for row in 0..3 {
         for (column, value) in state.iter().copied().enumerate() {
-            result[row] = result[row].add(F(MDS[row][column]).mul(value));
+            result[row] = result[row].add(F(mds[row][column]).mul(value));
         }
     }
     result
@@ -671,12 +672,14 @@ fn trace_row(
     state: [F; 3],
     queue: [F; PRIVATE_LIMBS],
     limb: F,
+    message: F,
     round_constants: [F; 3],
 ) -> Vec<F> {
     let mut row = vec![F::ZERO; TRACE_WIDTH];
     row[STATE_OFFSET..STATE_OFFSET + 3].copy_from_slice(&state);
     row[QUEUE_OFFSET..QUEUE_OFFSET + PRIVATE_LIMBS].copy_from_slice(&queue);
     row[LIMB_OFFSET] = limb;
+    row[MESSAGE_OFFSET] = message;
     for bit in 0..LIMB_BITS {
         row[BIT_OFFSET + bit] = F((limb.0 >> bit) & 1);
     }
@@ -715,13 +718,15 @@ fn fixed_row(schedule: ScheduleRow) -> Vec<F> {
         ScheduleOp::FullRound { round } => {
             fixed[FIX_FULL] = F::ONE;
             for index in 0..3 {
-                fixed[FIX_RC_OFFSET + index] = F(ROUND_CONSTANTS[round][index]);
+                fixed[FIX_RC_OFFSET + index] =
+                    F(poseidon_manifest().round_constants()[round][index]);
             }
         }
         ScheduleOp::PartialRound { round } => {
             fixed[FIX_PARTIAL] = F::ONE;
             for index in 0..3 {
-                fixed[FIX_RC_OFFSET + index] = F(ROUND_CONSTANTS[round][index]);
+                fixed[FIX_RC_OFFSET + index] =
+                    F(poseidon_manifest().round_constants()[round][index]);
             }
         }
         ScheduleOp::Output { output_index } => {
@@ -759,25 +764,24 @@ fn build_trace_material(
             ScheduleOp::Load(index) => witness_limbs[index],
             _ => F::ZERO,
         };
-        let row = trace_row(state, queue, limb, round_constants);
+        let message = match schedule_row.op {
+            ScheduleOp::Absorb { word, .. } => match word {
+                MessageWord::Constant(value) => F(value),
+                MessageWord::Witness(index) => queue[index],
+            },
+            _ => F::ZERO,
+        };
+        let row = trace_row(state, queue, limb, message, round_constants);
 
         match schedule_row.op {
             ScheduleOp::Hold | ScheduleOp::Output { .. } => {}
             ScheduleOp::Reset => state = [F::ZERO; 3],
             ScheduleOp::Load(index) => queue[index] = limb,
-            ScheduleOp::Absorb { position, word } => {
-                let message = match word {
-                    MessageWord::Constant(value) => F(value),
-                    MessageWord::Witness(index) => queue[index],
-                };
+            ScheduleOp::Absorb { position, .. } => {
                 state[position] = state[position].add(message);
             }
             ScheduleOp::FullRound { .. } => {
-                state = apply_mds([
-                    row[X5_OFFSET],
-                    row[X5_OFFSET + 1],
-                    row[X5_OFFSET + 2],
-                ]);
+                state = apply_mds([row[X5_OFFSET], row[X5_OFFSET + 1], row[X5_OFFSET + 2]]);
             }
             ScheduleOp::PartialRound { .. } => {
                 state = apply_mds([row[X5_OFFSET], row[A_OFFSET + 1], row[A_OFFSET + 2]]);
@@ -818,9 +822,10 @@ fn masked_lde_columns<R: TryRngCore>(
     let trace_root = primitive_root(TRACE_LOG2)?;
     let lde_root = primitive_root(LDE_LOG2)?;
     let coset_shift = F(FIELD_GENERATOR);
-    if coset_shift.pow(TRACE_SIZE as u128) == F::ONE {
+    if coset_shift.pow(LDE_SIZE as u128) == F::ONE || coset_shift.pow(TRACE_SIZE as u128) == F::ONE
+    {
         return Err(ZkAceStarkError::InternalInvariant(
-            "compiled LDE coset intersects the trace subgroup",
+            "compiled LDE shift lies in an evaluation subgroup",
         ));
     }
     base_columns
@@ -837,8 +842,7 @@ fn masked_lde_columns<R: TryRngCore>(
             for degree in 0..=MASK_DEGREE {
                 let random = random_field(rng)?;
                 coefficients[degree] = coefficients[degree].sub(random);
-                coefficients[TRACE_SIZE + degree] =
-                    coefficients[TRACE_SIZE + degree].add(random);
+                coefficients[TRACE_SIZE + degree] = coefficients[TRACE_SIZE + degree].add(random);
             }
             evaluate_coefficients_on_coset(&coefficients, LDE_SIZE, lde_root, coset_shift)
         })
@@ -864,6 +868,120 @@ fn fixed_lde_columns(base_columns: &[Vec<F>]) -> Result<Vec<Vec<F>>, ZkAceStarkE
         .collect()
 }
 
+fn batch_invert(values: &mut [F]) -> Result<(), ZkAceStarkError> {
+    let mut prefixes = Vec::with_capacity(values.len());
+    let mut product = F::ONE;
+    for value in values.iter().copied() {
+        if value == F::ZERO {
+            return Err(ZkAceStarkError::InternalInvariant(
+                "batch inversion input must be non-zero",
+            ));
+        }
+        prefixes.push(product);
+        product = product.mul(value);
+    }
+    let mut inverse = product.inv().ok_or(ZkAceStarkError::InternalInvariant(
+        "batch inversion product must be non-zero",
+    ))?;
+    for index in (0..values.len()).rev() {
+        let value = values[index];
+        values[index] = inverse.mul(prefixes[index]);
+        inverse = inverse.mul(value);
+    }
+    Ok(())
+}
+
+fn accumulate_fixed_row(result: &mut [F], schedule_row: ScheduleRow, weight: F) {
+    let mut add = |index: usize, value: F| {
+        result[index] = result[index].add(weight.mul(value));
+    };
+    match schedule_row.op {
+        ScheduleOp::Hold => {}
+        ScheduleOp::Reset => add(FIX_RESET, F::ONE),
+        ScheduleOp::Load(index) => add(FIX_LOAD_OFFSET + index, F::ONE),
+        ScheduleOp::Absorb { position, word } => {
+            add(
+                if position == 0 {
+                    FIX_ABSORB_0
+                } else {
+                    FIX_ABSORB_1
+                },
+                F::ONE,
+            );
+            match word {
+                MessageWord::Constant(value) => {
+                    add(FIX_MESSAGE_CONST, F(value));
+                }
+                MessageWord::Witness(index) => {
+                    add(FIX_MESSAGE_WITNESS_OFFSET + index, F::ONE);
+                }
+            }
+        }
+        ScheduleOp::FullRound { round } | ScheduleOp::PartialRound { round } => {
+            add(
+                if matches!(schedule_row.op, ScheduleOp::FullRound { .. }) {
+                    FIX_FULL
+                } else {
+                    FIX_PARTIAL
+                },
+                F::ONE,
+            );
+            for index in 0..3 {
+                add(
+                    FIX_RC_OFFSET + index,
+                    F(poseidon_manifest().round_constants()[round][index]),
+                );
+            }
+        }
+        ScheduleOp::Output { output_index } => {
+            add(FIX_OUTPUT_OFFSET + output_index, F::ONE);
+        }
+    }
+}
+
+/// Evaluate all fixed schedule columns at one non-trace-domain point.
+///
+/// Verification needs only the transcript-selected query rows. Evaluating the
+/// Lagrange basis here avoids allocating and FFT-expanding a 47-column,
+/// 65,536-row fixed table for every admitted proof.
+fn fixed_row_at_point(schedule: &[ScheduleRow], x: F) -> Result<Vec<F>, ZkAceStarkError> {
+    if schedule.len() != TRACE_SIZE || x.pow(TRACE_SIZE as u128) == F::ONE {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "fixed-row evaluation point has invalid shape/domain",
+        ));
+    }
+    let trace_root = primitive_root(TRACE_LOG2)?;
+    let mut trace_points = Vec::with_capacity(TRACE_SIZE);
+    let mut denominators = Vec::with_capacity(TRACE_SIZE);
+    let mut point = F::ONE;
+    for _ in 0..TRACE_SIZE {
+        trace_points.push(point);
+        denominators.push(x.sub(point));
+        point = point.mul(trace_root);
+    }
+    batch_invert(&mut denominators)?;
+    let inverse_trace_size =
+        F::reduce(TRACE_SIZE as u128)
+            .inv()
+            .ok_or(ZkAceStarkError::InternalInvariant(
+                "trace size must be invertible",
+            ))?;
+    let common = x
+        .pow(TRACE_SIZE as u128)
+        .sub(F::ONE)
+        .mul(inverse_trace_size);
+    let mut result = vec![F::ZERO; FIXED_WIDTH];
+    for ((schedule_row, trace_point), inverse_denominator) in
+        schedule.iter().copied().zip(trace_points).zip(denominators)
+    {
+        // Z_H'(h_i) = T / h_i, hence
+        // L_i(x) = Z_H(x) * h_i / (T * (x - h_i)).
+        let weight = common.mul(trace_point).mul(inverse_denominator);
+        accumulate_fixed_row(&mut result, schedule_row, weight);
+    }
+    Ok(result)
+}
+
 fn row_at(columns: &[Vec<F>], index: usize) -> Result<Vec<F>, ZkAceStarkError> {
     columns
         .iter()
@@ -878,7 +996,7 @@ fn row_at(columns: &[Vec<F>], index: usize) -> Result<Vec<F>, ZkAceStarkError> {
         .collect()
 }
 
-const LOCAL_CONSTRAINT_COUNT: usize = 12 + LIMB_BITS + 1 + 8 + 3 * (LIMB_BITS - 32);
+const LOCAL_CONSTRAINT_COUNT: usize = 12 + LIMB_BITS + 1 + 1 + 8 + 3 * (LIMB_BITS - 32);
 const TRANSITION_CONSTRAINT_COUNT: usize = 3 + PRIVATE_LIMBS;
 const CONSTRAINT_COUNT: usize = LOCAL_CONSTRAINT_COUNT + TRANSITION_CONSTRAINT_COUNT;
 
@@ -892,10 +1010,7 @@ fn hash_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn base_transcript_seed(
-    public_digest: &[u8; 32],
-    trace_root: &[u8; 32],
-) -> [u8; 32] {
+fn base_transcript_seed(public_digest: &[u8; 32], trace_root: &[u8; 32]) -> [u8; 32] {
     hash_parts(
         TRANSCRIPT_DOMAIN,
         &[
@@ -929,21 +1044,13 @@ fn challenge_field(seed: &[u8; 32], label: &[u8], lane: usize, index: usize) -> 
     if reduced == F::ZERO { F::ONE } else { reduced }
 }
 
-fn challenge_vector(
-    seed: &[u8; 32],
-    label: &[u8],
-    lane: usize,
-    count: usize,
-) -> Vec<F> {
+fn challenge_vector(seed: &[u8; 32], label: &[u8], lane: usize, count: usize) -> Vec<F> {
     (0..count)
         .map(|index| challenge_field(seed, label, lane, index))
         .collect()
 }
 
-fn composition_seed(
-    base_seed: &[u8; 32],
-    composition_roots: &[[u8; 32]],
-) -> [u8; 32] {
+fn composition_seed(base_seed: &[u8; 32], composition_roots: &[[u8; 32]]) -> [u8; 32] {
     let mut encoded_roots = Vec::with_capacity(composition_roots.len() * 32);
     for root in composition_roots {
         encoded_roots.extend_from_slice(root);
@@ -961,13 +1068,23 @@ fn fri_lane_seed(composition_seed: &[u8; 32], lane: usize) -> [u8; 32] {
     )
 }
 
-fn query_seed(
-    composition_seed: &[u8; 32],
-    lanes: &[FriLaneMaterial],
-) -> [u8; 32] {
+fn fri_beta(lane_seed: &[u8; 32], lane: usize, round: usize, layer_root: &[u8; 32]) -> F {
+    let seed = hash_parts(
+        b"iroha:privacy:zk-ace:fri-round-transcript:v1",
+        &[
+            lane_seed,
+            &(lane as u64).to_be_bytes(),
+            &(round as u64).to_be_bytes(),
+            layer_root,
+        ],
+    );
+    challenge_field(&seed, b"fri-beta", lane, round)
+}
+
+fn query_seed_from_roots(composition_seed: &[u8; 32], lane_roots: &[Vec<[u8; 32]>]) -> [u8; 32] {
     let mut encoded_roots = Vec::new();
-    for lane in lanes {
-        for root in &lane.roots {
+    for roots in lane_roots {
+        for root in roots {
             encoded_roots.extend_from_slice(root);
         }
     }
@@ -1041,16 +1158,13 @@ fn constraint_quotient_value(
                 .sub(fixed[FIX_RC_OFFSET + word]),
         );
         absorb_local(
-            current[X2_OFFSET + word]
-                .sub(current[A_OFFSET + word].mul(current[A_OFFSET + word])),
+            current[X2_OFFSET + word].sub(current[A_OFFSET + word].mul(current[A_OFFSET + word])),
         );
         absorb_local(
-            current[X4_OFFSET + word]
-                .sub(current[X2_OFFSET + word].mul(current[X2_OFFSET + word])),
+            current[X4_OFFSET + word].sub(current[X2_OFFSET + word].mul(current[X2_OFFSET + word])),
         );
         absorb_local(
-            current[X5_OFFSET + word]
-                .sub(current[X4_OFFSET + word].mul(current[A_OFFSET + word])),
+            current[X5_OFFSET + word].sub(current[X4_OFFSET + word].mul(current[A_OFFSET + word])),
         );
     }
     for bit in 0..LIMB_BITS {
@@ -1061,6 +1175,12 @@ fn constraint_quotient_value(
         sum.add(current[BIT_OFFSET + bit].mul(F::reduce(1_u128 << bit)))
     });
     absorb_local(current[LIMB_OFFSET].sub(recomposed));
+    let mut expected_message = fixed[FIX_MESSAGE_CONST];
+    for index in 0..PRIVATE_LIMBS {
+        expected_message = expected_message
+            .add(fixed[FIX_MESSAGE_WITNESS_OFFSET + index].mul(current[QUEUE_OFFSET + index]));
+    }
+    absorb_local(current[MESSAGE_OFFSET].sub(expected_message));
     for output in 0..8 {
         absorb_local(
             fixed[FIX_OUTPUT_OFFSET + output]
@@ -1069,9 +1189,7 @@ fn constraint_quotient_value(
     }
     for limb_index in [4usize, 9, 14] {
         for bit in 32..LIMB_BITS {
-            absorb_local(
-                fixed[FIX_LOAD_OFFSET + limb_index].mul(current[BIT_OFFSET + bit]),
-            );
+            absorb_local(fixed[FIX_LOAD_OFFSET + limb_index].mul(current[BIT_OFFSET + bit]));
         }
     }
     if alpha_index != LOCAL_CONSTRAINT_COUNT {
@@ -1091,12 +1209,6 @@ fn constraint_quotient_value(
         .sub(absorb_0)
         .sub(absorb_1)
         .sub(reset);
-    let mut message = fixed[FIX_MESSAGE_CONST];
-    for index in 0..PRIVATE_LIMBS {
-        message = message.add(
-            fixed[FIX_MESSAGE_WITNESS_OFFSET + index].mul(current[QUEUE_OFFSET + index]),
-        );
-    }
     let full_state = apply_mds([
         current[X5_OFFSET],
         current[X5_OFFSET + 1],
@@ -1108,24 +1220,20 @@ fn constraint_quotient_value(
         current[A_OFFSET + 2],
     ]);
     for word in 0..3 {
-        let absorbed = current[STATE_OFFSET + word].add(if word == 0 {
-            absorb_0.mul(message)
-        } else if word == 1 {
-            absorb_1.mul(message)
-        } else {
-            F::ZERO
-        });
         let expected = full
             .mul(full_state[word])
             .add(partial.mul(partial_state[word]))
-            .add(absorb_0.add(absorb_1).mul(absorbed))
+            .add(absorb_0.add(absorb_1).mul(current[STATE_OFFSET + word]))
+            .add(if word == 0 {
+                absorb_0.mul(current[MESSAGE_OFFSET])
+            } else if word == 1 {
+                absorb_1.mul(current[MESSAGE_OFFSET])
+            } else {
+                F::ZERO
+            })
             .add(hold.mul(current[STATE_OFFSET + word]));
         let residue = next[STATE_OFFSET + word].sub(expected);
-        result = result.add(
-            alphas[alpha_index]
-                .mul(residue)
-                .mul(transition_factor),
-        );
+        result = result.add(alphas[alpha_index].mul(residue).mul(transition_factor));
         alpha_index += 1;
     }
     for index in 0..PRIVATE_LIMBS {
@@ -1133,11 +1241,7 @@ fn constraint_quotient_value(
         let expected =
             queue.add(fixed[FIX_LOAD_OFFSET + index].mul(current[LIMB_OFFSET].sub(queue)));
         let residue = next[QUEUE_OFFSET + index].sub(expected);
-        result = result.add(
-            alphas[alpha_index]
-                .mul(residue)
-                .mul(transition_factor),
-        );
+        result = result.add(alphas[alpha_index].mul(residue).mul(transition_factor));
         alpha_index += 1;
     }
     if alpha_index != CONSTRAINT_COUNT {
@@ -1210,17 +1314,12 @@ fn mix_fri_base(
 }
 
 fn fri_fold_pair(low: F, high: F, beta: F, x: F) -> Result<F, ZkAceStarkError> {
-    let two_inverse = F(2)
-        .inv()
-        .ok_or(ZkAceStarkError::InternalInvariant(
-            "two must be invertible in Goldilocks",
-        ))?;
-    let inverse_two_x = F(2)
-        .mul(x)
-        .inv()
-        .ok_or(ZkAceStarkError::InternalInvariant(
-            "FRI domain point must be invertible",
-        ))?;
+    let two_inverse = F(2).inv().ok_or(ZkAceStarkError::InternalInvariant(
+        "two must be invertible in Goldilocks",
+    ))?;
+    let inverse_two_x = F(2).mul(x).inv().ok_or(ZkAceStarkError::InternalInvariant(
+        "FRI domain point must be invertible",
+    ))?;
     let even = low.add(high).mul(two_inverse);
     let odd = low.sub(high).mul(inverse_two_x);
     Ok(even.add(beta.mul(odd)))
@@ -1253,7 +1352,11 @@ fn build_fri_lane(
             .collect();
         let tree = MerkleTree::from_leaves(leaves)?;
         let root = tree.root();
-        let beta = challenge_field(lane_seed, b"fri-beta", lane, round);
+        // Each folding challenge is sampled only after the layer it
+        // challenges has been committed.  Precomputing all betas before these
+        // roots exist would let a malicious prover adapt the layer to its
+        // challenge.
+        let beta = fri_beta(lane_seed, lane, round, &root);
         let half = current.len() / 2;
         let mut next = Vec::with_capacity(half);
         let mut x = domain_shift;
@@ -1317,3 +1420,835 @@ fn ensure_terminal_degree(values: &[F]) -> Result<(), ZkAceStarkError> {
     Ok(())
 }
 
+fn validate_relation_inputs(
+    public_inputs: &ZkAcePublicInputsV1,
+) -> Result<[F; 8], ZkAceStarkError> {
+    if public_inputs.version != 1
+        || public_inputs.domain_tag != ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG
+        || public_inputs.action_class != ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
+        || public_inputs.verifier_key_id.backend.as_str() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
+        || public_inputs.verifier_key_id.name != ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+        || public_inputs.amount == 0
+        || public_inputs.policy_hash == [0; 32]
+    {
+        return Err(ZkAceStarkError::InvalidPublicInputs);
+    }
+    let expected_transfer_digest = derive_zk_ace_transfer_digest(
+        &public_inputs.from,
+        &public_inputs.to,
+        &public_inputs.asset,
+        public_inputs.amount,
+        &public_inputs.chain_id,
+        ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+        &public_inputs.policy_hash,
+    );
+    if public_inputs.tx_digest != expected_transfer_digest {
+        return Err(ZkAceStarkError::InvalidPublicInputs);
+    }
+    public_output_words(public_inputs)
+}
+
+#[cfg(test)]
+fn fixed_columns_for_public_inputs(
+    public_inputs: &ZkAcePublicInputsV1,
+) -> Result<Vec<Vec<F>>, ZkAceStarkError> {
+    let rows = build_schedule(public_inputs)?
+        .into_iter()
+        .map(fixed_row)
+        .collect::<Vec<_>>();
+    transpose_rows(&rows, FIXED_WIDTH)
+}
+
+fn composition_tree(lane: usize, values: &[F]) -> Result<MerkleTree, ZkAceStarkError> {
+    if values.len() != LDE_SIZE {
+        return Err(ZkAceStarkError::InternalInvariant(
+            "composition vector length mismatch",
+        ));
+    }
+    MerkleTree::from_leaves(
+        values
+            .iter()
+            .copied()
+            .map(|value| composition_leaf_hash(lane, value))
+            .collect(),
+    )
+}
+
+fn proof_query(
+    index: usize,
+    trace_lde: &[Vec<F>],
+    trace_tree: &MerkleTree,
+    compositions: &[Vec<F>],
+    composition_trees: &[MerkleTree],
+    fri_lanes: &[FriLaneMaterial],
+) -> Result<ZkAceQueryProofV1, ZkAceStarkError> {
+    let next_index = (index + TERMINAL_SIZE) % LDE_SIZE;
+    let current_row = row_at(trace_lde, index)?;
+    let next_row = row_at(trace_lde, next_index)?;
+    let composition_values = compositions.iter().map(|values| values[index].0).collect();
+    let composition_paths = composition_trees
+        .iter()
+        .map(|tree| tree.path(index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut query_fri_lanes = Vec::with_capacity(SECURITY_LANES);
+    for lane in fri_lanes {
+        let mut layer_index = index;
+        let mut rounds = Vec::with_capacity(FRI_ROUNDS);
+        for round in 0..FRI_ROUNDS {
+            let layer = &lane.layers[round];
+            let half = layer.len() / 2;
+            let low_index = layer_index % half;
+            let high_index = low_index + half;
+            rounds.push(ZkAceFriRoundOpeningV1 {
+                low: layer[low_index].0,
+                high: layer[high_index].0,
+                low_path: lane.trees[round].path(low_index)?,
+                high_path: lane.trees[round].path(high_index)?,
+            });
+            layer_index = low_index;
+        }
+        query_fri_lanes.push(ZkAceFriLaneQueryV1 { rounds });
+    }
+    Ok(ZkAceQueryProofV1 {
+        index: u32::try_from(index).map_err(|_| {
+            ZkAceStarkError::InternalInvariant("compiled query index does not fit u32")
+        })?,
+        current_row: current_row.into_iter().map(|value| value.0).collect(),
+        next_row: next_row.into_iter().map(|value| value.0).collect(),
+        current_row_path: trace_tree.path(index)?,
+        next_row_path: trace_tree.path(next_index)?,
+        composition_values,
+        composition_paths,
+        fri_lanes: query_fri_lanes,
+    })
+}
+
+/// Construct a canonical masked proof using a caller-supplied fallible RNG.
+///
+/// The injected RNG exists for deterministic known-answer tests and explicit
+/// entropy-failure tests. Product callers use [`rand::rngs::OsRng`].
+pub(crate) fn prove_zk_ace_stark_v1_with_rng<R: TryRngCore>(
+    public_inputs: &ZkAcePublicInputsV1,
+    witness: &ZkAceWitnessV1,
+    rng: &mut R,
+) -> Result<Vec<u8>, ZkAceStarkError> {
+    let _ = validate_relation_inputs(public_inputs)?;
+    let public_digest = derive_zk_ace_air_public_digest(public_inputs)
+        .map_err(|_| ZkAceStarkError::PublicInputEncoding)?;
+    let trace_material = build_trace_material(public_inputs, witness)?;
+    let trace_lde = masked_lde_columns(&trace_material.trace_columns, rng)?;
+    let fixed_lde = fixed_lde_columns(&trace_material.fixed_columns)?;
+    let trace_tree = trace_tree(&trace_lde)?;
+    let trace_root = trace_tree.root();
+    let base_seed = base_transcript_seed(&public_digest, &trace_root);
+
+    let mut compositions = Vec::with_capacity(SECURITY_LANES);
+    let mut composition_trees = Vec::with_capacity(SECURITY_LANES);
+    let mut composition_roots = Vec::with_capacity(SECURITY_LANES);
+    for lane in 0..SECURITY_LANES {
+        let alphas = challenge_vector(&base_seed, b"constraint-alpha", lane, CONSTRAINT_COUNT);
+        let values = composition_lane(
+            &trace_lde,
+            &fixed_lde,
+            &trace_material.public_outputs,
+            &alphas,
+        )?;
+        let tree = composition_tree(lane, &values)?;
+        composition_roots.push(tree.root());
+        compositions.push(values);
+        composition_trees.push(tree);
+    }
+
+    let composition_seed = composition_seed(&base_seed, &composition_roots);
+    let mut fri_material = Vec::with_capacity(SECURITY_LANES);
+    for lane in 0..SECURITY_LANES {
+        let trace_mix = challenge_vector(&composition_seed, b"trace-mix", lane, TRACE_WIDTH);
+        let composition_mix = challenge_field(&composition_seed, b"composition-mix", lane, 0);
+        let base_values =
+            mix_fri_base(&trace_lde, &compositions[lane], &trace_mix, composition_mix)?;
+        let lane_seed = fri_lane_seed(&composition_seed, lane);
+        fri_material.push(build_fri_lane(base_values, &lane_seed, lane)?);
+    }
+    let fri_roots = fri_material
+        .iter()
+        .map(|lane| lane.roots.clone())
+        .collect::<Vec<_>>();
+    let query_seed = query_seed_from_roots(&composition_seed, &fri_roots);
+    let query_indices = derive_query_indices(&query_seed)?;
+    let queries = query_indices
+        .into_iter()
+        .map(|index| {
+            proof_query(
+                index,
+                &trace_lde,
+                &trace_tree,
+                &compositions,
+                &composition_trees,
+                &fri_material,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let proof = ZkAceStarkProofV1 {
+        version: PROOF_VERSION,
+        trace_root,
+        composition_roots,
+        fri_lanes: fri_material
+            .into_iter()
+            .map(|lane| ZkAceFriLaneProofV1 {
+                roots: lane.roots,
+                terminal_values: lane
+                    .terminal_values
+                    .into_iter()
+                    .map(|value| value.0)
+                    .collect(),
+            })
+            .collect(),
+        queries,
+    };
+    let encoded = norito::to_bytes(&proof).map_err(|_| ZkAceStarkError::MalformedProof)?;
+    if encoded.len() > MAX_PROOF_BYTES {
+        return Err(ZkAceStarkError::ProofTooLarge);
+    }
+    // Never return a prover artifact that the independently reconstructed
+    // verifier view rejects.
+    verify_zk_ace_stark_v1(public_inputs, &encoded)?;
+    Ok(encoded)
+}
+
+fn canonical_fields(values: &[u64], expected: usize) -> Result<Vec<F>, ZkAceStarkError> {
+    if values.len() != expected {
+        return Err(ZkAceStarkError::ProfileMismatch);
+    }
+    values
+        .iter()
+        .copied()
+        .map(|value| F::canonical(value).ok_or(ZkAceStarkError::NonCanonicalField))
+        .collect()
+}
+
+fn validate_proof_shape(proof: &ZkAceStarkProofV1) -> Result<(), ZkAceStarkError> {
+    if proof.version != PROOF_VERSION
+        || proof.composition_roots.len() != SECURITY_LANES
+        || proof.fri_lanes.len() != SECURITY_LANES
+        || proof.queries.len() != QUERY_COUNT
+    {
+        return Err(ZkAceStarkError::ProfileMismatch);
+    }
+    for lane in &proof.fri_lanes {
+        if lane.roots.len() != FRI_ROUNDS + 1 || lane.terminal_values.len() != TERMINAL_SIZE {
+            return Err(ZkAceStarkError::ProfileMismatch);
+        }
+    }
+    for query in &proof.queries {
+        if query.current_row.len() != TRACE_WIDTH
+            || query.next_row.len() != TRACE_WIDTH
+            || query.current_row_path.len() != LDE_LOG2 as usize
+            || query.next_row_path.len() != LDE_LOG2 as usize
+            || query.composition_values.len() != SECURITY_LANES
+            || query.composition_paths.len() != SECURITY_LANES
+            || query
+                .composition_paths
+                .iter()
+                .any(|path| path.len() != LDE_LOG2 as usize)
+            || query.fri_lanes.len() != SECURITY_LANES
+        {
+            return Err(ZkAceStarkError::ProfileMismatch);
+        }
+        for lane in &query.fri_lanes {
+            if lane.rounds.len() != FRI_ROUNDS {
+                return Err(ZkAceStarkError::ProfileMismatch);
+            }
+            for (round, opening) in lane.rounds.iter().enumerate() {
+                let expected_depth = LDE_LOG2 as usize - round;
+                if opening.low_path.len() != expected_depth
+                    || opening.high_path.len() != expected_depth
+                {
+                    return Err(ZkAceStarkError::ProfileMismatch);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_fri_query(
+    lane: usize,
+    query_index: usize,
+    expected_base_value: F,
+    lane_proof: &ZkAceFriLaneProofV1,
+    lane_query: &ZkAceFriLaneQueryV1,
+    composition_seed: &[u8; 32],
+    terminal_values: &[F],
+) -> Result<(), ZkAceStarkError> {
+    let lane_seed = fri_lane_seed(composition_seed, lane);
+    let mut layer_index = query_index;
+    let mut layer_size = LDE_SIZE;
+    let mut domain_shift = F(FIELD_GENERATOR);
+    let mut domain_root = primitive_root(LDE_LOG2)?;
+    let mut expected = expected_base_value;
+
+    for round in 0..FRI_ROUNDS {
+        let opening = &lane_query.rounds[round];
+        let low = F::canonical(opening.low).ok_or(ZkAceStarkError::NonCanonicalField)?;
+        let high = F::canonical(opening.high).ok_or(ZkAceStarkError::NonCanonicalField)?;
+        let half = layer_size / 2;
+        let low_index = layer_index % half;
+        let high_index = low_index + half;
+        let depth = LDE_LOG2 as usize - round;
+        if !verify_merkle_path(
+            &lane_proof.roots[round],
+            fri_leaf_hash(lane, round, low),
+            low_index,
+            &opening.low_path,
+            depth,
+        ) || !verify_merkle_path(
+            &lane_proof.roots[round],
+            fri_leaf_hash(lane, round, high),
+            high_index,
+            &opening.high_path,
+            depth,
+        ) {
+            return Err(ZkAceStarkError::FriOpening);
+        }
+        let selected = if layer_index < half { low } else { high };
+        if selected != expected {
+            return Err(ZkAceStarkError::FriOpening);
+        }
+        let x = domain_shift.mul(domain_root.pow(low_index as u128));
+        let beta = fri_beta(&lane_seed, lane, round, &lane_proof.roots[round]);
+        expected = fri_fold_pair(low, high, beta, x)?;
+        layer_index = low_index;
+        layer_size = half;
+        domain_shift = domain_shift.mul(domain_shift);
+        domain_root = domain_root.mul(domain_root);
+    }
+    if layer_size != TERMINAL_SIZE
+        || terminal_values
+            .get(layer_index)
+            .copied()
+            .ok_or(ZkAceStarkError::FriOpening)?
+            != expected
+    {
+        return Err(ZkAceStarkError::FriOpening);
+    }
+    Ok(())
+}
+
+/// Verify the exact canonical dedicated ZK-ACE proof wire.
+pub(crate) fn verify_zk_ace_stark_v1(
+    public_inputs: &ZkAcePublicInputsV1,
+    proof_bytes: &[u8],
+) -> Result<(), ZkAceStarkError> {
+    if proof_bytes.is_empty() {
+        return Err(ZkAceStarkError::MalformedProof);
+    }
+    if proof_bytes.len() > MAX_PROOF_BYTES {
+        return Err(ZkAceStarkError::ProofTooLarge);
+    }
+    let public_outputs = validate_relation_inputs(public_inputs)?;
+    let public_digest = derive_zk_ace_air_public_digest(public_inputs)
+        .map_err(|_| ZkAceStarkError::PublicInputEncoding)?;
+    let proof: ZkAceStarkProofV1 =
+        norito::decode_from_bytes(proof_bytes).map_err(|_| ZkAceStarkError::MalformedProof)?;
+    let canonical = norito::to_bytes(&proof).map_err(|_| ZkAceStarkError::MalformedProof)?;
+    if canonical.as_slice() != proof_bytes {
+        return Err(ZkAceStarkError::NonCanonicalProof);
+    }
+    validate_proof_shape(&proof)?;
+
+    let base_seed = base_transcript_seed(&public_digest, &proof.trace_root);
+    let composition_seed = composition_seed(&base_seed, &proof.composition_roots);
+    let lane_roots = proof
+        .fri_lanes
+        .iter()
+        .map(|lane| lane.roots.clone())
+        .collect::<Vec<_>>();
+    let query_seed = query_seed_from_roots(&composition_seed, &lane_roots);
+    let expected_indices = derive_query_indices(&query_seed)?;
+    let fixed_schedule = build_schedule(public_inputs)?;
+    let lde_root = primitive_root(LDE_LOG2)?;
+    let mut terminal_fields = Vec::with_capacity(SECURITY_LANES);
+
+    for (lane_index, lane) in proof.fri_lanes.iter().enumerate() {
+        let terminal = canonical_fields(&lane.terminal_values, TERMINAL_SIZE)?;
+        let terminal_tree = MerkleTree::from_leaves(
+            terminal
+                .iter()
+                .copied()
+                .map(|value| fri_leaf_hash(lane_index, FRI_ROUNDS, value))
+                .collect(),
+        )?;
+        if terminal_tree.root() != lane.roots[FRI_ROUNDS] {
+            return Err(ZkAceStarkError::FriOpening);
+        }
+        ensure_terminal_degree(&terminal)?;
+        terminal_fields.push(terminal);
+    }
+
+    let alphas = (0..SECURITY_LANES)
+        .map(|lane| challenge_vector(&base_seed, b"constraint-alpha", lane, CONSTRAINT_COUNT))
+        .collect::<Vec<_>>();
+    let trace_mix = (0..SECURITY_LANES)
+        .map(|lane| challenge_vector(&composition_seed, b"trace-mix", lane, TRACE_WIDTH))
+        .collect::<Vec<_>>();
+    let composition_mix = (0..SECURITY_LANES)
+        .map(|lane| challenge_field(&composition_seed, b"composition-mix", lane, 0))
+        .collect::<Vec<_>>();
+
+    for (query_position, query) in proof.queries.iter().enumerate() {
+        let index =
+            usize::try_from(query.index).map_err(|_| ZkAceStarkError::TranscriptMismatch)?;
+        if index != expected_indices[query_position] || index >= LDE_SIZE {
+            return Err(ZkAceStarkError::TranscriptMismatch);
+        }
+        let next_index = (index + TERMINAL_SIZE) % LDE_SIZE;
+        let current = canonical_fields(&query.current_row, TRACE_WIDTH)?;
+        let next = canonical_fields(&query.next_row, TRACE_WIDTH)?;
+        if !verify_merkle_path(
+            &proof.trace_root,
+            trace_leaf_hash(&current),
+            index,
+            &query.current_row_path,
+            LDE_LOG2 as usize,
+        ) || !verify_merkle_path(
+            &proof.trace_root,
+            trace_leaf_hash(&next),
+            next_index,
+            &query.next_row_path,
+            LDE_LOG2 as usize,
+        ) {
+            return Err(ZkAceStarkError::TraceOpening);
+        }
+        let x = F(FIELD_GENERATOR).mul(lde_root.pow(index as u128));
+        let fixed = fixed_row_at_point(&fixed_schedule, x)?;
+        let composition_values = canonical_fields(&query.composition_values, SECURITY_LANES)?;
+        for lane in 0..SECURITY_LANES {
+            if !verify_merkle_path(
+                &proof.composition_roots[lane],
+                composition_leaf_hash(lane, composition_values[lane]),
+                index,
+                &query.composition_paths[lane],
+                LDE_LOG2 as usize,
+            ) {
+                return Err(ZkAceStarkError::ConstraintOpening);
+            }
+            let expected_composition = constraint_quotient_value(
+                x,
+                &current,
+                &next,
+                &fixed,
+                &public_outputs,
+                &alphas[lane],
+            )?;
+            if composition_values[lane] != expected_composition {
+                return Err(ZkAceStarkError::ConstraintOpening);
+            }
+            let mixed_trace = current
+                .iter()
+                .zip(&trace_mix[lane])
+                .fold(F::ZERO, |sum, (value, coefficient)| {
+                    sum.add(value.mul(*coefficient))
+                });
+            let expected_base =
+                mixed_trace.add(composition_values[lane].mul(composition_mix[lane]));
+            verify_fri_query(
+                lane,
+                index,
+                expected_base,
+                &proof.fri_lanes[lane],
+                &query.fri_lanes[lane],
+                &composition_seed,
+                &terminal_fields[lane],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{str::FromStr as _, sync::OnceLock};
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        ChainId,
+        account::AccountId,
+        asset::AssetDefinitionId,
+        domain::DomainId,
+        name::Name,
+        proof::VerifyingKeyId,
+        zk::{derive_zk_ace_identity_commitment, derive_zk_ace_replay_nullifier},
+    };
+    use rand::{RngCore, SeedableRng as _, rngs::StdRng};
+
+    use super::*;
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic ZK-ACE test account");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn asset() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("test domain"),
+            Name::from_str("zkace").expect("test asset"),
+        )
+    }
+
+    fn public_inputs_and_witness() -> (ZkAcePublicInputsV1, ZkAceWitnessV1) {
+        let witness = ZkAceWitnessV1 {
+            identity_root: [0x11; 32],
+            identity_blinding: [0x22; 32],
+            replay_secret: [0x33; 32],
+        };
+        let chain_id = ChainId::from("taira-privacy-zk-ace-test");
+        let source = account(1);
+        let destination = account(2);
+        let asset = asset();
+        let policy_hash = [0x47; 32];
+        let authorization_digest = [0xA6; 32];
+        let identity_commitment = derive_zk_ace_identity_commitment(
+            &witness.identity_root,
+            &witness.identity_blinding,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        let tx_digest = derive_zk_ace_transfer_digest(
+            &source,
+            &destination,
+            &asset,
+            19,
+            &chain_id,
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            &policy_hash,
+        );
+        let replay_nullifier = derive_zk_ace_replay_nullifier(
+            &witness.replay_secret,
+            &authorization_digest,
+            &chain_id,
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        (
+            ZkAcePublicInputsV1::transparent_transfer(
+                identity_commitment,
+                tx_digest,
+                authorization_digest,
+                chain_id,
+                replay_nullifier,
+                policy_hash,
+                source,
+                destination,
+                asset,
+                19,
+                VerifyingKeyId::new(
+                    ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+                    ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+                ),
+            ),
+            witness,
+        )
+    }
+
+    fn fixture() -> &'static (ZkAcePublicInputsV1, ZkAceWitnessV1, Vec<u8>) {
+        static FIXTURE: OnceLock<(ZkAcePublicInputsV1, ZkAceWitnessV1, Vec<u8>)> = OnceLock::new();
+        FIXTURE.get_or_init(|| {
+            let (public_inputs, witness) = public_inputs_and_witness();
+            let mut rng = StdRng::from_seed([0x5A; 32]);
+            let proof = prove_zk_ace_stark_v1_with_rng(&public_inputs, &witness, &mut rng)
+                .expect("construct sound deterministic fixture");
+            (public_inputs, witness, proof)
+        })
+    }
+
+    fn decode_fixture() -> ZkAceStarkProofV1 {
+        norito::decode_from_bytes(&fixture().2).expect("decode canonical fixture")
+    }
+
+    fn assert_rejected(proof: &ZkAceStarkProofV1) {
+        let bytes = norito::to_bytes(proof).expect("encode adversarial proof");
+        assert!(
+            verify_zk_ace_stark_v1(&fixture().0, &bytes).is_err(),
+            "adversarial proof must be rejected"
+        );
+    }
+
+    #[test]
+    fn goldilocks_fft_roundtrips_and_roots_have_exact_order() {
+        for log_size in 1..=10 {
+            let root = primitive_root(log_size).expect("compiled root");
+            let size = 1usize << log_size;
+            assert_eq!(root.pow(size as u128), F::ONE);
+            assert_ne!(root.pow((size / 2) as u128), F::ONE);
+            let mut values = (0..size)
+                .map(|index| F::reduce((index as u128 + 1).pow(3)))
+                .collect::<Vec<_>>();
+            let expected = values.clone();
+            fft(&mut values, root).expect("FFT");
+            ifft(&mut values, root).expect("inverse FFT");
+            assert_eq!(values, expected);
+        }
+    }
+
+    #[test]
+    fn complete_trace_matches_both_poseidon_relations() {
+        let (public_inputs, witness) = public_inputs_and_witness();
+        let material = build_trace_material(&public_inputs, &witness).expect("valid trace");
+        assert_eq!(
+            material.public_outputs,
+            public_output_words(&public_inputs).expect("canonical public outputs")
+        );
+        assert_eq!(material.trace_columns.len(), TRACE_WIDTH);
+        assert_eq!(material.fixed_columns.len(), FIXED_WIDTH);
+        assert!(
+            material
+                .trace_columns
+                .iter()
+                .all(|column| column.len() == TRACE_SIZE)
+        );
+    }
+
+    #[test]
+    fn verifier_barycentric_fixed_rows_match_full_lde() {
+        let (public_inputs, _) = public_inputs_and_witness();
+        let schedule = build_schedule(&public_inputs).expect("compiled fixed schedule");
+        let columns = fixed_columns_for_public_inputs(&public_inputs).expect("fixed base columns");
+        let lde = fixed_lde_columns(&columns).expect("full fixed LDE");
+        let root = primitive_root(LDE_LOG2).expect("LDE root");
+        for index in [0usize, 1, 17, 31_337, LDE_SIZE - 1] {
+            let x = F(FIELD_GENERATOR).mul(root.pow(index as u128));
+            assert_eq!(
+                fixed_row_at_point(&schedule, x).expect("barycentric fixed row"),
+                row_at(&lde, index).expect("full-LDE fixed row"),
+                "fixed interpolation drift at LDE index {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_private_witness_component_is_required() {
+        let (public_inputs, witness) = public_inputs_and_witness();
+        let mutations: [fn(&mut ZkAceWitnessV1); 3] = [
+            |candidate: &mut ZkAceWitnessV1| candidate.identity_root[0] ^= 1,
+            |candidate: &mut ZkAceWitnessV1| candidate.identity_blinding[0] ^= 1,
+            |candidate: &mut ZkAceWitnessV1| candidate.replay_secret[0] ^= 1,
+        ];
+        for mutate in mutations {
+            let mut changed = witness;
+            mutate(&mut changed);
+            assert!(matches!(
+                build_trace_material(&public_inputs, &changed),
+                Err(ZkAceStarkError::WitnessRelation)
+            ));
+        }
+    }
+
+    #[derive(Debug)]
+    struct MaxValueRng;
+
+    impl RngCore for MaxValueRng {
+        fn next_u32(&mut self) -> u32 {
+            u32::MAX
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            u64::MAX
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            destination.fill(0xFF);
+        }
+    }
+
+    #[test]
+    fn unavailable_canonical_entropy_fails_closed() {
+        let (public_inputs, witness) = public_inputs_and_witness();
+        assert!(matches!(
+            prove_zk_ace_stark_v1_with_rng(&public_inputs, &witness, &mut MaxValueRng),
+            Err(ZkAceStarkError::RandomnessUnavailable)
+        ));
+    }
+
+    #[test]
+    fn proof_roundtrips_under_exact_shape_and_byte_ceiling() {
+        let (public_inputs, _, proof) = fixture();
+        verify_zk_ace_stark_v1(public_inputs, proof).expect("proof verifies");
+        assert!(!proof.is_empty());
+        assert!(proof.len() <= MAX_PROOF_BYTES);
+        let decoded = decode_fixture();
+        assert_eq!(decoded.composition_roots.len(), SECURITY_LANES);
+        assert_eq!(decoded.queries.len(), QUERY_COUNT);
+        assert!(
+            decoded
+                .queries
+                .iter()
+                .all(|query| query.current_row.len() == TRACE_WIDTH)
+        );
+    }
+
+    #[test]
+    fn trace_masking_is_randomized_and_does_not_embed_raw_witness_bytes() {
+        let (public_inputs, witness, first) = fixture();
+        let mut rng = StdRng::from_seed([0xA5; 32]);
+        let second = prove_zk_ace_stark_v1_with_rng(public_inputs, witness, &mut rng)
+            .expect("second masked proof");
+        assert_ne!(first, &second);
+        verify_zk_ace_stark_v1(public_inputs, &second).expect("second proof verifies");
+        for marker in [
+            witness.identity_root,
+            witness.identity_blinding,
+            witness.replay_secret,
+        ] {
+            assert!(
+                !first
+                    .windows(marker.len())
+                    .any(|window| window == marker.as_slice())
+            );
+            assert!(
+                !second
+                    .windows(marker.len())
+                    .any(|window| window == marker.as_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn every_public_relation_binding_rejects_replay() {
+        let (public_inputs, _, proof) = fixture();
+        let mutations: [(&str, fn(&mut ZkAcePublicInputsV1)); 14] = [
+            ("version", |value| value.version ^= 1),
+            ("identity", |value| value.identity_commitment[0] ^= 1),
+            ("transfer", |value| value.tx_digest[0] ^= 1),
+            ("authorization", |value| value.authorization_digest[0] ^= 1),
+            ("chain", |value| value.chain_id = ChainId::from("foreign")),
+            ("domain", |value| value.domain_tag.push('x')),
+            ("action", |value| value.action_class.push('x')),
+            ("nullifier", |value| value.replay_nullifier[0] ^= 1),
+            ("policy", |value| value.policy_hash[0] ^= 1),
+            ("source", |value| value.from = account(3)),
+            ("destination", |value| value.to = account(4)),
+            ("asset", |value| {
+                value.asset = AssetDefinitionId::new(
+                    DomainId::try_new("privacy", "universal").expect("test domain"),
+                    Name::from_str("other").expect("other asset"),
+                );
+            }),
+            ("amount", |value| value.amount += 1),
+            ("verifier", |value| value.verifier_key_id.name.push('x')),
+        ];
+        for (label, mutate) in mutations {
+            let mut changed = public_inputs.clone();
+            mutate(&mut changed);
+            assert!(
+                verify_zk_ace_stark_v1(&changed, proof).is_err(),
+                "{label} mutation must reject replay"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_wire_rejects_empty_oversized_truncated_and_trailing_data() {
+        let (public_inputs, _, proof) = fixture();
+        assert!(matches!(
+            verify_zk_ace_stark_v1(public_inputs, &[]),
+            Err(ZkAceStarkError::MalformedProof)
+        ));
+        assert!(matches!(
+            verify_zk_ace_stark_v1(public_inputs, &vec![0; MAX_PROOF_BYTES + 1]),
+            Err(ZkAceStarkError::ProofTooLarge)
+        ));
+        for length in [
+            1,
+            proof.len() / 3,
+            proof.len() / 2,
+            proof.len().saturating_sub(1),
+        ] {
+            assert!(verify_zk_ace_stark_v1(public_inputs, &proof[..length]).is_err());
+        }
+        let mut trailing = proof.clone();
+        trailing.push(0);
+        assert!(verify_zk_ace_stark_v1(public_inputs, &trailing).is_err());
+    }
+
+    #[test]
+    fn malformed_shapes_noncanonical_fields_and_merkle_forgery_reject() {
+        let mut changed = decode_fixture();
+        changed.version ^= 1;
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.queries.pop();
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.queries[0].current_row.pop();
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.queries[0].current_row[0] = FIELD_MODULUS;
+        let bytes = norito::to_bytes(&changed).expect("encode non-canonical field");
+        assert!(matches!(
+            verify_zk_ace_stark_v1(&fixture().0, &bytes),
+            Err(ZkAceStarkError::NonCanonicalField)
+        ));
+
+        changed = decode_fixture();
+        changed.trace_root[0] ^= 1;
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.queries[0].current_row_path[0][0] ^= 1;
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.composition_roots[0][0] ^= 1;
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.queries[0].composition_values[0] ^= 1;
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.queries[0].fri_lanes[0].rounds[0].low ^= 1;
+        assert_rejected(&changed);
+
+        changed = decode_fixture();
+        changed.queries[0].fri_lanes[0].rounds[0].high_path[0][0] ^= 1;
+        assert_rejected(&changed);
+    }
+
+    #[test]
+    fn malicious_zero_composition_cannot_disconnect_private_trace() {
+        let mut changed = decode_fixture();
+        changed.composition_roots.fill([0; 32]);
+        for query in &mut changed.queries {
+            query.composition_values.fill(0);
+            for path in &mut query.composition_paths {
+                path.fill([0; 32]);
+            }
+        }
+        assert_rejected(&changed);
+    }
+
+    #[test]
+    fn terminal_root_cannot_hide_a_high_degree_polynomial() {
+        let mut changed = decode_fixture();
+        changed.fri_lanes[0].terminal_values[3] ^= 1;
+        let terminal = canonical_fields(&changed.fri_lanes[0].terminal_values, TERMINAL_SIZE)
+            .expect("mutated field remains canonical");
+        let tree = MerkleTree::from_leaves(
+            terminal
+                .iter()
+                .copied()
+                .map(|value| fri_leaf_hash(0, FRI_ROUNDS, value))
+                .collect(),
+        )
+        .expect("terminal tree");
+        changed.fri_lanes[0].roots[FRI_ROUNDS] = tree.root();
+        let bytes = norito::to_bytes(&changed).expect("encode high-degree terminal");
+        assert!(matches!(
+            verify_zk_ace_stark_v1(&fixture().0, &bytes),
+            Err(ZkAceStarkError::FriDegree)
+        ));
+    }
+}

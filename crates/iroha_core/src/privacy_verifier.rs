@@ -12,8 +12,8 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     privacy::{
         AnonymousPgcKOutOfNStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyConsensusLimitsV1, PrivacyNamespaceV1,
-        PrivacyCommitmentV1, PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
         PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
         PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
         PrivacyProofEnvelopeValidationError, PrivacyProofV1, PrivacyProtocolActivationRecordV1,
@@ -319,19 +319,17 @@ pub(crate) fn verify_privacy_envelope_v1(
                     PrivacyZkAceVerificationFailureV1 { source },
                 ))
             })?;
-            VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(
-                VerifiedZkAceAuthorizationV1 {
-                    policy_id: statement.policy_id,
-                    policy_digest: statement.policy_digest,
-                    identity_commitment: statement.identity_commitment,
-                    authorization_epoch: statement.authorization_epoch,
-                    source: statement.source.clone(),
-                    destination: statement.destination.clone(),
-                    asset_definition_id: statement.asset_definition_id.clone(),
-                    amount: statement.amount,
-                    replay_nullifier: statement.replay_nullifier,
-                },
-            )
+            VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(VerifiedZkAceAuthorizationV1 {
+                policy_id: statement.policy_id,
+                policy_digest: statement.policy_digest,
+                identity_commitment: statement.identity_commitment,
+                authorization_epoch: statement.authorization_epoch,
+                source: statement.source.clone(),
+                destination: statement.destination.clone(),
+                asset_definition_id: statement.asset_definition_id.clone(),
+                amount: statement.amount,
+                replay_nullifier: statement.replay_nullifier,
+            })
         }
         (
             PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement),

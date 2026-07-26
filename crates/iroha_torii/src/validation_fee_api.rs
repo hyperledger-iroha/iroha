@@ -137,7 +137,10 @@ fn validate_retained_parliament_snapshot(
                 "validation-fee Parliament roster for {body:?} is inconsistent"
             )));
         }
-        let members = roster.members.iter().collect::<std::collections::BTreeSet<_>>();
+        let members = roster
+            .members
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
         let alternates = roster
             .alternates
             .iter()
@@ -271,9 +274,7 @@ fn parliament_body_progress(
         if let Some(stage) = stage {
             let expected_required =
                 iroha_core::state::council_quorum_threshold(roster.members.len(), stage.quorum_bps);
-            let decision_sets_are_disjoint = stage
-                .approvers
-                .is_disjoint(&stage.rejections)
+            let decision_sets_are_disjoint = stage.approvers.is_disjoint(&stage.rejections)
                 && stage.approvers.is_disjoint(&stage.abstentions)
                 && stage.rejections.is_disjoint(&stage.abstentions);
             let decisions_are_members = stage

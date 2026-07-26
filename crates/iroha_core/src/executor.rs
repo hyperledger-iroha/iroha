@@ -8739,10 +8739,6 @@ fn initial_permission_resource_authority(
             let token = decode!(executor_permission::account::CanReplaceAccountController);
             token.account == *authority
         }
-        "CanManageZkAceIdentityForAccount" => {
-            let token = decode!(executor_permission::zk_ace::CanManageZkAceIdentityForAccount);
-            token.account == *authority
-        }
         "CanResolveAccountAlias" => {
             let token = decode!(executor_permission::account::CanResolveAccountAlias);
             let delegation: Permission =
@@ -10573,7 +10569,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyAssetMetadata",
     "CanSetAssetTransferFreeze",
     "CanSetAssetTransferDailyLimit",
-    "CanManageZkAceIdentityForAccount",
     "CanRegisterNft",
     "CanUnregisterNft",
     "CanTransferNft",

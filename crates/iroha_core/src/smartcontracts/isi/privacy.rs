@@ -18,15 +18,15 @@ use iroha_data_model::{
         },
     },
     permission::Permission,
-    prelude::{Account, AccountId, AssetId, Quantity, Register, Transfer},
+    prelude::{Account, AccountId, Quantity, Register, Transfer},
     privacy::{
-        PrivacyConsensusPolicyTighteningV1, PrivacyNamespaceV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1,
-        PrivacyRootRoleV1, PrivacyStatementV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAmsActionV1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
-        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1, zk_ams_issuer_policy_record_digest_v1,
-        zk_ams_registry_record_digest_v1, validate_zk_ace_policy_revocation_v1,
-        validate_zk_ace_policy_rotation_v1,
+        PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyConsensusPolicyTighteningV1, PrivacyNamespaceV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1,
+        PrivacyRootManagementV1, PrivacyRootRoleV1, PrivacyStatementV1,
+        PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsActionV1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1, validate_zk_ace_policy_revocation_v1,
+        validate_zk_ace_policy_rotation_v1, zk_ams_issuer_policy_record_digest_v1,
+        zk_ams_registry_record_digest_v1,
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
@@ -63,7 +63,7 @@ use crate::{
         PrivacyVerificationContextFailureCodeV1, PrivacyVerificationContextV1,
         PrivacyVerificationErrorV1, VerifiedPrivacyLedgerEffectsV1, verify_privacy_envelope_v1,
     },
-    state::StateTransaction,
+    state::{StateTransaction, WorldReadOnly},
 };
 
 fn invalid_privacy_parameter(message: impl Into<String>) -> Error {
@@ -1002,6 +1002,11 @@ fn require_registered_zk_ace_protocol(
         Error::InvariantViolation(
             format!("registered ZK-ACE activation is invalid: {error}").into(),
         )
+    })?;
+    validate_compiled_privacy_activation_v1(activation).map_err(|error| {
+        Error::InvariantViolation(
+            format!("registered ZK-ACE activation is not executable: {error}").into(),
+        )
     })
 }
 
@@ -1027,14 +1032,14 @@ impl Execute for RegisterPrivacyZkAcePolicyV1 {
             invalid_privacy_parameter(format!("ZK-ACE policy registration rejected: {error}"))
         })?;
         validate_zk_ace_policy_references(&self.policy, state_transaction)?;
-        let policy_count =
-            privacy_zk_ace_policy_count_v1(&state_transaction.world.privacy_commitments).map_err(
-                |error| {
-                    Error::InvariantViolation(
-                        format!("persisted ZK-ACE policy registry is invalid: {error}").into(),
-                    )
-                },
-            )?;
+        let policy_count = privacy_zk_ace_policy_count_v1(
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            Error::InvariantViolation(
+                format!("persisted ZK-ACE policy registry is invalid: {error}").into(),
+            )
+        })?;
         if policy_count >= PRIVACY_ZK_ACE_MAX_POLICIES_V1 {
             return Err(invalid_privacy_parameter(format!(
                 "ZK-ACE policy registry is full at {} policies",
@@ -1079,9 +1084,7 @@ impl Execute for RotatePrivacyZkAcePolicyV1 {
             .ok()
             .and_then(|bytes| u64::try_from(bytes.len()).ok())
             .ok_or_else(|| {
-                Error::InvariantViolation(
-                    "ZK-ACE policy rotation canonical encoding failed".into(),
-                )
+                Error::InvariantViolation("ZK-ACE policy rotation canonical encoding failed".into())
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
@@ -1511,114 +1514,114 @@ impl Execute for SubmitPrivacyProofV1 {
         } else {
             None
         };
-        let (zk_ace_policy, zk_ace_replay_key) =
-            if self.envelope.protocol_id == PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 {
-                let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) =
-                    &self.envelope.statement
-                else {
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE protocol envelope carries a different statement type",
-                    ));
-                };
-                let policy_key = PrivacyCommitmentKeyV1::zk_ace_policy(statement.policy_id)
-                    .map_err(invalid_privacy_parameter)?;
-                if state_transaction
-                    .world
-                    .privacy_commitments
-                    .get(&policy_key)
-                    .is_none()
-                {
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE authoritative policy is not registered",
-                    ));
-                }
-                let policy = load_privacy_zk_ace_policy_v1(
-                    statement.policy_id,
-                    &state_transaction.world.privacy_commitments,
+        let (zk_ace_policy, zk_ace_replay_key) = if self.envelope.protocol_id
+            == PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        {
+            let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &self.envelope.statement
+            else {
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE protocol envelope carries a different statement type",
+                ));
+            };
+            let policy_key = PrivacyCommitmentKeyV1::zk_ace_policy(statement.policy_id)
+                .map_err(invalid_privacy_parameter)?;
+            if state_transaction
+                .world
+                .privacy_commitments
+                .get(&policy_key)
+                .is_none()
+            {
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE authoritative policy is not registered",
+                ));
+            }
+            let policy = load_privacy_zk_ace_policy_v1(
+                statement.policy_id,
+                &state_transaction.world.privacy_commitments,
+            )
+            .map_err(|error| {
+                Error::InvariantViolation(
+                    format!("trusted ZK-ACE policy state failed validation: {error}").into(),
                 )
-                .map_err(|error| {
+            })?;
+            if policy.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE authoritative policy is revoked",
+                ));
+            }
+            if policy.policy_id != statement.policy_id
+                || policy.policy_digest != statement.policy_digest
+                || policy.identity_commitment != statement.identity_commitment
+                || policy.authorization_epoch != statement.authorization_epoch
+                || policy.asset_definition_id != statement.asset_definition_id
+            {
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE statement does not exactly match authoritative policy state",
+                ));
+            }
+            if policy
+                .source_allowlist
+                .binary_search(&statement.source)
+                .is_err()
+            {
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE source account is not authorized by policy",
+                ));
+            }
+            if state_transaction
+                .world
+                .accounts
+                .get(&statement.source)
+                .is_none()
+            {
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE source account does not exist",
+                ));
+            }
+            if state_transaction
+                .world
+                .accounts
+                .get(&statement.destination)
+                .is_none()
+            {
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE destination account does not exist",
+                ));
+            }
+            state_transaction
+                .world
+                .asset_definition(&statement.asset_definition_id)
+                .map_err(Error::from)?;
+            let replay_key = PrivacyNullifierKeyV1::zk_ace_replay(
+                statement.policy_id,
+                statement.replay_nullifier,
+            )
+            .map_err(invalid_privacy_parameter)?;
+            if let Some(record) = state_transaction.world.privacy_nullifiers.get(&replay_key) {
+                record.validate().map_err(|error| {
                     Error::InvariantViolation(
-                        format!("trusted ZK-ACE policy state failed validation: {error}").into(),
+                        format!("persisted ZK-ACE replay provenance is invalid: {error}").into(),
                     )
                 })?;
-                if policy.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE authoritative policy is revoked",
+                if !matches!(
+                    record,
+                    PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
+                        policy_id,
+                        ..
+                    } if *policy_id == statement.policy_id
+                ) {
+                    return Err(Error::InvariantViolation(
+                        "persisted ZK-ACE replay marker has wrong-policy provenance".into(),
                     ));
                 }
-                if policy.policy_id != statement.policy_id
-                    || policy.policy_digest != statement.policy_digest
-                    || policy.identity_commitment != statement.identity_commitment
-                    || policy.authorization_epoch != statement.authorization_epoch
-                    || policy.asset_definition_id != statement.asset_definition_id
-                {
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE statement does not exactly match authoritative policy state",
-                    ));
-                }
-                if policy
-                    .source_allowlist
-                    .binary_search(&statement.source)
-                    .is_err()
-                {
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE source account is not authorized by policy",
-                    ));
-                }
-                if state_transaction
-                    .world
-                    .accounts
-                    .get(&statement.source)
-                    .is_none()
-                {
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE source account does not exist",
-                    ));
-                }
-                if state_transaction
-                    .world
-                    .accounts
-                    .get(&statement.destination)
-                    .is_none()
-                {
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE destination account does not exist",
-                    ));
-                }
-                state_transaction
-                    .world
-                    .asset_definition(&statement.asset_definition_id)
-                    .map_err(Error::from)?;
-                let replay_key = PrivacyNullifierKeyV1::zk_ace_replay(
-                    statement.policy_id,
-                    statement.replay_nullifier,
-                )
-                .map_err(invalid_privacy_parameter)?;
-                if let Some(record) = state_transaction.world.privacy_nullifiers.get(&replay_key) {
-                    record.validate().map_err(|error| {
-                        Error::InvariantViolation(
-                            format!("persisted ZK-ACE replay provenance is invalid: {error}").into(),
-                        )
-                    })?;
-                    if !matches!(
-                        record,
-                        PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
-                            policy_id,
-                            ..
-                        } if *policy_id == statement.policy_id
-                    ) {
-                        return Err(Error::InvariantViolation(
-                            "persisted ZK-ACE replay marker has wrong-policy provenance".into(),
-                        ));
-                    }
-                    return Err(invalid_privacy_parameter(
-                        "ZK-ACE replay nullifier was already consumed",
-                    ));
-                }
-                (Some(policy), Some(replay_key))
-            } else {
-                (None, None)
-            };
+                return Err(invalid_privacy_parameter(
+                    "ZK-ACE replay nullifier was already consumed",
+                ));
+            }
+            (Some(policy), Some(replay_key))
+        } else {
+            (None, None)
+        };
         let pgc_verification_state =
             pgc_snapshot
                 .as_ref()
@@ -1696,22 +1699,23 @@ impl Execute for SubmitPrivacyProofV1 {
                     || effect.identity_commitment != policy.identity_commitment
                     || effect.authorization_epoch != policy.authorization_epoch
                     || effect.asset_definition_id != policy.asset_definition_id
-                    || policy.source_allowlist.binary_search(&effect.source).is_err()
+                    || policy
+                        .source_allowlist
+                        .binary_search(&effect.source)
+                        .is_err()
                 {
                     return Err(Error::InvariantViolation(
                         "native ZK-ACE effect is inconsistent with trusted state or its statement"
                             .into(),
                     ));
                 }
-                let expected_replay_key = PrivacyNullifierKeyV1::zk_ace_replay(
-                    effect.policy_id,
-                    effect.replay_nullifier,
-                )
-                .map_err(|error| {
-                    Error::InvariantViolation(
-                        format!("verified ZK-ACE replay key is invalid: {error}").into(),
-                    )
-                })?;
+                let expected_replay_key =
+                    PrivacyNullifierKeyV1::zk_ace_replay(effect.policy_id, effect.replay_nullifier)
+                        .map_err(|error| {
+                            Error::InvariantViolation(
+                                format!("verified ZK-ACE replay key is invalid: {error}").into(),
+                            )
+                        })?;
                 if replay_key != expected_replay_key {
                     return Err(Error::InvariantViolation(
                         "native ZK-ACE effect changed its replay key".into(),
@@ -1727,16 +1731,15 @@ impl Execute for SubmitPrivacyProofV1 {
                         "verified ZK-ACE replay nullifier was already consumed",
                     ));
                 }
-                let replay_record =
-                    PrivacyStateItemRecordV1::zk_ace_verified_authorization(
-                        policy.policy_id,
-                        policy.record_digest,
-                        self.envelope.statement_digest,
-                        state_transaction.block_height(),
-                        expected_action_index,
-                    )
-                    .map_err(invalid_privacy_parameter)?;
-                let source_asset_id = super::world::privacy_public_asset_id(
+                let replay_record = PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                    policy.policy_id,
+                    policy.record_digest,
+                    self.envelope.statement_digest,
+                    state_transaction.block_height(),
+                    expected_action_index,
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let source_asset_id = crate::smartcontracts::world::isi::privacy_public_asset_id(
                     state_transaction,
                     &effect.asset_definition_id,
                     &effect.source,
@@ -1750,12 +1753,13 @@ impl Execute for SubmitPrivacyProofV1 {
                 let _bound_fee_without_second_charge = statement.fee;
                 state_transaction
                     .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+                Transfer::asset_quantity(source_asset_id, amount, effect.destination)
+                    .execute(&effect.source, state_transaction)?;
                 state_transaction
                     .world
                     .privacy_nullifiers
                     .insert(replay_key, replay_record);
-                Transfer::asset_quantity(source_asset_id, amount, effect.destination)
-                    .execute(&effect.source, state_transaction)
+                Ok(())
             }
             VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(effect) => {
                 let snapshot = zk_ams_snapshot.as_ref().ok_or_else(|| {
@@ -1942,7 +1946,7 @@ impl Execute for SubmitPrivacyProofV1 {
                     state_transaction
                         .world
                         .privacy_commitments
-                        .insert(key, item_provenance);
+                        .insert(key, item_provenance.clone());
                 }
                 state_transaction
                     .world
@@ -2258,13 +2262,15 @@ mod tests {
         name::Name,
         privacy::{
             AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-            PrivacyActiveLifecycleV1, PrivacyConsensusLimitsV1, PrivacyNamespaceScopeV1,
-            PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-            PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1,
+            PrivacyActiveLifecycleV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1,
+            PrivacyP256PointV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
+            PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
             PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
             PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
             PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementV1,
-            PrivacyTransactionIntentDigestV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+            PrivacyTransactionIntentDigestV1, PrivacyZkAcePolicyLifecycleV1,
+            PrivacyZkAcePolicyRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         },
     };
     use iroha_test_samples::ALICE_ID;
