@@ -25,7 +25,8 @@ use iroha_data_model::{
     validation_fee::{
         VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
         VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode,
-        ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateRulesV1,
+        ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateMemberV1,
+        ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
         ValidationFeePolicyV1,
     },
 };
@@ -35,7 +36,7 @@ use mv::storage::StorageReadOnly;
 const GATE_HEIGHT: u64 = 5;
 const BALLOT_HEIGHT: u64 = 10;
 const BALLOT_AMOUNT: u64 = 150;
-const BALLOT_DURATION: u64 = 10;
+const BALLOT_DURATION: u64 = 3_600;
 const CITIZENSHIP_AMOUNT: u64 = 10_000;
 
 fn account(seed: u8) -> AccountId {
@@ -227,26 +228,6 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
             mode: GovernanceReferendumMode::Plain,
         },
     );
-    let mut approvals = GovernanceStageApprovals::default();
-    for body in [
-        ParliamentBody::RulesCommittee,
-        ParliamentBody::AgendaCouncil,
-        ParliamentBody::InterestPanel,
-        ParliamentBody::ReviewPanel,
-        ParliamentBody::PolicyJury,
-        ParliamentBody::OversightCommittee,
-        ParliamentBody::FmaCommittee,
-    ] {
-        approvals
-            .ensure_stage(body, 0, 1, 10_000)
-            .record(parliament_signer.clone());
-    }
-    approvals.approval_gate_height = Some(GATE_HEIGHT);
-    state_transaction
-        .world
-        .governance_stage_approvals_mut()
-        .insert(referendum_id.clone(), approvals);
-
     for (owner, bonded_height) in [
         (&proposer, GATE_HEIGHT),
         (&other_at_gate, GATE_HEIGHT),
@@ -262,6 +243,55 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
             ),
         );
     }
+    let mut electorate_members = [
+        (&proposer, GATE_HEIGHT),
+        (&late_nay_voter, GATE_HEIGHT + 1),
+        (&late_abstain_voter, GATE_HEIGHT + 1),
+    ]
+    .into_iter()
+    .map(
+        |(account_id, bonded_height)| ValidationFeePlainElectorateMemberV1 {
+            account_id: account_id.clone(),
+            bonded_height,
+            bonded_amount: retained_rules.citizenship_amount.clone(),
+        },
+    )
+    .collect::<Vec<_>>();
+    electorate_members.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+    let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+        proposal_id,
+        proposer.clone(),
+        BALLOT_HEIGHT,
+        GATE_HEIGHT,
+        electorate_members,
+    )
+    .expect("canonical proposal-bound PLAIN electorate snapshot");
+    assert_eq!(
+        electorate.context_error(proposal_id, &proposer, &retained_rules),
+        None
+    );
+    assert!(!electorate.contains(&other_at_gate));
+    let electorate_root = electorate.roster_root;
+    let mut approvals = GovernanceStageApprovals::default();
+    for body in [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::FmaCommittee,
+    ] {
+        approvals
+            .ensure_stage(body, 0, 1, 10_000)
+            .record(parliament_signer.clone());
+    }
+    approvals.approval_gate_height = Some(GATE_HEIGHT);
+    approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
+    state_transaction
+        .world
+        .governance_stage_approvals_mut()
+        .insert(referendum_id.clone(), approvals);
 
     for (candidate, expected) in [
         (

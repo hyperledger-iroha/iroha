@@ -280,3 +280,93 @@ fn citizenship_records_persist_across_transactions() {
     .execute(&ALICE_ID, &mut stx_2)
     .expect("persist council should succeed when citizen record persisted");
 }
+
+#[test]
+fn citizenship_top_up_preserves_the_original_bond_interval_and_service_state() {
+    let def_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").expect("domain"),
+        "xor".parse().expect("asset name"),
+    );
+    let world = build_world(&def_id);
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let mut state = State::new_for_testing(world, kura, query_handle);
+    let mut gov_cfg = state.gov.clone();
+    gov_cfg.citizenship_asset_id = def_id.clone();
+    gov_cfg.citizenship_bond_amount = 50_u64.into();
+    gov_cfg.citizenship_escrow_account = BOB_ID.clone();
+    state.set_gov(gov_cfg);
+
+    let mut block_1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+    let mut stx_1 = block_1.transaction();
+    RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 50_u64.into(),
+    }
+    .execute(&ALICE_ID, &mut stx_1)
+    .expect("initial citizen bond succeeds");
+    stx_1.apply();
+    block_1
+        .commit()
+        .expect("initial citizen bond block commits");
+
+    let mut block_2 = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+    let mut stx_2 = block_2.transaction();
+    let mut serviced = stx_2
+        .world
+        .citizens()
+        .get(&*ALICE_ID)
+        .cloned()
+        .expect("persisted citizen record");
+    serviced.seats_in_epoch = 2;
+    serviced.last_epoch_seen = 7;
+    serviced.cooldown_until = 42;
+    serviced.declines_used = 1;
+    serviced.no_show_strikes = 3;
+    serviced.misconduct_strikes = 4;
+    stx_2
+        .world
+        .citizens_mut()
+        .insert(ALICE_ID.clone(), serviced);
+
+    RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 75_u64.into(),
+    }
+    .execute(&ALICE_ID, &mut stx_2)
+    .expect("citizenship top-up succeeds");
+    RegisterCitizen {
+        owner: ALICE_ID.clone(),
+        amount: 75_u64.into(),
+    }
+    .execute(&ALICE_ID, &mut stx_2)
+    .expect("same-amount citizenship registration is an idempotent no-op");
+
+    let retained = stx_2
+        .world
+        .citizens()
+        .get(&*ALICE_ID)
+        .expect("topped-up citizen record");
+    assert_eq!(retained.amount, Quantity::from(75_u64));
+    assert_eq!(retained.bonded_height, 1);
+    assert_eq!(retained.seats_in_epoch, 2);
+    assert_eq!(retained.last_epoch_seen, 7);
+    assert_eq!(retained.cooldown_until, 42);
+    assert_eq!(retained.declines_used, 1);
+    assert_eq!(retained.no_show_strikes, 3);
+    assert_eq!(retained.misconduct_strikes, 4);
+    assert_eq!(
+        **stx_2
+            .world
+            .asset_mut(&AssetId::new(def_id.clone(), ALICE_ID.clone()))
+            .expect("alice citizenship asset"),
+        Quantity::from(925_u64)
+    );
+    assert_eq!(
+        **stx_2
+            .world
+            .asset_mut(&AssetId::new(def_id, BOB_ID.clone()))
+            .expect("citizenship escrow asset"),
+        Quantity::from(75_u64)
+    );
+}

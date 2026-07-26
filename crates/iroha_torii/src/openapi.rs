@@ -14272,6 +14272,14 @@ fn validation_fee_schemas(schemas: &mut Map) {
         "maxLength": 64,
         "pattern": "^[0-9a-f]{64}$"
     });
+    let norito_hex32 = norito::json!({
+        "type": "string",
+        "minLength": 64,
+        "maxLength": 64,
+        "pattern": "^[0-9A-F]{64}$",
+        "not": { "pattern": "^0{64}$" },
+        "description": "Canonical non-zero 32-byte value in Norito JSON's uppercase hexadecimal representation."
+    });
     let policy_proof_request_schema_name =
         iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_REQUEST_SCHEMA_NAME;
     let policy_proof_response_schema_name =
@@ -14334,13 +14342,89 @@ fn validation_fee_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "ValidationFeePlainElectorateMemberV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "bonded_height", "bonded_amount"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless citizen account."
+                },
+                "bonded_height": {
+                    "type": "string",
+                    "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "description": "Canonical unsigned decimal height at which the uninterrupted citizenship bond began."
+                },
+                "bonded_amount": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "maxLength": 155,
+                    "description": "Positive exact-integer citizenship amount frozen at the referendum boundary."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeePlainElectorateSnapshotV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "proposal_id", "proposal_operator", "captured_at_height",
+                "approval_gate_height", "member_count", "members", "roster_root"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "proposal_id": {
+                    "allOf": [norito_hex32],
+                    "description": "Native proposal identifier in Norito JSON's canonical uppercase hexadecimal representation."
+                },
+                "proposal_operator": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless proposal-operator account."
+                },
+                "captured_at_height": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "description": "Exact referendum start height at whose boundary the electorate was frozen."
+                },
+                "approval_gate_height": {
+                    "type": "string",
+                    "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "description": "First height at which all seven proposal-local Parliament bodies held approval quorum."
+                },
+                "member_count": {
+                    "type": "string",
+                    "pattern": "^(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-6])$",
+                    "description": "Canonical unsigned decimal member count; it exactly matches the members array."
+                },
+                "members": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 256,
+                    "items": {
+                        "$ref": "#/components/schemas/ValidationFeePlainElectorateMemberV1"
+                    },
+                    "description": "Complete canonically ordered, duplicate-free frozen electorate."
+                },
+                "roster_root": {
+                    "allOf": [norito_hex32],
+                    "description": "Domain-separated commitment to the complete frozen snapshot payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "ValidationFeeProposalRecordV1".to_owned(),
         norito::json!({
             "type": "object",
             "required": [
                 "proposal_id", "proposer", "proposal_kind", "created_height", "status",
-                "pipeline", "referendum", "parliament_snapshot", "finalization_evidence",
-                "enacted_at_height"
+                "pipeline", "referendum", "parliament_snapshot", "plain_electorate_snapshot",
+                "finalization_evidence", "enacted_at_height"
             ],
             "additionalProperties": false,
             "properties": {
@@ -14361,6 +14445,15 @@ fn validation_fee_schemas(schemas: &mut Map) {
                 },
                 "referendum": { "$ref": "#/components/schemas/JsonValue" },
                 "parliament_snapshot": { "$ref": "#/components/schemas/JsonValue" },
+                "plain_electorate_snapshot": {
+                    "oneOf": [
+                        {
+                            "$ref": "#/components/schemas/ValidationFeePlainElectorateSnapshotV1"
+                        },
+                        { "type": "null" }
+                    ],
+                    "description": "Complete citizen electorate frozen at referendum start; null only before the referendum opens."
+                },
                 "finalization_evidence": {
                     "oneOf": [
                         { "$ref": "#/components/schemas/JsonValue" },
@@ -28021,6 +28114,84 @@ mod tests {
             reference_count > 0,
             "generated OpenAPI document unexpectedly contains no schema references"
         );
+    }
+
+    #[test]
+    fn validation_fee_openapi_exposes_complete_frozen_plain_electorate() {
+        let schemas = openapi_schemas();
+        let record = schemas
+            .get("ValidationFeeProposalRecordV1")
+            .and_then(Value::as_object)
+            .expect("validation-fee proposal record schema");
+        assert!(
+            record
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| required
+                    .iter()
+                    .any(|field| field.as_str() == Some("plain_electorate_snapshot")))
+        );
+        let snapshot_property = record
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("plain_electorate_snapshot"))
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate property");
+        let snapshot_variants = snapshot_property
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("nullable validation-fee frozen electorate");
+        assert_eq!(
+            snapshot_variants
+                .first()
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ValidationFeePlainElectorateSnapshotV1")
+        );
+        assert!(
+            snapshot_variants
+                .iter()
+                .any(|schema| schema.get("type").and_then(Value::as_str) == Some("null"))
+        );
+
+        let snapshot = schemas
+            .get("ValidationFeePlainElectorateSnapshotV1")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate schema");
+        let properties = snapshot
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate properties");
+        let members = properties
+            .get("members")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate members");
+        assert_eq!(members.get("minItems"), Some(&Value::from(1_u64)));
+        assert_eq!(members.get("maxItems"), Some(&Value::from(256_u64)));
+        assert_eq!(
+            members
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/ValidationFeePlainElectorateMemberV1")
+        );
+        for digest in ["proposal_id", "roster_root"] {
+            assert_eq!(
+                properties
+                    .get(digest)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("allOf"))
+                    .and_then(Value::as_array)
+                    .and_then(|schemas| schemas.first())
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9A-F]{64}$"),
+                "{digest} must match native Norito JSON fixed-byte encoding"
+            );
+        }
     }
 
     #[test]

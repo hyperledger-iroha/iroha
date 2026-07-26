@@ -9231,7 +9231,7 @@ test("submitTransaction rejects mismatched data model version", async () => {
     () => client.submitTransaction(payload),
     (error) => {
       assert(error instanceof ToriiDataModelMismatchError);
-      assert.equal(error.expected, 3);
+      assert.equal(error.expected, 4);
       assert.equal(error.actual, 9);
       return true;
     },

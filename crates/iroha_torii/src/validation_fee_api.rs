@@ -17,8 +17,8 @@ use iroha_data_model::{
         },
     },
     validation_fee::{
-        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyRegistryV1,
-        ValidationFeePolicySnapshotCommitmentV1,
+        ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
+        ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotCommitmentV1,
     },
 };
 use iroha_torii_shared::validation_fee_api::{
@@ -167,12 +167,51 @@ fn validate_retained_parliament_snapshot(
     Ok(())
 }
 
-fn validate_retained_proposal_state(
+fn retained_plain_electorate_snapshot<'a>(
     proposal_id: [u8; 32],
     proposal: &iroha_core::state::GovernanceProposalRecord,
     referendum: iroha_core::state::GovernanceReferendumRecord,
+    approvals: Option<&'a iroha_core::state::GovernanceStageApprovals>,
     rules: &ValidationFeePlainElectorateRulesV1,
-) -> Result<(), Error> {
+) -> Result<Option<&'a ValidationFeePlainElectorateSnapshotV1>, Error> {
+    let snapshot =
+        approvals.and_then(|records| records.validation_fee_plain_electorate_snapshot.as_ref());
+    if referendum.status == iroha_core::state::GovernanceReferendumStatus::Proposed {
+        if snapshot.is_some() {
+            return Err(inconsistent(
+                "validation-fee proposal froze its PLAIN electorate before referendum start",
+            ));
+        }
+        return Ok(None);
+    }
+    let approvals = approvals.ok_or_else(|| {
+        inconsistent("validation-fee proposal has no retained Parliament approval gate")
+    })?;
+    let snapshot = snapshot.ok_or_else(|| {
+        inconsistent("validation-fee proposal has no frozen PLAIN electorate snapshot")
+    })?;
+    if let Some(reason) = snapshot.context_error(proposal_id, &proposal.proposer, rules) {
+        return Err(inconsistent(format!(
+            "validation-fee proposal retained an invalid PLAIN electorate snapshot: {reason}"
+        )));
+    }
+    if snapshot.captured_at_height != referendum.h_start
+        || approvals.approval_gate_height != Some(snapshot.approval_gate_height)
+    {
+        return Err(inconsistent(
+            "validation-fee PLAIN electorate snapshot anchors differ from retained governance state",
+        ));
+    }
+    Ok(Some(snapshot))
+}
+
+fn validate_retained_proposal_state<'a>(
+    proposal_id: [u8; 32],
+    proposal: &iroha_core::state::GovernanceProposalRecord,
+    referendum: iroha_core::state::GovernanceReferendumRecord,
+    approvals: Option<&'a iroha_core::state::GovernanceStageApprovals>,
+    rules: &ValidationFeePlainElectorateRulesV1,
+) -> Result<Option<&'a ValidationFeePlainElectorateSnapshotV1>, Error> {
     validate_retained_parliament_snapshot(proposal)?;
     let span = referendum
         .h_end
@@ -184,6 +223,8 @@ fn validate_retained_proposal_state(
             "validation-fee referendum window differs from retained PLAIN electorate rules",
         ));
     }
+    let electorate =
+        retained_plain_electorate_snapshot(proposal_id, proposal, referendum, approvals, rules)?;
 
     let Some(evidence) = proposal.finalization_evidence.as_ref() else {
         if referendum.status == iroha_core::state::GovernanceReferendumStatus::Closed
@@ -193,7 +234,7 @@ fn validate_retained_proposal_state(
                 "validation-fee proposal status differs from its missing finalization evidence",
             ));
         }
-        return Ok(());
+        return Ok(electorate);
     };
     if referendum.status != iroha_core::state::GovernanceReferendumStatus::Closed
         || evidence.proposal_id != proposal_id
@@ -242,7 +283,7 @@ fn validate_retained_proposal_state(
             "validation-fee proposal status differs from its finalization decision",
         ));
     }
-    Ok(())
+    Ok(electorate)
 }
 
 fn parliament_body_progress(
@@ -354,6 +395,7 @@ fn live_plain_tally(
     locks: Option<&iroha_core::state::GovernanceLocksForReferendum>,
     referendum_end: u64,
     rules: &ValidationFeePlainElectorateRulesV1,
+    electorate: Option<&ValidationFeePlainElectorateSnapshotV1>,
 ) -> Result<(u128, u128, u128), Error> {
     let mut approve = 0_u128;
     let mut reject = 0_u128;
@@ -361,17 +403,23 @@ fn live_plain_tally(
     let Some(locks) = locks else {
         return Ok((approve, reject, abstain));
     };
+    let electorate = electorate.ok_or_else(|| {
+        inconsistent("validation-fee citizen locks exist without a frozen PLAIN electorate")
+    })?;
     for (owner, record) in &locks.locks {
         if &record.owner != owner
             || record.amount != rules.ballot_amount
             || record.duration_blocks != rules.ballot_duration_blocks
+            || !electorate.contains(owner)
         {
             return Err(inconsistent(
-                "validation-fee citizen lock differs from retained PLAIN electorate rules",
+                "validation-fee citizen lock differs from retained PLAIN electorate rules or frozen membership",
             ));
         }
         if record.expiry_height < referendum_end {
-            continue;
+            return Err(inconsistent(
+                "validation-fee citizen lock expires before the retained referendum end",
+            ));
         }
         let units = record.amount.to_string().parse::<u128>().map_err(|_| {
             inconsistent("validation-fee citizen ballot amount is outside the integer tally domain")
@@ -451,6 +499,7 @@ fn public_proposal_record(
     proposal_id: [u8; 32],
     proposal: &iroha_core::state::GovernanceProposalRecord,
     referendum: iroha_core::state::GovernanceReferendumRecord,
+    approvals: Option<&iroha_core::state::GovernanceStageApprovals>,
 ) -> Result<ValidationFeeProposalRecordV1, Error> {
     if !matches!(
         proposal.kind,
@@ -471,7 +520,8 @@ fn public_proposal_record(
         ));
     }
     let rules = retained_plain_electorate_rules(&proposal.kind)?;
-    validate_retained_proposal_state(proposal_id, proposal, referendum, rules)?;
+    let electorate =
+        validate_retained_proposal_state(proposal_id, proposal, referendum, approvals, rules)?;
     let snapshot = proposal
         .parliament_snapshot
         .as_ref()
@@ -520,6 +570,7 @@ fn public_proposal_record(
             roster_root: snapshot.roster_root,
             bodies: snapshot.bodies.clone(),
         },
+        plain_electorate_snapshot: electorate.cloned(),
         finalization_evidence: proposal.finalization_evidence,
         enacted_at_height: proposal.enacted_at_height.map(|height| height.to_string()),
     })
@@ -555,7 +606,13 @@ pub(crate) async fn handler_proposals(
             .ok_or_else(|| {
                 inconsistent("validation-fee proposal has no exact retained referendum")
             })?;
-        proposals.push(public_proposal_record(*proposal_id, proposal, referendum)?);
+        let approvals = world.governance_stage_approvals().get(&referendum_id);
+        proposals.push(public_proposal_record(
+            *proposal_id,
+            proposal,
+            referendum,
+            approvals,
+        )?);
     }
     proposals.sort_by(|left, right| {
         left.created_height
@@ -608,14 +665,15 @@ pub(crate) async fn handler_proposal_detail(
         .get(&proposal_id)
         .copied()
         .ok_or_else(|| inconsistent("validation-fee proposal has no exact retained referendum"))?;
-    validate_retained_proposal_state(
+    let approvals = world.governance_stage_approvals().get(&proposal_id);
+    let electorate = validate_retained_proposal_state(
         proposal_id_bytes,
         proposal,
         referendum,
+        approvals,
         plain_electorate_rules,
     )?;
     let gov = app.state.governance_snapshot();
-    let approvals = world.governance_stage_approvals().get(&proposal_id);
     let body_progress = parliament_body_progress(
         proposal,
         approvals,
@@ -626,6 +684,7 @@ pub(crate) async fn handler_proposal_detail(
         world.governance_locks().get(&proposal_id),
         referendum.h_end,
         plain_electorate_rules,
+        electorate,
     )?;
     let (approve, reject, abstain, approved) = if let Some(evidence) =
         proposal.finalization_evidence.as_ref()
@@ -657,7 +716,7 @@ pub(crate) async fn handler_proposal_detail(
         .ok_or_else(|| inconsistent("validation-fee citizen tally overflow"))?;
     Ok(JsonBody(ValidationFeeProposalDetailV1 {
         version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
-        proposal: public_proposal_record(proposal_id_bytes, proposal, referendum)?,
+        proposal: public_proposal_record(proposal_id_bytes, proposal, referendum, approvals)?,
         current_height: u64::try_from(app.state.committed_height())
             .unwrap_or(u64::MAX)
             .to_string(),
@@ -940,7 +999,20 @@ pub(crate) async fn handler_plain_ballot_draft(
         .get(&proposal_id)
         .copied()
         .ok_or_else(|| inconsistent("validation-fee proposal has no exact retained referendum"))?;
-    validate_retained_proposal_state(proposal_id_bytes, proposal, referendum, rules)?;
+    let approvals = world
+        .governance_stage_approvals()
+        .get(&proposal_id)
+        .ok_or_else(|| {
+            inconsistent("validation-fee proposal has no retained Parliament approval gate")
+        })?;
+    let electorate = validate_retained_proposal_state(
+        proposal_id_bytes,
+        proposal,
+        referendum,
+        Some(approvals),
+        rules,
+    )?
+    .ok_or_else(|| inconsistent("open validation-fee referendum has no frozen PLAIN electorate"))?;
     if referendum.mode != iroha_core::state::GovernanceReferendumMode::Plain {
         return Err(inconsistent(
             "validation-fee proposal retained a non-plain referendum",
@@ -970,24 +1042,11 @@ pub(crate) async fn handler_plain_ballot_draft(
             "validation-fee referendum accepts one effective ballot per account",
         ));
     }
-    let citizen = world
-        .citizens()
-        .get(&request.owner)
-        .ok_or_else(|| bad_request("validation-fee ballot owner has no retained citizen record"))?;
-    if citizen.amount < rules.citizenship_amount {
+    if !electorate.contains(&request.owner) {
         return Err(bad_request(
-            "validation-fee ballot owner is below the proposal-bound citizenship amount",
+            "validation-fee ballot owner is not in the frozen PLAIN electorate",
         ));
     }
-    let approvals = world
-        .governance_stage_approvals()
-        .get(&proposal_id)
-        .ok_or_else(|| {
-            inconsistent("validation-fee proposal has no retained Parliament approval gate")
-        })?;
-    let gate_height = approvals.approval_gate_height.ok_or_else(|| {
-        inconsistent("validation-fee proposal has not crossed its Parliament approval gate")
-    })?;
     let snapshot = proposal
         .parliament_snapshot
         .as_ref()
@@ -998,33 +1057,6 @@ pub(crate) async fn handler_plain_ballot_draft(
     }) {
         return Err(inconsistent(
             "validation-fee proposal does not retain current seven-body Parliament approval",
-        ));
-    }
-    let eligible = if request.owner == proposal.proposer {
-        citizen.bonded_height <= gate_height
-    } else {
-        citizen.bonded_height > gate_height
-    };
-    if !eligible {
-        return Err(bad_request(
-            "ballot owner is outside the proposal-bound citizen eligibility rule",
-        ));
-    }
-    let eligible_count = world
-        .citizens()
-        .iter()
-        .filter(|(account_id, record)| {
-            record.amount >= rules.citizenship_amount
-                && if *account_id == &proposal.proposer {
-                    record.bonded_height <= gate_height
-                } else {
-                    record.bonded_height > gate_height
-                }
-        })
-        .count();
-    if u64::try_from(eligible_count).unwrap_or(u64::MAX) > rules.max_members {
-        return Err(inconsistent(
-            "validation-fee electorate exceeds its immutable member cap",
         ));
     }
 
@@ -1050,6 +1082,8 @@ pub(crate) async fn handler_plain_ballot_draft(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -1149,6 +1183,109 @@ mod tests {
                 &ballot
             );
         }
+    }
+
+    #[test]
+    fn live_plain_tally_requires_exact_frozen_membership_and_lock_shape() {
+        let mut gov = iroha_config::parameters::actual::Governance {
+            plain_voting_enabled: true,
+            min_turnout: 1,
+            min_bond_amount: 150_u64.into(),
+            window_span: 3_600,
+            ..iroha_config::parameters::actual::Governance::default()
+        };
+        gov.citizenship_asset_id = gov.voting_asset_id.clone();
+        gov.conviction_step_blocks = 100;
+        gov.max_conviction = 6;
+        let rules = validation_fee_plain_electorate_rules(&gov);
+        let proposer = iroha_test_samples::ALICE_ID.clone();
+        let member = iroha_test_samples::BOB_ID.clone();
+        let nonmember = iroha_test_samples::CARPENTER_ID.clone();
+        let capture_height = 100;
+        let approval_gate_height = 50;
+        let mut members = vec![
+            iroha_data_model::validation_fee::ValidationFeePlainElectorateMemberV1 {
+                account_id: proposer.clone(),
+                bonded_height: approval_gate_height,
+                bonded_amount: rules.citizenship_amount.clone(),
+            },
+            iroha_data_model::validation_fee::ValidationFeePlainElectorateMemberV1 {
+                account_id: member.clone(),
+                bonded_height: approval_gate_height + 1,
+                bonded_amount: rules.citizenship_amount.clone(),
+            },
+        ];
+        members.sort_by(|left, right| left.account_id.cmp(&right.account_id));
+        let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+            [0x11; 32],
+            proposer.clone(),
+            capture_height,
+            approval_gate_height,
+            members,
+        )
+        .expect("canonical frozen electorate");
+        let referendum_end = capture_height + rules.ballot_duration_blocks - 1;
+        let lock = iroha_core::state::GovernanceLockRecord {
+            owner: member.clone(),
+            amount: rules.ballot_amount.clone(),
+            slashed: iroha_primitives::numeric::Quantity::zero(),
+            expiry_height: referendum_end,
+            direction: 0,
+            duration_blocks: rules.ballot_duration_blocks,
+        };
+        let locks = iroha_core::state::GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(member.clone(), lock.clone())]),
+        };
+
+        assert_eq!(
+            live_plain_tally(Some(&locks), referendum_end, &rules, Some(&electorate))
+                .expect("exact frozen member lock"),
+            (72, 0, 0)
+        );
+        assert!(
+            live_plain_tally(Some(&locks), referendum_end, &rules, None).is_err(),
+            "locks without a frozen electorate must fail closed"
+        );
+
+        let nonmember_locks = iroha_core::state::GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(
+                nonmember.clone(),
+                iroha_core::state::GovernanceLockRecord {
+                    owner: nonmember,
+                    ..lock.clone()
+                },
+            )]),
+        };
+        assert!(
+            live_plain_tally(
+                Some(&nonmember_locks),
+                referendum_end,
+                &rules,
+                Some(&electorate)
+            )
+            .is_err(),
+            "a lock outside the frozen electorate must fail closed"
+        );
+
+        let expired_locks = iroha_core::state::GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(
+                member,
+                iroha_core::state::GovernanceLockRecord {
+                    expiry_height: referendum_end - 1,
+                    ..lock
+                },
+            )]),
+        };
+        assert!(
+            live_plain_tally(
+                Some(&expired_locks),
+                referendum_end,
+                &rules,
+                Some(&electorate)
+            )
+            .is_err(),
+            "an impossible early-expiry validation-fee lock must fail closed"
+        );
     }
 }
 

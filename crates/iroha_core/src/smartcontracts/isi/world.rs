@@ -8818,6 +8818,14 @@ pub mod isi {
                                 ));
                             }
                             if rec.expiry_height < tally_height {
+                                if validation_fee_rules.is_some() {
+                                    return Err(
+                                        InstructionExecutionError::InvariantViolation(
+                                            "validation-fee citizen lock expires before the retained referendum end"
+                                                .into(),
+                                        ),
+                                    );
+                                }
                                 continue;
                             }
                             let weight =

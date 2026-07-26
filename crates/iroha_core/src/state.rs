@@ -8838,8 +8838,7 @@ pub struct GovernanceStageApprovals {
     pub approval_gate_height: Option<u64>,
     /// Canonical validation-fee citizen electorate frozen at the referendum start boundary.
     #[norito(default)]
-    pub validation_fee_plain_electorate_snapshot:
-        Option<ValidationFeePlainElectorateSnapshotV1>,
+    pub validation_fee_plain_electorate_snapshot: Option<ValidationFeePlainElectorateSnapshotV1>,
 }
 
 impl GovernanceStageApprovals {
@@ -9273,9 +9272,7 @@ fn build_validation_fee_plain_electorate_snapshot<'a>(
     citizens: impl Iterator<Item = (&'a AccountId, &'a CitizenshipRecord)>,
 ) -> Result<ValidationFeePlainElectorateSnapshotV1, &'static str> {
     if approval_gate_height >= captured_at_height {
-        return Err(
-            "validation-fee PLAIN electorate approval gate must precede referendum start",
-        );
+        return Err("validation-fee PLAIN electorate approval gate must precede referendum start");
     }
     let mut members = Vec::new();
     for (account_id, record) in citizens {
@@ -9288,8 +9285,7 @@ fn build_validation_fee_plain_electorate_snapshot<'a>(
         let eligible = if account_id == proposal_operator {
             record.bonded_height <= approval_gate_height
         } else {
-            record.bonded_height > approval_gate_height
-                && record.bonded_height < captured_at_height
+            record.bonded_height > approval_gate_height && record.bonded_height < captured_at_height
         };
         if eligible {
             members.push(ValidationFeePlainElectorateMemberV1 {
@@ -9318,6 +9314,159 @@ fn build_validation_fee_plain_electorate_snapshot<'a>(
         return Err(reason);
     }
     Ok(snapshot)
+}
+
+#[cfg(test)]
+mod validation_fee_plain_electorate_snapshot_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::*;
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair =
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn rules(max_members: u64) -> ValidationFeePlainElectorateRulesV1 {
+        ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+                .parse()
+                .expect("voting asset id"),
+            ballot_amount: 150_u64.into(),
+            ballot_duration_blocks: 3_600,
+            citizenship_amount: 10_000_u64.into(),
+            max_members,
+            conviction_step_blocks: 100,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            eligibility_rule: iroha_data_model::validation_fee::
+                ValidationFeePlainElectorateEligibilityRuleV1::
+                ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        }
+    }
+
+    #[test]
+    fn snapshot_builder_freezes_only_the_exact_gate_interval() {
+        let proposal_id = [0x51; 32];
+        let proposal_operator = account(1);
+        let after_gate = account(2);
+        let before_gate = account(3);
+        let at_start = account(4);
+        let under_bond = account(5);
+        let approval_gate_height = 100;
+        let captured_at_height = 200;
+        let citizens = vec![
+            (
+                proposal_operator.clone(),
+                CitizenshipRecord::new(
+                    proposal_operator.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height,
+                ),
+            ),
+            (
+                after_gate.clone(),
+                CitizenshipRecord::new(
+                    after_gate.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height + 1,
+                ),
+            ),
+            (
+                before_gate.clone(),
+                CitizenshipRecord::new(
+                    before_gate.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height,
+                ),
+            ),
+            (
+                at_start.clone(),
+                CitizenshipRecord::new(at_start.clone(), 10_000_u64.into(), captured_at_height),
+            ),
+            (
+                under_bond.clone(),
+                CitizenshipRecord::new(
+                    under_bond.clone(),
+                    9_999_u64.into(),
+                    approval_gate_height + 1,
+                ),
+            ),
+        ];
+
+        let snapshot = build_validation_fee_plain_electorate_snapshot(
+            proposal_id,
+            &proposal_operator,
+            captured_at_height,
+            approval_gate_height,
+            &rules(256),
+            citizens
+                .iter()
+                .map(|(account_id, record)| (account_id, record)),
+        )
+        .expect("exact frozen electorate");
+
+        assert_eq!(snapshot.member_count, 2);
+        assert!(snapshot.contains(&proposal_operator));
+        assert!(snapshot.contains(&after_gate));
+        assert!(!snapshot.contains(&before_gate));
+        assert!(!snapshot.contains(&at_start));
+        assert!(!snapshot.contains(&under_bond));
+        assert_eq!(snapshot.invariant_error(), None);
+    }
+
+    #[test]
+    fn snapshot_builder_rejects_corrupt_keys_and_never_truncates() {
+        let proposal_id = [0x52; 32];
+        let proposal_operator = account(1);
+        let other = account(2);
+        let approval_gate_height = 100;
+        let captured_at_height = 200;
+        let eligible = vec![
+            (
+                proposal_operator.clone(),
+                CitizenshipRecord::new(
+                    proposal_operator.clone(),
+                    10_000_u64.into(),
+                    approval_gate_height,
+                ),
+            ),
+            (
+                other.clone(),
+                CitizenshipRecord::new(other.clone(), 10_000_u64.into(), approval_gate_height + 1),
+            ),
+        ];
+        assert_eq!(
+            build_validation_fee_plain_electorate_snapshot(
+                proposal_id,
+                &proposal_operator,
+                captured_at_height,
+                approval_gate_height,
+                &rules(1),
+                eligible
+                    .iter()
+                    .map(|(account_id, record)| (account_id, record)),
+            ),
+            Err("validation-fee PLAIN electorate exceeds its immutable member cap")
+        );
+
+        let corrupt_key = account(3);
+        let corrupt = CitizenshipRecord::new(other, 10_000_u64.into(), approval_gate_height + 1);
+        assert_eq!(
+            build_validation_fee_plain_electorate_snapshot(
+                proposal_id,
+                &proposal_operator,
+                captured_at_height,
+                approval_gate_height,
+                &rules(256),
+                std::iter::once((&corrupt_key, &corrupt)),
+            ),
+            Err("validation-fee citizen storage key differs from its canonical owner")
+        );
+    }
 }
 
 #[cfg(feature = "json")]
@@ -28330,10 +28479,7 @@ impl State {
                     );
                     continue;
                 };
-                if approvals
-                    .validation_fee_plain_electorate_snapshot
-                    .is_some()
-                {
+                if approvals.validation_fee_plain_electorate_snapshot.is_some() {
                     continue;
                 }
                 let Some(approval_gate_height) = approvals.approval_gate_height else {

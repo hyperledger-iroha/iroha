@@ -12,10 +12,10 @@ use iroha_data_model::{
     },
     isi::governance::VotingMode,
     validation_fee::{
-        ValidationFeeChargingMode, ValidationFeeGovernanceVotingModeV1,
+        VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, ValidationFeeChargingMode,
         ValidationFeeParliamentAuthorizationV1, ValidationFeePlainElectorateRulesV1,
-        ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-        ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
+        ValidationFeePlainElectorateSnapshotV1, ValidationFeePolicyRegistryEntryV1,
+        ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
         ValidationFeePolicyWitnessProofV1, ValidationFeeTreasuryPayoutBindingV1,
     },
 };
@@ -209,10 +209,36 @@ pub struct ValidationFeeVerifiedParliamentProposalV1 {
     pub payload_hash: String,
     /// Raw Parliament roster commitment in canonical lowercase hexadecimal.
     pub parliament_roster_root: String,
+    /// Exact proposal-bound PLAIN electorate rules.
+    #[norito(rename = "plainElectorateRules")]
+    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
+    /// Immutable anchors for the citizen roster frozen at referendum start.
+    #[norito(rename = "plainElectorateSnapshot")]
+    pub plain_electorate_snapshot: ValidationFeeVerifiedPlainElectorateSnapshotV1,
     /// Exact referendum and enactment window.
     pub enactment_window: ValidationFeeVerifiedEnactmentWindowV1,
     /// Complete finalized PLAIN referendum evidence.
     pub finalization: ValidationFeeVerifiedFinalizationV1,
+}
+
+/// JSON-safe anchors for one registry-proven frozen PLAIN electorate.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedPlainElectorateSnapshotV1 {
+    /// Domain-separated root of the complete frozen citizen snapshot.
+    #[norito(rename = "rosterRoot")]
+    pub roster_root: String,
+    /// Exact number of citizens committed by `rosterRoot`.
+    #[norito(rename = "memberCount")]
+    pub member_count: String,
+    /// Referendum-start height at which the roster was frozen.
+    #[norito(rename = "capturedAtHeight")]
+    pub captured_at_height: String,
+    /// Seven-body Parliament approval gate used by the eligibility rule.
+    #[norito(rename = "approvalGateHeight")]
+    pub approval_gate_height: String,
 }
 
 /// JSON-safe Parliament referendum and enactment heights.
@@ -320,14 +346,36 @@ pub struct ValidationFeeVerifiedPayoutRecipientV1 {
 fn verified_parliament_proposal(
     proposal_kind: &str,
     authorization: &ValidationFeeParliamentAuthorizationV1,
+    plain_electorate_rules: &ValidationFeePlainElectorateRulesV1,
 ) -> Result<ValidationFeeVerifiedParliamentProposalV1, String> {
-    if authorization.proposal_id != authorization.proposal_fingerprint {
-        return Err(
-            "validation-fee Parliament proposal id differs from its typed payload hash".to_owned(),
-        );
+    if let Some(reason) = authorization.invariant_error() {
+        return Err(format!(
+            "validation-fee Parliament authorization is invalid: {reason}"
+        ));
     }
-    if authorization.finalization.mode != ValidationFeeGovernanceVotingModeV1::Plain {
-        return Err("validation-fee Parliament projection requires PLAIN finalization".to_owned());
+    if let Some(reason) = plain_electorate_rules.invariant_error() {
+        return Err(format!(
+            "validation-fee PLAIN electorate rules are invalid: {reason}"
+        ));
+    }
+    let referendum_span = authorization
+        .referendum_window
+        .upper
+        .checked_sub(authorization.referendum_window.lower)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| "validation-fee referendum window span overflows".to_owned())?;
+    if referendum_span != plain_electorate_rules.ballot_duration_blocks
+        || authorization.plain_electorate_snapshot_member_count > plain_electorate_rules.max_members
+        || authorization.finalization.min_turnout != plain_electorate_rules.min_turnout
+        || authorization.finalization.approval_threshold_numerator
+            != plain_electorate_rules.approval_threshold_numerator
+        || authorization.finalization.approval_threshold_denominator
+            != plain_electorate_rules.approval_threshold_denominator
+    {
+        return Err(
+            "validation-fee Parliament authorization differs from its proposal-bound PLAIN electorate rules"
+                .to_owned(),
+        );
     }
     let proposal_id = hex::encode(authorization.proposal_id);
     let finalization = authorization.finalization;
@@ -336,6 +384,19 @@ fn verified_parliament_proposal(
         proposal_id: proposal_id.clone(),
         payload_hash: hex::encode(authorization.proposal_fingerprint),
         parliament_roster_root: hex::encode(authorization.proposal_time_roster_root),
+        plain_electorate_rules: plain_electorate_rules.clone(),
+        plain_electorate_snapshot: ValidationFeeVerifiedPlainElectorateSnapshotV1 {
+            roster_root: hex::encode(authorization.plain_electorate_snapshot_root),
+            member_count: authorization
+                .plain_electorate_snapshot_member_count
+                .to_string(),
+            captured_at_height: authorization
+                .plain_electorate_snapshot_captured_at_height
+                .to_string(),
+            approval_gate_height: authorization
+                .plain_electorate_snapshot_approval_gate_height
+                .to_string(),
+        },
         enactment_window: ValidationFeeVerifiedEnactmentWindowV1 {
             opens_at_height: authorization.referendum_window.lower.to_string(),
             closes_at_height: authorization.referendum_window.upper.to_string(),
@@ -375,6 +436,25 @@ fn verified_current_policy(
     if payout.invariant_error().is_some() || payout_lifecycle.invariant_error().is_some() {
         return Err("enabled validation-fee payout binding or lifecycle is invalid".into());
     }
+    if payout_lifecycle.plain_electorate_rules != entry.plain_electorate_rules {
+        return Err(
+            "validation-fee policy and payout lifecycle use different PLAIN electorate rules"
+                .into(),
+        );
+    }
+    if entry.plain_electorate_rules.voting_asset_id != payout.xor_asset_id {
+        return Err(
+            "validation-fee PLAIN voting asset differs from the proven payout XOR asset".into(),
+        );
+    }
+    if entry
+        .parliament_authorization
+        .enacted_at_height
+        .checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+        != Some(entry.policy.effective_from_height)
+    {
+        return Err("validation-fee policy activation delay is invalid".into());
+    }
     let recipients = payout
         .recipients
         .iter()
@@ -401,10 +481,12 @@ fn verified_current_policy(
             validation_fee_policy: verified_parliament_proposal(
                 "ValidationFeePolicyV1",
                 &entry.parliament_authorization,
+                &entry.plain_electorate_rules,
             )?,
             payout_lifecycle: verified_parliament_proposal(
                 "ValidationFeePayoutLifecycleV1",
                 &payout_lifecycle.parliament_authorization,
+                &payout_lifecycle.plain_electorate_rules,
             )?,
             payout_lifecycle_seal_hash: hex::encode(payout_lifecycle.lifecycle_seal),
         },
@@ -793,6 +875,8 @@ pub struct ValidationFeeProposalRecordV1 {
     pub referendum: ValidationFeeProposalReferendumV1,
     /// Proposal-time seven-body Parliament snapshot.
     pub parliament_snapshot: ValidationFeeParliamentSnapshotV1,
+    /// Citizen electorate frozen at referendum start, once the referendum has opened.
+    pub plain_electorate_snapshot: Option<ValidationFeePlainElectorateSnapshotV1>,
     /// Deterministic finalized tally, when finalized.
     pub finalization_evidence: Option<GovernanceFinalizationEvidence>,
     /// Height at which enactment completed.
@@ -1029,22 +1113,7 @@ pub struct ValidationFeeProposalDraftResponseV1 {
 }
 
 /// Closed direction accepted by the typed validation-fee PLAIN ballot draft.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    JsonDeserialize,
-    JsonSerialize,
-    NoritoDeserialize,
-    NoritoSerialize,
-)]
-#[norito(
-    tag = "direction",
-    content = "value",
-    rename_all = "SCREAMING_SNAKE_CASE"
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
 pub enum ValidationFeePlainBallotDirectionV1 {
     /// Vote in favor of the proposal.
     Aye,
@@ -1159,8 +1228,84 @@ fn require_canonical_iroha_hash(label: &str, value: &[u8; 32]) -> Result<(), Str
 mod tests {
     use super::*;
     use iroha_data_model::validation_fee::{
-        ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceWindowV1,
+        ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
+        ValidationFeeGovernanceWindowV1, ValidationFeePlainElectorateEligibilityRuleV1,
     };
+
+    fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
+        ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+                .parse()
+                .expect("canonical voting asset"),
+            ballot_amount: 150_u64.into(),
+            ballot_duration_blocks: 3_600,
+            citizenship_amount: 10_000_u64.into(),
+            max_members: 256,
+            conviction_step_blocks: 100,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 1,
+            eligibility_rule:
+                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        }
+    }
+
+    fn parliament_authorization(
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> ValidationFeeParliamentAuthorizationV1 {
+        let proposal_id = [0x02; 32];
+        let referendum_lower = 100;
+        let referendum_upper = referendum_lower + rules.ballot_duration_blocks - 1;
+        ValidationFeeParliamentAuthorizationV1 {
+            proposal_id,
+            proposal_fingerprint: proposal_id,
+            proposal_time_roster_root: [0x04; 32],
+            plain_electorate_snapshot_root: [0x06; 32],
+            plain_electorate_snapshot_member_count: 1,
+            plain_electorate_snapshot_captured_at_height: referendum_lower,
+            plain_electorate_snapshot_approval_gate_height: referendum_lower - 1,
+            referendum_window: ValidationFeeGovernanceWindowV1 {
+                lower: referendum_lower,
+                upper: referendum_upper,
+            },
+            finalization: ValidationFeeFinalizationEvidenceV1 {
+                referendum_id: proposal_id,
+                finalized_at_height: referendum_upper,
+                mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: rules.min_turnout,
+                approval_threshold_numerator: rules.approval_threshold_numerator,
+                approval_threshold_denominator: rules.approval_threshold_denominator,
+                approved: true,
+            },
+            enacted_at_height: referendum_upper + 1,
+        }
+    }
+
+    #[test]
+    fn plain_ballot_direction_json_is_a_closed_string() {
+        for (direction, expected) in [
+            (ValidationFeePlainBallotDirectionV1::Aye, r#""AYE""#),
+            (ValidationFeePlainBallotDirectionV1::Nay, r#""NAY""#),
+            (ValidationFeePlainBallotDirectionV1::Abstain, r#""ABSTAIN""#),
+        ] {
+            assert_eq!(
+                norito::json::to_json(&direction).expect("serialize ballot direction"),
+                expected
+            );
+            assert_eq!(
+                norito::json::from_str::<ValidationFeePlainBallotDirectionV1>(expected)
+                    .expect("deserialize ballot direction"),
+                direction
+            );
+        }
+        assert!(
+            norito::json::from_str::<ValidationFeePlainBallotDirectionV1>(r#""APPROVE""#).is_err()
+        );
+    }
 
     #[test]
     fn iroha_hash_validation_requires_the_canonical_marker() {
@@ -1179,49 +1324,108 @@ mod tests {
     #[test]
     fn verified_parliament_projection_preserves_full_range_integers_as_strings() {
         let proposal_id = [0x02; 32];
+        let referendum_upper = u64::MAX - 1;
+        let referendum_lower = referendum_upper - 3_599;
+        let plain_electorate_rules = plain_electorate_rules();
         let authorization = ValidationFeeParliamentAuthorizationV1 {
             proposal_id,
             proposal_fingerprint: proposal_id,
             proposal_time_roster_root: [0x04; 32],
+            plain_electorate_snapshot_root: [0x06; 32],
+            plain_electorate_snapshot_member_count: 1,
+            plain_electorate_snapshot_captured_at_height: referendum_lower,
+            plain_electorate_snapshot_approval_gate_height: referendum_lower - 1,
             referendum_window: ValidationFeeGovernanceWindowV1 {
-                lower: 1,
-                upper: u64::MAX,
+                lower: referendum_lower,
+                upper: referendum_upper,
             },
             finalization: ValidationFeeFinalizationEvidenceV1 {
                 referendum_id: proposal_id,
-                finalized_at_height: u64::MAX - 1,
+                finalized_at_height: referendum_upper,
                 mode: ValidationFeeGovernanceVotingModeV1::Plain,
                 approve: u128::MAX,
                 reject: 0,
                 abstain: 0,
-                min_turnout: u128::MAX,
-                approval_threshold_numerator: u64::MAX,
-                approval_threshold_denominator: u64::MAX,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 1,
                 approved: true,
             },
             enacted_at_height: u64::MAX,
         };
-        let projected = verified_parliament_proposal("ValidationFeePolicyV1", &authorization)
-            .expect("project verified Parliament authorization");
+        let projected = verified_parliament_proposal(
+            "ValidationFeePolicyV1",
+            &authorization,
+            &plain_electorate_rules,
+        )
+        .expect("project verified Parliament authorization");
         assert_eq!(projected.proposal_id, projected.payload_hash);
         assert_eq!(projected.finalization.approve, u128::MAX.to_string());
         assert_eq!(
-            projected.finalization.approval_threshold_numerator,
-            u64::MAX.to_string()
+            projected.plain_electorate_snapshot.captured_at_height,
+            referendum_lower.to_string()
         );
         assert_eq!(
             projected.enactment_window.enacted_at_height,
             u64::MAX.to_string()
         );
+        assert_eq!(projected.plain_electorate_rules, plain_electorate_rules);
 
         let json = norito::json::to_string(&projected).expect("serialize JSON-safe projection");
         assert!(json.contains(r#""proposal_kind":"ValidationFeePolicyV1""#));
         assert!(json.contains(&format!(r#""approve":"{}""#, u128::MAX)));
-        assert!(json.contains(&format!(r#""approval_threshold_numerator":"{}""#, u64::MAX)));
+        assert!(json.contains(r#""plainElectorateRules":"#));
+        assert!(json.contains(r#""plainElectorateSnapshot":"#));
+        assert!(json.contains(r#""memberCount":"1""#));
         assert!(!json.contains("validator_id"));
         let roundtrip: ValidationFeeVerifiedParliamentProposalV1 =
             norito::json::from_str(&json).expect("roundtrip JSON-safe projection");
         assert_eq!(roundtrip, projected);
+    }
+
+    #[test]
+    fn verified_parliament_projection_rejects_rule_and_snapshot_anchor_mismatches() {
+        let rules = plain_electorate_rules();
+        let authorization = parliament_authorization(&rules);
+        verified_parliament_proposal("ValidationFeePolicyV1", &authorization, &rules)
+            .expect("exact proposal-bound authorization");
+
+        let mut wrong_duration = rules.clone();
+        wrong_duration.ballot_duration_blocks -= 1;
+        assert!(
+            verified_parliament_proposal("ValidationFeePolicyV1", &authorization, &wrong_duration)
+                .is_err(),
+            "the inclusive referendum span must match the proposal-bound duration"
+        );
+
+        let mut oversized_authorization = authorization;
+        oversized_authorization.plain_electorate_snapshot_member_count = 2;
+        let mut one_member_rule = rules.clone();
+        one_member_rule.max_members = 1;
+        assert!(
+            verified_parliament_proposal(
+                "ValidationFeePolicyV1",
+                &oversized_authorization,
+                &one_member_rule
+            )
+            .is_err(),
+            "the registry-proven snapshot count must fit the proposal-bound cap"
+        );
+
+        let mut wrong_threshold = rules.clone();
+        wrong_threshold.approval_threshold_denominator = 2;
+        assert!(
+            verified_parliament_proposal("ValidationFeePolicyV1", &authorization, &wrong_threshold)
+                .is_err(),
+            "finalization thresholds must match the proposal-bound rules"
+        );
+
+        let mut wrong_capture = authorization;
+        wrong_capture.plain_electorate_snapshot_captured_at_height += 1;
+        assert!(
+            verified_parliament_proposal("ValidationFeePolicyV1", &wrong_capture, &rules).is_err(),
+            "the frozen roster must be captured at the inclusive referendum start"
+        );
     }
 
     #[test]
@@ -1231,6 +1435,13 @@ mod tests {
             proposal_id: "02".repeat(32),
             payload_hash: "02".repeat(32),
             parliament_roster_root: "04".repeat(32),
+            plain_electorate_rules: plain_electorate_rules(),
+            plain_electorate_snapshot: ValidationFeeVerifiedPlainElectorateSnapshotV1 {
+                roster_root: "06".repeat(32),
+                member_count: "1".to_owned(),
+                captured_at_height: "1".to_owned(),
+                approval_gate_height: "0".to_owned(),
+            },
             enactment_window: ValidationFeeVerifiedEnactmentWindowV1 {
                 opens_at_height: "1".to_owned(),
                 closes_at_height: "2".to_owned(),
@@ -1298,6 +1509,10 @@ mod tests {
             "validationFeePolicy",
             "payoutLifecycle",
             "payoutLifecycleSealHash",
+            "plainElectorateRules",
+            "plainElectorateSnapshot",
+            "rosterRoot",
+            "memberCount",
             "contractAddress",
             "batchSbdMinorUnits",
             "account_id",
