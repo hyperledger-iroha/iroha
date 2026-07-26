@@ -36137,7 +36137,7 @@ seiyaku GovernanceLifecycle {
                     unsupported_label_generic_record_profile(backend);
                 let mut rec = VerifyingKeyRecord::new_with_owner(
                     1,
-                    format!("{backend}:pending-production-circuit"),
+                    format!("{backend}:unsupported-protocol-circuit"),
                     None,
                     "test",
                     record_backend,

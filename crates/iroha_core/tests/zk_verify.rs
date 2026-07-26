@@ -32,7 +32,7 @@ fn bound_halo2_fixture() -> FixtureEnvelope {
     let vk_hash = seed.vk_hash("halo2/ipa").expect("fixture verifying key");
     halo2_fixture_envelope(TINY_ADD_CIRCUIT_ID, vk_hash)
 }
-const PENDING_PRODUCTION_ATTACHMENT_BACKENDS: &[&str] = &[
+const UNSUPPORTED_PROTOCOL_ATTACHMENT_BACKENDS: &[&str] = &[
     "halo2/ipa/orchard",
     "stark/fri/miden",
     "anonymous-pgc",
@@ -456,8 +456,8 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
 }
 
 #[test]
-fn preverify_rejects_pending_production_backend_labels_before_lookup() {
-    for (idx, backend) in PENDING_PRODUCTION_ATTACHMENT_BACKENDS
+fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
+    for (idx, backend) in UNSUPPORTED_PROTOCOL_ATTACHMENT_BACKENDS
         .iter()
         .copied()
         .enumerate()
@@ -489,9 +489,9 @@ fn preverify_rejects_pending_production_backend_labels_before_lookup() {
         let mut stx = block.transaction();
         let err = exec
             .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
-            .expect_err("pending-production attachment backend must fail before registry lookup");
+            .expect_err("protocol name must fail as a generic backend before registry lookup");
         assert!(
-            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("pending-production proof backends")),
+            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("unsupported proof backends")),
             "unexpected preverify error for {backend}: {err:?}"
         );
     }

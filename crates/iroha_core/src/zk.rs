@@ -7178,7 +7178,7 @@ mod stark_backend_tag_tests {
     }
 
     #[test]
-    fn verify_backend_rejects_pending_production_labels_before_dispatch() {
+    fn verify_backend_rejects_protocol_names_before_dispatch() {
         for backend in [
             "halo2/ipa/orchard",
             "halo2/ipa/penumbra",
@@ -7192,7 +7192,7 @@ mod stark_backend_tag_tests {
             let vk = VerifyingKeyBox::new(backend.to_owned(), vec![5, 6, 7, 8]);
             assert!(
                 !verify_backend(backend, &proof, Some(&vk)),
-                "pending backend {backend} must not reach a native verifier"
+                "protocol name {backend} must not reach a native verifier"
             );
         }
     }
@@ -8970,7 +8970,7 @@ mod guardrails_tests {
     }
 
     #[test]
-    fn guardrails_reject_pending_production_backends_before_dispatch() {
+    fn guardrails_reject_protocol_names_before_dispatch() {
         for backend in [
             "halo2/ipa/orchard",
             "stark/fri/miden",
@@ -16338,7 +16338,7 @@ mod preverified_key_tests {
     }
 
     #[test]
-    fn preverify_rejects_unknown_and_pending_production_backends_before_dedup() {
+    fn preverify_rejects_unknown_and_protocol_names_before_dedup() {
         for backend in [
             "not-a-production-backend",
             " halo2/ipa",

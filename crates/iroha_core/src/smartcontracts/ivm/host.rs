@@ -26774,7 +26774,7 @@ seiyaku DurableOwner {
     }
 
     #[test]
-    fn set_verifying_keys_rejects_pending_production_backend_labels() {
+    fn set_verifying_keys_rejects_protocol_names_as_backend_labels() {
         crate::test_alias::ensure();
         for backend in [
             "halo2/ipa/orchard",

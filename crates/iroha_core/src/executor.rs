@@ -7253,7 +7253,6 @@ impl Executor {
                 authority,
                 contract_runtime_context,
                 &transfer_asset,
-                state_transaction.block_unix_timestamp_ms(),
             )?
         {
             return Err(ValidationFail::NotPermitted(
@@ -10456,25 +10455,18 @@ fn can_transfer_asset(
     authority: &AccountId,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     transfer: &Transfer<Asset, Quantity, Account>,
-    now_ms: u64,
 ) -> Result<bool, ValidationFail> {
+    if let Some(context) = contract_runtime_context {
+        let live_subject = code::bound_contract_subject_from_world(world, &context.contract_address);
+        if context.contract_subject != *authority
+            || context.contract_address.subject_id() != context.contract_subject
+            || live_subject.as_ref() != Some(authority)
+        {
+            return Ok(false);
+        }
+    }
+
     if transfer.source().account() == authority {
-        return Ok(true);
-    }
-
-    if contract_runtime_context
-        .is_some_and(|context| transfer.source().account() == &context.contract_subject)
-    {
-        return Ok(true);
-    }
-
-    if let Some(domain_id) = transfer.source().definition().try_domain()
-        && authority_owns_domain(world, authority, domain_id)?
-    {
-        return Ok(true);
-    }
-
-    if authority_owns_any_alias_domain(world, authority, transfer.source().account(), now_ms)? {
         return Ok(true);
     }
 
@@ -16611,7 +16603,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_allows_transfer_asset_by_source_domain_owner() {
+    fn initial_executor_denies_transfer_asset_by_asset_definition_domain_owner() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId =
             DomainId::try_new("users", "universal").expect("users domain id");
@@ -16622,10 +16614,19 @@ mod tests {
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
+        let asset_definition_id =
+            AssetDefinitionId::new(users_domain_id.clone(), "coin".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("coin".to_owned())
+            .build(&user1);
+        let transfer_asset_id = AssetId::new(asset_definition_id, user1.clone());
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
 
-        let world = World::with(
+        let world = World::with_assets(
             [users_domain],
             [alice_account, user1_account, user2_account],
+            [asset_definition],
+            [source_balance],
             [],
         );
         let kura = Kura::blank_kura_for_testing();
@@ -16639,13 +16640,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        let transfer_asset_id = AssetId::new(
-            iroha_data_model::asset::AssetDefinitionId::new(
-                DomainId::try_new("users", "universal").unwrap(),
-                "coin".parse().unwrap(),
-            ),
-            user1.clone(),
-        );
         let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
@@ -16655,11 +16649,140 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer, 0)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
-            allowed,
-            "source domain owner should be allowed to transfer account assets"
+            !allowed,
+            "asset-definition domain ownership must not authorize transfers from another account"
+        );
+        let result = super::Executor::Initial.execute_instruction(
+            &mut block.transaction(),
+            &alice_id,
+            instruction,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("source asset owner must sign")
+            ),
+            "asset-definition domain owner bypass must fail before applying the transfer: {result:?}"
+        );
+    }
+
+    #[test]
+    fn initial_executor_denies_transfer_asset_by_active_alias_domain_owner_for_all_shapes() {
+        use iroha_data_model::{
+            account::{
+                AccountAddress,
+                rekey::{AccountAlias, AccountAliasDomain},
+            },
+            nexus::DataSpaceCatalog,
+            sns::{NameControllerV1, NameRecordV1},
+        };
+
+        let alias_domain_owner = ALICE_ID.clone();
+        let source = checked_account_id();
+        let destination = checked_account_id();
+        let alias_domain_id =
+            DomainId::try_new("fi", "universal").expect("alias domain id");
+        let asset_domain_id =
+            DomainId::try_new("assets", "universal").expect("asset domain id");
+        let asset_definition_id =
+            AssetDefinitionId::new(asset_domain_id.clone(), "coin".parse().unwrap());
+        let source_asset_id = AssetId::new(asset_definition_id.clone(), source.clone());
+        let mut world = World::with_assets(
+            [
+                Domain::new(alias_domain_id).build(&alias_domain_owner),
+                Domain::new(asset_domain_id).build(&source),
+            ],
+            [
+                Account::new(alias_domain_owner.clone()).build(&alias_domain_owner),
+                Account::new(source.clone()).build(&source),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [AssetDefinition::numeric(asset_definition_id)
+                .with_name("coin".to_owned())
+                .build(&source)],
+            [Asset::new(
+                source_asset_id.clone(),
+                Quantity::from(10_u64),
+            )],
+            [],
+        );
+        let alias = AccountAlias::new(
+            "customer".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "fi".parse().expect("alias domain"),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
+            .expect("account alias selector");
+        let address = AccountAddress::from_account_id(&source).expect("source address");
+        let lease = NameRecordV1::new(
+            selector.clone(),
+            source.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(crate::sns::record_storage_key(&selector), lease.encode());
+        world.account_aliases.insert(alias, source.clone());
+
+        assert!(
+            authority_owns_any_alias_domain(&world, &alias_domain_owner, &source, 50)
+                .expect("active alias-domain ownership check"),
+            "fixture must prove that the attacker owns an active alias domain for the source"
+        );
+
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
+        let mut transaction = block.transaction();
+        let transfer =
+            Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
+        let boxed = InstructionBox::from(transfer.clone());
+        let concrete =
+            concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
+
+        let boxed_result = super::Executor::Initial.execute_instruction(
+            &mut transaction,
+            &alias_domain_owner,
+            boxed,
+        );
+        assert!(
+            matches!(
+                boxed_result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("source asset owner must sign")
+            ),
+            "active alias-domain ownership must not authorize TransferBox::Asset: {boxed_result:?}"
+        );
+
+        let concrete_result =
+            super::Executor::Initial.execute_borrowed_overlay_instruction(
+                &mut transaction,
+                &alias_domain_owner,
+                &concrete,
+                None,
+            );
+        assert!(
+            matches!(
+                concrete_result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("source asset owner must sign")
+            ),
+            "active alias-domain ownership must not authorize a borrowed concrete transfer: {concrete_result:?}"
         );
     }
 
@@ -16709,7 +16832,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let mut stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer, 0)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
             !allowed,
