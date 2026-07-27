@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2TimeoutViewProgressProofs ----
-EXTENDS SumeragiV2ProgressWitnessFinalClosureProofs
+EXTENDS SumeragiV2AsyncHistoricalRecoveryClockOwnerActionProofs
 
 (***************************************************************************
 Direct timeout/view temporal decomposition.
@@ -13,7 +13,8 @@ For one frozen `(target, roundView)` the direct corridor is:
 
   1. source ownership exposes a higher-view TC/Decision frontier or a finite
      catch-up rank;
-  2. catch-up consumes every missing `(source, intermediate view)` slot;
+  2. catch-up follows the target's retained previous-view TC to one lagging
+     source and consumes every missing `(source, intermediate view)` slot;
   3. once every responsive voter is at `roundView`, receipt service consumes
      the finite set of missing `(target, signer, roundView)` receipts;
   4. the exact last receipt exposes the target's TC formation/install
@@ -47,6 +48,12 @@ TimeoutDirectReleaseSource(target, roundView) ==
 
 TimeoutDirectGoal(target, roundView) ==
   TimeoutViewGoal(target, roundView)
+
+TimeoutDeadlineArmedOwner(node, roundView) ==
+  /\ TimeoutRoundStable(node, roundView)
+  /\ ~NodeTimedOut(node, roundView)
+  /\ \/ asyncNow >= asyncNodeDeadlines[node]
+     \/ "TimeoutElapsed" \in asyncOutstandingTags[node]
 
 (***************************************************************************
 Finite two-stage rank.
@@ -100,12 +107,6 @@ TimeoutDirectOwnerFrontier(target, roundView) ==
   \/ DecisionPropagationFrontier(target)
   \/ TcFrontier(target, roundView)
   \/ TimeoutCertificateFormationFrontier(target, roundView)
-
-TimeoutDeadlineArmedOwner(source, sourceView) ==
-  /\ TimeoutRoundStable(source, sourceView)
-  /\ ~NodeTimedOut(source, sourceView)
-  /\ \/ asyncNodeDeadlines[source] <= asyncNow
-     \/ "TimeoutElapsed" \in asyncOutstandingTags[source]
 
 (***************************************************************************
 Static rank and source-exposure facts.
@@ -170,6 +171,58 @@ BY TimeoutCatchupDebtRankIsNatural,
        NodeHasDecision, TcFrontier
 
 (***************************************************************************
+Exact catch-up owner.
+
+A lagging source must not be advanced by treating the target's already-true
+`TimeoutViewGoal(target, nodeView[laggingSource])` as progress.  The real
+owner is the target's retained TC for `roundView - 1`.  Installing that exact
+certificate at the lagging source raises its view to at least `roundView` and
+therefore retires every debt slot for that source.
+***************************************************************************)
+
+THEOREM TimeoutLaggingSourceHasExactTcFrontier ==
+  \A target, laggingSource \in AsyncCurrentResponsiveVoters,
+     roundView \in Views:
+    /\ AsyncTypeInvariant
+    /\ TimeoutViewOwnershipInvariant
+    /\ TimeoutRoundStable(target, roundView)
+    /\ nodeView[laggingSource] < roundView
+    => /\ roundView > 0
+       /\ TcFrontier(laggingSource, roundView - 1)
+BY ResponsiveAuthoritySuppliesEveryTcFrontier,
+   IsaT(180)
+   DEF TimeoutViewOwnershipInvariant,
+       TimeoutRoundStable,
+       ResponsiveViewCertificateAuthority,
+       AsyncTypeInvariant, CurrentVoters, CurrentEpoch,
+       AsyncCurrentResponsiveVoters, Views
+
+TimeoutLaggingSourceCatchupOutcome(
+    target, roundView, laggingSource) ==
+  \/ TimeoutDirectGoal(target, roundView)
+  \/ TimeoutDirectOwnerFrontier(target, roundView)
+  \/ nodeView[laggingSource] >= roundView
+
+THEOREM TimeoutLaggingSourceGoalSuppliesCatchupOutcome ==
+  \A target, laggingSource \in AsyncCurrentResponsiveVoters,
+     roundView \in Views:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipInvariant
+    /\ roundView > 0
+    /\ laggingSource # target
+    /\ TimeoutDirectGoal(laggingSource, roundView - 1)
+    => TimeoutLaggingSourceCatchupOutcome(
+         target, roundView, laggingSource)
+BY IsaT(240)
+   DEF TimeoutLaggingSourceCatchupOutcome,
+       TimeoutDirectGoal, TimeoutDirectOwnerFrontier,
+       TimeoutViewOwnershipInvariant,
+       DecisionPropagationFrontier, DecisionSourceAt,
+       NodeHasDecision, AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       Views
+
+(***************************************************************************
 Six honest residual properties.
 ***************************************************************************)
 
@@ -190,9 +243,12 @@ TimeoutDeadlineClockConvergenceProperty(specification) ==
                 \/ \E vote \in TimeoutVoteRecordSet:
                      TimeoutOrigin(source, sourceView, vote))
 
-\* TODO: prove the pre-deadline clock prefix.  Weak fairness of AsyncTick is
-\* insufficient while overdue packet, node-service, or I/O-service owners
-\* disable it; those exact finite blockers must be discharged first.
+
+\* TODO: prove the pre-deadline clock prefix from a finite semantic owner
+\* universe.  Weak fairness of AsyncTick is insufficient while overdue packet,
+\* node-service, or I/O-service owners disable it.  Any producer episode must
+\* be derived from immutable admission/lifecycle metadata; a state-dependent
+\* CHOOSE owner or an unproved ordinal ceiling is not a descent argument.
 
 TimeoutSemanticOwnerHandoffProperty(specification) ==
   specification
@@ -206,25 +262,34 @@ TimeoutSemanticOwnerHandoffProperty(specification) ==
               sourceView \in Views,
               vote \in TimeoutVoteRecordSet,
               recipient \in AsyncCurrentResponsiveVoters:
-             TimeoutOrigin(source, sourceView, vote)
+             (/\ gst
+              /\ TimeoutOrigin(source, sourceView, vote))
                ~> TimeoutOriginOutcome(
                     source, sourceView, vote, recipient)
 
-\* TODO: prove exact BeginTimeout/PersistTimeout/SignTimeout candidate exits
-\* from the causal, deferred, runtime, I/O, and replay owners.  Generic
-\* protected-candidate starvation alone does not identify the successor
-\* timeout vote or preserve its semantic vote identity.
+\* GST is explicit on the semantic continuation.  Before GST a responsive
+\* crash may discard an unpersisted BeginTimeout request; the liveness
+\* contract begins only after the advertised GST/recovery boundary.  Prove the
+\* exact deadline/BeginTimeout/PersistTimeout/SignTimeout candidate exits for
+\* each fixed recipient.  Generic protected-candidate starvation alone does
+\* not identify the successor timeout vote or preserve its semantic identity.
 
 TimeoutSourceIsolatedDeliveryConvergenceProperty(specification) ==
   specification
     => \A vote \in TimeoutVoteRecordSet,
           recipient \in AsyncCurrentResponsiveVoters:
-         TimeoutDelivery(vote, recipient)
+         (/\ gst
+          /\ vote.signer \in AsyncCurrentResponsiveVoters
+          /\ TimeoutDelivery(vote, recipient))
            ~> TimeoutDeliveryOutcome(vote, recipient)
 
-\* TODO: prove per-(authenticated source, recipient) transport, ingress, and
-\* reducer convergence for the exact immutable TimeoutVote item.  Traffic or
-\* backpressure from another source must not replace this owner.
+\* Both guards are part of the declared liveness contract.  Packet loss is
+\* permitted before GST, and a Byzantine ephemeral TimeoutVote has no durable
+\* retransmission owner.  The exact source therefore must be one of the
+\* responsive voters whose retained/replay service is fair after GST.  Prove
+\* per-(authenticated source, recipient) transport, ingress, and reducer
+\* convergence for that immutable TimeoutVote item.  Traffic or backpressure
+\* from another source must not replace this owner.
 
 TimeoutFiniteRankDescentProperty(specification) ==
   (/\ TimeoutDeadlineClockConvergenceProperty(specification)
@@ -245,10 +310,12 @@ TimeoutFiniteRankDescentProperty(specification) ==
                            TimeoutProgressRankFrontier(
                              target, roundView, lowerRank)))
 
-\* TODO: prove finite coordination.  Select one concrete missing catch-up slot
-\* or receipt signer, preserve all already-retired slots/receipts, and show
-\* its exact timeout outcome either lowers this rank or exposes a higher TC or
-\* Decision owner for the same target.
+\* TODO: prove finite coordination.  Catch-up must use
+\* TimeoutLaggingSourceHasExactTcFrontier and exact TC convergence; the
+\* recipient's already-true lower-view TimeoutViewGoal is not progress.
+\* Receipt descent selects one concrete missing signer, preserves every
+\* already-retired receipt, and shows its exact timeout outcome either lowers
+\* this rank or exposes a higher TC or Decision owner for the same target.
 
 TimeoutCertificateAndDecisionConvergenceProperty(specification) ==
   specification
@@ -273,6 +340,98 @@ DirectTimeoutViewClosureResidualProperty(specification) ==
   /\ TimeoutSourceIsolatedDeliveryConvergenceProperty(specification)
   /\ TimeoutFiniteRankDescentProperty(specification)
   /\ TimeoutCertificateAndDecisionConvergenceProperty(specification)
+
+(***************************************************************************
+Catch-up temporal composition.
+
+This corridor deliberately consumes the exact TC property, not a timeout-vote
+outcome for a recipient which is already above the lagging source.  It is
+stated before the complete rank theorem so the dependency remains visible to
+the proof checker and mutation suite.
+***************************************************************************)
+
+THEOREM TimeoutRetainedTcClosesLaggingSource ==
+  \A initialContext:
+    /\ TimeoutViewOwnershipPreservationProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ TimeoutCertificateAndDecisionConvergenceProperty(
+         AsyncLiveSpecAt(initialContext))
+    => (AsyncLiveSpecAt(initialContext)
+          => \A target, laggingSource
+                 \in AsyncCurrentResponsiveVoters,
+                roundView \in Views:
+               (/\ TimeoutRoundStable(target, roundView)
+                /\ nodeView[laggingSource] < roundView)
+                 ~> TimeoutLaggingSourceCatchupOutcome(
+                      target, roundView, laggingSource))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                TimeoutViewOwnershipPreservationProperty(
+                  AsyncLiveSpecAt(initialContext)),
+                TimeoutCertificateAndDecisionConvergenceProperty(
+                  AsyncLiveSpecAt(initialContext))
+         PROVE AsyncLiveSpecAt(initialContext)
+                 => \A target, laggingSource
+                        \in AsyncCurrentResponsiveVoters,
+                       roundView \in Views:
+                      (/\ TimeoutRoundStable(target, roundView)
+                       /\ nodeView[laggingSource] < roundView)
+                        ~> TimeoutLaggingSourceCatchupOutcome(
+                             target, roundView, laggingSource)
+    <2>1. AsyncLiveSpecAt(initialContext)
+             => []AsyncStrongTypeInvariant
+      BY AsyncLiveSpecProjectsAsyncSpec,
+         AsyncSpecAlwaysStrongTypeInvariant, PTL
+    <2>2. AsyncLiveSpecAt(initialContext)
+             => []TimeoutViewOwnershipInvariant
+      BY <1>1 DEF TimeoutViewOwnershipPreservationProperty
+    <2>3. ASSUME NEW target, NEW laggingSource
+                    \in AsyncCurrentResponsiveVoters,
+                  NEW roundView \in Views,
+                  AsyncLiveSpecAt(initialContext)
+           PROVE (/\ TimeoutRoundStable(target, roundView)
+                    /\ nodeView[laggingSource] < roundView)
+                   ~> TimeoutLaggingSourceCatchupOutcome(
+                        target, roundView, laggingSource)
+      <3>1. CASE roundView = 0
+        BY <2>1, <2>3, <3>1, PTL
+           DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+               Safety, TypeInvariant, Views
+      <3>2. CASE laggingSource = target
+        BY <2>3, <3>2, PTL
+      <3>3. CASE /\ roundView > 0
+                   /\ laggingSource # target
+        <4>1. roundView - 1 \in Views
+          BY <2>3, <3>3, Isa
+             DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+                 Safety, TypeInvariant, ModelConfiguration, Views
+        <4>2. [](/\ AsyncTypeInvariant
+                  /\ TimeoutViewOwnershipInvariant
+                  /\ TimeoutRoundStable(target, roundView)
+                  /\ nodeView[laggingSource] < roundView
+                 => TcFrontier(laggingSource, roundView - 1))
+          BY <2>1, <2>2,
+             AsyncStrongTypeProjectsAsyncType,
+             TimeoutLaggingSourceHasExactTcFrontier, PTL
+        <4>3. (/\ TimeoutRoundStable(target, roundView)
+                 /\ nodeView[laggingSource] < roundView)
+                ~> TcFrontier(laggingSource, roundView - 1)
+          BY <4>2, PTL
+        <4>4. TcFrontier(laggingSource, roundView - 1)
+                 ~> TimeoutDirectGoal(
+                      laggingSource, roundView - 1)
+          BY <1>1, <2>3, <4>1
+             DEF TimeoutCertificateAndDecisionConvergenceProperty
+        <4>5. [](TimeoutDirectGoal(
+                    laggingSource, roundView - 1)
+                   => TimeoutLaggingSourceCatchupOutcome(
+                        target, roundView, laggingSource))
+          BY <2>1, <2>2, <2>3, <3>3,
+             TimeoutLaggingSourceGoalSuppliesCatchupOutcome, PTL, Isa
+        <4> QED BY <4>3, <4>4, <4>5, PTL
+      <3> QED BY <2>3, <3>1, <3>2, <3>3, Isa
+    <2> QED BY <2>3
+  <1> QED BY <1>1
 
 (***************************************************************************
 Derived source exposure.

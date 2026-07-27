@@ -76,8 +76,17 @@ pub(crate) use refinement::{
     SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
     SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP, SUCCESSOR_MARKER_ACTIVATED, SUCCESSOR_STAGE_COMPLETE,
     SUCCESSOR_STAGE_NONE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING, TagProjection,
-    classify_exact_body_completion_ownership, exact_body_stage_is_owned,
-    plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
+    check_production_application_transition, check_production_applied_successor_transition,
+    check_production_decision_recovery_transition, check_production_durable_intent_transition,
+    check_production_historical_body_pipeline_transition,
+    check_production_historical_certificate_transition, check_production_ingress_transition,
+    check_production_recovered_successor_transition,
+    check_production_reliable_flush_application_transition,
+    check_production_reliable_flush_link_transition,
+    check_production_reliable_flush_worker_transition, check_production_scheduler_transition,
+    check_production_successor_startup_lifecycle_transition,
+    check_production_terminal_application_transition, classify_exact_body_completion_ownership,
+    exact_body_stage_is_owned, plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting, prepend_causal_continuation,
     production_application_trace_refines_decision_completion_kernel,
     production_applied_successor_trace_refines_indexed_activation_kernel,
@@ -99,7 +108,8 @@ pub(crate) use refinement::{
     select_bounded_service_class,
 };
 pub use refinement::{
-    ProductionTwoStageRelayRetryTraceProjection,
+    CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,
+    check_production_two_stage_relay_retry_transition,
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
 };
 pub(crate) use scheduler::{ScheduleState, ScheduledWork};

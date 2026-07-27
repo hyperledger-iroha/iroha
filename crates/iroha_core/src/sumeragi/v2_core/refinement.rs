@@ -3956,6 +3956,27 @@ pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
     pub(crate) pending_successor_activation_present: bool,
 }
 
+/// Opaque evidence that a total production transition gate accepted a
+/// projection.
+///
+/// The field is private so callers cannot manufacture authorization from a
+/// projection they already hold. Every constructor below evaluates the
+/// executable kernel and returns `None` on rejection; consumers must acquire
+/// this token before crossing their state-changing linearization point.
+#[must_use = "checked transition evidence must be consumed at the authorized mutation boundary"]
+#[derive(Debug, PartialEq, Eq)]
+pub struct CheckedProductionTransition<P> {
+    projection: P,
+}
+
+impl<P> CheckedProductionTransition<P> {
+    /// Consume the checked token and recover the exact accepted projection.
+    #[must_use]
+    pub fn into_projection(self) -> P {
+        self.projection
+    }
+}
+
 const fn effective_lock_trace_step_is_valid(projection: EffectiveLockTraceProjection) -> bool {
     effective_lock_trace_step_body!(projection)
 }
@@ -6042,6 +6063,199 @@ pub(crate) const fn production_terminal_application_without_successor_activation
     production_terminal_application_without_successor_activation_body!(projection)
 }
 
+/// Check an applied-predecessor successor transition and mint opaque evidence
+/// only for an accepted projection.
+#[must_use]
+pub(crate) fn check_production_applied_successor_transition(
+    projection: ProductionAppliedSuccessorTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionAppliedSuccessorTraceProjection>> {
+    if production_applied_successor_trace_refines_indexed_activation_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check a recovered successor transition and mint opaque evidence only for
+/// an accepted projection.
+#[must_use]
+pub(crate) fn check_production_recovered_successor_transition(
+    projection: ProductionRecoveredSuccessorTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionRecoveredSuccessorTraceProjection>> {
+    if production_recovered_successor_trace_refines_indexed_activation_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one successor startup lifecycle transition.
+#[must_use]
+pub(crate) fn check_production_successor_startup_lifecycle_transition(
+    projection: ProductionSuccessorStartupLifecycleProjection,
+) -> Option<CheckedProductionTransition<ProductionSuccessorStartupLifecycleProjection>> {
+    if production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one authenticated historical certificate handoff.
+#[must_use]
+pub(crate) fn check_production_historical_certificate_transition(
+    projection: ProductionHistoricalCertificateTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionHistoricalCertificateTraceProjection>> {
+    if production_historical_certificate_trace_refines_indexed_async_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one authenticated historical body-pipeline handoff.
+#[must_use]
+pub(crate) fn check_production_historical_body_pipeline_transition(
+    projection: ProductionHistoricalBodyPipelineTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionHistoricalBodyPipelineTraceProjection>> {
+    if production_historical_body_pipeline_trace_refines_indexed_async_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one reducer durable-intent transition.
+#[must_use]
+pub(crate) fn check_production_durable_intent_transition(
+    projection: ProductionDurableIntentTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionDurableIntentTraceProjection>> {
+    if production_durable_intent_trace_refines_progress_witness_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one pending-Decision recovery transition.
+#[must_use]
+pub(crate) fn check_production_decision_recovery_transition(
+    projection: ProductionDecisionRecoveryTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionDecisionRecoveryTraceProjection>> {
+    if production_decision_trace_refines_recovery_witness_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one protected scheduler selection.
+#[must_use]
+pub(crate) fn check_production_scheduler_transition(
+    projection: ProductionSchedulerTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionSchedulerTraceProjection>> {
+    if production_scheduler_trace_refines_protected_ownership_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one bounded ingress admission before queue mutation.
+#[must_use]
+pub(crate) fn check_production_ingress_transition(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionIngressIdentityAndClassTraceProjection>> {
+    if production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one two-stage relay retry before reinserting it.
+#[must_use]
+pub fn check_production_two_stage_relay_retry_transition(
+    projection: ProductionTwoStageRelayRetryTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionTwoStageRelayRetryTraceProjection>> {
+    if production_two_stage_relay_retry_trace_refines_source_fairness_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check the worker-side half of a reliable writer-flush transition.
+#[must_use]
+pub(crate) fn check_production_reliable_flush_worker_transition(
+    projection: ProductionReliableFlushTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionReliableFlushTraceProjection>> {
+    if production_reliable_flush_trace_refines_outbound_ownership_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check the lane-application half of a reliable writer-flush transition.
+#[must_use]
+pub(crate) fn check_production_reliable_flush_application_transition(
+    projection: ProductionReliableFlushApplicationProjection,
+) -> Option<CheckedProductionTransition<ProductionReliableFlushApplicationProjection>> {
+    if production_reliable_flush_application_refines_source_lane_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check that the two halves of a reliable writer flush name the same exact
+/// occurrence.
+#[must_use]
+pub(crate) fn check_production_reliable_flush_link_transition(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+) -> Option<
+    CheckedProductionTransition<(
+        ProductionReliableFlushTraceProjection,
+        ProductionReliableFlushApplicationProjection,
+    )>,
+> {
+    if production_reliable_flush_two_phase_link_kernel(worker, application) {
+        Some(CheckedProductionTransition {
+            projection: (worker, application),
+        })
+    } else {
+        None
+    }
+}
+
+/// Check one durable application completion transition.
+#[must_use]
+pub(crate) fn check_production_application_transition(
+    projection: ProductionApplicationTraceProjection,
+) -> Option<CheckedProductionTransition<ProductionApplicationTraceProjection>> {
+    if production_application_trace_refines_decision_completion_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check the terminal application boundary before successor construction.
+#[must_use]
+pub(crate) fn check_production_terminal_application_transition(
+    projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
+) -> Option<
+    CheckedProductionTransition<ProductionTerminalApplicationWithoutSuccessorActivationProjection>,
+> {
+    if production_terminal_application_without_successor_activation_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
 fn volatile_summary_is_well_formed(summary: VolatileSummary, validator_count: u64) -> bool {
     volatile_summary_well_formed_body!(summary, validator_count)
 }
@@ -6556,6 +6770,12 @@ mod tests {
             successor,
         };
         assert!(production_applied_successor_trace_refines_indexed_activation_kernel(trace));
+        assert_eq!(
+            check_production_applied_successor_transition(trace)
+                .expect("valid applied-successor transition must mint evidence")
+                .into_projection(),
+            trace
+        );
         assert_eq!(trace.predecessor_stage_before, SUCCESSOR_STAGE_RUNNING);
         assert_eq!(trace.predecessor_stage_after, SUCCESSOR_STAGE_COMPLETE);
         assert_eq!(
@@ -6569,6 +6789,7 @@ mod tests {
 
         let mut foreign_block = trace;
         foreign_block.binding.authority_predecessor.block_hash.word0 ^= 1;
+        assert!(check_production_applied_successor_transition(foreign_block).is_none());
         assert!(!production_successor_predecessor_binding_kernel(
             foreign_block.binding
         ));
@@ -6624,6 +6845,12 @@ mod tests {
             total_capacity: 8,
         };
         assert!(production_two_stage_relay_retry_trace_refines_source_fairness_kernel(trace));
+        assert_eq!(
+            check_production_two_stage_relay_retry_transition(trace)
+                .expect("valid relay retry must mint evidence")
+                .into_projection(),
+            trace
+        );
         assert!(trace.daemon_source_capacity_matches_two_upstream_lanes);
         assert!(trace.class_corridor_covers_authenticated_sources);
         assert_eq!(trace.total_depth_after, trace.total_depth_before);
@@ -6661,6 +6888,7 @@ mod tests {
             },
         ] {
             assert!(!production_two_stage_relay_retry_trace_refines_source_fairness_kernel(mutant));
+            assert!(check_production_two_stage_relay_retry_transition(mutant).is_none());
         }
     }
 
@@ -6680,6 +6908,12 @@ mod tests {
         };
         assert!(
             production_recovered_successor_trace_refines_indexed_activation_kernel(complete_tip)
+        );
+        assert_eq!(
+            check_production_recovered_successor_transition(complete_tip)
+                .expect("valid complete-tip recovery must mint evidence")
+                .into_projection(),
+            complete_tip
         );
         assert_eq!(complete_tip.published_status_height_before, 0);
         assert_eq!(
@@ -6730,6 +6964,7 @@ mod tests {
 
         let mut occupied_registry = complete_tip;
         occupied_registry.published_status_height_before = predecessor.height;
+        assert!(check_production_recovered_successor_transition(occupied_registry).is_none());
         assert!(
             !production_recovered_successor_trace_refines_indexed_activation_kernel(
                 occupied_registry
@@ -6759,6 +6994,12 @@ mod tests {
             restart_required_after: false,
         };
         assert!(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(begin));
+        assert_eq!(
+            check_production_successor_startup_lifecycle_transition(begin)
+                .expect("valid startup transition must mint evidence")
+                .into_projection(),
+            begin
+        );
         assert_eq!(begin.published_height_after, begin.published_height_before);
         assert!(!begin.restart_required_after);
 
@@ -6776,6 +7017,10 @@ mod tests {
 
         let mut fabricated_completion = failure;
         fabricated_completion.stage_after = SUCCESSOR_STAGE_COMPLETE;
+        assert!(
+            check_production_successor_startup_lifecycle_transition(fabricated_completion)
+                .is_none()
+        );
         assert!(
             !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
                 fabricated_completion
@@ -6856,6 +7101,12 @@ mod tests {
             request_present_after: false,
         };
         assert!(production_historical_certificate_trace_refines_indexed_async_kernel(trace));
+        assert_eq!(
+            check_production_historical_certificate_transition(trace)
+                .expect("valid historical certificate handoff must mint evidence")
+                .into_projection(),
+            trace
+        );
         assert_eq!(trace.certificate_height, trace.context_height);
         assert!(trace.request_present_before);
         assert!(!trace.request_present_after);
@@ -6863,6 +7114,7 @@ mod tests {
 
         let mut foreign_admission = trace;
         foreign_admission.admitted_message_hash.word1 ^= 1;
+        assert!(check_production_historical_certificate_transition(foreign_admission).is_none());
         assert!(
             !production_historical_certificate_trace_refines_indexed_async_kernel(
                 foreign_admission
@@ -6935,6 +7187,12 @@ mod tests {
             request_present_after: false,
         };
         assert!(production_historical_body_pipeline_trace_refines_indexed_async_kernel(trace));
+        assert_eq!(
+            check_production_historical_body_pipeline_transition(trace)
+                .expect("valid historical body handoff must mint evidence")
+                .into_projection(),
+            trace
+        );
         assert!(trace.owner_present_after);
         assert_eq!(trace.owner_tag, trace.fetch_tag);
         assert!(!trace.pending_fetch_present_after);
@@ -6942,6 +7200,7 @@ mod tests {
 
         let mut replayed_request = trace;
         replayed_request.request_present_after = true;
+        assert!(check_production_historical_body_pipeline_transition(replayed_request).is_none());
         assert!(
             !production_historical_body_pipeline_trace_refines_indexed_async_kernel(
                 replayed_request
@@ -7533,6 +7792,12 @@ mod tests {
     fn lock_and_commit_requires_one_current_vote_and_proposal_round() {
         let begin = lock_and_commit_begin_trace();
         assert!(production_durable_intent_trace_refines_progress_witness_kernel(begin));
+        assert_eq!(
+            check_production_durable_intent_transition(begin)
+                .expect("valid durable intent must mint evidence")
+                .into_projection(),
+            begin
+        );
 
         let mut split_round = begin;
         split_round.pending_after.proposal_view -= 1;
@@ -7548,6 +7813,7 @@ mod tests {
             !production_durable_intent_trace_refines_progress_witness_kernel(split_round),
             "a new Commit cannot combine the current vote round with an older proposal round"
         );
+        assert!(check_production_durable_intent_transition(split_round).is_none());
 
         let mut substituted_primary_origin = begin;
         substituted_primary_origin
@@ -7939,6 +8205,12 @@ mod tests {
         assert!(production_decision_trace_refines_recovery_witness_kernel(
             recovery
         ));
+        assert_eq!(
+            check_production_decision_recovery_transition(recovery)
+                .expect("valid Decision recovery must mint evidence")
+                .into_projection(),
+            recovery
+        );
         assert!(recovery.expected_height > 0);
         assert!(recovery.state_height <= recovery.expected_height);
         assert!(recovery.expected_height - recovery.state_height <= 1);
@@ -8034,15 +8306,17 @@ mod tests {
                 }
             ));
         }
+        let replaced_recovery_owner = ProductionDecisionRecoveryTraceProjection {
+            owner_tag: TagProjection {
+                view: 5,
+                ..recovery.owner_tag
+            },
+            ..recovery
+        };
         assert!(!production_decision_trace_refines_recovery_witness_kernel(
-            ProductionDecisionRecoveryTraceProjection {
-                owner_tag: TagProjection {
-                    view: 5,
-                    ..recovery.owner_tag
-                },
-                ..recovery
-            }
+            replaced_recovery_owner
         ));
+        assert!(check_production_decision_recovery_transition(replaced_recovery_owner).is_none());
 
         let scheduler = ProductionSchedulerTraceProjection {
             fifo_owed_before: false,
@@ -8053,17 +8327,25 @@ mod tests {
             fifo_owed_after: true,
         };
         assert!(production_scheduler_trace_refines_protected_ownership_kernel(scheduler));
+        assert_eq!(
+            check_production_scheduler_transition(scheduler)
+                .expect("valid scheduler choice must mint evidence")
+                .into_projection(),
+            scheduler
+        );
         assert!(scheduler.selected <= 3);
         assert_eq!(scheduler.selected, 2);
         assert_eq!(scheduler.fifo_owed_after, scheduler.fifo_ready);
+        let replaced_scheduler_owner = ProductionSchedulerTraceProjection {
+            selected: 3,
+            ..scheduler
+        };
         assert!(
             !production_scheduler_trace_refines_protected_ownership_kernel(
-                ProductionSchedulerTraceProjection {
-                    selected: 3,
-                    ..scheduler
-                }
+                replaced_scheduler_owner
             )
         );
+        assert!(check_production_scheduler_transition(replaced_scheduler_owner).is_none());
 
         let ingress = ProductionIngressIdentityAndClassTraceProjection {
             incoming_height: 4,
@@ -8081,20 +8363,28 @@ mod tests {
         assert!(
             production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(ingress)
         );
+        assert_eq!(
+            check_production_ingress_transition(ingress)
+                .expect("valid ingress admission must mint evidence")
+                .into_projection(),
+            ingress
+        );
         assert_eq!(ingress.incoming_height, ingress.stored_height);
         assert_eq!(ingress.incoming_view, ingress.stored_view);
         assert_eq!(ingress.incoming_generation, ingress.stored_generation);
         assert_eq!(ingress.incoming_class, ingress.stored_class);
         assert!(ingress.queue_len_after > ingress.queue_len_before);
         assert!(ingress.queue_len_after <= ingress.queue_capacity);
+        let replaced_ingress_owner = ProductionIngressIdentityAndClassTraceProjection {
+            stored_generation: 4,
+            ..ingress
+        };
         assert!(
             !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
-                ProductionIngressIdentityAndClassTraceProjection {
-                    stored_generation: 4,
-                    ..ingress
-                }
+                replaced_ingress_owner
             )
         );
+        assert!(check_production_ingress_transition(replaced_ingress_owner).is_none());
 
         let flush = ProductionReliableFlushTraceProjection {
             status: 2,
@@ -8164,6 +8454,12 @@ mod tests {
             capacity: 2,
         };
         assert!(production_reliable_flush_trace_refines_outbound_ownership_kernel(flush));
+        assert_eq!(
+            check_production_reliable_flush_worker_transition(flush)
+                .expect("valid worker flush must mint evidence")
+                .into_projection(),
+            flush
+        );
         assert!((1..=3).contains(&flush.status));
         assert!(flush.chunk_index < flush.chunk_count);
         assert_eq!(flush.chunk_cursor_before, flush.chunk_index);
@@ -8175,6 +8471,15 @@ mod tests {
                     ..flush
                 }
             )
+        );
+        assert!(
+            check_production_reliable_flush_worker_transition(
+                ProductionReliableFlushTraceProjection {
+                    stream_epoch: 0,
+                    ..flush
+                }
+            )
+            .is_none()
         );
         assert!(
             !production_reliable_flush_trace_refines_outbound_ownership_kernel(
@@ -8321,6 +8626,18 @@ mod tests {
             flush,
             lane_application
         ));
+        assert_eq!(
+            check_production_reliable_flush_application_transition(lane_application)
+                .expect("valid lane flush application must mint evidence")
+                .into_projection(),
+            lane_application
+        );
+        assert_eq!(
+            check_production_reliable_flush_link_transition(flush, lane_application)
+                .expect("linked flush occurrence must mint evidence")
+                .into_projection(),
+            (flush, lane_application)
+        );
         let disconnected_application_timeout_attempt =
             ProductionReliableFlushApplicationProjection {
                 reply_writer_timeout_attempt: lane_application
@@ -8337,6 +8654,13 @@ mod tests {
             flush,
             disconnected_application_timeout_attempt
         ));
+        assert!(
+            check_production_reliable_flush_link_transition(
+                flush,
+                disconnected_application_timeout_attempt
+            )
+            .is_none()
+        );
         let disconnected_worker_timeout_attempt = ProductionReliableFlushTraceProjection {
             reply_writer_timeout_attempt: flush.reply_writer_timeout_attempt.saturating_add(1),
             ..flush
@@ -8360,6 +8684,10 @@ mod tests {
             !production_reliable_flush_application_refines_source_lane_kernel(
                 zero_stream_epoch_application
             )
+        );
+        assert!(
+            check_production_reliable_flush_application_transition(zero_stream_epoch_application)
+                .is_none()
         );
         assert!(!production_reliable_flush_two_phase_link_kernel(
             ProductionReliableFlushTraceProjection {
@@ -8615,6 +8943,12 @@ mod tests {
             completion_work_id: 11,
         };
         assert!(production_application_trace_refines_decision_completion_kernel(application));
+        assert_eq!(
+            check_production_application_transition(application)
+                .expect("valid durable application must mint evidence")
+                .into_projection(),
+            application
+        );
         assert!(application.context_height > 0);
         assert_eq!(application.state_height_after, application.context_height);
         assert_eq!(application.artifact_height, application.context_height);
@@ -8689,14 +9023,16 @@ mod tests {
                 }
             )
         );
+        let replaced_completion_owner = ProductionApplicationTraceProjection {
+            completion_work_id: 12,
+            ..application
+        };
         assert!(
             !production_application_trace_refines_decision_completion_kernel(
-                ProductionApplicationTraceProjection {
-                    completion_work_id: 12,
-                    ..application
-                }
+                replaced_completion_owner
             )
         );
+        assert!(check_production_application_transition(replaced_completion_owner).is_none());
 
         let terminal_application =
             ProductionTerminalApplicationWithoutSuccessorActivationProjection {
@@ -8723,6 +9059,12 @@ mod tests {
             )
         );
         assert_eq!(
+            check_production_terminal_application_transition(terminal_application)
+                .expect("valid terminal application must mint evidence")
+                .into_projection(),
+            terminal_application
+        );
+        assert_eq!(
             terminal_application.receipt_height,
             terminal_application.context_height
         );
@@ -8731,14 +9073,17 @@ mod tests {
             terminal_application.context_height
         );
         assert!(!terminal_application.pending_successor_activation_present);
+        let premature_successor =
+            ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+                pending_successor_activation_present: true,
+                ..terminal_application
+            };
         assert!(
             !production_terminal_application_without_successor_activation_kernel(
-                ProductionTerminalApplicationWithoutSuccessorActivationProjection {
-                    pending_successor_activation_present: true,
-                    ..terminal_application
-                }
+                premature_successor
             )
         );
+        assert!(check_production_terminal_application_transition(premature_successor).is_none());
         assert!(
             !production_terminal_application_without_successor_activation_kernel(
                 ProductionTerminalApplicationWithoutSuccessorActivationProjection {

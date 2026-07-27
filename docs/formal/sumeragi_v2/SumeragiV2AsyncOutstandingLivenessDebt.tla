@@ -3,10 +3,16 @@ EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs
 
 THEOREM TimeoutViewProgressObligation ==
   \A initialContext:
-    TimeoutViewProgressProperty(AsyncSpecAt(initialContext))
+    TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))
 
 (***************************************************************************
 Locked-body reproposal progress.
+
+The exact source and outcome operators are declared in
+`SumeragiV2LivenessProofs`, below this ordered shard chain.  Keeping vocabulary
+below the debt theorem lets the direct retained-lock proof leaf import the
+same predicates without flowing this proofless theorem back into its own
+premises.
 
 Timeout/view progress alone does not guarantee that an available lock is ever
 used again.  For every responsive validator, a retained durable body at the
@@ -20,57 +26,9 @@ between timeout/view progress and rotating-leader progress and remains
 `specified_unproved` until the retained-body service ranks, proposer selection,
 and the later-round rebind path are deductively composed.
 ***************************************************************************)
-StableAvailableRetainedLock(node, lockedRound, subject) ==
-  /\ gst
-  /\ node \in AsyncCurrentResponsiveVoters \cap up
-  /\ lockedRound \in Views
-  /\ subject \in Subjects
-  /\ lockRank[node] = lockedRound
-  /\ lockSubject[node] = subject
-  /\ BodyHeldBy(durableBodies, node, context, lockedRound, subject)
-  /\ RetainedLockedBodyHeldBy(
-       retainedLockedBodies, node, context, subject)
-
-LockedBodyCommittedInOldRound(node, lockedRound, subject) ==
-  \E qc \in commitQCs:
-    /\ qc.context = context
-    /\ qc.phase = "Commit"
-    /\ qc.view = lockedRound
-    /\ qc.subject = subject
-    /\ node \in qc.signers
-
-LockedBodyReproposedUnchangedLater(lockedRound, subject) ==
-  \E envelope \in proposalNetwork:
-    /\ envelope.proposal.context = context
-    /\ envelope.proposal.view > lockedRound
-    /\ envelope.proposal.subject = subject
-
-LockedBodyLegitimatelyDecidedOrSuperseded(
-    node, lockedRound, subject) ==
-  \/ NodeHasDecision(node)
-  \/ /\ lockRank[node] > lockedRound
-     /\ \E qc \in prepareQCs:
-          /\ qc.context = context
-          /\ qc.phase = "Prepare"
-          /\ qc.view = lockRank[node]
-          /\ qc.subject = lockSubject[node]
-
-LockedBodyReproposalOutcome(node, lockedRound, subject) ==
-  \/ LockedBodyCommittedInOldRound(node, lockedRound, subject)
-  \/ LockedBodyReproposedUnchangedLater(lockedRound, subject)
-  \/ LockedBodyLegitimatelyDecidedOrSuperseded(
-       node, lockedRound, subject)
-
-LockedBodyReproposalProgressProperty(spec) ==
-  spec =>
-    \A node \in ValidatorIds, lockedRound \in Views,
-       subject \in Subjects:
-      StableAvailableRetainedLock(node, lockedRound, subject)
-        ~> LockedBodyReproposalOutcome(node, lockedRound, subject)
-
 THEOREM LockedBodyReproposalProgressObligation ==
   \A initialContext:
-    LockedBodyReproposalProgressProperty(AsyncSpecAt(initialContext))
+    LockedBodyReproposalProgressProperty(AsyncLiveSpecAt(initialContext))
 
 THEOREM RotatingLeaderProgressObligation ==
   \A initialContext:

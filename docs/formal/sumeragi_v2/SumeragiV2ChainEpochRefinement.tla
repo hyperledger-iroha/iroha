@@ -975,12 +975,12 @@ remain available to RunHistoricalServer after validators advance.
 
 The nested tuple layout is exactly
 <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>: 46 Core components followed
-by 36 scheduler/transport components and five responsive-node recovery
+by 37 scheduler/transport components and five responsive-node recovery
 components. The scheduler tuple includes the certified-response claim before
-the transport state; its final component owns the exact historical-recovery
-target set, while the final recovery component owns the exact historical-lock
-restart-authority projection. Shape predicates exclude unmodelled fields and
-make every instance projection extensional.
+the transport state; its final component owns the fixed roster/class-bounded
+control-service slot table, while the final recovery component owns the exact
+historical-lock restart-authority projection. Shape predicates exclude
+unmodelled fields and make every instance projection extensional.
 ***************************************************************************)
 IndexedCore(initialContext, component) ==
   indexedAsyncState[initialContext][1][component]
@@ -1105,6 +1105,7 @@ IndexedAsync(initialContext) ==
        asyncIngressReady <- IndexedScheduler(initialContext, 34),
        asyncHeldChunks <- IndexedScheduler(initialContext, 35),
        asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 36),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 37),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
@@ -1260,6 +1261,7 @@ VerificationAsyncProof ==
        asyncIngressReady <- VerificationScheduler(34),
        asyncHeldChunks <- VerificationScheduler(35),
        asyncHistoricalRecoveryTargets <- VerificationScheduler(36),
+       asyncControlServiceState <- VerificationScheduler(37),
        asyncRecoveryPhase <- VerificationRecovery(1),
        asyncRecoveryNode <- VerificationRecovery(2),
        asyncRecoveryGeneration <- VerificationRecovery(3),
@@ -1277,8 +1279,8 @@ IndexedAsyncStateShape ==
        /\ DOMAIN indexedAsyncState[initialContext] = 1..3
        /\ Len(indexedAsyncState[initialContext][1]) = 46
        /\ DOMAIN indexedAsyncState[initialContext][1] = 1..46
-       /\ Len(indexedAsyncState[initialContext][2]) = 36
-       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..36
+       /\ Len(indexedAsyncState[initialContext][2]) = 37
+       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..37
        /\ Len(indexedAsyncState[initialContext][3]) = 5
        /\ DOMAIN indexedAsyncState[initialContext][3] = 1..5
 
@@ -1476,12 +1478,16 @@ IndexedTotalReceiptProjection ==
 Authenticated historical recovery is owned by the exact Async instance.
 
 The chain wrapper may open recovery only for a responsive node located at the
-frozen context and only when a joined honest CommitQC signer still holds the
-certified body. `OpenHistoricalRecovery` records that exact target in scheduler
-component 35. From then on the ordinary Async reducer persists the decision,
-recovers and stores the body, validates it, and appends the application to the
-same per-context `decisions` and `applied` sets used by ordinary consensus.
-There is no shadow receipt set, stage variable, or independent recovery step.
+frozen context and only when a joined responsive applied archive still holds
+the body certified by the exact CommitQC.  The archive authenticates its own
+response but need not be one of the old QC's signers: the QC authorizes the
+immutable subject, while the frozen-roster archive and exact body hash bind the
+historical source. `OpenHistoricalRecovery` records that exact target in
+scheduler component 35. From then on the ordinary Async reducer persists the
+decision, recovers and stores the body, validates it, and appends the
+application to the same per-context `decisions` and `applied` sets used by
+ordinary consensus. There is no shadow receipt set, stage variable, or
+independent recovery step.
 ***************************************************************************)
 HistoricalRecoveryRecord(node, source) ==
   [node |-> node, qc |-> source.qc]
@@ -1507,7 +1513,6 @@ IndexedHistoricalRecoverySourceReady(initialContext, server, source) ==
              source.qc, initialContext.height + 1)
      \/ /\ initialContext.height = MaxHeight
         /\ Chain!ReceiptOutsideChainHorizon(source)
-  /\ server \in source.qc.signers \cap Honest
   /\ server \in IndexedAsync(initialContext)!
                  AsyncCurrentResponsiveVoters
   /\ server \in IndexedCore(initialContext, 6)
@@ -5546,6 +5551,341 @@ BY IndexedReachedAncestorEventuallyJoinsEveryResponsivePrefix, SMT
    DEF IndexedResponsiveJoinPrefixAt,
        IndexedAllResponsiveJoined,
        ModelConfiguration, ValidatorIds
+
+(***************************************************************************
+Strict-ancestor catchup kernel.
+
+The older finite-height induction above consumes the global
+`IndexedExactHistoricalRecoveryProgress` property.  That interface is too
+broad for proving historical source acquisition itself: recovery at the
+frozen target height would then be one of its own premises.
+
+`IndexedStrictAncestorRecoveryAdvance` removes that cycle.  For one frozen
+joined target it assumes only that an outstanding responsive node eventually
+passes each strict ancestor.  Existing indexed safety classifies every node
+as already past, pending the typed successor lifecycle, or outstanding at
+that exact ancestor.  The finite responsive-prefix and height inductions
+below then reach the target height and join every responsive node to the
+target.  No current-height recovery, one-height completion, or indexed
+height-liveness property is consumed.
+***************************************************************************)
+
+IndexedStrictAncestorRecoveryAdvance(targetContext) ==
+  \A blockHeight \in 0..targetContext.height:
+    blockHeight < targetContext.height
+      => \A node \in Responsive:
+           HistoricalRecoveryOutstanding(
+             IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> IndexedNodePastContext(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+
+THEOREM IndexedTargetStepPassesEachResponsiveNodeFromStrictAncestorRecovery ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       IndexedStrictAncestorRecoveryAdvance(targetContext)
+         => \A blockHeight \in 0..targetContext.height:
+              \A node \in Responsive:
+                blockHeight < targetContext.height
+                  => IndexedTargetHeightStepPremise(
+                       targetContext, blockHeight)
+                       ~> IndexedNodePastContext(
+                            IndexedAncestorContext(
+                              targetContext, blockHeight),
+                            node)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              targetContext \in AdmissibleContextRecords,
+              IndexedStrictAncestorRecoveryAdvance(targetContext),
+              NEW blockHeight \in 0..targetContext.height,
+              NEW node \in Responsive,
+              blockHeight < targetContext.height
+         PROVE IndexedTargetHeightStepPremise(
+                   targetContext, blockHeight)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      node)
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. []IndexedJoinedThroughLocalHeight
+      BY <1>1, IndexedChainSpecJoinsEveryNodeThroughLocalHeight, PTL
+    <2>3. IndexedCompositionInvariant
+             /\ IndexedJoinedThroughLocalHeight
+             /\ IndexedTargetHeightStepPremise(
+                  targetContext, blockHeight)
+             => \/ IndexedNodePastContext(
+                     IndexedAncestorContext(targetContext, blockHeight),
+                     node)
+                \/ IndexedActivationPendingIntoContext(
+                     IndexedAncestorContext(targetContext, blockHeight),
+                     node)
+                \/ HistoricalRecoveryOutstanding(
+                     IndexedAncestorContext(targetContext, blockHeight),
+                     node)
+      BY <1>1, IndexedTargetStepEitherPassedOrRecoveryOutstanding
+    <2>4. IndexedAncestorContext(targetContext, blockHeight).height
+             < MaxHeight
+      BY <1>1, IndexedAdmissibleTargetHasAdmissibleAncestors,
+         Isa DEF IndexedAncestorContext,
+                 AdmissibleContextRecords, FrozenContextAdmissible,
+                 ContextRecords, Heights
+    <2>5. IndexedActivationPendingIntoContext(
+               IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> (IndexedNodePastContext(
+                    IndexedAncestorContext(targetContext, blockHeight), node)
+                  \/ HistoricalRecoveryOutstanding(
+                       IndexedAncestorContext(targetContext, blockHeight),
+                       node))
+      BY <1>1, <2>4,
+         IndexedAdmissibleTargetHasAdmissibleAncestors,
+         IndexedActivationPendingEventuallyLeavesPastOrRecoveryOutstanding
+    <2>6. HistoricalRecoveryOutstanding(
+               IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> IndexedNodePastContext(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+      BY <1>1 DEF IndexedStrictAncestorRecoveryAdvance
+    <2> QED BY <2>1, <2>2, <2>3, <2>5, <2>6, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedTargetStepPassesEveryResponsivePrefixFromStrictAncestorRecovery ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       IndexedStrictAncestorRecoveryAdvance(targetContext)
+         => \A blockHeight \in 0..targetContext.height:
+              \A limit \in Nat:
+                blockHeight < targetContext.height
+                  => IndexedTargetHeightStepPremise(
+                       targetContext, blockHeight)
+                       ~> IndexedResponsivePrefixPast(
+                            IndexedAncestorContext(
+                              targetContext, blockHeight),
+                            limit)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              targetContext \in AdmissibleContextRecords,
+              IndexedStrictAncestorRecoveryAdvance(targetContext),
+              NEW blockHeight \in 0..targetContext.height,
+              blockHeight < targetContext.height
+         PROVE \A limit \in Nat:
+                 IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                   ~> IndexedResponsivePrefixPast(
+                        IndexedAncestorContext(targetContext, blockHeight),
+                        limit)
+    <2> DEFINE P(limit) ==
+           IndexedTargetHeightStepPremise(targetContext, blockHeight)
+             ~> IndexedResponsivePrefixPast(
+                  IndexedAncestorContext(targetContext, blockHeight),
+                  limit)
+    <2>1. P(0)
+      <3>1. CASE 0 \in Responsive
+        <4>1. IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight), 0)
+          BY <1>1, <3>1,
+             IndexedTargetStepPassesEachResponsiveNodeFromStrictAncestorRecovery
+        <4> QED BY <4>1, PTL DEF P, IndexedResponsivePrefixPast
+      <3>2. CASE 0 \notin Responsive
+        BY <3>2, PTL DEF P, IndexedResponsivePrefixPast
+      <3> QED BY <3>1, <3>2
+    <2>2. ASSUME NEW limit \in Nat, P(limit)
+           PROVE P(limit + 1)
+      <3>1. CASE limit + 1 \in Responsive
+        <4>1. IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit + 1)
+          BY <1>1, <3>1,
+             IndexedTargetStepPassesEachResponsiveNodeFromStrictAncestorRecovery
+        <4>2. IndexedResponsivePrefixPast(
+                 IndexedAncestorContext(targetContext, blockHeight), limit)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedResponsivePrefixPast(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit)'
+          BY <1>1, <2>2, IndexedAdmissibleTargetHasAdmissibleAncestors,
+             IndexedResponsivePrefixPastIsStable
+        <4>3. IndexedNodePastContext(
+                 IndexedAncestorContext(targetContext, blockHeight),
+                 limit + 1)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit + 1)'
+          BY <1>1, <3>1,
+             IndexedAdmissibleTargetHasAdmissibleAncestors,
+             IndexedNodePastContextIsStable,
+             Isa DEF ModelConfiguration, ValidatorIds
+        <4>4. IndexedResponsivePrefixPast(
+                 IndexedAncestorContext(targetContext, blockHeight),
+                 limit + 1)
+                 <=> /\ IndexedResponsivePrefixPast(
+                           IndexedAncestorContext(targetContext, blockHeight),
+                           limit)
+                     /\ IndexedNodePastContext(
+                           IndexedAncestorContext(targetContext, blockHeight),
+                           limit + 1)
+          BY <2>2, <3>1, Isa DEF IndexedResponsivePrefixPast
+        <4> QED BY <2>2, <4>1, <4>2, <4>3, <4>4, PTL DEF P
+      <3>2. CASE limit + 1 \notin Responsive
+        <4>1. IndexedResponsivePrefixPast(
+                 IndexedAncestorContext(targetContext, blockHeight), limit)
+                 => IndexedResponsivePrefixPast(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit + 1)
+          BY <2>2, <3>2, Isa DEF IndexedResponsivePrefixPast
+        <4> QED BY <2>2, <4>1, PTL DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A limit \in Nat: P(limit)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
+THEOREM IndexedJoinedTargetAdvancesAncestorFromStrictRecovery ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       IndexedStrictAncestorRecoveryAdvance(targetContext)
+         => \A blockHeight \in 0..targetContext.height:
+              blockHeight < targetContext.height
+                => (IndexedTargetJoined(targetContext)
+                      /\ IndexedResponsiveHeightReached(blockHeight))
+                     ~> IndexedResponsiveHeightReached(blockHeight + 1)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              targetContext \in AdmissibleContextRecords,
+              IndexedStrictAncestorRecoveryAdvance(targetContext),
+              NEW blockHeight \in 0..targetContext.height,
+              blockHeight < targetContext.height
+         PROVE (IndexedTargetJoined(targetContext)
+                   /\ IndexedResponsiveHeightReached(blockHeight))
+                  ~> IndexedResponsiveHeightReached(blockHeight + 1)
+    <2>1. IndexedTargetJoined(targetContext)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => IndexedTargetJoined(targetContext)'
+      BY <1>1, IndexedTargetJoinedIsStable
+    <2>2. IndexedResponsiveHeightReached(blockHeight)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => IndexedResponsiveHeightReached(blockHeight)'
+      BY <1>1, IndexedResponsiveHeightReachedIsStable,
+         Isa DEF Heights, AdmissibleContextRecords,
+                 FrozenContextAdmissible, ContextRecords
+    <2>3. IndexedTargetHeightStepPremise(targetContext, blockHeight)
+             ~> IndexedResponsivePrefixPast(
+                  IndexedAncestorContext(targetContext, blockHeight),
+                  N - 1)
+      BY <1>1,
+         IndexedTargetStepPassesEveryResponsivePrefixFromStrictAncestorRecovery,
+         SMT DEF ModelConfiguration
+    <2>4. IndexedResponsivePrefixPast(
+             IndexedAncestorContext(targetContext, blockHeight), N - 1)
+             => IndexedResponsiveHeightReached(blockHeight + 1)
+      BY <1>1, SMT
+         DEF IndexedResponsivePrefixPast,
+             IndexedResponsiveHeightReached,
+             IndexedNodePastContext, IndexedAncestorContext,
+             ModelConfiguration, ValidatorIds,
+             AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
+         DEF IndexedTargetHeightStepPremise
+  <1> QED BY <1>1
+
+THEOREM IndexedJoinedTargetReachesEveryAncestorFromStrictRecovery ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       IndexedStrictAncestorRecoveryAdvance(targetContext)
+         => \A blockHeight \in 0..targetContext.height:
+              IndexedTargetJoined(targetContext)
+                ~> IndexedResponsiveHeightReached(blockHeight)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              targetContext \in AdmissibleContextRecords,
+              IndexedStrictAncestorRecoveryAdvance(targetContext)
+         PROVE \A blockHeight \in 0..targetContext.height:
+                 IndexedTargetJoined(targetContext)
+                   ~> IndexedResponsiveHeightReached(blockHeight)
+    <2> DEFINE P(blockHeight) ==
+           blockHeight <= targetContext.height
+             => (IndexedTargetJoined(targetContext)
+                   ~> IndexedResponsiveHeightReached(blockHeight))
+    <2>1. P(0)
+      BY <1>1, SMT
+         DEF P, IndexedResponsiveHeightReached,
+             AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights, ModelConfiguration,
+             ValidatorIds
+    <2>2. ASSUME NEW blockHeight \in Nat, P(blockHeight)
+           PROVE P(blockHeight + 1)
+      <3>1. CASE blockHeight < targetContext.height
+        <4>1. blockHeight \in 0..targetContext.height
+          BY <1>1, <2>2, <3>1, SMT
+             DEF AdmissibleContextRecords, FrozenContextAdmissible,
+                 ContextRecords, Heights
+        <4>2. (IndexedTargetJoined(targetContext)
+                  /\ IndexedResponsiveHeightReached(blockHeight))
+                 ~> IndexedResponsiveHeightReached(blockHeight + 1)
+          BY <1>1, <3>1, <4>1,
+             IndexedJoinedTargetAdvancesAncestorFromStrictRecovery
+        <4>3. IndexedTargetJoined(targetContext)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedTargetJoined(targetContext)'
+          BY <1>1, IndexedTargetJoinedIsStable
+        <4> QED BY <2>2, <3>1, <4>2, <4>3, PTL DEF P
+      <3>2. CASE blockHeight >= targetContext.height
+        BY <3>2, SMT DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A blockHeight \in Nat: P(blockHeight)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
+THEOREM IndexedStrictAncestorRecoveryEventuallyJoinsTarget ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       IndexedStrictAncestorRecoveryAdvance(targetContext)
+         => IndexedTargetJoined(targetContext)
+              ~> IndexedAllResponsiveJoined(targetContext)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              targetContext \in AdmissibleContextRecords,
+              IndexedStrictAncestorRecoveryAdvance(targetContext)
+         PROVE IndexedTargetJoined(targetContext)
+                 ~> IndexedAllResponsiveJoined(targetContext)
+    <2>1. targetContext.height \in 0..targetContext.height
+      BY <1>1, Isa
+         DEF AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights
+    <2>2. IndexedTargetJoined(targetContext)
+             ~> IndexedResponsiveHeightReached(targetContext.height)
+      BY <1>1, <2>1,
+         IndexedJoinedTargetReachesEveryAncestorFromStrictRecovery
+    <2>3. IndexedTargetJoined(targetContext)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => IndexedTargetJoined(targetContext)'
+      BY <1>1, IndexedTargetJoinedIsStable
+    <2>4. (IndexedTargetJoined(targetContext)
+              /\ IndexedResponsiveHeightReached(targetContext.height))
+             ~> IndexedAllResponsiveJoined(
+                  IndexedAncestorContext(
+                    targetContext, targetContext.height))
+      BY <1>1, <2>1,
+         IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode
+    <2>5. IndexedAncestorContext(targetContext, targetContext.height)
+             = targetContext
+      BY <1>1, Isa
+         DEF IndexedAncestorContext, AdmissibleContextRecords,
+             FrozenContextAdmissible, ContextRecords, LineagesAt,
+             Heights, ContextRecord
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, PTL
+  <1> QED BY <1>1
 
 IndexedAllResponsiveExactApplicationsAt(initialContext) ==
   \A node \in Responsive:

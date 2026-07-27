@@ -22,9 +22,9 @@ use super::v2_core::{
     ProductionTerminalApplicationWithoutSuccessorActivationProjection,
     SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
     SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP, SUCCESSOR_LIFECYCLE_SNAPSHOT_BOOTSTRAP,
-    SUCCESSOR_STAGE_NONE, production_startup_failure_and_restart_refines_indexed_lifecycle_kernel,
+    SUCCESSOR_STAGE_NONE, check_production_successor_startup_lifecycle_transition,
+    check_production_terminal_application_transition,
     production_successor_predecessor_binding_kernel,
-    production_terminal_application_without_successor_activation_kernel,
 };
 #[cfg(test)]
 use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
@@ -77,8 +77,9 @@ use super::{
     },
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::{
-        CertifiedServeAdmission, CertifiedServePrepareError, ExactFanoutOwnership,
-        ProductionV2Services, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
+        CertifiedServeAdmission, CertifiedServeIngressGate, CertifiedServePrepareError,
+        ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor,
+        durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -294,9 +295,12 @@ impl PendingSuccessorActivation {
             restart_required_before: false,
             restart_required_after: false,
         };
-        if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {
+        let Some(checked_lifecycle) =
+            check_production_successor_startup_lifecycle_transition(lifecycle)
+        else {
             return Err(V2RunnerError::SuccessorRefinementRejected);
-        }
+        };
+        let _authorized_lifecycle = checked_lifecycle.into_projection();
         Ok(match authority {
             RecoveredSuccessorActivationAuthority::CompleteTip(authority) => {
                 Self::RecoveredCompleteTip { authority }
@@ -615,6 +619,52 @@ impl Drop for V2IngressClearGuard {
     fn drop(&mut self) {
         self.ingress_ready.store(false, Ordering::Release);
         self.block_ingress.close();
+    }
+}
+
+struct CertifiedServeIngressBinding {
+    ingress_ready: Arc<AtomicBool>,
+    block_ingress: Arc<FairV2Ingress>,
+    gate: Option<CertifiedServeIngressGate>,
+}
+
+impl CertifiedServeIngressBinding {
+    fn bind(
+        ingress_ready: Arc<AtomicBool>,
+        block_ingress: Arc<FairV2Ingress>,
+        gate: CertifiedServeIngressGate,
+    ) -> Result<Self, V2RunnerError> {
+        block_ingress
+            .bind_certified_serve_gate(gate.clone())
+            .map_err(V2RunnerError::Service)?;
+        Ok(Self {
+            ingress_ready,
+            block_ingress,
+            gate: Some(gate),
+        })
+    }
+
+    fn retire(&mut self) -> Result<(), V2RunnerError> {
+        let Some(gate) = self.gate.as_ref() else {
+            return Ok(());
+        };
+        close_ingress_for_rollover(&self.ingress_ready, &self.block_ingress);
+        self.block_ingress
+            .unbind_certified_serve_gate(gate)
+            .map_err(V2RunnerError::Service)?;
+        self.gate = None;
+        Ok(())
+    }
+}
+
+impl Drop for CertifiedServeIngressBinding {
+    fn drop(&mut self) {
+        if let Err(error) = self.retire() {
+            iroha_logger::error!(
+                %error,
+                "failed to retire the per-height certified Serve ingress gate"
+            );
+        }
     }
 }
 
@@ -1010,6 +1060,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             exact_output_service_owner,
         )
         .map_err(V2RunnerError::Service)?;
+        let mut certified_serve_ingress_binding = CertifiedServeIngressBinding::bind(
+            Arc::clone(&ingress_ready),
+            Arc::clone(&block_rx),
+            services
+                .certified_serve_ingress_gate()
+                .map_err(V2RunnerError::Service)?,
+        )?;
 
         // A Native receipt at the durable tip may have crossed its
         // finality/manifest/receipt boundary before WSV checkpoint and commit
@@ -1038,6 +1095,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     return Err(V2RunnerError::RestartRequired);
                 }
                 if shutdown_signal.is_sent() {
+                    certified_serve_ingress_binding.retire()?;
                     services.allow_clean_shutdown();
                     return Ok(());
                 }
@@ -1180,6 +1238,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 return Err(V2RunnerError::RestartRequired);
             }
             if shutdown_signal.is_sent() {
+                certified_serve_ingress_binding.retire()?;
                 services.allow_clean_shutdown();
                 return Ok(());
             }
@@ -1187,6 +1246,65 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // poll. It rebuilds the live overlays only at its next semantic
             // deadline or after the published height owner changes.
             liveness_watchdog.poll(Instant::now());
+
+            // The network thread installs an exact certified-body ticket before
+            // its carrier becomes visible in fair ingress. Give that target a
+            // dedicated runner turn before completions, runtime work, lock
+            // reconciliation, or any other local producer can acquire a later
+            // I/O position.
+            if services
+                .certified_serve_barrier_request_hash()
+                .map_err(V2RunnerError::Service)?
+                .is_some()
+            {
+                // A full prefix may include an earlier Serve lifecycle whose
+                // auxiliary unit is released only after its sealed response is
+                // posted and acknowledged. Service at most one I/O completion
+                // from the prefix frozen by this target; the barrier prevents
+                // later I/O replenishment and the source-only turn excludes
+                // unrelated local completions.
+                services.drain_certified_serve_predecessor_completion(&mut executor)?;
+                if recovering_interrupted_tip {
+                    drain_decided_lane_recovery_ingress(
+                        &block_rx,
+                        &mut lane_work,
+                        executor.current_tag().view(),
+                    )?;
+                } else {
+                    drain_v2_ingress(
+                        &block_rx,
+                        &mut executor,
+                        &mut services,
+                        &mut lane_work,
+                        output_guard.as_ref(),
+                        kura.as_ref(),
+                        &context_store,
+                        &common_config.key_pair,
+                        block_sync_server
+                            .as_mut()
+                            .expect("block-sync server initialized before ingress"),
+                        &mut block_sync,
+                        &mut block_sync_request,
+                        1,
+                    )?;
+                }
+                // Popping an ordinary frozen predecessor materializes the
+                // barrier inside the worker queue lock. A Serve predecessor
+                // retains its unit through completion posting, so the dedicated
+                // source-only turn above acknowledges exactly that finite
+                // prefix before another target turn.
+                committed_lane_status_publisher.publish_if_changed(&lane_work);
+                let _ = wake_rx.recv_timeout(IDLE_POLL);
+                continue;
+            }
+            let Some(_certified_serve_producer_episode) = services
+                .try_begin_certified_serve_producer_episode()
+                .map_err(V2RunnerError::Service)?
+            else {
+                // Exact admission won the queue-locked race after the
+                // observation above. Restart at the dedicated target turn.
+                continue;
+            };
 
             // Retry actor-owned output first, but keep servicing bounded
             // reducer and completion sources while one target is unavailable.
@@ -1435,7 +1553,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     let _ = wake_rx.recv_timeout(IDLE_POLL);
                     continue;
                 };
-                close_ingress_for_rollover(&ingress_ready, &block_rx);
+                certified_serve_ingress_binding.retire()?;
                 lane_work.prune_finalized_merge_sidecars()?;
                 services
                     .handoff_applied_height_output_to_durable_reconstruction(
@@ -1575,11 +1693,12 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 predecessor: predecessor.refinement_projection(),
                 pending_successor_activation_present: pending_successor_activation.is_some(),
             };
-        if !production_terminal_application_without_successor_activation_kernel(
-            terminal_application,
-        ) {
+        let Some(checked_application) =
+            check_production_terminal_application_transition(terminal_application)
+        else {
             return Err(V2RunnerError::SuccessorRefinementRejected);
-        }
+        };
+        let _authorized_application = checked_application.into_projection();
         let activation = PendingSuccessorConstruction::begin(predecessor)?;
         let successor_construction = output_guard
             .begin_fail_stop_operation()
@@ -2074,6 +2193,15 @@ fn drain_v2_ingress(
 ) -> Result<(), V2RunnerError> {
     for turn in outer_ingress_turns(limit) {
         if turn == OuterIngressTurn::Runtime {
+            if services
+                .certified_serve_barrier_request_hash()
+                .map_err(V2RunnerError::Service)?
+                .is_some()
+            {
+                // A provisional or prepared exact target owns this turn. The
+                // outer runner services it before any queued runtime producer.
+                continue;
+            }
             // A whole authenticated ingress batch can be expensive. Give the
             // serialized runtime one service turn before every outer
             // occurrence so trusted completions and timers cannot remain

@@ -340,7 +340,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 733
+_PRODUCTION_TEST_COUNT = 738
 _G_UNIT_TEST_COUNT = 277
 _G_UNIT_GROUPS = (
     (
@@ -456,7 +456,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 32),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 83),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -1064,7 +1064,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-proof-fidelity",
                 "pytest",
-                1686,
+                1728,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_proof_ledger_test.py "

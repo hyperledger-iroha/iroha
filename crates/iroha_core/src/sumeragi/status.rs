@@ -64,9 +64,9 @@ use super::{
         SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
         SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED,
         SUCCESSOR_STAGE_COMPLETE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
-        production_applied_successor_trace_refines_indexed_activation_kernel,
-        production_recovered_successor_trace_refines_indexed_activation_kernel,
-        production_startup_failure_and_restart_refines_indexed_lifecycle_kernel,
+        check_production_applied_successor_transition,
+        check_production_recovered_successor_transition,
+        check_production_successor_startup_lifecycle_transition,
     },
     v2_effects::{EffectExecutorStatus, PendingKuraApplyRecoveryStage},
     v2_recovery::{
@@ -1049,9 +1049,12 @@ pub(crate) fn begin_v2_successor_activation(
         restart_required_before: status.restart_required,
         restart_required_after: status.restart_required,
     };
-    if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {
+    let Some(checked_lifecycle) =
+        check_production_successor_startup_lifecycle_transition(lifecycle)
+    else {
         return Err(V2SuccessorActivationError::RefinementRejected);
-    }
+    };
+    let _authorized_lifecycle = checked_lifecycle.into_projection();
     update_v2_successor_work_stage_at(
         height,
         SumeragiV2LocalWorkStage::Queued,
@@ -1145,9 +1148,10 @@ fn activate_v2_successor_height_at(
             &successor,
         ),
     };
-    if !production_applied_successor_trace_refines_indexed_activation_kernel(trace) {
+    let Some(checked_trace) = check_production_applied_successor_transition(trace) else {
         return Err(V2SuccessorActivationError::RefinementRejected);
-    }
+    };
+    let _authorized_trace = checked_trace.into_projection();
 
     // Validate the predecessor and publish Complete before replacing it with
     // the prepared successor snapshot. This is the sole accepted Running ->
@@ -1215,14 +1219,15 @@ fn publish_recovered_v2_successor_height_at(
             &successor,
         ),
     };
-    if !production_recovered_successor_trace_refines_indexed_activation_kernel(trace) {
+    let Some(checked_trace) = check_production_recovered_successor_transition(trace) else {
         if let Some(published) = published {
             return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(
                 published.height,
             ));
         }
         return Err(V2SuccessorActivationError::RefinementRejected);
-    }
+    };
+    let _authorized_trace = checked_trace.into_projection();
     if let Some(published) = published {
         return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(
             published.height,
@@ -2278,12 +2283,16 @@ pub(crate) fn mark_v2_restart_required() {
                 restart_required_before: status.restart_required,
                 restart_required_after: true,
             };
-            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {
+            let Some(checked_lifecycle) =
+                check_production_successor_startup_lifecycle_transition(lifecycle)
+            else {
                 iroha_logger::error!(
                     height = status.height,
-                    "Sumeragi v2 Running successor failure projection was rejected; latching restart-required fail-closed"
+                    "Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"
                 );
-            }
+                return;
+            };
+            let _authorized_lifecycle = checked_lifecycle.into_projection();
         }
         status.restart_required = true;
     }
@@ -3272,7 +3281,7 @@ mod v2_liveness_watchdog_tests {
     }
 
     #[test]
-    fn rejected_running_successor_failure_projection_still_latches_restart_required() {
+    fn rejected_running_successor_failure_projection_preserves_status() {
         let _guard = super::rbc_status_test_guard();
         clear_v2_status();
         let started_at = Instant::now();
@@ -3286,8 +3295,8 @@ mod v2_liveness_watchdog_tests {
 
         let failed = v2_status_at(started_at).expect("failed status remains visible");
         assert!(
-            failed.restart_required,
-            "kernel rejection must strengthen the process failure latch"
+            !failed.restart_required,
+            "a rejected lifecycle transition must not mutate the status"
         );
         assert_eq!(
             failed.liveness.work.successor_height,

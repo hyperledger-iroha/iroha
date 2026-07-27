@@ -975,6 +975,7 @@ BY AsyncStepRefinementObligation,
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncControlServiceStateTypeInvariant
   /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
   /\ ReceivedTimeoutVotePoolInvariant
   /\ AsyncRecoveryTypeInvariant
@@ -1004,6 +1005,17 @@ PROOF
       BY <2>1 DEF StrongInductiveInvariant, Safety
     <2>3. AsyncSchedulerTypeInvariant
       BY <1>1, <2>2, AsyncInitEstablishesSchedulerType
+    <2>3b. AsyncControlServiceStateTypeInvariant
+      BY <1>1, Isa
+         DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+             AsyncControlServiceStateTypeInvariant,
+             AsyncControlServiceSlots,
+             AsyncNextControlServiceOrdinal,
+             AsyncCertifiedResponseClaimRecords,
+             AsyncNextCertifiedResponseClaimOrdinal,
+             AsyncCandidateServiceTombstones,
+             AsyncNextCandidateServiceOrdinal,
+             AsyncCandidateServiceTombstoneSet
     <2>3a. AsyncCertifiedResponseClaimIngressOwnershipInvariant
       BY <1>1, EmptyCertifiedResponseClaimHasIngressOwnership
          DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit
@@ -1028,7 +1040,8 @@ PROOF
              AsyncGstRecoveryPhaseInvariant
     <2>7. AsyncSerializedBusyKernelInvariant
       BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
-    <2> QED BY <2>1, <2>3, <2>3a, <2>4, <2>5, <2>6, <2>7
+    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>4, <2>5, <2>6,
+                <2>7
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1065,6 +1078,7 @@ PROOF
          PROVE AsyncStrongTypeInvariant'
     <2>1. /\ StrongInductiveInvariant
            /\ AsyncSchedulerTypeInvariant
+           /\ AsyncControlServiceStateTypeInvariant
            /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
            /\ ReceivedTimeoutVotePoolInvariant
            /\ AsyncRecoveryTypeInvariant
@@ -1081,6 +1095,16 @@ PROOF
       BY <2>1, <2>2, CoreStrongInductiveActionPreservation
     <2>4. AsyncSchedulerTypeInvariant'
       BY <1>1, <2>1, AsyncAllVarsStutterPreservesSchedulerType
+    <2>4b. AsyncControlServiceStateTypeInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncControlServiceStateTypeInvariant,
+             AsyncControlServiceSlots,
+             AsyncNextControlServiceOrdinal,
+             AsyncCertifiedResponseClaimRecords,
+             AsyncNextCertifiedResponseClaimOrdinal,
+             AsyncCandidateServiceTombstones,
+             AsyncNextCandidateServiceOrdinal
     <2>4a. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
       BY <1>1, <2>1,
          CertifiedResponseClaimIngressOwnershipStutter
@@ -1106,7 +1130,8 @@ PROOF
     <2>8. AsyncSerializedBusyKernelInvariant'
       BY <2>1, <2>2,
          CoreVarsStutterPreservesSerializedBusyKernelInvariant
-    <2> QED BY <2>3, <2>4, <2>4a, <2>5, <2>6, <2>7, <2>8
+    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,
+                <2>8
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -3003,6 +3028,58 @@ PROOF
          DEF AsyncNext
   <1> QED BY <1>1
 
+THEOREM AsyncNextPreservesControlServiceStateTypeInvariant ==
+  /\ AsyncTypeInvariant
+  /\ AsyncControlServiceStateTypeInvariant
+  /\ AsyncNext
+  => AsyncControlServiceStateTypeInvariant'
+BY FS_Subset, FS_Image, IsaT(600)
+   DEF AsyncNext,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncCandidateServiceTombstonesAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncControlServiceResetNodesThisStep,
+       AsyncControlServiceAdmissionsThisStep,
+       AsyncControlServicesThisStep,
+       AsyncCertifiedResponseClaimAdmissionsThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncControlServiceStateTypeInvariant,
+       AsyncControlServiceRecordSet,
+       AsyncControlServiceRecord,
+       AsyncControlServiceSlots,
+       AsyncNextControlServiceOrdinal,
+       AsyncCertifiedResponseClaimRecords,
+       AsyncNextCertifiedResponseClaimOrdinal,
+       AsyncCertifiedResponseClaimRecord,
+       CertifiedResponseClaimRecordsFor,
+       AsyncCandidateServiceTombstones,
+       AsyncNextCandidateServiceOrdinal,
+       AsyncCandidateServiceTombstoneSet,
+       AsyncCandidateServiceTombstone,
+       AsyncCandidateServiceIdentity,
+       AsyncCandidateServicePayload,
+       AsyncCandidateServiceRecordsForIdentity,
+       AsyncCandidateServiceTombstoneRetainedAfterStep,
+       AsyncCandidateServiceEligibleAfterStep,
+       AsyncControlServiceSlotSet,
+       AsyncControlServiceSlot,
+       AsyncControlServiceProtocolOwner,
+       AsyncControlServiceAdmissionStartsOrReplaces,
+       AsyncControlServiceCurrentHeightItem,
+       AsyncLeaderWireServiceIdentity
+
 THEOREM AsyncNextPreservesStrongTypeInvariant ==
   AsyncStrongTypeInvariant /\ AsyncNext
     => AsyncStrongTypeInvariant'
@@ -3029,11 +3106,16 @@ PROOF
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2g. AsyncCertifiedResponseClaimIngressOwnershipInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2h. AsyncControlServiceStateTypeInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
     <2>3. StrongInductiveInvariant'
       BY <1>1, <2>1, AsyncNextPreservesStrongInductiveInvariant
     <2>4. AsyncSchedulerTypeInvariant'
       BY <1>1, <2>1, <2>2, <2>2a,
          AsyncNextPreservesSchedulerType
+    <2>4b. AsyncControlServiceStateTypeInvariant'
+      BY <1>1, <2>2, <2>2h,
+         AsyncNextPreservesControlServiceStateTypeInvariant
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>2, AsyncNextPreservesTimeoutPoolInvariant
     <2>6. /\ AsyncRecoveryTypeInvariant'
@@ -3056,8 +3138,8 @@ PROOF
     <2>11. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
       BY <1>1, <2>2, <2>2g,
          AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant
-    <2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10,
-                <2>11
+    <2> QED BY <2>3, <2>4, <2>4b, <2>5, <2>6, <2>7, <2>8,
+                <2>9, <2>10, <2>11
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 

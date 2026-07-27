@@ -954,6 +954,13 @@ PROOF
          PROVE asyncNow' = asyncNow
     <2>1. CASE \E packet \in asyncTransport: PreGstLosePacket(packet)
       BY <2>1, Isa DEF PreGstLosePacket
+    <2>1a. CASE \E reservation \in asyncServeReservations:
+                    PreGstServeReceiverCloseRollback(
+                      reservation.node, reservation.identity)
+      BY <2>1a, Isa
+         DEF PreGstServeReceiverCloseRollback,
+             PreGstPendingServeReceiverCloseRollback,
+             PreGstMaterializedServeReceiverCloseRollback
     <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
       BY <2>2, Isa DEF PreGstCrash, AsyncSchedulerVars
     <2>3. CASE \E source \in AsyncIngressSources,
@@ -997,7 +1004,7 @@ PROOF
                   AsyncByzantineTimeout(
                     signer, roundView, highestPrepare)
       BY <2>8, Isa DEF AsyncByzantineTimeout
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4,
+    <2> QED BY <1>1, <2>1, <2>1a, <2>2, <2>3, <2>3c, <2>4,
                 <2>5, <2>6, <2>7, <2>8
          DEF AsyncFaultStep
   <1> QED BY <1>1

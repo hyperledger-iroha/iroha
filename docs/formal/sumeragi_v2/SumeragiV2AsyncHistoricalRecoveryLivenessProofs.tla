@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncHistoricalRecoveryLivenessProofs ----
-EXTENDS SumeragiV2AsyncLivenessProofs, TLAPS
+EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs, TLAPS
 
 (***************************************************************************
 Exact historical-recovery liveness child.
@@ -927,6 +927,7 @@ HistoricalRecoveryAsyncTemporalClosurePremises(specification) ==
   /\ HistoricalDecisionFrontierAvailabilityProperty(specification)
   /\ HistoricalDecisionConcreteLeafProperties(specification)
   /\ ResponsiveDecisionServiceOwnershipProperty(specification)
+  /\ ApplicationCompletionProgressProperty(specification)
 
 (***************************************************************************
 Exact premise accounting.
@@ -937,9 +938,13 @@ CommitQC request outbox, and the discovery guard persists until either the
 request set is published or Decision is installed.  They therefore must not
 remain hidden among the temporal assumptions supplied to the corridor.
 
-The other six predicates are the smallest remaining historical-service
-boundary in this child.  In particular, the clock predicate is not inferred
-from weak fairness of `AsyncTick`: an overdue packet or local-service owner can
+The other seven predicates are the smallest remaining service boundary in
+this child.  Six are historical-service predicates.  The seventh is the
+current-voter application-completion property supplied by the higher
+proof-bearing closure; keeping it explicit prevents this lower historical
+module from importing the post-debt DecisionApplication facade and creating a
+dependency cycle.  In particular, the clock predicate is not inferred from
+weak fairness of `AsyncTick`: an overdue packet or local-service owner can
 disable that action, so a proof must first discharge the concrete terminating
 work/rank corridor.  Keeping this partition exact prevents a future proof from
 silently replacing one of those dependencies with target-to-Decision itself.
@@ -956,6 +961,7 @@ HistoricalRecoveryAsyncRemainingCorridorPremises(specification) ==
   /\ HistoricalDecisionFrontierAvailabilityProperty(specification)
   /\ HistoricalDecisionConcreteLeafProperties(specification)
   /\ ResponsiveDecisionServiceOwnershipProperty(specification)
+  /\ ApplicationCompletionProgressProperty(specification)
 
 HistoricalRecoveryAsyncRemainingCorridorObligation ==
   \A initialContext:
@@ -1246,8 +1252,9 @@ PROOF
     <2>2. \A node \in AsyncCurrentResponsiveVoters:
              (gst /\ NodeHasDecision(node))
                ~> NodeHasApplication(node)
-      BY ApplicationCompletionProgressObligation
-         DEF ApplicationCompletionProgressProperty
+      BY <1>1
+         DEF HistoricalRecoveryAsyncTemporalClosurePremises,
+             ApplicationCompletionProgressProperty
     <2>3. []ResponsiveDecisionServiceOwnershipInvariant
       BY <1>1
          DEF HistoricalRecoveryAsyncTemporalClosurePremises,

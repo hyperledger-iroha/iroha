@@ -98,7 +98,7 @@ use iroha_core::{
         ProductionTwoStageRelayRetryTraceProjection, SumeragiHandle, SumeragiIngressDisposition,
         SumeragiStartArgs, V2StartupReplayInventoryGuard, VotingBlock,
         filter_validators_from_trusted, network_topology::Topology,
-        production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
+        check_production_two_stage_relay_retry_transition,
     },
 };
 use iroha_crypto::Algorithm;
@@ -4070,6 +4070,77 @@ fn sumeragi_relay_retain_retry(
     let retry_source = work.source.clone();
     let retry_route = work.reply_route.clone();
     let retry_geometry = work.retention_guard.geometry;
+    let source_depth_before_reinsert = retained
+        .lanes
+        .get(&retry_source)
+        .map_or(0, VecDeque::len);
+    if !retained.has_capacity() || source_depth_before_reinsert >= retained.source_capacity {
+        return Err(SumeragiRelayRetryRetentionError::Capacity(work));
+    }
+    let source_rank_before_reinsert = retained
+        .ready
+        .iter()
+        .position(|source| source == &retry_source);
+    let ready_sources_after = if source_depth_before_reinsert == 0 {
+        retained.ready.len().checked_add(1)
+    } else {
+        Some(retained.ready.len())
+    }
+    .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?;
+    let selected_source_rank_after = if source_depth_before_reinsert == 0 {
+        retained.ready.len()
+    } else {
+        source_rank_before_reinsert
+            .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?
+    };
+    let source_depth_after = source_depth_before_reinsert
+        .checked_add(1)
+        .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?;
+    let total_depth_after = retained
+        .len
+        .checked_add(1)
+        .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?;
+    let prospective = ProductionTwoStageRelayRetryTraceProjection {
+        daemon_source_capacity_matches_two_upstream_lanes: retry_geometry
+            .daemon_source_capacity_matches_two_upstream_lanes(),
+        class_corridor_covers_authenticated_sources: retry_geometry
+            .class_corridor_covers_authenticated_sources(),
+        authenticated_source_matches_resource_owner: selection.source == retry_source
+            && retry_route.is_authenticated_via(&selection.source.via),
+        retry_route_same_delivery: true,
+        retry_route_active,
+        selected_eligible: selection.selected_eligible,
+        ready_sources_before: u64::try_from(selection.ready_sources_before)
+            .expect("retained ready-source count must fit u64"),
+        selected_source_rank_before: u64::try_from(selection.selected_source_rank_before)
+            .expect("retained source rank must fit u64"),
+        ready_sources_after: u64::try_from(ready_sources_after)
+            .expect("retained ready-source count must fit u64"),
+        selected_source_rank_after: u64::try_from(selected_source_rank_after)
+            .expect("retained source rank must fit u64"),
+        source_depth_before: u64::try_from(selection.source_depth_before)
+            .expect("retained source depth must fit u64"),
+        selected_item_rank_before: u64::try_from(selection.selected_item_rank_before)
+            .expect("retained item rank must fit u64"),
+        source_depth_after: u64::try_from(source_depth_after)
+            .expect("retained source depth must fit u64"),
+        selected_item_rank_after: u64::try_from(source_depth_before_reinsert)
+            .expect("retained item rank must fit u64"),
+        total_depth_before: u64::try_from(selection.total_depth_before)
+            .expect("retained total depth must fit u64"),
+        total_depth_after: u64::try_from(total_depth_after)
+            .expect("retained total depth must fit u64"),
+        source_capacity: u64::try_from(retained.source_capacity)
+            .expect("retained source capacity must fit u64"),
+        total_capacity: u64::try_from(retained.capacity)
+            .expect("retained total capacity must fit u64"),
+    };
+    let Some(checked_transition) =
+        check_production_two_stage_relay_retry_transition(prospective)
+    else {
+        return Err(SumeragiRelayRetryRetentionError::RefinementViolation);
+    };
+    let prospective = checked_transition.into_projection();
     retained.push(retry_source.clone(), work).map_err(|error| {
         SumeragiRelayRetryRetentionError::Capacity(match error {
             FairRetainedPushError::Full(work) | FairRetainedPushError::SourceFull(work) => work,
@@ -4086,7 +4157,7 @@ fn sumeragi_relay_retain_retry(
         lane.iter()
             .rposition(|candidate| candidate.reply_route.same_delivery(&retry_route))
     });
-    let projection = ProductionTwoStageRelayRetryTraceProjection {
+    let observed = ProductionTwoStageRelayRetryTraceProjection {
         daemon_source_capacity_matches_two_upstream_lanes: retry_geometry
             .daemon_source_capacity_matches_two_upstream_lanes(),
         class_corridor_covers_authenticated_sources: retry_geometry
@@ -4123,7 +4194,7 @@ fn sumeragi_relay_retain_retry(
         total_capacity: u64::try_from(retained.capacity)
             .expect("retained total capacity must fit u64"),
     };
-    if production_two_stage_relay_retry_trace_refines_source_fairness_kernel(projection) {
+    if observed == prospective {
         Ok(())
     } else {
         Err(SumeragiRelayRetryRetentionError::RefinementViolation)
