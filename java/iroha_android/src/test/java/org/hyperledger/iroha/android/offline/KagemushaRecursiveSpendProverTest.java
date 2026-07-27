@@ -51,6 +51,7 @@ public final class KagemushaRecursiveSpendProverTest {
     appendJoinRejectsZeroAndThreeInputsBeforeNativeDispatch();
     scaledAmountsAreExactAndNeverRound();
     peerTransportGoldenVectorsAreExact();
+    nfcAidIsCanonicalAndRejectsRetiredSelection();
     qrNfcAndNearbyGoldenVectorsAreExact();
     nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
     toriiLifecycleRoutesAndHeadersAreExact();
@@ -60,6 +61,11 @@ public final class KagemushaRecursiveSpendProverTest {
   @org.junit.Test
   public void scaledAmountsAreExactAndNeverRoundUnderJUnit() {
     scaledAmountsAreExactAndNeverRound();
+  }
+
+  @org.junit.Test
+  public void nfcAidIsCanonicalAndRejectsRetiredSelectionUnderJUnit() {
+    nfcAidIsCanonicalAndRejectsRetiredSelection();
   }
 
   private static void heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting() {
@@ -1331,6 +1337,60 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !KagemushaNearby.IS_AVAILABLE;
     Arrays.fill(rawArchive, (byte) 0);
     Arrays.fill(nearby, (byte) 0);
+  }
+
+  private static void nfcAidIsCanonicalAndRejectsRetiredSelection() {
+    final byte[] canonicalAid = IrohaPeerNfcV1.applicationIdentifier();
+    assert KagemushaNfcProtocol.AID_HEX.equals("F0494C44534E464301");
+    assert KagemushaNfcProtocol.AID_HEX.equals(IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX);
+    assert Arrays.equals(KagemushaNfcProtocol.AID, canonicalAid);
+
+    final byte[] select = KagemushaNfcProtocol.selectAidApdu();
+    assert hex(select).equals("00a4040009f0494c44534e46430100");
+    assert KagemushaNfcProtocol.parseCommand(select).type()
+        == KagemushaNfcProtocol.Type.SELECT;
+
+    final byte[] exposedAidSnapshot = KagemushaNfcProtocol.AID.clone();
+    try {
+      KagemushaNfcProtocol.AID[0] = 0x00;
+      assert hex(KagemushaNfcProtocol.selectAidApdu())
+          .equals("00a4040009f0494c44534e46430100");
+      assert KagemushaNfcProtocol.parseCommand(select).type()
+          == KagemushaNfcProtocol.Type.SELECT;
+    } finally {
+      System.arraycopy(
+          exposedAidSnapshot,
+          0,
+          KagemushaNfcProtocol.AID,
+          0,
+          exposedAidSnapshot.length);
+    }
+
+    final byte[] retiredSelect = {
+        0x00,
+        (byte) 0xA4,
+        0x04,
+        0x00,
+        0x0B,
+        (byte) 0xF0,
+        0x50,
+        0x4B,
+        0x45,
+        0x50,
+        0x4B,
+        0x52,
+        0x4E,
+        0x46,
+        0x43,
+        0x01,
+        0x00
+    };
+    assert KagemushaNfcProtocol.parseCommand(retiredSelect).type()
+        == KagemushaNfcProtocol.Type.SELECT_OTHER_APPLICATION;
+    Arrays.fill(canonicalAid, (byte) 0);
+    Arrays.fill(exposedAidSnapshot, (byte) 0);
+    Arrays.fill(select, (byte) 0);
+    Arrays.fill(retiredSelect, (byte) 0);
   }
 
   private static boolean assertNativeArtifactStreamingUnavailableFailsClosed() {

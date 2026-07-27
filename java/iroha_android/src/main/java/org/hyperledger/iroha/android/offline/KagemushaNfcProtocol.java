@@ -10,8 +10,7 @@ import java.util.Objects;
 
 /** Platform-neutral NFC APDU datastream used by Android HCE/IsoDep and iOS CardSession peers. */
 public final class KagemushaNfcProtocol {
-  public static final byte[] AID =
-      new byte[] {(byte) 0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01};
+  public static final byte[] AID = IrohaPeerNfcV1.applicationIdentifier();
   public static final String AID_HEX = IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX;
   public static final int RAW_TRANSPORT_VERSION = 4;
   public static final int SAFE_CHUNK_BYTES = 220;
@@ -38,13 +37,14 @@ public final class KagemushaNfcProtocol {
   private KagemushaNfcProtocol() {}
 
   public static byte[] selectAidApdu() {
-    final byte[] apdu = new byte[5 + AID.length + 1];
+    final byte[] aid = IrohaPeerNfcV1.applicationIdentifier();
+    final byte[] apdu = new byte[5 + aid.length + 1];
     apdu[0] = 0x00;
     apdu[1] = (byte) 0xA4;
     apdu[2] = 0x04;
     apdu[3] = 0x00;
-    apdu[4] = (byte) AID.length;
-    System.arraycopy(AID, 0, apdu, 5, AID.length);
+    apdu[4] = (byte) aid.length;
+    System.arraycopy(aid, 0, apdu, 5, aid.length);
     apdu[apdu.length - 1] = 0x00;
     return apdu;
   }
@@ -331,7 +331,8 @@ public final class KagemushaNfcProtocol {
     if (!isAnySelectAid(apdu)) return false;
     final int length = apdu[4] & 0xFF;
     final int payloadEnd = 5 + length;
-    return Arrays.equals(Arrays.copyOfRange(apdu, 5, payloadEnd), AID);
+    return Arrays.equals(
+        Arrays.copyOfRange(apdu, 5, payloadEnd), IrohaPeerNfcV1.applicationIdentifier());
   }
 
   private static boolean isAnySelectAid(final byte[] apdu) {
