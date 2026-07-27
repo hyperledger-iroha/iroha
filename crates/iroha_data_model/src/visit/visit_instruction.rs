@@ -165,6 +165,11 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_bootstrap_privacy_orchard_pool_v1(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1>()
+    {
+        visitor.visit_bootstrap_privacy_proof_managed_pool_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1>()
     {
         visitor.visit_bootstrap_privacy_pgc_accounts_v1(v);
@@ -700,6 +705,9 @@ macro_rules! instruction_visitors {
             visit_publish_privacy_root_v1(&$crate::isi::privacy::PublishPrivacyRootV1),
             visit_bootstrap_privacy_orchard_pool_v1(
                 &$crate::isi::privacy::BootstrapPrivacyOrchardPoolV1
+            ),
+            visit_bootstrap_privacy_proof_managed_pool_v1(
+                &$crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1
             ),
             visit_bootstrap_privacy_pgc_accounts_v1(
                 &$crate::isi::privacy::BootstrapPrivacyPgcAccountsV1

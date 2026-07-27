@@ -640,15 +640,16 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
   assert.equal(submissions.length, 1, "invalid signatures must fail before Torii I/O");
 });
 
-test("package dist entrypoint exports privacy native archive helpers", () => {
-  for (const name of [
-    "isPrivacyNativeAvailable",
-    "privacyCapabilitiesV1",
+test("package dist entrypoint exports only the canonical privacy capability bridge", () => {
+  for (const name of ["isPrivacyNativeAvailable", "privacyCapabilitiesV1"]) {
+    assert.equal(typeof packageExports[name], "function", `${name} must be exported`);
+  }
+  for (const retired of [
     "privacyProofRequestV1",
     "privacyBuildProofV1",
     "privacyVerifyProofV1",
   ]) {
-    assert.equal(typeof packageExports[name], "function", `${name} must be exported`);
+    assert.equal(retired in packageExports, false, `${retired} must be retired`);
   }
   assert.equal(
     packageExports.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,

@@ -427,18 +427,6 @@ export function privacyCapabilitiesV1() {
   return unsupported("privacyCapabilitiesV1");
 }
 
-export function privacyProofRequestV1() {
-  return unsupported("privacyProofRequestV1");
-}
-
-export function privacyBuildProofV1() {
-  return unsupported("privacyBuildProofV1");
-}
-
-export function privacyVerifyProofV1() {
-  return unsupported("privacyVerifyProofV1");
-}
-
 export function sm2FixtureFromSeed() {
   return unsupported("sm2FixtureFromSeed");
 }

@@ -201,10 +201,9 @@ from .dataspaces import (
 from .event_filter import DataEventFilter, ensure_event_filter
 from .numeric_v1 import NumericV1Codec
 from .privacy_catalog import (
-    get_privacy_algorithm_descriptors,
-)
-from .privacy_catalog import (
-    privacy_capabilities as _privacy_capabilities,
+    PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1,
+    PrivacyCapabilitySnapshotV1,
+    parse_privacy_capability_snapshot_json_v1,
 )
 from .query import (
     AggregateSpec,
@@ -10988,32 +10987,27 @@ class ToriiClient(_BaseToriiClient):
             result = f"{result}#{scope}"
         return result
 
-    def privacy_capabilities(
-        self,
-        production_evidence: Any | None = None,
-        *,
-        chain_id: str | None = None,
-    ) -> Dict[str, Any]:
-        """Return SDK privacy catalog and implementation capability metadata."""
+    def privacy_capabilities_v1(self) -> PrivacyCapabilitySnapshotV1:
+        """Fetch and validate the authoritative committed privacy snapshot."""
 
-        return _privacy_capabilities(
-            self,
-            production_evidence,
-            chain_id=chain_id,
+        response = self._request(
+            "GET",
+            "/v1/privacy/capabilities",
+            headers={"Accept": "application/json"},
         )
-
-    def privacy_algorithm_descriptors(
-        self,
-        production_evidence: Any | None = None,
-        *,
-        chain_id: str | None = None,
-    ) -> List[Dict[str, Any]]:
-        """Return defensive-copy privacy algorithm descriptors."""
-
-        return get_privacy_algorithm_descriptors(
-            production_evidence,
-            chain_id=chain_id,
+        self._expect_status(
+            response,
+            [200],
+            maximum_body_bytes=PRIVACY_CAPABILITY_SNAPSHOT_MAX_JSON_BYTES_V1,
+            context="privacy capabilities",
         )
+        content_type = response.headers.get("Content-Type", "")
+        media_type = content_type.split(";", 1)[0].strip().lower()
+        if media_type != "application/json":
+            raise ValueError(
+                "privacy capabilities response must use application/json media type"
+            )
+        return parse_privacy_capability_snapshot_json_v1(response.content)
 
     @property
     def sorafs_alias_policy(self) -> SorafsAliasPolicy:

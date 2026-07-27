@@ -27,6 +27,44 @@ build environment. It is not a reproducible-build or hostile-executor proof.
 Release processes that require that stronger property must compare matching
 artifacts from independent controlled rebuilders.
 
+Native publication also assumes that the configured Cargo target is on a
+single-host local, hard-link-capable filesystem and that cooperating builders
+share one PID namespace. Its durable owner record recovers an interrupted
+publisher only after that exact local PID is no longer live; foreign-host,
+malformed, and ambiguous lock state is preserved and rejected. Do not publish
+the native host through a network filesystem or a volume without hard-link
+support. Concurrent publishers must all run the current owner-record protocol;
+mixing an older empty-directory lock implementation with this one is
+unsupported. Recovery retains a tiny owner-specific tombstone as an ABA guard
+so a delayed recovery process cannot displace a newer live publisher.
+
+Each operating-system temporary build run is likewise published only after an
+off-name initializer contains a complete, fsynced owner record binding the
+exact directory identity, hostname, PID, and effective UID where the platform
+exposes one. Before starting another build, the janitor reaps only exact
+current-host/current-user run names whose recorded PID is definitely absent.
+Live, foreign, malformed, partial, symlinked, and unknown prefix-matching
+artifacts are preserved. A dead run is first identity-revalidated and renamed
+into an exact trash namespace; payload deletion is resumable, and the owner
+record moves to a terminal sidecar before the empty trash directory is
+removed. This prevents a process killed during recursive cleanup from leaving
+a semantic run name or an unrecoverable ownerless deletion state.
+
+The temporary-run janitor relies on the same trusted-user boundary as the
+native build itself: same-UID local processes are trusted, and Windows
+installations must provide an equivalent private ACL. It never follows a
+symlink or replacement root, but Node.js has no portable descriptor-relative
+recursive deletion API. Its explicit guarantee is recovery from process
+interruption, including `SIGKILL`. Owner and rename transitions are fsynced,
+but durability across sudden host power loss still depends on the operating
+system and filesystem honoring file and directory sync semantics; temporary
+payload loss after such an event does not constitute published build evidence.
+
+Cargo may expose the validated profile-root `cdylib` as a hard link to its
+`deps` artifact. The builder accepts that exact Cargo-JSON-validated path only
+as an input, copies it into a private singly linked seal, and publishes from
+that seal. Staging and final native binaries remain strictly singly linked.
+
 When upgrading a source checkout from a revision that tracked the checksum
 manifest but ignored the generated binary, Git can remove the manifest while
 leaving an old `native/iroha_js_host.node`. The publisher intentionally rejects

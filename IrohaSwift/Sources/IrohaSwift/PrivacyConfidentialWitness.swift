@@ -266,16 +266,6 @@ public enum PrivacyConfidentialWitnessCodecs {
         "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV1"
     public static let privacyConfidentialWitnessV2WireName =
         "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV2"
-    public static let privacyProofRequestV1WireName =
-        "connect_norito_bridge::PrivacyProofRequestV1"
-    public static let confidentialTransferV2AlgorithmId = "confidential-transfer-v2"
-    public static let confidentialTransferV2Entrypoint = "buildConfidentialTransferProofV2"
-    public static let confidentialTransferV2VerifierRef =
-        "halo2-ipa-pasta:confidential_transfer_v2"
-    public static let confidentialUnshieldV3AlgorithmId = "unshield"
-    public static let confidentialUnshieldV3Entrypoint = "buildConfidentialUnshieldProofV3"
-    public static let confidentialUnshieldV3VerifierRef =
-        "halo2-ipa-pasta:confidential_unshield_v3"
     public static let confidentialTreeCapacityV2 = 1 << 16
     public static let confidentialTreeDepthV2 = 16
     public static let confidentialMaxInputsV2 = 2
@@ -283,9 +273,7 @@ public enum PrivacyConfidentialWitnessCodecs {
     public static let confidentialMaxUnshieldChangeOutputsV3 = 1
 
     static let requestFlags = NoritoHeader.compactLen
-    private static let proofMaxBytes = 32 * 1024 * 1024
     private static let witnessHeaderPaddingBytes = 8
-    private static let privacyRequestSchemaByte: UInt8 = 0x52
 
     static let confidentialTransferPublicInputsSchemaV1 = Data(
         (
@@ -376,84 +364,6 @@ public enum PrivacyConfidentialWitnessCodecs {
         return try encodeWitnessV2(witness)
     }
 
-    public static func buildConfidentialTransferProofRequestV1(
-        witness: PrivacyConfidentialWitnessV1,
-        vkRef: String = confidentialTransferV2VerifierRef
-    ) throws -> Data {
-        try validateVkRef(vkRef, expected: confidentialTransferV2VerifierRef)
-        return try encodePrivacyProofRequest(
-            algorithmId: confidentialTransferV2AlgorithmId,
-            entrypoint: confidentialTransferV2Entrypoint,
-            vkRef: vkRef,
-            publicInputs: confidentialTransferPublicInputsSchemaV1,
-            witness: encodeTransferWitness(witness),
-            proof: Data()
-        )
-    }
-
-    public static func buildConfidentialUnshieldProofRequestV1(
-        witness: PrivacyConfidentialWitnessV1,
-        vkRef: String = confidentialUnshieldV3VerifierRef
-    ) throws -> Data {
-        try validateVkRef(vkRef, expected: confidentialUnshieldV3VerifierRef)
-        return try encodePrivacyProofRequest(
-            algorithmId: confidentialUnshieldV3AlgorithmId,
-            entrypoint: confidentialUnshieldV3Entrypoint,
-            vkRef: vkRef,
-            publicInputs: confidentialUnshieldPublicInputsSchemaV1,
-            witness: encodeUnshieldWitness(witness),
-            proof: Data()
-        )
-    }
-
-    public static func buildConfidentialTransferProofRequestV2(
-        witness: PrivacyConfidentialWitnessV2,
-        vkRef: String = confidentialTransferV2VerifierRef
-    ) throws -> Data {
-        try validateVkRef(vkRef, expected: confidentialTransferV2VerifierRef)
-        return try encodePrivacyProofRequest(
-            algorithmId: confidentialTransferV2AlgorithmId,
-            entrypoint: confidentialTransferV2Entrypoint,
-            vkRef: vkRef,
-            publicInputs: confidentialTransferPublicInputsSchemaV1,
-            witness: encodeTransferWitnessV2(witness),
-            proof: Data()
-        )
-    }
-
-    public static func buildConfidentialUnshieldProofRequestV2(
-        witness: PrivacyConfidentialWitnessV2,
-        vkRef: String = confidentialUnshieldV3VerifierRef
-    ) throws -> Data {
-        try validateVkRef(vkRef, expected: confidentialUnshieldV3VerifierRef)
-        return try encodePrivacyProofRequest(
-            algorithmId: confidentialUnshieldV3AlgorithmId,
-            entrypoint: confidentialUnshieldV3Entrypoint,
-            vkRef: vkRef,
-            publicInputs: confidentialUnshieldPublicInputsSchemaV1,
-            witness: encodeUnshieldWitnessV2(witness),
-            proof: Data()
-        )
-    }
-
-    public static func buildConfidentialUnshieldVerifyRequestV1(
-        proof: Data,
-        vkRef: String = confidentialUnshieldV3VerifierRef
-    ) throws -> Data {
-        try validateVkRef(vkRef, expected: confidentialUnshieldV3VerifierRef)
-        guard !proof.isEmpty, proof.count <= proofMaxBytes else {
-            throw PrivacyConfidentialWitnessError.invalidField("proof")
-        }
-        return try encodePrivacyProofRequest(
-            algorithmId: confidentialUnshieldV3AlgorithmId,
-            entrypoint: confidentialUnshieldV3Entrypoint,
-            vkRef: vkRef,
-            publicInputs: confidentialUnshieldPublicInputsSchemaV1,
-            witness: Data(),
-            proof: Data(proof)
-        )
-    }
-
     static func canonicalText(_ value: String, field: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed == value, !trimmed.contains("\0") else {
@@ -522,68 +432,6 @@ public enum PrivacyConfidentialWitnessCodecs {
         guard witness.unshieldChange.count <= confidentialMaxUnshieldChangeOutputsV3 else {
             throw PrivacyConfidentialWitnessError.invalidField("unshieldChange")
         }
-    }
-
-    private static func validateVkRef(_ value: String, expected: String) throws {
-        let text = try privacyRequestText(value, field: "vkRef")
-        guard text == expected else {
-            throw PrivacyConfidentialWitnessError.invalidField("vkRef")
-        }
-    }
-
-    private static func privacyRequestText(_ value: String, field: String) throws -> String {
-        let text = try canonicalText(value, field: field)
-        guard text.count <= 1024,
-              text.unicodeScalars.allSatisfy({ scalar in
-                  scalar.value >= 0x21 && scalar.value <= 0x7e
-              }),
-              text.allSatisfy({ character in
-                  character.isLetter || character.isNumber
-                      || character == "-"
-                      || character == "_"
-                      || character == "."
-                      || character == ":"
-              })
-        else {
-            throw PrivacyConfidentialWitnessError.invalidField(field)
-        }
-        return text
-    }
-
-    private static func encodePrivacyProofRequest(
-        algorithmId: String,
-        entrypoint: String,
-        vkRef: String,
-        publicInputs: Data,
-        witness: Data,
-        proof: Data
-    ) throws -> Data {
-        guard proof.count <= proofMaxBytes else {
-            throw PrivacyConfidentialWitnessError.invalidField("proof")
-        }
-        var writer = CompactNoritoWriter()
-        writer.writeField(CompactNorito.encodeString(try privacyRequestText(
-            algorithmId,
-            field: "algorithmId"
-        )))
-        writer.writeField(CompactNorito.encodeString(try privacyRequestText(
-            entrypoint,
-            field: "entrypoint"
-        )))
-        writer.writeField(CompactNorito.encodeString(try privacyRequestText(vkRef, field: "vkRef")))
-        writer.writeField(encodeBytesVec(publicInputs))
-        writer.writeField(encodeBytesVec(witness))
-        writer.writeField(encodeBytesVec(proof))
-        var archive = noritoEncode(
-            typeName: privacyProofRequestV1WireName,
-            payload: writer.data,
-            flags: requestFlags
-        )
-        guard archive.count >= NoritoHeader.encodedLength else {
-            throw PrivacyConfidentialWitnessError.invalidArchive("privacyProofRequest")
-        }
-        archive.replaceSubrange(6..<22, with: Data(repeating: privacyRequestSchemaByte, count: 16))
-        return archive
     }
 
     private static func encodeNoteWitness(_ note: PrivacyConfidentialNoteWitnessV1) throws -> Data {

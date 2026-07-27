@@ -16,17 +16,19 @@ use iroha_data_model::{
         BootleLanternIssuerPolicyV1, IrohaZkX509StarkP256StatementV1, ORCHARD_MAX_ACTIONS_V1,
         PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
         PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
-        PrivacyActivationValidationError, PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1,
-        PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
-        PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
-        PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTrustAnchorNamespaceV1,
-        PrivacyTrustAnchorPolicyNamespaceV1, PrivacyZkAcePolicyRecordDigestV1,
-        PrivacyZkAcePolicyRecordV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+        PrivacyActivationValidationError, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+        PrivacyConsensusPolicyV1, PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+        PrivacyNullifierV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1,
+        PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
+        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProofManagedPoolBootstrapDigestV1,
+        PrivacyProofManagedPoolBootstrapV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
+        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
+        PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
+        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
+        PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
         PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
         PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
         ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
@@ -842,6 +844,8 @@ fn validate_pgc_retained_root_chain_v1(
         | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
         | PrivacyRootProvenanceV1::OrchardPoolBootstrap { .. }
         | PrivacyRootProvenanceV1::OrchardPoolSuccessor { .. }
+        | PrivacyRootProvenanceV1::ProofManagedPoolBootstrap { .. }
+        | PrivacyRootProvenanceV1::ProofManagedPoolSuccessor { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. } => {
             return Err("privacy PGC retained history begins with invalid provenance".to_owned());
         }
@@ -2443,6 +2447,8 @@ fn validate_zk_ams_retained_root_chain_v1(
         | PrivacyRootProvenanceV1::ZkX509CrlGovernance { .. }
         | PrivacyRootProvenanceV1::OrchardPoolBootstrap { .. }
         | PrivacyRootProvenanceV1::OrchardPoolSuccessor { .. }
+        | PrivacyRootProvenanceV1::ProofManagedPoolBootstrap { .. }
+        | PrivacyRootProvenanceV1::ProofManagedPoolSuccessor { .. }
         | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. }
         | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
@@ -2601,6 +2607,411 @@ pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
     })
 }
 
+/// Fully validated view of one FCMP++, private-IVM, or PQ-MASP pool.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyProofManagedPoolSnapshotV1 {
+    namespace: PrivacyNamespaceV1,
+    root_role: PrivacyRootRoleV1,
+    bootstrap: PrivacyProofManagedPoolBootstrapV1,
+    bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+    initial_root: PrivacyRootV1,
+    current_epoch: u64,
+    current_root: PrivacyRootV1,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
+    retained_roots: Vec<(PrivacyRootKeyV1, PrivacyRootProvenanceV1)>,
+}
+
+impl PrivacyProofManagedPoolSnapshotV1 {
+    #[must_use]
+    pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
+        self.namespace
+    }
+
+    #[must_use]
+    pub(crate) const fn root_role(&self) -> PrivacyRootRoleV1 {
+        self.root_role
+    }
+
+    #[must_use]
+    pub(crate) const fn bootstrap(&self) -> &PrivacyProofManagedPoolBootstrapV1 {
+        &self.bootstrap
+    }
+
+    #[must_use]
+    pub(crate) const fn bootstrap_digest(&self) -> PrivacyProofManagedPoolBootstrapDigestV1 {
+        self.bootstrap_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn initial_root(&self) -> PrivacyRootV1 {
+        self.initial_root
+    }
+
+    #[must_use]
+    pub(crate) const fn current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn current_root(&self) -> PrivacyRootV1 {
+        self.current_root
+    }
+
+    #[must_use]
+    pub(crate) const fn retention_anchor(&self) -> Option<PrivacyRootRetentionAnchorV1> {
+        self.retention_anchor
+    }
+
+    /// Return retained membership for the exact current head.
+    #[must_use]
+    pub(crate) fn retained_current_root(&self) -> Option<(u64, PrivacyRootV1)> {
+        self.retained_roots
+            .iter()
+            .any(|(key, _)| key.epoch() == self.current_epoch && key.root() == self.current_root)
+            .then_some((self.current_epoch, self.current_root))
+    }
+}
+
+fn validate_proof_managed_pool_successor_link_v1(
+    namespace: PrivacyNamespaceV1,
+    key: PrivacyRootKeyV1,
+    provenance: PrivacyRootProvenanceV1,
+    bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+) -> Result<(u64, PrivacyRootV1), String> {
+    let protocol_id = namespace.protocol_id();
+    let PrivacyRootProvenanceV1::ProofManagedPoolSuccessor {
+        bootstrap_digest: observed_bootstrap_digest,
+        protocol_id: observed_protocol_id,
+        parent_epoch,
+        parent_root,
+        ..
+    } = provenance
+    else {
+        return Err(format!(
+            "proof-managed pool history {namespace:?} contains a non-successor advancement"
+        ));
+    };
+    if observed_bootstrap_digest != bootstrap_digest || observed_protocol_id != protocol_id {
+        return Err(format!(
+            "proof-managed pool successor {} is bound to a different bootstrap or protocol",
+            key.epoch()
+        ));
+    }
+    if parent_epoch.checked_add(1) != Some(key.epoch()) {
+        return Err(format!(
+            "proof-managed pool successor {} does not advance parent epoch {parent_epoch} by exactly one",
+            key.epoch()
+        ));
+    }
+    Ok((parent_epoch, parent_root))
+}
+
+fn validate_proof_managed_pool_retained_root_chain_v1(
+    namespace: PrivacyNamespaceV1,
+    bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+    initial_root: PrivacyRootV1,
+    retained_root_count: usize,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
+    history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
+) -> Result<(), String> {
+    const INITIAL_EPOCH: u64 = 1;
+    if retained_root_count == 0 {
+        return Err("proof-managed pool retained-root count must be non-zero".to_owned());
+    }
+    if history.is_empty() {
+        return Err("proof-managed pool has no retained root history".to_owned());
+    }
+    if history.len() > retained_root_count {
+        return Err(format!(
+            "proof-managed pool root history exceeds retention {retained_root_count}"
+        ));
+    }
+    let protocol_id = namespace.protocol_id();
+    let (first_key, first_provenance) = history[0];
+    match first_provenance {
+        PrivacyRootProvenanceV1::ProofManagedPoolBootstrap {
+            bootstrap_digest: observed_bootstrap_digest,
+            protocol_id: observed_protocol_id,
+            ..
+        } => {
+            if observed_bootstrap_digest != bootstrap_digest || observed_protocol_id != protocol_id
+            {
+                return Err(
+                    "proof-managed pool root origin differs from its typed bootstrap".to_owned(),
+                );
+            }
+            if retention_anchor.is_some() {
+                return Err(
+                    "retained proof-managed bootstrap history has an unexpected prefix anchor"
+                        .to_owned(),
+                );
+            }
+            if first_key.epoch() != INITIAL_EPOCH || first_key.root() != initial_root {
+                return Err(
+                    "proof-managed pool origin is not its canonical epoch-one native root"
+                        .to_owned(),
+                );
+            }
+        }
+        PrivacyRootProvenanceV1::ProofManagedPoolSuccessor { .. } => {
+            let (parent_epoch, parent_root) = validate_proof_managed_pool_successor_link_v1(
+                namespace,
+                first_key,
+                first_provenance,
+                bootstrap_digest,
+            )?;
+            if first_key.epoch() <= INITIAL_EPOCH {
+                return Err(
+                    "pruned proof-managed history begins at or before its canonical origin"
+                        .to_owned(),
+                );
+            }
+            let anchor = retention_anchor.ok_or_else(|| {
+                "pruned proof-managed history has no exact retention anchor".to_owned()
+            })?;
+            if anchor.epoch().checked_add(1) != Some(first_key.epoch())
+                || parent_epoch != anchor.epoch()
+                || parent_root != anchor.root()
+            {
+                return Err(
+                    "first retained proof-managed successor does not consume its exact prefix anchor"
+                        .to_owned(),
+                );
+            }
+            if anchor.epoch() == INITIAL_EPOCH && anchor.root() != initial_root {
+                return Err(
+                    "proof-managed prefix anchor substitutes the canonical initial root".to_owned(),
+                );
+            }
+        }
+        PrivacyRootProvenanceV1::Governance { .. }
+        | PrivacyRootProvenanceV1::ZkX509CaGovernance { .. }
+        | PrivacyRootProvenanceV1::ZkX509CrlGovernance { .. }
+        | PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
+        | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
+        | PrivacyRootProvenanceV1::OrchardPoolBootstrap { .. }
+        | PrivacyRootProvenanceV1::OrchardPoolSuccessor { .. }
+        | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
+        | PrivacyRootProvenanceV1::VerifiedProof { .. }
+        | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
+            return Err(
+                "proof-managed pool retained history begins with invalid provenance".to_owned(),
+            );
+        }
+    }
+
+    for adjacent in history.windows(2) {
+        let (parent_key, _) = adjacent[0];
+        let (child_key, child_provenance) = adjacent[1];
+        let (declared_parent_epoch, declared_parent_root) =
+            validate_proof_managed_pool_successor_link_v1(
+                namespace,
+                child_key,
+                child_provenance,
+                bootstrap_digest,
+            )?;
+        if parent_key.epoch().checked_add(1) != Some(child_key.epoch())
+            || declared_parent_epoch != parent_key.epoch()
+            || declared_parent_root != parent_key.root()
+        {
+            return Err(format!(
+                "proof-managed pool history has a gap or forged parent between epochs {} and {}",
+                parent_key.epoch(),
+                child_key.epoch()
+            ));
+        }
+    }
+    if retention_anchor.is_some() && history.len() != retained_root_count {
+        return Err(format!(
+            "anchored proof-managed history has {} roots but must fill retention {retained_root_count}",
+            history.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Load and cross-check every authoritative component of one proof-managed pool.
+pub(crate) fn load_privacy_proof_managed_pool_snapshot_v1(
+    namespace: PrivacyNamespaceV1,
+    retained_root_count: u32,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
+) -> Result<PrivacyProofManagedPoolSnapshotV1, String> {
+    let root_role = proof_managed_pool_root_role_v1(namespace)
+        .map_err(|error| format!("invalid proof-managed pool namespace: {error}"))?;
+    if retained_root_count == 0 {
+        return Err("proof-managed pool retained-root count must be non-zero".to_owned());
+    }
+    let retained_root_count = usize::try_from(retained_root_count)
+        .map_err(|_| "proof-managed retained-root count cannot be represented".to_owned())?;
+
+    let config_key = PrivacyCommitmentKeyV1::proof_managed_pool_config(namespace)
+        .map_err(|error| format!("invalid proof-managed pool config key: {error}"))?;
+    let config_record = commitments
+        .get(&config_key)
+        .ok_or_else(|| "proof-managed pool has no typed bootstrap configuration".to_owned())?;
+    config_record
+        .validate()
+        .map_err(|error| format!("invalid proof-managed pool configuration: {error}"))?;
+    let (bootstrap, bootstrap_digest, initial_root, _) = config_record
+        .proof_managed_pool_bootstrap_ref()
+        .ok_or_else(|| "proof-managed pool config key has wrong-role provenance".to_owned())?;
+    if bootstrap.namespace() != namespace {
+        return Err("proof-managed pool config namespace differs from its bootstrap".to_owned());
+    }
+    let expected_digest = bootstrap.digest().map_err(|error| {
+        format!("proof-managed pool bootstrap canonical encoding failed: {error}")
+    })?;
+    if bootstrap_digest != expected_digest {
+        return Err("proof-managed pool config carries a substituted bootstrap digest".to_owned());
+    }
+    let expected_initial_root =
+        crate::privacy_engines::proof_managed_pool_initial_root_v1(bootstrap).map_err(|error| {
+            format!("proof-managed pool native root derivation failed: {error}")
+        })?;
+    if initial_root != expected_initial_root {
+        return Err("proof-managed pool config carries a substituted initial root".to_owned());
+    }
+
+    let genesis_commitments = bootstrap.initial_commitments();
+    for commitment in genesis_commitments {
+        let key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(namespace, *commitment)
+            .map_err(|error| format!("invalid genesis commitment key: {error}"))?;
+        let record = commitments.get(&key).ok_or_else(|| {
+            "proof-managed pool omits a commitment from its typed genesis set".to_owned()
+        })?;
+        if !matches!(
+            record,
+            PrivacyStateItemRecordV1::ProofManagedPoolBootstrapItem {
+                bootstrap_digest: observed,
+                ..
+            } if *observed == bootstrap_digest
+        ) {
+            return Err(
+                "proof-managed genesis commitment has wrong-role or cross-bootstrap provenance"
+                    .to_owned(),
+            );
+        }
+    }
+    for (key, record) in commitments.range(
+        PrivacyCommitmentKeyV1::proof_managed_pool_commitment_range(namespace),
+    ) {
+        key.validate()
+            .map_err(|error| format!("invalid proof-managed commitment key: {error}"))?;
+        record
+            .validate()
+            .map_err(|error| format!("invalid proof-managed commitment provenance: {error}"))?;
+        let PrivacyCommitmentKeyV1::ProofManagedPoolCommitment { commitment, .. } = *key else {
+            return Err("proof-managed commitment range returned a wrong-role key".to_owned());
+        };
+        match record {
+            PrivacyStateItemRecordV1::ProofManagedPoolBootstrapItem {
+                bootstrap_digest: observed,
+                ..
+            } => {
+                if *observed != bootstrap_digest
+                    || genesis_commitments.binary_search(&commitment).is_err()
+                {
+                    return Err(
+                        "proof-managed bootstrap item is absent from its canonical genesis set"
+                            .to_owned(),
+                    );
+                }
+            }
+            PrivacyStateItemRecordV1::ProofManagedPoolVerifiedItem {
+                bootstrap_digest: observed,
+                ..
+            } if *observed == bootstrap_digest => {}
+            PrivacyStateItemRecordV1::ZkAcePolicyGovernance { .. }
+            | PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkX509TrustAnchorGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkX509CertificatePolicyGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkX509CrlGovernance { .. }
+            | PrivacyStateItemRecordV1::OrchardPoolState { .. }
+            | PrivacyStateItemRecordV1::OrchardVerifiedNullifier { .. }
+            | PrivacyStateItemRecordV1::ProofManagedPoolBootstrap { .. }
+            | PrivacyStateItemRecordV1::ProofManagedPoolVerifiedItem { .. }
+            | PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization { .. }
+            | PrivacyStateItemRecordV1::ZkAmsGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkAmsVerifiedProof { .. } => {
+                return Err(
+                    "proof-managed commitment has wrong-role or cross-bootstrap provenance"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+
+    let head_key = PrivacyRootHeadKeyV1::new(namespace, root_role)
+        .map_err(|error| format!("invalid proof-managed pool head key: {error}"))?;
+    let head = root_heads
+        .get(&head_key)
+        .copied()
+        .ok_or_else(|| "proof-managed pool has no current root head".to_owned())?;
+    head.validate()
+        .map_err(|error| format!("invalid proof-managed pool head: {error}"))?;
+
+    let mut retained_roots = Vec::new();
+    for (key, provenance) in roots.range(PrivacyRootKeyV1::history_range(namespace, root_role)) {
+        if retained_roots.len() == retained_root_count {
+            return Err(format!(
+                "proof-managed pool root history exceeds retention {retained_root_count}"
+            ));
+        }
+        key.validate()
+            .map_err(|error| format!("invalid proof-managed pool root key: {error}"))?;
+        provenance
+            .validate()
+            .map_err(|error| format!("invalid proof-managed pool root provenance: {error}"))?;
+        if retained_roots.last().is_some_and(
+            |(previous, _): &(PrivacyRootKeyV1, PrivacyRootProvenanceV1)| {
+                previous.epoch() == key.epoch()
+            },
+        ) {
+            return Err(format!(
+                "proof-managed pool root history contains duplicate epoch {}",
+                key.epoch()
+            ));
+        }
+        retained_roots.push((*key, *provenance));
+    }
+    validate_proof_managed_pool_retained_root_chain_v1(
+        namespace,
+        bootstrap_digest,
+        initial_root,
+        retained_root_count,
+        head.retention_anchor(),
+        &retained_roots,
+    )?;
+    let latest = retained_roots
+        .last()
+        .expect("non-empty proof-managed history checked above");
+    if head.epoch() != latest.0.epoch()
+        || head.root() != latest.0.root()
+        || head.provenance() != latest.1
+    {
+        return Err("proof-managed pool head does not equal latest retained history".to_owned());
+    }
+    if head.provenance().proof_managed_pool_origin()
+        != Some((bootstrap_digest, namespace.protocol_id()))
+    {
+        return Err("proof-managed pool head differs from its typed bootstrap".to_owned());
+    }
+
+    Ok(PrivacyProofManagedPoolSnapshotV1 {
+        namespace,
+        root_role,
+        bootstrap: bootstrap.clone(),
+        bootstrap_digest,
+        initial_root,
+        current_epoch: head.epoch(),
+        current_root: head.root(),
+        retention_anchor: head.retention_anchor(),
+        retained_roots,
+    })
+}
+
 /// Validate every cross-map invariant in restored first-release privacy state.
 ///
 /// Snapshot decoding invokes this before constructing `World`. Consequently a
@@ -2689,6 +3100,8 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         BTreeMap::<PrivacyNamespaceV1, PrivacyZkAmsRegistryBootstrapDigestV1>::new();
     let mut orchard_bootstraps =
         BTreeMap::<PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1>::new();
+    let mut proof_managed_bootstraps =
+        BTreeMap::<PrivacyNamespaceV1, PrivacyProofManagedPoolBootstrapDigestV1>::new();
     for ((namespace, role), history) in &history_by_scope {
         let retained_root_count =
             if namespace.protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
@@ -2767,6 +3180,24 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             {
                 return Err(format!(
                     "duplicate Orchard note-commitment scope for {namespace:?}"
+                ));
+            }
+        } else if proof_managed_pool_root_role_v1(*namespace)
+            .is_ok_and(|expected| expected == *role)
+        {
+            let snapshot = load_privacy_proof_managed_pool_snapshot_v1(
+                *namespace,
+                retained_root_count,
+                commitments,
+                roots,
+                root_heads,
+            )?;
+            if proof_managed_bootstraps
+                .insert(*namespace, snapshot.bootstrap_digest())
+                .is_some()
+            {
+                return Err(format!(
+                    "duplicate proof-managed pool root scope for {namespace:?}"
                 ));
             }
         } else if namespace.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
@@ -3050,6 +3481,44 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     ));
                 }
             }
+            PrivacyCommitmentKeyV1::ProofManagedPoolConfig { namespace } => {
+                let bootstrap_digest =
+                    proof_managed_bootstraps.get(namespace).ok_or_else(|| {
+                        format!(
+                            "proof-managed pool config {namespace:?} has no authoritative root history"
+                        )
+                    })?;
+                if !matches!(
+                    record,
+                    PrivacyStateItemRecordV1::ProofManagedPoolBootstrap {
+                        bootstrap,
+                        bootstrap_digest: observed,
+                        ..
+                    } if observed == bootstrap_digest && bootstrap.namespace() == *namespace
+                ) {
+                    return Err(format!(
+                        "proof-managed pool config {namespace:?} has wrong-role or cross-bootstrap provenance"
+                    ));
+                }
+            }
+            PrivacyCommitmentKeyV1::ProofManagedPoolCommitment { namespace, .. } => {
+                let bootstrap_digest =
+                    proof_managed_bootstraps.get(namespace).ok_or_else(|| {
+                        format!(
+                            "proof-managed commitment {namespace:?} has no authoritative root history"
+                        )
+                    })?;
+                if record.proof_managed_pool_bootstrap_digest() != Some(*bootstrap_digest)
+                    || matches!(
+                        record,
+                        PrivacyStateItemRecordV1::ProofManagedPoolBootstrap { .. }
+                    )
+                {
+                    return Err(format!(
+                        "proof-managed commitment {namespace:?} has wrong-role or cross-bootstrap provenance"
+                    ));
+                }
+            }
             PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
             | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. }
             | PrivacyCommitmentKeyV1::ZkX509CrlCurrent { .. } => {}
@@ -3078,6 +3547,8 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     PrivacyCommitmentKeyV1::ZkAcePolicy { .. }
                     | PrivacyCommitmentKeyV1::BootleLanternIssuerPolicy { .. }
                     | PrivacyCommitmentKeyV1::OrchardPoolState { .. }
+                    | PrivacyCommitmentKeyV1::ProofManagedPoolConfig { .. }
+                    | PrivacyCommitmentKeyV1::ProofManagedPoolCommitment { .. }
                     | PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
                     | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. }
                     | PrivacyCommitmentKeyV1::ZkX509CrlCurrent { .. } => false,
@@ -3126,6 +3597,25 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 ) {
                     return Err(format!(
                         "Orchard nullifier {namespace:?} has wrong-role or cross-bootstrap provenance"
+                    ));
+                }
+            }
+            PrivacyNullifierKeyV1::ProofManagedNullifier { namespace, .. } => {
+                let bootstrap_digest =
+                    proof_managed_bootstraps.get(namespace).ok_or_else(|| {
+                        format!(
+                            "proof-managed nullifier {namespace:?} has no authoritative pool history"
+                        )
+                    })?;
+                if !matches!(
+                    record,
+                    PrivacyStateItemRecordV1::ProofManagedPoolVerifiedItem {
+                        bootstrap_digest: observed,
+                        ..
+                    } if observed == bootstrap_digest
+                ) {
+                    return Err(format!(
+                        "proof-managed nullifier {namespace:?} has wrong-role or cross-bootstrap provenance"
                     ));
                 }
             }
@@ -3763,6 +4253,8 @@ fn validate_orchard_retained_root_chain_v1(
         | PrivacyRootProvenanceV1::ZkX509CrlGovernance { .. }
         | PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
         | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
+        | PrivacyRootProvenanceV1::ProofManagedPoolBootstrap { .. }
+        | PrivacyRootProvenanceV1::ProofManagedPoolSuccessor { .. }
         | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. }
         | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
@@ -3928,6 +4420,13 @@ pub enum PrivacyNullifierKeyV1 {
         /// Canonical Pallas-base nullifier encoding.
         nullifier: [u8; 32],
     },
+    /// One consumed nullifier in an FCMP++, private-IVM, or PQ-MASP pool.
+    ProofManagedNullifier {
+        /// Exact governed proof-managed pool namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Canonical nonzero protocol statement nullifier.
+        nullifier: PrivacyNullifierV1,
+    },
 }
 
 impl PrivacyNullifierKeyV1 {
@@ -3986,11 +4485,28 @@ impl PrivacyNullifierKeyV1 {
         })
     }
 
+    /// Construct a nullifier key for one typed proof-managed pool.
+    pub(crate) fn proof_managed_nullifier(
+        namespace: PrivacyNamespaceV1,
+        nullifier: PrivacyNullifierV1,
+    ) -> Result<Self, &'static str> {
+        validate_proof_managed_pool_namespace_v1(namespace)?;
+        if nullifier.is_zero() {
+            return Err("proof-managed pool nullifier must be non-zero");
+        }
+        Ok(Self::ProofManagedNullifier {
+            namespace,
+            nullifier,
+        })
+    }
+
     /// Return the exact ZK-AMS namespace, if this is a key-image marker.
     #[must_use]
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
-            Self::ZkAceReplay { .. } | Self::OrchardNullifier { .. } => None,
+            Self::ZkAceReplay { .. }
+            | Self::OrchardNullifier { .. }
+            | Self::ProofManagedNullifier { .. } => None,
             Self::ZkAmsKeyImage { namespace, .. } => Some(namespace),
         }
     }
@@ -3999,7 +4515,9 @@ impl PrivacyNullifierKeyV1 {
     #[must_use]
     pub const fn zk_ams_image(self) -> Option<PrivacyZkAmsKeyImageV1> {
         match self {
-            Self::ZkAceReplay { .. } | Self::OrchardNullifier { .. } => None,
+            Self::ZkAceReplay { .. }
+            | Self::OrchardNullifier { .. }
+            | Self::ProofManagedNullifier { .. } => None,
             Self::ZkAmsKeyImage { key_image, .. } => Some(key_image),
         }
     }
@@ -4009,7 +4527,9 @@ impl PrivacyNullifierKeyV1 {
     pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
             Self::OrchardNullifier { namespace, .. } => Some(namespace),
-            Self::ZkAceReplay { .. } | Self::ZkAmsKeyImage { .. } => None,
+            Self::ZkAceReplay { .. }
+            | Self::ZkAmsKeyImage { .. }
+            | Self::ProofManagedNullifier { .. } => None,
         }
     }
 
@@ -4018,7 +4538,25 @@ impl PrivacyNullifierKeyV1 {
     pub(crate) const fn orchard_nullifier_bytes(self) -> Option<[u8; 32]> {
         match self {
             Self::OrchardNullifier { nullifier, .. } => Some(nullifier),
-            Self::ZkAceReplay { .. } | Self::ZkAmsKeyImage { .. } => None,
+            Self::ZkAceReplay { .. }
+            | Self::ZkAmsKeyImage { .. }
+            | Self::ProofManagedNullifier { .. } => None,
+        }
+    }
+
+    /// Return the proof-managed pool namespace and nullifier, if present.
+    #[must_use]
+    pub(crate) const fn proof_managed_identity(
+        self,
+    ) -> Option<(PrivacyNamespaceV1, PrivacyNullifierV1)> {
+        match self {
+            Self::ProofManagedNullifier {
+                namespace,
+                nullifier,
+            } => Some((namespace, nullifier)),
+            Self::ZkAceReplay { .. }
+            | Self::ZkAmsKeyImage { .. }
+            | Self::OrchardNullifier { .. } => None,
         }
     }
 
@@ -4029,6 +4567,7 @@ impl PrivacyNullifierKeyV1 {
             Self::ZkAceReplay { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             Self::ZkAmsKeyImage { .. } => PrivacyProtocolIdV1::IrohaZkAmsV1,
             Self::OrchardNullifier { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            Self::ProofManagedNullifier { namespace, .. } => namespace.protocol_id(),
         }
     }
 
@@ -4060,6 +4599,20 @@ impl PrivacyNullifierKeyV1 {
         }
     }
 
+    /// Ordered bounds covering every consumed nullifier in one proof-managed pool.
+    #[must_use]
+    pub(crate) fn proof_managed_nullifier_range(
+        namespace: PrivacyNamespaceV1,
+    ) -> core::ops::RangeInclusive<Self> {
+        Self::ProofManagedNullifier {
+            namespace,
+            nullifier: PrivacyNullifierV1::new([0; 32]),
+        }..=Self::ProofManagedNullifier {
+            namespace,
+            nullifier: PrivacyNullifierV1::new([u8::MAX; 32]),
+        }
+    }
+
     fn validate(self) -> Result<(), &'static str> {
         match self {
             Self::ZkAceReplay {
@@ -4074,6 +4627,10 @@ impl PrivacyNullifierKeyV1 {
                 namespace,
                 nullifier,
             } => Self::orchard_nullifier(namespace, nullifier).map(|_| ()),
+            Self::ProofManagedNullifier {
+                namespace,
+                nullifier,
+            } => Self::proof_managed_nullifier(namespace, nullifier).map(|_| ()),
         }
     }
 }
@@ -4101,6 +4658,18 @@ pub enum PrivacyCommitmentKeyV1 {
     OrchardPoolState {
         /// Governed Orchard pool namespace.
         namespace: PrivacyNamespaceV1,
+    },
+    /// Immutable typed bootstrap/configuration for one proof-managed pool.
+    ProofManagedPoolConfig {
+        /// Exact FCMP++, private-IVM, or PQ-MASP namespace.
+        namespace: PrivacyNamespaceV1,
+    },
+    /// One genesis or proof-produced commitment in a proof-managed pool.
+    ProofManagedPoolCommitment {
+        /// Exact governed pool namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Canonical nonzero commitment.
+        commitment: PrivacyCommitmentV1,
     },
     /// One immutable revision in an X.509 trust-anchor lineage.
     ZkX509TrustAnchorRevision {
@@ -4186,6 +4755,8 @@ impl PrivacyCommitmentKeyV1 {
             } => Some((issuer_id, policy_id)),
             Self::ZkAcePolicy { .. }
             | Self::OrchardPoolState { .. }
+            | Self::ProofManagedPoolConfig { .. }
+            | Self::ProofManagedPoolCommitment { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
             | Self::ZkX509CrlCurrent { .. }
@@ -4219,6 +4790,61 @@ impl PrivacyCommitmentKeyV1 {
         }
     }
 
+    /// Construct the singleton typed configuration key for one proof-managed pool.
+    pub(crate) fn proof_managed_pool_config(
+        namespace: PrivacyNamespaceV1,
+    ) -> Result<Self, &'static str> {
+        validate_proof_managed_pool_namespace_v1(namespace)?;
+        Ok(Self::ProofManagedPoolConfig { namespace })
+    }
+
+    /// Construct one exact proof-managed pool commitment key.
+    pub(crate) fn proof_managed_pool_commitment(
+        namespace: PrivacyNamespaceV1,
+        commitment: PrivacyCommitmentV1,
+    ) -> Result<Self, &'static str> {
+        validate_proof_managed_pool_namespace_v1(namespace)?;
+        if commitment.is_zero() {
+            return Err("proof-managed pool commitment must be non-zero");
+        }
+        Ok(Self::ProofManagedPoolCommitment {
+            namespace,
+            commitment,
+        })
+    }
+
+    /// Ordered bounds covering every proof-managed pool configuration.
+    #[must_use]
+    pub(crate) fn proof_managed_pool_config_range() -> core::ops::RangeInclusive<Self> {
+        let namespace = |protocol_id, pool_id| {
+            PrivacyNamespaceV1::new(
+                protocol_id,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: PrivacyPoolIdV1::new(pool_id),
+                }),
+            )
+        };
+        Self::ProofManagedPoolConfig {
+            namespace: namespace(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, [0; 32]),
+        }..=Self::ProofManagedPoolConfig {
+            namespace: namespace(PrivacyProtocolIdV1::PqMaspStarkV0, [u8::MAX; 32]),
+        }
+    }
+
+    /// Ordered bounds covering all commitments in exactly one proof-managed pool.
+    #[must_use]
+    pub(crate) fn proof_managed_pool_commitment_range(
+        namespace: PrivacyNamespaceV1,
+    ) -> core::ops::RangeInclusive<Self> {
+        Self::ProofManagedPoolCommitment {
+            namespace,
+            commitment: PrivacyCommitmentV1::new([0; 32]),
+        }..=Self::ProofManagedPoolCommitment {
+            namespace,
+            commitment: PrivacyCommitmentV1::new([u8::MAX; 32]),
+        }
+    }
+
     /// Ordered bounds covering exactly the complete ZK-ACE policy table.
     #[must_use]
     pub fn zk_ace_policy_range() -> core::ops::RangeInclusive<Self> {
@@ -4248,6 +4874,26 @@ impl PrivacyCommitmentKeyV1 {
             Self::OrchardPoolState { namespace } => Some(namespace),
             Self::ZkAcePolicy { .. }
             | Self::BootleLanternIssuerPolicy { .. }
+            | Self::ProofManagedPoolConfig { .. }
+            | Self::ProofManagedPoolCommitment { .. }
+            | Self::ZkX509TrustAnchorRevision { .. }
+            | Self::ZkX509CertificatePolicyRevision { .. }
+            | Self::ZkX509CrlCurrent { .. }
+            | Self::ZkAmsIssuerPolicyRecord { .. }
+            | Self::ZkAmsPhc { .. }
+            | Self::ZkAmsSeedKey { .. } => None,
+        }
+    }
+
+    /// Return the proof-managed pool namespace, if this key belongs to one.
+    #[must_use]
+    pub(crate) const fn proof_managed_namespace(self) -> Option<PrivacyNamespaceV1> {
+        match self {
+            Self::ProofManagedPoolConfig { namespace }
+            | Self::ProofManagedPoolCommitment { namespace, .. } => Some(namespace),
+            Self::ZkAcePolicy { .. }
+            | Self::BootleLanternIssuerPolicy { .. }
+            | Self::OrchardPoolState { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
             | Self::ZkX509CrlCurrent { .. }
@@ -4434,6 +5080,8 @@ impl PrivacyCommitmentKeyV1 {
             Self::ZkAcePolicy { .. }
             | Self::BootleLanternIssuerPolicy { .. }
             | Self::OrchardPoolState { .. }
+            | Self::ProofManagedPoolConfig { .. }
+            | Self::ProofManagedPoolCommitment { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
             | Self::ZkX509CrlCurrent { .. } => None,
@@ -4452,6 +5100,8 @@ impl PrivacyCommitmentKeyV1 {
                 PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
             }
             Self::OrchardPoolState { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            Self::ProofManagedPoolConfig { namespace }
+            | Self::ProofManagedPoolCommitment { namespace, .. } => namespace.protocol_id(),
             Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
             | Self::ZkX509CrlCurrent { .. } => PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
@@ -4470,6 +5120,8 @@ impl PrivacyCommitmentKeyV1 {
             Self::ZkAcePolicy { .. }
             | Self::BootleLanternIssuerPolicy { .. }
             | Self::OrchardPoolState { .. }
+            | Self::ProofManagedPoolConfig { .. }
+            | Self::ProofManagedPoolCommitment { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
             | Self::ZkX509CrlCurrent { .. } => None,
@@ -4524,6 +5176,13 @@ impl PrivacyCommitmentKeyV1 {
                 policy_id,
             } => Self::bootle_lantern_issuer_policy(issuer_id, policy_id).map(|_| ()),
             Self::OrchardPoolState { namespace } => Self::orchard_pool_state(namespace).map(|_| ()),
+            Self::ProofManagedPoolConfig { namespace } => {
+                Self::proof_managed_pool_config(namespace).map(|_| ())
+            }
+            Self::ProofManagedPoolCommitment {
+                namespace,
+                commitment,
+            } => Self::proof_managed_pool_commitment(namespace, commitment).map(|_| ()),
             Self::ZkX509TrustAnchorRevision {
                 trust_anchor_id,
                 record_epoch,
@@ -4574,6 +5233,56 @@ fn validate_orchard_namespace(namespace: PrivacyNamespaceV1) -> Result<(), &'sta
         return Err("Orchard state key requires the Orchard protocol namespace");
     }
     Ok(())
+}
+
+/// Return the sole root role for a first-release proof-managed pool namespace.
+pub(crate) fn proof_managed_pool_root_role_v1(
+    namespace: PrivacyNamespaceV1,
+) -> Result<PrivacyRootRoleV1, &'static str> {
+    namespace
+        .validate()
+        .map_err(|_| "proof-managed pool namespace is invalid")?;
+    let role = match namespace.protocol_id() {
+        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => PrivacyRootRoleV1::OutputSet,
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => PrivacyRootRoleV1::ProgramState,
+        PrivacyProtocolIdV1::PqMaspStarkV0 => PrivacyRootRoleV1::NoteCommitmentAnchor,
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
+        | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
+        | PrivacyProtocolIdV1::IrohaZkAmsV1
+        | PrivacyProtocolIdV1::VegaExistingCredentialZkV0
+        | PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
+        | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+        | PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
+            return Err("namespace is not a proof-managed FCMP++, private-IVM, or PQ-MASP pool");
+        }
+    };
+    if !role.is_compatible_with_namespace(namespace) {
+        return Err("proof-managed pool root role is incompatible with its namespace");
+    }
+    Ok(role)
+}
+
+fn validate_proof_managed_pool_namespace_v1(
+    namespace: PrivacyNamespaceV1,
+) -> Result<(), &'static str> {
+    proof_managed_pool_root_role_v1(namespace).map(|_| ())
+}
+
+fn validate_proof_managed_pool_protocol_v1(
+    protocol_id: PrivacyProtocolIdV1,
+) -> Result<(), &'static str> {
+    if matches!(
+        protocol_id,
+        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
+            | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+            | PrivacyProtocolIdV1::PqMaspStarkV0
+    ) {
+        Ok(())
+    } else {
+        Err("protocol is not a proof-managed FCMP++, private-IVM, or PQ-MASP pool")
+    }
 }
 
 /// Exact ordered root-membership key.
@@ -4718,7 +5427,7 @@ impl PrivacyRootHeadKeyV1 {
 
 /// Domain-separated provenance shared by root history and the current head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
-#[norito(tag = "origin", content = "record")]
+#[norito(tag = "origin", content = "record", deny_unknown_fields)]
 pub(crate) enum PrivacyRootProvenanceV1 {
     /// Root published by an authorized governance instruction.
     Governance {
@@ -4790,6 +5499,32 @@ pub(crate) enum PrivacyRootProvenanceV1 {
     OrchardPoolSuccessor {
         /// Immutable typed pool-bootstrap provenance.
         bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the successor became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+        /// Exact epoch consumed by the verified transition.
+        parent_epoch: u64,
+        /// Exact root consumed by the verified transition.
+        parent_root: PrivacyRootV1,
+    },
+    /// Initial FCMP++, private-IVM, or PQ-MASP root derived from typed governance.
+    ProofManagedPoolBootstrap {
+        /// Digest of the complete canonical bootstrap payload.
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        /// Exact protocol whose native accumulator derived the root.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Block height at which the bootstrap became durable.
+        admitted_at_height: u64,
+    },
+    /// Proof-derived successor in an FCMP++, private-IVM, or PQ-MASP pool.
+    ProofManagedPoolSuccessor {
+        /// Immutable typed pool-bootstrap provenance.
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        /// Exact protocol whose native verifier certified the successor.
+        protocol_id: PrivacyProtocolIdV1,
         /// Digest of the exact verified public statement.
         statement_digest: PrivacyStatementDigestV1,
         /// Block height at which the successor became durable.
@@ -5086,6 +5821,64 @@ impl PrivacyRootProvenanceV1 {
         })
     }
 
+    /// Construct typed provenance for a proof-managed pool origin.
+    pub(crate) fn proof_managed_pool_bootstrap(
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        protocol_id: PrivacyProtocolIdV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("proof-managed pool bootstrap digest must be non-zero");
+        }
+        validate_proof_managed_pool_protocol_v1(protocol_id)?;
+        if admitted_at_height == 0 {
+            return Err("privacy root admission height must be non-zero");
+        }
+        Ok(Self::ProofManagedPoolBootstrap {
+            bootstrap_digest,
+            protocol_id,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct a proof-managed successor with immutable pool-origin binding.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn proof_managed_pool_successor(
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        protocol_id: PrivacyProtocolIdV1,
+        statement_digest: PrivacyStatementDigestV1,
+        admitted_at_height: u64,
+        action_index: u32,
+        parent_epoch: u64,
+        parent_root: PrivacyRootV1,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("proof-managed pool bootstrap digest must be non-zero");
+        }
+        validate_proof_managed_pool_protocol_v1(protocol_id)?;
+        if statement_digest.is_zero() {
+            return Err("proof-managed pool statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy root admission height must be non-zero");
+        }
+        if parent_epoch == 0 {
+            return Err("proof-managed pool parent epoch must be non-zero");
+        }
+        if parent_root.is_zero() {
+            return Err("proof-managed pool parent root must be non-zero");
+        }
+        Ok(Self::ProofManagedPoolSuccessor {
+            bootstrap_digest,
+            protocol_id,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            parent_root,
+        })
+    }
+
     /// Construct native PGC bootstrap provenance.
     ///
     /// # Errors
@@ -5205,12 +5998,18 @@ impl PrivacyRootProvenanceV1 {
                 parent_epoch,
                 parent_root,
                 ..
+            }
+            | Self::ProofManagedPoolSuccessor {
+                parent_epoch,
+                parent_root,
+                ..
             } => Some((parent_epoch, parent_root)),
             Self::Governance { .. }
             | Self::ZkX509CaGovernance { .. }
             | Self::ZkX509CrlGovernance { .. }
             | Self::ZkAmsRegistryBootstrap { .. }
             | Self::OrchardPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
             | Self::VerifiedBootstrap { .. } => None,
         }
     }
@@ -5233,6 +6032,8 @@ impl PrivacyRootProvenanceV1 {
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolBootstrap { .. }
             | Self::OrchardPoolSuccessor { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolSuccessor { .. }
             | Self::VerifiedBootstrap { .. }
             | Self::VerifiedProof { .. }
             | Self::VerifiedPgcSuccessor { .. } => None,
@@ -5256,6 +6057,40 @@ impl PrivacyRootProvenanceV1 {
             | Self::ZkX509CrlGovernance { .. }
             | Self::ZkAmsRegistryBootstrap { .. }
             | Self::ZkAmsRegistrySuccessor { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolSuccessor { .. }
+            | Self::VerifiedBootstrap { .. }
+            | Self::VerifiedProof { .. }
+            | Self::VerifiedPgcSuccessor { .. } => None,
+        }
+    }
+
+    /// Return the immutable typed origin for a proof-managed pool root.
+    #[must_use]
+    pub(crate) const fn proof_managed_pool_origin(
+        self,
+    ) -> Option<(
+        PrivacyProofManagedPoolBootstrapDigestV1,
+        PrivacyProtocolIdV1,
+    )> {
+        match self {
+            Self::ProofManagedPoolBootstrap {
+                bootstrap_digest,
+                protocol_id,
+                ..
+            }
+            | Self::ProofManagedPoolSuccessor {
+                bootstrap_digest,
+                protocol_id,
+                ..
+            } => Some((bootstrap_digest, protocol_id)),
+            Self::Governance { .. }
+            | Self::ZkX509CaGovernance { .. }
+            | Self::ZkX509CrlGovernance { .. }
+            | Self::ZkAmsRegistryBootstrap { .. }
+            | Self::ZkAmsRegistrySuccessor { .. }
+            | Self::OrchardPoolBootstrap { .. }
+            | Self::OrchardPoolSuccessor { .. }
             | Self::VerifiedBootstrap { .. }
             | Self::VerifiedProof { .. }
             | Self::VerifiedPgcSuccessor { .. } => None,
@@ -5338,6 +6173,34 @@ impl PrivacyRootProvenanceV1 {
                 parent_root,
             } => Self::orchard_pool_successor(
                 bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+            )
+            .map(|_| ()),
+            Self::ProofManagedPoolBootstrap {
+                bootstrap_digest,
+                protocol_id,
+                admitted_at_height,
+            } => Self::proof_managed_pool_bootstrap(
+                bootstrap_digest,
+                protocol_id,
+                admitted_at_height,
+            )
+            .map(|_| ()),
+            Self::ProofManagedPoolSuccessor {
+                bootstrap_digest,
+                protocol_id,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+            } => Self::proof_managed_pool_successor(
+                bootstrap_digest,
+                protocol_id,
                 statement_digest,
                 admitted_at_height,
                 action_index,
@@ -5563,6 +6426,35 @@ pub enum PrivacyStateItemRecordV1 {
         /// Zero-based privacy-action index within the transaction.
         action_index: u32,
     },
+    /// Complete immutable bootstrap installed for a proof-managed pool.
+    ProofManagedPoolBootstrap {
+        /// Canonical typed bootstrap, including asset/program bindings.
+        bootstrap: PrivacyProofManagedPoolBootstrapV1,
+        /// Digest of the exact canonical bootstrap.
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        /// Native accumulator root derived from the genesis commitment set.
+        initial_root: PrivacyRootV1,
+        /// Block height at which governance initialized the pool.
+        admitted_at_height: u64,
+    },
+    /// One genesis commitment installed by the typed pool bootstrap.
+    ProofManagedPoolBootstrapItem {
+        /// Digest of the complete canonical bootstrap.
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        /// Block height at which governance initialized the pool.
+        admitted_at_height: u64,
+    },
+    /// One nullifier or commitment emitted by a directly verified pool proof.
+    ProofManagedPoolVerifiedItem {
+        /// Immutable typed pool-bootstrap provenance.
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the item became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+    },
     /// Replay marker emitted by one directly verified ZK-ACE authorization.
     ZkAceVerifiedAuthorization {
         /// Stable policy lineage used for verification.
@@ -5714,6 +6606,79 @@ impl PrivacyStateItemRecordV1 {
         })
     }
 
+    /// Construct the authoritative configuration for one proof-managed pool.
+    pub(crate) fn proof_managed_pool_bootstrap(
+        bootstrap: PrivacyProofManagedPoolBootstrapV1,
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        initial_root: PrivacyRootV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        bootstrap
+            .validate()
+            .map_err(|_| "proof-managed pool bootstrap is invalid")?;
+        let expected_digest = bootstrap
+            .digest()
+            .map_err(|_| "proof-managed pool bootstrap encoding failed")?;
+        if bootstrap_digest.is_zero() || bootstrap_digest != expected_digest {
+            return Err("proof-managed pool bootstrap digest is invalid");
+        }
+        let expected_root = crate::privacy_engines::proof_managed_pool_initial_root_v1(&bootstrap)
+            .map_err(|_| "proof-managed pool native accumulator is unavailable")?;
+        if initial_root.is_zero() || initial_root != expected_root {
+            return Err("proof-managed pool initial root is invalid");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::ProofManagedPoolBootstrap {
+            bootstrap,
+            bootstrap_digest,
+            initial_root,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct provenance for one genesis commitment in a proof-managed pool.
+    pub(crate) fn proof_managed_pool_bootstrap_item(
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("proof-managed pool bootstrap digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::ProofManagedPoolBootstrapItem {
+            bootstrap_digest,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct typed provenance for one proof-produced pool state item.
+    pub(crate) fn proof_managed_pool_verified_item(
+        bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
+        statement_digest: PrivacyStatementDigestV1,
+        admitted_at_height: u64,
+        action_index: u32,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("proof-managed pool bootstrap digest must be non-zero");
+        }
+        if statement_digest.is_zero() {
+            return Err("proof-managed pool statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::ProofManagedPoolVerifiedItem {
+            bootstrap_digest,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+        })
+    }
+
     /// Construct provenance for one consumed ZK-ACE replay nullifier.
     pub fn zk_ace_verified_authorization(
         policy_id: PrivacyPolicyIdV1,
@@ -5826,6 +6791,35 @@ impl PrivacyStateItemRecordV1 {
                 *action_index,
             )
             .map(|_| ()),
+            Self::ProofManagedPoolBootstrap {
+                bootstrap,
+                bootstrap_digest,
+                initial_root,
+                admitted_at_height,
+            } => Self::proof_managed_pool_bootstrap(
+                bootstrap.clone(),
+                *bootstrap_digest,
+                *initial_root,
+                *admitted_at_height,
+            )
+            .map(|_| ()),
+            Self::ProofManagedPoolBootstrapItem {
+                bootstrap_digest,
+                admitted_at_height,
+            } => Self::proof_managed_pool_bootstrap_item(*bootstrap_digest, *admitted_at_height)
+                .map(|_| ()),
+            Self::ProofManagedPoolVerifiedItem {
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+            } => Self::proof_managed_pool_verified_item(
+                *bootstrap_digest,
+                *statement_digest,
+                *admitted_at_height,
+                *action_index,
+            )
+            .map(|_| ()),
             Self::ZkAceVerifiedAuthorization {
                 policy_id,
                 policy_record_digest,
@@ -5870,6 +6864,9 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
             | Self::ZkAceVerifiedAuthorization { .. } => None,
             Self::ZkAmsGovernance {
                 bootstrap_digest, ..
@@ -5877,6 +6874,71 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkAmsVerifiedProof {
                 bootstrap_digest, ..
             } => Some(*bootstrap_digest),
+        }
+    }
+
+    /// Borrow the complete proof-managed pool bootstrap carried by this record.
+    #[must_use]
+    pub(crate) const fn proof_managed_pool_bootstrap_ref(
+        &self,
+    ) -> Option<(
+        &PrivacyProofManagedPoolBootstrapV1,
+        PrivacyProofManagedPoolBootstrapDigestV1,
+        PrivacyRootV1,
+        u64,
+    )> {
+        match self {
+            Self::ProofManagedPoolBootstrap {
+                bootstrap,
+                bootstrap_digest,
+                initial_root,
+                admitted_at_height,
+            } => Some((
+                bootstrap,
+                *bootstrap_digest,
+                *initial_root,
+                *admitted_at_height,
+            )),
+            Self::ZkAcePolicyGovernance { .. }
+            | Self::BootleLanternIssuerPolicyGovernance { .. }
+            | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::ZkX509CrlGovernance { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
+            | Self::ZkAceVerifiedAuthorization { .. }
+            | Self::ZkAmsGovernance { .. }
+            | Self::ZkAmsVerifiedProof { .. } => None,
+        }
+    }
+
+    /// Return the immutable proof-managed pool origin bound to this item.
+    #[must_use]
+    pub(crate) const fn proof_managed_pool_bootstrap_digest(
+        &self,
+    ) -> Option<PrivacyProofManagedPoolBootstrapDigestV1> {
+        match self {
+            Self::ProofManagedPoolBootstrap {
+                bootstrap_digest, ..
+            }
+            | Self::ProofManagedPoolBootstrapItem {
+                bootstrap_digest, ..
+            }
+            | Self::ProofManagedPoolVerifiedItem {
+                bootstrap_digest, ..
+            } => Some(*bootstrap_digest),
+            Self::ZkAcePolicyGovernance { .. }
+            | Self::BootleLanternIssuerPolicyGovernance { .. }
+            | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::ZkX509CrlGovernance { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::OrchardVerifiedNullifier { .. }
+            | Self::ZkAceVerifiedAuthorization { .. }
+            | Self::ZkAmsGovernance { .. }
+            | Self::ZkAmsVerifiedProof { .. } => None,
         }
     }
 
@@ -5892,6 +6954,9 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
@@ -5908,6 +6973,9 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
@@ -5925,6 +6993,9 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkX509CertificatePolicyGovernance { .. }
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
@@ -5942,6 +7013,9 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
@@ -5961,6 +7035,9 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
@@ -5978,6 +7055,9 @@ impl PrivacyStateItemRecordV1 {
             | Self::ZkX509CertificatePolicyGovernance { .. }
             | Self::OrchardPoolState { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ProofManagedPoolBootstrap { .. }
+            | Self::ProofManagedPoolBootstrapItem { .. }
+            | Self::ProofManagedPoolVerifiedItem { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
@@ -6157,11 +7237,14 @@ pub(crate) struct PrivacyRootRetentionReductionPlanV1 {
 /// Keep this closed list shared by policy prevalidation and block-start
 /// application so a newly prunable history cannot be admitted without also
 /// being reduced at the exact effective height.
-pub(crate) const PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1: [PrivacyProtocolIdV1; 4] = [
+pub(crate) const PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1: [PrivacyProtocolIdV1; 7] = [
     PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
     PrivacyProtocolIdV1::IrohaZkAmsV1,
     PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
     PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+    PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    PrivacyProtocolIdV1::PqMaspStarkV0,
 ];
 
 const fn privacy_root_history_supports_retention_anchor_v1(
@@ -6183,6 +7266,15 @@ const fn privacy_root_history_supports_retention_anchor_v1(
             PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
             PrivacyRootRoleV1::CertificateAuthorityMembership
                 | PrivacyRootRoleV1::CertificateRevocationNonmembership
+        ) | (
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyRootRoleV1::OutputSet
+        ) | (
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRootRoleV1::ProgramState
+        ) | (
+            PrivacyProtocolIdV1::PqMaspStarkV0,
+            PrivacyRootRoleV1::NoteCommitmentAnchor
         )
     )
 }
@@ -6247,11 +7339,11 @@ pub(crate) fn plan_privacy_root_retention_reduction_v1(
 
 /// Validate that every unanchored history already satisfies a future retention cap.
 ///
-/// PGC account-state, ZK-AMS registry, Orchard note-commitment, and typed X.509
-/// CA/CRL histories carry exact provenance plus a pruned-prefix anchor and can
-/// therefore be reduced atomically at the scheduled height. Every other
-/// history must already fit the future cap; governance cannot silently orphan
-/// it.
+/// PGC account-state, ZK-AMS registry, Orchard note-commitment, proof-managed
+/// FCMP++/private-IVM/PQ-MASP, and typed X.509 CA/CRL histories carry exact
+/// provenance plus a pruned-prefix anchor and can therefore be reduced
+/// atomically at the scheduled height. Every other history must already fit the
+/// future cap; governance cannot silently orphan it.
 pub(crate) fn validate_unanchored_privacy_root_retention_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     retained_root_count: u32,
@@ -6511,6 +7603,38 @@ mod tests {
     fn orchard_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
         PrivacyNamespaceV1::new(
             PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
+            }),
+        )
+    }
+
+    fn fcmp_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
+            }),
+        )
+    }
+
+    fn ivm_private_note_namespace(pool_byte: u8, program_byte: u8) -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyNamespaceScopeV1::PoolProgram(
+                iroha_data_model::privacy::PrivacyPoolProgramNamespaceV1 {
+                    pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
+                    program_id: iroha_data_model::privacy::PrivacyProgramIdV1::new(nonzero(
+                        program_byte,
+                    )),
+                },
+            ),
+        )
+    }
+
+    fn pq_masp_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::PqMaspStarkV0,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
             }),
@@ -8852,11 +9976,14 @@ mod tests {
 
     #[test]
     fn future_unanchored_retention_is_prevalidated_while_typed_histories_are_prunable() {
-        let fcmp_namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
-                pool_id: PrivacyPoolIdV1::new(nonzero(0xA7)),
-            }),
+        let unanchored_namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            PrivacyNamespaceScopeV1::IssuerPolicy(
+                iroha_data_model::privacy::PrivacyIssuerPolicyNamespaceV1 {
+                    issuer_id: PrivacyIssuerIdV1::new(nonzero(0xA6)),
+                    policy_id: PrivacyPolicyIdV1::new(nonzero(0xA7)),
+                },
+            ),
         );
         let provenance = PrivacyRootProvenanceV1::governance(
             PrivacyRootPublicationDigestV1::new(nonzero(0xA8)),
@@ -8867,8 +9994,8 @@ mod tests {
         for epoch in 1..=2 {
             non_pgc_roots.insert(
                 PrivacyRootKeyV1::new(
-                    fcmp_namespace,
-                    PrivacyRootRoleV1::OutputSet,
+                    unanchored_namespace,
+                    PrivacyRootRoleV1::Revocation,
                     epoch,
                     PrivacyRootV1::new([u8::try_from(epoch).expect("small epoch"); 32]),
                 )
@@ -8910,6 +10037,41 @@ mod tests {
                 x509_namespace(),
                 PrivacyRootRoleV1::CertificateRevocationNonmembership,
                 "X.509 CRL",
+            ),
+            (
+                PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+                    PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                        pool_id: PrivacyPoolIdV1::new(nonzero(0xBA)),
+                    }),
+                ),
+                PrivacyRootRoleV1::OutputSet,
+                "FCMP++",
+            ),
+            (
+                PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                    PrivacyNamespaceScopeV1::PoolProgram(
+                        iroha_data_model::privacy::PrivacyPoolProgramNamespaceV1 {
+                            pool_id: PrivacyPoolIdV1::new(nonzero(0xBB)),
+                            program_id: iroha_data_model::privacy::PrivacyProgramIdV1::new(
+                                nonzero(0xBC),
+                            ),
+                        },
+                    ),
+                ),
+                PrivacyRootRoleV1::ProgramState,
+                "private-IVM",
+            ),
+            (
+                PrivacyNamespaceV1::new(
+                    PrivacyProtocolIdV1::PqMaspStarkV0,
+                    PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                        pool_id: PrivacyPoolIdV1::new(nonzero(0xBD)),
+                    }),
+                ),
+                PrivacyRootRoleV1::NoteCommitmentAnchor,
+                "PQ-MASP",
             ),
         ] {
             let mut roots = Storage::new();
@@ -9286,6 +10448,281 @@ mod tests {
         assert_eq!(
             PrivacyNullifierKeyV1::decode_json_key(&canonical).expect("decode canonical key"),
             replay_a
+        );
+    }
+
+    #[test]
+    fn proof_managed_pool_keys_are_closed_scoped_and_nonzero() {
+        let fcmp_a = fcmp_namespace(0xC1);
+        let fcmp_b = fcmp_namespace(0xC2);
+        let ivm = ivm_private_note_namespace(0xC1, 0xC3);
+        let pq = pq_masp_namespace(0xC1);
+        let commitment = PrivacyCommitmentV1::new(nonzero(0xC4));
+        let nullifier = PrivacyNullifierV1::new(nonzero(0xC5));
+
+        for (namespace, protocol_id, role) in [
+            (
+                fcmp_a,
+                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+                PrivacyRootRoleV1::OutputSet,
+            ),
+            (
+                ivm,
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyRootRoleV1::ProgramState,
+            ),
+            (
+                pq,
+                PrivacyProtocolIdV1::PqMaspStarkV0,
+                PrivacyRootRoleV1::NoteCommitmentAnchor,
+            ),
+        ] {
+            assert_eq!(
+                proof_managed_pool_root_role_v1(namespace).expect("closed pool namespace"),
+                role
+            );
+            let config = PrivacyCommitmentKeyV1::proof_managed_pool_config(namespace)
+                .expect("typed config key");
+            let output =
+                PrivacyCommitmentKeyV1::proof_managed_pool_commitment(namespace, commitment)
+                    .expect("typed commitment key");
+            let replay = PrivacyNullifierKeyV1::proof_managed_nullifier(namespace, nullifier)
+                .expect("typed nullifier key");
+            assert_eq!(config.protocol_id(), protocol_id);
+            assert_eq!(output.protocol_id(), protocol_id);
+            assert_eq!(replay.protocol_id(), protocol_id);
+            assert_eq!(config.proof_managed_namespace(), Some(namespace));
+            assert_eq!(output.proof_managed_namespace(), Some(namespace));
+            assert_eq!(
+                replay.proof_managed_identity(),
+                Some((namespace, nullifier))
+            );
+            assert!(
+                PrivacyCommitmentKeyV1::proof_managed_pool_commitment(
+                    namespace,
+                    PrivacyCommitmentV1::new([0; 32]),
+                )
+                .is_err()
+            );
+            assert!(
+                PrivacyNullifierKeyV1::proof_managed_nullifier(
+                    namespace,
+                    PrivacyNullifierV1::new([0; 32]),
+                )
+                .is_err()
+            );
+        }
+
+        let same_fcmp_a = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(fcmp_a, commitment)
+            .expect("FCMP++ key A");
+        let same_fcmp_b = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(fcmp_b, commitment)
+            .expect("FCMP++ key B");
+        let same_ivm = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(ivm, commitment)
+            .expect("private-IVM key");
+        let same_pq = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(pq, commitment)
+            .expect("PQ-MASP key");
+        assert_ne!(same_fcmp_a, same_fcmp_b);
+        assert_ne!(same_fcmp_a, same_ivm);
+        assert_ne!(same_fcmp_a, same_pq);
+
+        assert!(
+            PrivacyCommitmentKeyV1::proof_managed_pool_config(orchard_namespace(0xC1)).is_err()
+        );
+        assert!(
+            PrivacyNullifierKeyV1::proof_managed_nullifier(zk_ams_namespace(0xC1), nullifier,)
+                .is_err()
+        );
+
+        let item = PrivacyStateItemRecordV1::proof_managed_pool_bootstrap_item(
+            PrivacyProofManagedPoolBootstrapDigestV1::new(nonzero(0xC6)),
+            7,
+        )
+        .expect("canonical bootstrap item");
+        let encoded = norito::json::to_json(&item).expect("encode bootstrap item");
+        let unknown = encoded.replacen(
+            "\"admitted_at_height\":7",
+            "\"admitted_at_height\":7,\"legacy\":true",
+            1,
+        );
+        assert_ne!(unknown, encoded);
+        assert!(
+            norito::json::from_json::<PrivacyStateItemRecordV1>(&unknown).is_err(),
+            "first-release durable records reject unknown legacy fields"
+        );
+    }
+
+    #[test]
+    fn proof_managed_root_chain_rejects_cross_origin_gaps_and_forged_anchors() {
+        let namespace = fcmp_namespace(0xD1);
+        let protocol_id = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
+        let role = PrivacyRootRoleV1::OutputSet;
+        let bootstrap_digest = PrivacyProofManagedPoolBootstrapDigestV1::new(nonzero(0xD2));
+        let roots = [
+            PrivacyRootV1::new(nonzero(0xD3)),
+            PrivacyRootV1::new(nonzero(0xD4)),
+            PrivacyRootV1::new(nonzero(0xD5)),
+            PrivacyRootV1::new(nonzero(0xD6)),
+        ];
+        let statement = |byte| PrivacyStatementDigestV1::new(nonzero(byte));
+        let key = |epoch: u64, root: PrivacyRootV1| {
+            PrivacyRootKeyV1::new(namespace, role, epoch, root).expect("root key")
+        };
+        let bootstrap =
+            PrivacyRootProvenanceV1::proof_managed_pool_bootstrap(bootstrap_digest, protocol_id, 7)
+                .expect("bootstrap provenance");
+        let successor = |epoch: u64,
+                         parent_root: PrivacyRootV1,
+                         digest: PrivacyProofManagedPoolBootstrapDigestV1,
+                         protocol: PrivacyProtocolIdV1| {
+            PrivacyRootProvenanceV1::proof_managed_pool_successor(
+                digest,
+                protocol,
+                statement(u8::try_from(0xD6_u64 + epoch).expect("small epoch")),
+                7 + epoch,
+                0,
+                epoch - 1,
+                parent_root,
+            )
+            .expect("successor provenance")
+        };
+        let complete = vec![
+            (key(1, roots[0]), bootstrap),
+            (
+                key(2, roots[1]),
+                successor(2, roots[0], bootstrap_digest, protocol_id),
+            ),
+            (
+                key(3, roots[2]),
+                successor(3, roots[1], bootstrap_digest, protocol_id),
+            ),
+            (
+                key(4, roots[3]),
+                successor(4, roots[2], bootstrap_digest, protocol_id),
+            ),
+        ];
+        validate_proof_managed_pool_retained_root_chain_v1(
+            namespace,
+            bootstrap_digest,
+            roots[0],
+            4,
+            None,
+            &complete,
+        )
+        .expect("complete canonical root chain");
+
+        let anchored = complete[2..].to_vec();
+        let anchor = PrivacyRootRetentionAnchorV1::new(2, roots[1]).expect("prefix anchor");
+        validate_proof_managed_pool_retained_root_chain_v1(
+            namespace,
+            bootstrap_digest,
+            roots[0],
+            2,
+            Some(anchor),
+            &anchored,
+        )
+        .expect("exact pruned-prefix chain");
+
+        for (label, initial_root, anchor, history) in [
+            (
+                "substituted origin root",
+                PrivacyRootV1::new(nonzero(0xE1)),
+                None,
+                complete.clone(),
+            ),
+            (
+                "anchor alongside bootstrap",
+                roots[0],
+                Some(
+                    PrivacyRootRetentionAnchorV1::new(1, roots[0])
+                        .expect("unexpected bootstrap anchor"),
+                ),
+                complete.clone(),
+            ),
+            ("missing pruned anchor", roots[0], None, anchored.clone()),
+            (
+                "forged pruned anchor",
+                roots[0],
+                Some(
+                    PrivacyRootRetentionAnchorV1::new(2, PrivacyRootV1::new(nonzero(0xE2)))
+                        .expect("forged anchor"),
+                ),
+                anchored.clone(),
+            ),
+        ] {
+            assert!(
+                validate_proof_managed_pool_retained_root_chain_v1(
+                    namespace,
+                    bootstrap_digest,
+                    initial_root,
+                    if history.len() == complete.len() {
+                        4
+                    } else {
+                        2
+                    },
+                    anchor,
+                    &history,
+                )
+                .is_err(),
+                "{label} must reject"
+            );
+        }
+
+        let mut forged_parent = complete.clone();
+        forged_parent[2].1 = successor(
+            3,
+            PrivacyRootV1::new(nonzero(0xE3)),
+            bootstrap_digest,
+            protocol_id,
+        );
+        assert!(
+            validate_proof_managed_pool_retained_root_chain_v1(
+                namespace,
+                bootstrap_digest,
+                roots[0],
+                4,
+                None,
+                &forged_parent,
+            )
+            .expect_err("forged parent")
+            .contains("gap or forged parent")
+        );
+
+        let mut cross_origin = complete.clone();
+        cross_origin[1].1 = successor(
+            2,
+            roots[0],
+            PrivacyProofManagedPoolBootstrapDigestV1::new(nonzero(0xE4)),
+            protocol_id,
+        );
+        assert!(
+            validate_proof_managed_pool_retained_root_chain_v1(
+                namespace,
+                bootstrap_digest,
+                roots[0],
+                4,
+                None,
+                &cross_origin,
+            )
+            .is_err()
+        );
+
+        let mut cross_protocol = complete;
+        cross_protocol[1].1 = successor(
+            2,
+            roots[0],
+            bootstrap_digest,
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        );
+        assert!(
+            validate_proof_managed_pool_retained_root_chain_v1(
+                namespace,
+                bootstrap_digest,
+                roots[0],
+                4,
+                None,
+                &cross_protocol,
+            )
+            .is_err()
         );
     }
 

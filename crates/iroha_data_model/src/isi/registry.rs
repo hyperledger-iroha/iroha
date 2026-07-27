@@ -300,6 +300,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>,
     InstructionRegistry::register_slice::<privacy::PublishPrivacyRootV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyOrchardPoolV1>,
+    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyProofManagedPoolV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyPgcAccountsV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyZkAmsRegistryV1>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkAcePolicyV1>,
@@ -461,6 +462,9 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     );
     registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyOrchardPoolV1>(
         privacy::BootstrapPrivacyOrchardPoolV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyProofManagedPoolV1>(
+        privacy::BootstrapPrivacyProofManagedPoolV1::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyPgcAccountsV1>(
         privacy::BootstrapPrivacyPgcAccountsV1::WIRE_ID,

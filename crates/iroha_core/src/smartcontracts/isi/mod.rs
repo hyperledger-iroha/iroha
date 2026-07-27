@@ -488,6 +488,7 @@ define_instruction_handlers! {
     >,
     dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyProofManagedPoolV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1>,

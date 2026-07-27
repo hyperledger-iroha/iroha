@@ -20,6 +20,9 @@ pub const PRIVACY_ROOT_PUBLICATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:roo
 /// Domain separator used to hash canonical [`PrivacyOrchardPoolBootstrapV1`] values.
 pub const PRIVACY_ORCHARD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:orchard-pool-bootstrap:v1";
+/// Domain separator for FCMP++, private-IVM, and PQ-MASP pool bootstraps.
+pub const PRIVACY_PROOF_MANAGED_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:proof-managed-pool-bootstrap:v1";
 /// Domain separator used to hash canonical [`PrivacyPgcAccountBootstrapV1`] payloads.
 pub const PRIVACY_PGC_ACCOUNT_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-bootstrap:v1";
@@ -29,6 +32,9 @@ pub const PRIVACY_PGC_BOOTSTRAP_PROOF_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for core's deterministic PGC account-state root derivation.
 pub const PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-state-root:v1";
+/// Domain separator for the exact private-IVM action selected by a statement.
+pub const IVM_PRIVATE_NOTE_ACTION_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:ivm-private-note:action:v1";
 /// Domain separator for canonical Bootle/Lantern issuer-policy record digests.
 pub const BOOTLE_LANTERN_ISSUER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:bootle-lantern:issuer-policy:v1";
@@ -490,6 +496,10 @@ define_privacy_digest!(
     PrivacyOrchardPoolBootstrapDigestV1
 );
 define_privacy_digest!(
+    /// Digest of one canonical governed FCMP++, private-IVM, or PQ-MASP pool bootstrap.
+    PrivacyProofManagedPoolBootstrapDigestV1
+);
+define_privacy_digest!(
     /// Digest of a canonical PGC account bootstrap payload.
     PrivacyPgcAccountBootstrapDigestV1
 );
@@ -564,6 +574,10 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Fixed identifier of a private IVM program.
     PrivacyProgramIdV1
+);
+define_privacy_digest!(
+    /// Digest of the exact private IVM action selected by a statement.
+    PrivacyActionDigestV1
 );
 define_privacy_digest!(
     /// Digest of a certificate subject public key.
@@ -1522,6 +1536,304 @@ pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
     /// The derived closed namespace is malformed.
     #[error("Orchard pool bootstrap namespace is invalid: {0}")]
     Namespace(PrivacyNamespaceValidationError),
+}
+
+/// Immutable governance payload for one FCMP++ complete-output-set pool.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyFcmpPoolBootstrapV1 {
+    /// Stable FCMP++ output-set identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by the confidential outputs.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Non-empty complete genesis output set in strict commitment order.
+    pub initial_output_commitments: Vec<PrivacyCommitmentV1>,
+}
+
+/// Immutable governance payload for one private-IVM program pool.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
+    /// Stable private-note pool identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset manipulated by the private program.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Public reserve account used by explicit value-balance bridges.
+    pub reserve_account: AccountId,
+    /// Exact compiled private-program digest accepted by this pool.
+    pub program_id: PrivacyProgramIdV1,
+    /// Non-empty genesis note set in strict commitment order.
+    pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
+}
+
+/// Immutable governance payload for one PQ-MASP note pool.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyPqMaspPoolBootstrapV1 {
+    /// Stable PQ-MASP note-pool identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by the private notes.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Non-empty genesis note set in strict commitment order.
+    pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
+}
+
+/// Closed typed bootstrap for proof-managed pools that do not use Orchard's
+/// compact frontier.
+///
+/// Initial roots and epochs are deliberately absent. Core derives each
+/// protocol's pinned root from the complete canonical genesis commitment set at
+/// epoch one, preventing governance from selecting an alternate accumulator
+/// origin.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "bootstrap", deny_unknown_fields)
+)]
+pub enum PrivacyProofManagedPoolBootstrapV1 {
+    /// FCMP++ complete-output-set origin.
+    #[cfg_attr(feature = "json", norito(rename = "monero-fcmp-plus-plus-v1"))]
+    MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1),
+    /// Native private-IVM program-state origin.
+    #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
+    IrohaIvmPrivateNoteStarkV1(PrivacyIvmPrivateNotePoolBootstrapV1),
+    /// PQ-MASP note-commitment origin.
+    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v0"))]
+    PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1),
+}
+
+impl PrivacyProofManagedPoolBootstrapV1 {
+    /// Return the exact protocol initialized by this payload.
+    #[must_use]
+    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            Self::PqMaspStarkV0(_) => PrivacyProtocolIdV1::PqMaspStarkV0,
+        }
+    }
+
+    /// Return the exact proof-managed root role initialized by this payload.
+    #[must_use]
+    pub const fn root_role(&self) -> PrivacyRootRoleV1 {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyRootRoleV1::OutputSet,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyRootRoleV1::ProgramState,
+            Self::PqMaspStarkV0(_) => PrivacyRootRoleV1::NoteCommitmentAnchor,
+        }
+    }
+
+    /// Return the sole protocol-scoped namespace initialized by this payload.
+    #[must_use]
+    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: bootstrap.pool_id,
+                }),
+            ),
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
+                    pool_id: bootstrap.pool_id,
+                    program_id: bootstrap.program_id,
+                }),
+            ),
+            Self::PqMaspStarkV0(bootstrap) => PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::PqMaspStarkV0,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: bootstrap.pool_id,
+                }),
+            ),
+        }
+    }
+
+    /// Return the exact backing asset definition.
+    #[must_use]
+    pub const fn asset_definition_id(&self) -> &AssetDefinitionId {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => &bootstrap.asset_definition_id,
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => &bootstrap.asset_definition_id,
+            Self::PqMaspStarkV0(bootstrap) => &bootstrap.asset_definition_id,
+        }
+    }
+
+    /// Return the public reserve account when the protocol supports an
+    /// explicit value-balance bridge.
+    #[must_use]
+    pub const fn reserve_account(&self) -> Option<&AccountId> {
+        match self {
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(&bootstrap.reserve_account),
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+        }
+    }
+
+    /// Return the pinned private-program digest for private-IVM pools.
+    #[must_use]
+    pub const fn program_id(&self) -> Option<PrivacyProgramIdV1> {
+        match self {
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => Some(bootstrap.program_id),
+            Self::MoneroFcmpPlusPlusV1(_) | Self::PqMaspStarkV0(_) => None,
+        }
+    }
+
+    /// Return the complete canonical genesis commitment set.
+    #[must_use]
+    pub fn initial_commitments(&self) -> &[PrivacyCommitmentV1] {
+        match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => &bootstrap.initial_output_commitments,
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => &bootstrap.initial_note_commitments,
+            Self::PqMaspStarkV0(bootstrap) => &bootstrap.initial_note_commitments,
+        }
+    }
+
+    /// Validate the exact closed namespace and required non-zero identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero pool/program identifiers or a malformed derived namespace.
+    pub fn validate(&self) -> Result<(), PrivacyProofManagedPoolBootstrapValidationErrorV1> {
+        let (pool_id, commitments) = match self {
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => (
+                bootstrap.pool_id,
+                bootstrap.initial_output_commitments.as_slice(),
+            ),
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => {
+                if bootstrap.program_id.is_zero() {
+                    return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroProgramId);
+                }
+                (
+                    bootstrap.pool_id,
+                    bootstrap.initial_note_commitments.as_slice(),
+                )
+            }
+            Self::PqMaspStarkV0(bootstrap) => (
+                bootstrap.pool_id,
+                bootstrap.initial_note_commitments.as_slice(),
+            ),
+        };
+        if pool_id.is_zero() {
+            return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroPoolId);
+        }
+        if commitments.is_empty() {
+            return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::EmptyInitialCommitments);
+        }
+        if commitments.len() > PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 {
+            return Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::TooManyInitialCommitments {
+                    count: commitments.len(),
+                    max: PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1,
+                },
+            );
+        }
+        let mut previous = None;
+        for (index, commitment) in commitments.iter().copied().enumerate() {
+            if commitment.is_zero() {
+                return Err(
+                    PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroInitialCommitment {
+                        index,
+                    },
+                );
+            }
+            if previous.is_some_and(|value| value >= commitment) {
+                return Err(
+                    PrivacyProofManagedPoolBootstrapValidationErrorV1::InitialCommitmentsNotStrictlyIncreasing {
+                        index,
+                    },
+                );
+            }
+            previous = Some(commitment);
+        }
+        let namespace = self.namespace();
+        namespace
+            .validate()
+            .map_err(PrivacyProofManagedPoolBootstrapValidationErrorV1::Namespace)?;
+        if !self.root_role().is_compatible_with_namespace(namespace) {
+            return Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::IncompatibleRootRole);
+        }
+        Ok(())
+    }
+
+    /// Hash the exact canonical bootstrap in its own provenance domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if canonical encoding fails.
+    pub fn digest(&self) -> Result<PrivacyProofManagedPoolBootstrapDigestV1, norito::Error> {
+        let encoded = norito::to_bytes(self)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_PROOF_MANAGED_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1);
+        hasher.update(
+            &u64::try_from(encoded.len())
+                .expect("Norito output length always fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(&encoded);
+        Ok(PrivacyProofManagedPoolBootstrapDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+}
+
+/// Structural failure for [`PrivacyProofManagedPoolBootstrapV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyProofManagedPoolBootstrapValidationErrorV1 {
+    /// The stable pool identifier is all zero.
+    #[error("proof-managed privacy pool bootstrap pool id must be non-zero")]
+    ZeroPoolId,
+    /// The private-IVM program digest is all zero.
+    #[error("private-IVM pool bootstrap program id must be non-zero")]
+    ZeroProgramId,
+    /// No genesis commitment was supplied.
+    #[error("proof-managed privacy pool bootstrap requires at least one initial commitment")]
+    EmptyInitialCommitments,
+    /// The genesis commitment set exceeds the hard first-release bound.
+    #[error(
+        "proof-managed privacy pool bootstrap has {count} initial commitments; maximum is {max}"
+    )]
+    TooManyInitialCommitments {
+        /// Observed commitment count.
+        count: usize,
+        /// Hard first-release maximum.
+        max: usize,
+    },
+    /// One genesis commitment is the all-zero sentinel.
+    #[error("proof-managed privacy pool bootstrap commitment {index} must be non-zero")]
+    ZeroInitialCommitment {
+        /// Zero-based commitment index.
+        index: usize,
+    },
+    /// Genesis commitments are duplicated or reordered.
+    #[error(
+        "proof-managed privacy pool bootstrap commitments stop increasing strictly at index {index}"
+    )]
+    InitialCommitmentsNotStrictlyIncreasing {
+        /// First invalid zero-based position.
+        index: usize,
+    },
+    /// The derived closed namespace is malformed.
+    #[error("proof-managed privacy pool bootstrap namespace is invalid: {0}")]
+    Namespace(PrivacyNamespaceValidationError),
+    /// The inferred root role is incompatible with the exact namespace.
+    #[error("proof-managed privacy pool bootstrap root role is incompatible")]
+    IncompatibleRootRole,
 }
 
 /// One canonical encrypted account in a PGC account-state bootstrap.
@@ -4227,6 +4539,8 @@ pub const IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1: u32 = 2;
 pub const PQ_MASP_MAX_INPUTS_V1: u32 = 2;
 /// Maximum PQ-MASP outputs in one first-release action.
 pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
+/// Maximum genesis commitments in one typed proof-managed pool bootstrap.
+pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 /// Maximum UTF-8 byte length admitted for a privacy transcript chain id.
 pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = 255;
 
@@ -7492,6 +7806,7 @@ pub struct OrchardHalo2ActionsStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MoneroFcmpPlusPlusStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -7525,6 +7840,7 @@ pub struct MoneroFcmpPlusPlusStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -7534,6 +7850,8 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     pub pool_id: PrivacyPoolIdV1,
     /// Exact private IVM program identifier.
     pub program_id: PrivacyProgramIdV1,
+    /// Digest of the exact canonical private-program action and public inputs.
+    pub action_digest: PrivacyActionDigestV1,
     /// Canonical private-note state root.
     pub state_root: PrivacyRootV1,
     /// Epoch at which `state_root` was canonical.
@@ -7556,13 +7874,40 @@ pub struct IrohaIvmPrivateNoteStarkStatementV1 {
     pub execution_epoch: u64,
 }
 
+impl IrohaIvmPrivateNoteStarkStatementV1 {
+    /// Compute the action digest with its self-authenticating field normalized
+    /// to zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if canonical statement encoding unexpectedly
+    /// fails.
+    pub fn computed_action_digest(&self) -> Result<PrivacyActionDigestV1, norito::Error> {
+        let mut normalized = self.clone();
+        normalized.action_digest = PrivacyActionDigestV1::new([0; 32]);
+        let encoded = norito::to_bytes(&normalized)?;
+        let mut hasher = Sha256::new();
+        hasher.update(IVM_PRIVATE_NOTE_ACTION_DIGEST_DOMAIN_V1);
+        hasher.update(
+            u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        Ok(PrivacyActionDigestV1::new(hasher.finalize().into()))
+    }
+}
+
 /// Post-quantum authorization profile required by PQ-MASP v0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "authorization", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "authorization", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyPqAuthorizationProfileV1 {
     /// ML-DSA-65 transaction authorization.
     MlDsa65,
@@ -7574,7 +7919,10 @@ pub enum PrivacyPqAuthorizationProfileV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "encryption", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "encryption", content = "value", deny_unknown_fields)
+)]
 pub enum PrivacyPqNoteEncryptionProfileV1 {
     /// ML-KEM-768 key establishment with XChaCha20-Poly1305 payload encryption.
     MlKem768XChaCha20Poly1305,
@@ -7586,6 +7934,7 @@ pub enum PrivacyPqNoteEncryptionProfileV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PqMaspStarkStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -8524,6 +8873,16 @@ fn validate_ivm_private_note(
         statement.program_id.is_zero(),
         PrivacyTypedFieldV1::ProgramId,
     )?;
+    require_nonzero_id(
+        statement.action_digest.is_zero(),
+        PrivacyTypedFieldV1::ActionDigest,
+    )?;
+    let computed_action_digest = statement
+        .computed_action_digest()
+        .map_err(|_| PrivacyStatementValidationError::ActionDigestEncodingFailed)?;
+    if statement.action_digest != computed_action_digest {
+        return Err(PrivacyStatementValidationError::ActionDigestMismatch);
+    }
     require_nonzero_id(statement.state_root.is_zero(), PrivacyTypedFieldV1::Root)?;
     require_epoch(statement.root_epoch, PrivacyEpochFieldV1::Root)?;
     validate_next_root_transition(
@@ -9207,6 +9566,8 @@ pub enum PrivacyTypedFieldV1 {
     SessionTranscriptDigest,
     /// Private IVM program identifier.
     ProgramId,
+    /// Private IVM action digest.
+    ActionDigest,
     /// Post-quantum authorization-key digest.
     AuthorizationKeyDigest,
     /// Post-quantum note-encryption-key digest.
@@ -9327,6 +9688,13 @@ pub enum PrivacyStatementValidationError {
         /// Invalid field.
         field: PrivacyTypedFieldV1,
     },
+    /// The private-IVM action projection could not be canonically encoded.
+    #[error("private IVM action digest projection failed canonical encoding")]
+    ActionDigestEncodingFailed,
+    /// The supplied private-IVM action digest does not authenticate the exact
+    /// canonical action projection.
+    #[error("private IVM action digest does not match the canonical action projection")]
+    ActionDigestMismatch,
     /// A protocol epoch or height is zero.
     #[error("privacy statement epoch or height {field:?} must be non-zero")]
     ZeroEpoch {
@@ -10706,21 +11074,28 @@ mod tests {
                 encrypted_outputs: vec![encrypted_output(91, 92)],
                 fee: 2,
             }),
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(IrohaIvmPrivateNoteStarkStatementV1 {
-                context: context(),
-                asset_definition_id: asset.clone(),
-                pool_id: PrivacyPoolIdV1::new(raw(94)),
-                program_id: PrivacyProgramIdV1::new(raw(95)),
-                state_root: PrivacyRootV1::new(raw(96)),
-                root_epoch: 15,
-                next_state_root: PrivacyRootV1::new(raw(100)),
-                next_state_root_epoch: 16,
-                nullifiers: vec![nullifier(97)],
-                output_commitments: vec![commitment(98)],
-                encrypted_outputs: vec![encrypted_output(98, 99)],
-                value_balance: PrivacyValueBalanceV1::balanced(),
-                fee: 2,
-                execution_epoch: 16,
+            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1({
+                let mut statement = IrohaIvmPrivateNoteStarkStatementV1 {
+                    context: context(),
+                    asset_definition_id: asset.clone(),
+                    pool_id: PrivacyPoolIdV1::new(raw(94)),
+                    program_id: PrivacyProgramIdV1::new(raw(95)),
+                    action_digest: PrivacyActionDigestV1::new([0; 32]),
+                    state_root: PrivacyRootV1::new(raw(96)),
+                    root_epoch: 15,
+                    next_state_root: PrivacyRootV1::new(raw(100)),
+                    next_state_root_epoch: 16,
+                    nullifiers: vec![nullifier(97)],
+                    output_commitments: vec![commitment(98)],
+                    encrypted_outputs: vec![encrypted_output(98, 99)],
+                    value_balance: PrivacyValueBalanceV1::balanced(),
+                    fee: 2,
+                    execution_epoch: 16,
+                };
+                statement.action_digest = statement
+                    .computed_action_digest()
+                    .expect("compute private-IVM fixture action digest");
+                statement
             }),
             PrivacyStatementV1::PqMaspStarkV0(PqMaspStarkStatementV1 {
                 context: context(),
@@ -11819,6 +12194,52 @@ mod tests {
     }
 
     #[test]
+    fn first_release_private_transfer_statements_reject_nested_unknown_json_fields() {
+        for protocol_id in [
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyProtocolIdV1::PqMaspStarkV0,
+        ] {
+            let statement = statement_for(protocol_id);
+            let canonical =
+                norito::json::to_json(&statement).expect("encode private-transfer statement JSON");
+            let nested_prefix = canonical
+                .strip_suffix("}}")
+                .expect("tagged statement ends with nested and outer objects");
+            let hostile = format!("{nested_prefix},\"legacy_transfer\":true}}}}");
+            assert!(
+                norito::json::from_json::<PrivacyStatementV1>(&hostile).is_err(),
+                "nested unknown field must fail for {protocol_id:?}"
+            );
+        }
+
+        let authorization = norito::json::to_json(&PrivacyPqAuthorizationProfileV1::MlDsa65)
+            .expect("encode PQ authorization profile");
+        let authorization_prefix = authorization
+            .strip_suffix('}')
+            .expect("PQ authorization profile is an object");
+        assert!(
+            norito::json::from_json::<PrivacyPqAuthorizationProfileV1>(&format!(
+                "{authorization_prefix},\"legacy\":null}}"
+            ))
+            .is_err()
+        );
+
+        let encryption =
+            norito::json::to_json(&PrivacyPqNoteEncryptionProfileV1::MlKem768XChaCha20Poly1305)
+                .expect("encode PQ note-encryption profile");
+        let encryption_prefix = encryption
+            .strip_suffix('}')
+            .expect("PQ note-encryption profile is an object");
+        assert!(
+            norito::json::from_json::<PrivacyPqNoteEncryptionProfileV1>(&format!(
+                "{encryption_prefix},\"legacy\":null}}"
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn taira_consensus_limits_reject_zero_overflow_and_inconsistent_profiles() {
         let defaults = PrivacyConsensusLimitsV1::taira_default();
         defaults.validate().expect("Taira defaults");
@@ -12453,6 +12874,124 @@ mod tests {
                 account(211),
             ),
             Err(PrivacyOrchardPoolBootstrapValidationErrorV1::ZeroPoolId)
+        );
+    }
+
+    #[test]
+    fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
+        let variants = [
+            PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(213)),
+                asset_definition_id: asset_definition_id(),
+                initial_output_commitments: vec![commitment(1), commitment(2)],
+            }),
+            PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
+                PrivacyIvmPrivateNotePoolBootstrapV1 {
+                    pool_id: PrivacyPoolIdV1::new(raw(214)),
+                    asset_definition_id: asset_definition_id(),
+                    reserve_account: account(215),
+                    program_id: PrivacyProgramIdV1::new(raw(216)),
+                    initial_note_commitments: vec![commitment(3), commitment(4)],
+                },
+            ),
+            PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV0(PrivacyPqMaspPoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(217)),
+                asset_definition_id: asset_definition_id(),
+                initial_note_commitments: vec![commitment(5), commitment(6)],
+            }),
+        ];
+        for bootstrap in variants {
+            bootstrap
+                .validate()
+                .expect("canonical typed pool bootstrap");
+            assert_eq!(bootstrap.namespace().protocol_id(), bootstrap.protocol_id());
+            assert!(
+                bootstrap
+                    .root_role()
+                    .is_compatible_with_namespace(bootstrap.namespace())
+            );
+            let digest = bootstrap.digest().expect("digest typed pool bootstrap");
+            assert!(!digest.is_zero());
+            let encoded = norito::to_bytes(&bootstrap).expect("encode typed pool bootstrap");
+            let decoded: PrivacyProofManagedPoolBootstrapV1 =
+                norito::decode_from_bytes(&encoded).expect("decode typed pool bootstrap");
+            assert_eq!(decoded, bootstrap);
+            let json = norito::json::to_json(&bootstrap).expect("encode pool-bootstrap JSON");
+            let decoded_json: PrivacyProofManagedPoolBootstrapV1 =
+                norito::json::from_json(&json).expect("decode pool-bootstrap JSON");
+            assert_eq!(decoded_json, bootstrap);
+            let nested_prefix = json
+                .strip_suffix("}}")
+                .expect("tagged bootstrap ends with nested and outer objects");
+            assert!(
+                norito::json::from_json::<PrivacyProofManagedPoolBootstrapV1>(&format!(
+                    "{nested_prefix},\"legacy_root\":true}}}}"
+                ))
+                .is_err()
+            );
+        }
+
+        let mut invalid =
+            PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(218)),
+                asset_definition_id: asset_definition_id(),
+                initial_output_commitments: Vec::new(),
+            });
+        assert_eq!(
+            invalid.validate(),
+            Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::EmptyInitialCommitments)
+        );
+        let PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(fcmp) = &mut invalid else {
+            unreachable!()
+        };
+        fcmp.initial_output_commitments = vec![commitment(7), commitment(7)];
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::InitialCommitmentsNotStrictlyIncreasing {
+                    index: 1
+                }
+            )
+        ));
+        let PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(fcmp) = &mut invalid else {
+            unreachable!()
+        };
+        fcmp.initial_output_commitments = vec![PrivacyCommitmentV1::new([0; 32]), commitment(8)];
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroInitialCommitment {
+                    index: 0
+                }
+            )
+        ));
+        let PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(fcmp) = &mut invalid else {
+            unreachable!()
+        };
+        fcmp.initial_output_commitments =
+            vec![commitment(9); PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 + 1];
+        assert!(matches!(
+            invalid.validate(),
+            Err(
+                PrivacyProofManagedPoolBootstrapValidationErrorV1::TooManyInitialCommitments {
+                    count,
+                    max: PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1
+                }
+            ) if count == PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1 + 1
+        ));
+
+        let invalid_program = PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
+            PrivacyIvmPrivateNotePoolBootstrapV1 {
+                pool_id: PrivacyPoolIdV1::new(raw(219)),
+                asset_definition_id: asset_definition_id(),
+                reserve_account: account(220),
+                program_id: PrivacyProgramIdV1::new([0; 32]),
+                initial_note_commitments: vec![commitment(10)],
+            },
+        );
+        assert_eq!(
+            invalid_program.validate(),
+            Err(PrivacyProofManagedPoolBootstrapValidationErrorV1::ZeroProgramId)
         );
     }
 
@@ -14871,6 +15410,28 @@ mod tests {
                 max: FCMP_MAX_INPUTS_V1
             })
         ));
+
+        let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+            unreachable!()
+        };
+        statement.action_digest = PrivacyActionDigestV1::new([0; 32]);
+        assert_eq!(
+            ivm.validate(&limits),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::ActionDigest,
+            })
+        );
+
+        let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {
+            unreachable!()
+        };
+        statement.action_digest.0[0] ^= 1;
+        assert_eq!(
+            ivm.validate(&limits),
+            Err(PrivacyStatementValidationError::ActionDigestMismatch)
+        );
 
         let mut ivm = statement_for(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
         let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &mut ivm else {

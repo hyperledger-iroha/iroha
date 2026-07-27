@@ -8,13 +8,13 @@ use super::*;
 use crate::privacy::{
     BootleLanternIssuerPolicyV1, PrivacyBootleLanternIssuerPolicyDigestV1,
     PrivacyConsensusLimitsV1, PrivacyOrchardPoolBootstrapV1, PrivacyPgcAccountBootstrapV1,
-    PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
-    PrivacyRootPublicationV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
-    PrivacyZkAmsRegistryBootstrapV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
-    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
-    PrivacyZkX509CrlRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
-    PrivacyZkX509TrustAnchorRecordV1,
+    PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
+    PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+    PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1, PrivacyZkAcePolicyRecordDigestV1,
+    PrivacyZkAcePolicyRecordV1, PrivacyZkAmsRegistryBootstrapV1,
+    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
+    PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
+    PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
 };
 
 isi! {
@@ -188,6 +188,32 @@ impl BootstrapPrivacyOrchardPoolV1 {
     /// Construct a governed Orchard pool bootstrap.
     #[must_use]
     pub fn new(bootstrap: PrivacyOrchardPoolBootstrapV1) -> Self {
+        Self { bootstrap }
+    }
+}
+
+isi! {
+    /// Bootstrap one governed FCMP++, private-IVM, or PQ-MASP pool at its
+    /// node-derived empty root.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct BootstrapPrivacyProofManagedPoolV1 {
+        /// Exact closed protocol, namespace, asset, and optional program/reserve binding.
+        pub bootstrap: PrivacyProofManagedPoolBootstrapV1,
+    }
+}
+
+impl crate::seal::Instruction for BootstrapPrivacyProofManagedPoolV1 {}
+
+impl BootstrapPrivacyProofManagedPoolV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_proof_managed_pool.v1";
+
+    /// Construct a governed proof-managed pool bootstrap.
+    #[must_use]
+    pub fn new(bootstrap: PrivacyProofManagedPoolBootstrapV1) -> Self {
         Self { bootstrap }
     }
 }
@@ -791,6 +817,9 @@ impl_privacy_decode_from_slice!(PublishPrivacyRootV1 {
 impl_privacy_decode_from_slice!(BootstrapPrivacyOrchardPoolV1 {
     bootstrap: PrivacyOrchardPoolBootstrapV1,
 });
+impl_privacy_decode_from_slice!(BootstrapPrivacyProofManagedPoolV1 {
+    bootstrap: PrivacyProofManagedPoolBootstrapV1,
+});
 impl_privacy_decode_from_slice!(BootstrapPrivacyPgcAccountsV1 {
     bootstrap: PrivacyPgcAccountBootstrapV1,
     proof: PrivacyPgcBootstrapProofBytesV1,
@@ -878,29 +907,31 @@ mod tests {
             IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IrohaJindoPolynomialCommitmentStatementV1,
             JindoActivationLimitsV1, PrivacyActiveLifecycleV1, PrivacyAssuranceV1,
             PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCommitmentV1,
-            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
-            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1,
-            PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1,
-            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-            PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPolicyDigestV1,
-            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
-            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-            PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
+            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyFcmpPoolBootstrapV1,
+            PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapV1,
+            PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
+            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyProofBytesV1, PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyRootRoleV1,
+            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+            PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
             PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
             PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
             PrivacyZkX509RecordLifecycleV1,
         },
     };
 
-    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 24] = [
+    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 25] = [
         RegisterPrivacyProtocolActivationV1::WIRE_ID,
         SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
         SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
         TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
         PublishPrivacyRootV1::WIRE_ID,
         BootstrapPrivacyOrchardPoolV1::WIRE_ID,
+        BootstrapPrivacyProofManagedPoolV1::WIRE_ID,
         BootstrapPrivacyPgcAccountsV1::WIRE_ID,
         BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
         RegisterPrivacyZkAcePolicyV1::WIRE_ID,
@@ -944,6 +975,17 @@ mod tests {
             account(24),
         )
         .expect("canonical Orchard bootstrap")
+    }
+
+    fn proof_managed_pool_bootstrap() -> PrivacyProofManagedPoolBootstrapV1 {
+        PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
+            pool_id: PrivacyPoolIdV1::new(digest(25)),
+            asset_definition_id: AssetDefinitionId::new(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("fcmp").expect("asset name"),
+            ),
+            initial_output_commitments: vec![PrivacyCommitmentV1::new(digest(26))],
+        })
     }
 
     fn activation() -> PrivacyProtocolActivationRecordV1 {
@@ -1340,6 +1382,10 @@ mod tests {
             $check!(
                 BootstrapPrivacyOrchardPoolV1::WIRE_ID,
                 BootstrapPrivacyOrchardPoolV1::new(orchard_bootstrap())
+            );
+            $check!(
+                BootstrapPrivacyProofManagedPoolV1::WIRE_ID,
+                BootstrapPrivacyProofManagedPoolV1::new(proof_managed_pool_bootstrap())
             );
             $check!(
                 BootstrapPrivacyPgcAccountsV1::WIRE_ID,

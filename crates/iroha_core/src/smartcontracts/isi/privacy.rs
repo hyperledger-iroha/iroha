@@ -11,17 +11,18 @@ use iroha_data_model::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         privacy::{
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
-            BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
-            RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
-            RegisterPrivacyZkAcePolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
-            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
-            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyZkAcePolicyV1,
-            RevokePrivacyZkX509CertificatePolicyV1, RevokePrivacyZkX509CrlV1,
-            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyBootleLanternIssuerPolicyV1,
-            RotatePrivacyZkAcePolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
-            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
-            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
-            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
+            BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
+            PublishPrivacyRootV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
+            RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
+            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
+            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyBootleLanternIssuerPolicyV1,
+            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
+            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyZkAcePolicyV1,
+            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
+            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
+            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
+            TransitionPrivacyProtocolLifecycleV1,
         },
     },
     permission::Permission,
@@ -60,6 +61,7 @@ use crate::{
             },
         },
         p256::{CompressedPointV1, TranscriptBindingV1},
+        proof_managed_pool_initial_root_v1,
         zk_ams::zk_ams_registry_transition_root_v1,
     },
     privacy_profiles::validate_compiled_privacy_activation_v1,
@@ -77,6 +79,7 @@ use crate::{
         privacy_bootle_lantern_issuer_policy_count_v1, privacy_zk_ace_policy_count_v1,
         privacy_zk_x509_ca_namespace_v1, privacy_zk_x509_crl_lineage_count_v1,
         privacy_zk_x509_governance_record_counts_v1, privacy_zk_x509_policy_namespace_v1,
+        proof_managed_pool_root_role_v1,
         validate_privacy_zk_x509_policy_revocation_dependencies_v1,
         validate_privacy_zk_x509_statement_state_v1,
         validate_privacy_zk_x509_trust_anchor_revocation_dependencies_v1,
@@ -686,6 +689,238 @@ impl Execute for BootstrapPrivacyOrchardPoolV1 {
             .world
             .privacy_commitments
             .insert(state_key, state_record);
+        state_transaction
+            .world
+            .privacy_roots
+            .insert(root_key, root_provenance);
+        state_transaction
+            .world
+            .privacy_root_heads
+            .insert(head_key, root_head);
+        Ok(())
+    }
+}
+
+impl Execute for BootstrapPrivacyProofManagedPoolV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "proof-managed pool bootstrap canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        self.bootstrap.validate().map_err(|error| {
+            invalid_privacy_parameter(format!("proof-managed pool bootstrap rejected: {error}"))
+        })?;
+
+        let protocol_id = self.bootstrap.protocol_id();
+        let namespace = self.bootstrap.namespace();
+        let root_role =
+            proof_managed_pool_root_role_v1(namespace).map_err(invalid_privacy_parameter)?;
+        if root_role != self.bootstrap.root_role() {
+            return Err(Error::InvariantViolation(
+                "proof-managed bootstrap derived inconsistent root roles".into(),
+            ));
+        }
+        let current_height = state_transaction._curr_block.height().get();
+        let activation_key = PrivacyActivationKeyV1::new(protocol_id);
+        let activation = state_transaction
+            .world
+            .privacy_activations
+            .get(&activation_key)
+            .copied()
+            .ok_or_else(|| {
+                invalid_privacy_parameter(format!(
+                    "proof-managed privacy protocol {protocol_id:?} is not registered"
+                ))
+            })?;
+        validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
+            Error::InvariantViolation(
+                format!(
+                    "registered proof-managed activation {protocol_id:?} is not executable: {error}"
+                )
+                .into(),
+            )
+        })?;
+        activation.validate().map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "registered proof-managed activation {protocol_id:?} is invalid: {error}"
+            ))
+        })?;
+        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
+            return Err(invalid_privacy_parameter(format!(
+                "cannot bootstrap a pool before {protocol_id:?} is active"
+            )));
+        };
+        if current_height < active.state_since_height {
+            return Err(invalid_privacy_parameter(format!(
+                "{protocol_id:?} activation is not effective until block {}",
+                active.state_since_height
+            )));
+        }
+
+        state_transaction
+            .world
+            .asset_definition(self.bootstrap.asset_definition_id())
+            .map_err(Error::from)?;
+        if let Some(reserve_account) = self.bootstrap.reserve_account()
+            && state_transaction
+                .world
+                .accounts
+                .get(reserve_account)
+                .is_none()
+        {
+            return Err(invalid_privacy_parameter(format!(
+                "proof-managed pool reserve account `{reserve_account}` does not exist"
+            )));
+        }
+
+        let config_key = PrivacyCommitmentKeyV1::proof_managed_pool_config(namespace)
+            .map_err(invalid_privacy_parameter)?;
+        let head_key =
+            PrivacyRootHeadKeyV1::new(namespace, root_role).map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_root_heads
+            .get(&head_key)
+            .is_some()
+        {
+            return Err(invalid_privacy_parameter(format!(
+                "proof-managed pool {namespace:?} is already initialized"
+            )));
+        }
+        if state_transaction
+            .world
+            .privacy_commitments
+            .get(&config_key)
+            .is_some()
+            || state_transaction
+                .world
+                .privacy_commitments
+                .range(PrivacyCommitmentKeyV1::proof_managed_pool_commitment_range(
+                    namespace,
+                ))
+                .next()
+                .is_some()
+            || state_transaction
+                .world
+                .privacy_nullifiers
+                .range(PrivacyNullifierKeyV1::proof_managed_nullifier_range(
+                    namespace,
+                ))
+                .next()
+                .is_some()
+            || state_transaction
+                .world
+                .privacy_roots
+                .range(PrivacyRootKeyV1::history_range(namespace, root_role))
+                .next()
+                .is_some()
+        {
+            return Err(Error::InvariantViolation(
+                "proof-managed pool state exists without a current typed head".into(),
+            ));
+        }
+
+        let bootstrap_digest = self.bootstrap.digest().map_err(|error| {
+            Error::InvariantViolation(
+                format!("proof-managed pool bootstrap canonical encoding failed: {error}").into(),
+            )
+        })?;
+        let initial_root =
+            proof_managed_pool_initial_root_v1(&self.bootstrap).map_err(|error| {
+                Error::InvariantViolation(
+                    format!("proof-managed pool native root derivation failed: {error}").into(),
+                )
+            })?;
+        let config_record = PrivacyStateItemRecordV1::proof_managed_pool_bootstrap(
+            self.bootstrap.clone(),
+            bootstrap_digest,
+            initial_root,
+            current_height,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let bootstrap_item_record = PrivacyStateItemRecordV1::proof_managed_pool_bootstrap_item(
+            bootstrap_digest,
+            current_height,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let mut commitment_keys = Vec::new();
+        commitment_keys
+            .try_reserve_exact(self.bootstrap.initial_commitments().len())
+            .map_err(|_| {
+                Error::InvariantViolation(
+                    "proof-managed pool bootstrap commitment allocation failed".into(),
+                )
+            })?;
+        for commitment in self.bootstrap.initial_commitments() {
+            let key = PrivacyCommitmentKeyV1::proof_managed_pool_commitment(namespace, *commitment)
+                .map_err(invalid_privacy_parameter)?;
+            if state_transaction
+                .world
+                .privacy_commitments
+                .get(&key)
+                .is_some()
+            {
+                return Err(Error::InvariantViolation(
+                    "proof-managed genesis commitment exists without pool configuration".into(),
+                ));
+            }
+            commitment_keys.push(key);
+        }
+
+        const INITIAL_EPOCH: u64 = 1;
+        let root_provenance = PrivacyRootProvenanceV1::proof_managed_pool_bootstrap(
+            bootstrap_digest,
+            protocol_id,
+            current_height,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let root_key = PrivacyRootKeyV1::new(namespace, root_role, INITIAL_EPOCH, initial_root)
+            .map_err(invalid_privacy_parameter)?;
+        let root_head =
+            PrivacyRootHeadRecordV1::new(INITIAL_EPOCH, initial_root, root_provenance, None)
+                .map_err(invalid_privacy_parameter)?;
+        let removals = plan_privacy_root_history_update_v1(
+            &state_transaction.world.privacy_roots,
+            &[root_key],
+            state_transaction
+                .world
+                .privacy_consensus_policy
+                .get()
+                .admission_retained_root_count(),
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "proof-managed pool bootstrap root rejected: {error}"
+            ))
+        })?;
+        if !removals.is_empty() {
+            return Err(Error::InvariantViolation(
+                "new proof-managed root history unexpectedly requires pruning".into(),
+            ));
+        }
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(config_key, config_record);
+        for key in commitment_keys {
+            state_transaction
+                .world
+                .privacy_commitments
+                .insert(key, bootstrap_item_record.clone());
+        }
         state_transaction
             .world
             .privacy_roots
@@ -5171,7 +5406,9 @@ mod tests {
     #[test]
     fn bootle_lantern_governance_registers_rotates_revokes_and_is_failure_atomic() {
         let state = state_with_exact_bootle_lantern_activation();
-        let mut block = state.block(test_header());
+        let header = test_header();
+        let header_hash = header.hash();
+        let mut block = state.block(header);
         let initial = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
         let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
             initial.issuer_id,
@@ -5186,6 +5423,13 @@ mod tests {
                 .expect_err("governance permission is mandatory");
             assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
             assert_eq!(transaction.world.privacy_commitments.get(&key), None);
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("empty Bootle/Lantern registry"),
+                0
+            );
             assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
         }
 
@@ -5226,6 +5470,10 @@ mod tests {
 
         {
             let mut transaction = block.transaction();
+            let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
+                &transaction.world.privacy_commitments,
+            )
+            .expect("valid singleton policy registry");
             let budget_before = transaction.privacy_budget_for_testing();
             let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
                 .execute(&ALICE_ID, &mut transaction)
@@ -5233,6 +5481,21 @@ mod tests {
             assert!(
                 smart_contract_parameter_message(&error).contains("already registered"),
                 "{error:?}"
+            );
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("duplicate rejection preserves the registry"),
+                count_before
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .privacy_commitments
+                    .get(&key)
+                    .and_then(PrivacyStateItemRecordV1::bootle_lantern_issuer_policy),
+                Some(&initial)
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
@@ -5255,8 +5518,25 @@ mod tests {
             transaction.apply();
         }
 
+        block
+            .commit()
+            .expect("commit Bootle/Lantern registration and rotation block");
+        let next_header = BlockHeader::new(
+            NonZeroU64::new(TEST_BLOCK_HEIGHT + 1).expect("non-zero height"),
+            Some(header_hash),
+            None,
+            None,
+            1_800_000_000_001,
+            0,
+        );
+        let mut block = state.block(next_header);
+
         {
             let mut transaction = block.transaction();
+            let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
+                &transaction.world.privacy_commitments,
+            )
+            .expect("valid singleton policy registry");
             let budget_before = transaction.privacy_budget_for_testing();
             let stale_successor = rotate_bootle_lantern_policy(&rotated);
             let error = RotatePrivacyBootleLanternIssuerPolicyV1::new(
@@ -5268,6 +5548,13 @@ mod tests {
             assert!(
                 smart_contract_parameter_message(&error).contains("stale or substituted"),
                 "{error:?}"
+            );
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("stale CAS rejection preserves the registry"),
+                count_before
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
             assert_eq!(
@@ -5312,6 +5599,10 @@ mod tests {
                 .expect("post-terminal policy digest");
 
             let mut transaction = block.transaction();
+            let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
+                &transaction.world.privacy_commitments,
+            )
+            .expect("valid singleton terminal policy registry");
             let budget_before = transaction.privacy_budget_for_testing();
             let error =
                 RotatePrivacyBootleLanternIssuerPolicyV1::new(revoked.record_digest, post_terminal)
@@ -5321,6 +5612,13 @@ mod tests {
                 smart_contract_parameter_message(&error).contains("already revoked"),
                 "{error:?}"
             );
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("terminal rejection preserves the registry"),
+                count_before
+            );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
             assert_eq!(
                 transaction
@@ -5329,6 +5627,165 @@ mod tests {
                     .get(&key)
                     .and_then(PrivacyStateItemRecordV1::bootle_lantern_issuer_policy),
                 Some(&revoked)
+            );
+        }
+    }
+
+    #[test]
+    fn bootle_lantern_governance_rejects_transition_substitution_without_mutation() {
+        let state = state_with_exact_bootle_lantern_activation();
+        let mut block = state.block(test_header());
+        let current = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+            current.issuer_id,
+            current.policy_id,
+        )
+        .expect("Bootle/Lantern policy key");
+
+        {
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            RegisterPrivacyBootleLanternIssuerPolicyV1::new(current.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register transition-test origin");
+            transaction.apply();
+        }
+
+        let rotated = rotate_bootle_lantern_policy(&current);
+        let mut skipped_epoch = rotated.clone();
+        skipped_epoch.epoch += 1;
+        skipped_epoch.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        skipped_epoch.record_digest = skipped_epoch
+            .computed_record_digest()
+            .expect("skipped-epoch policy digest");
+        let mut unchanged = current.clone();
+        unchanged.epoch += 1;
+        unchanged.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        unchanged.record_digest = unchanged
+            .computed_record_digest()
+            .expect("unchanged policy digest");
+        let mut substituted_namespace = rotated.clone();
+        substituted_namespace.policy_id.0[0] ^= 1;
+        substituted_namespace.record_digest =
+            PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        substituted_namespace.record_digest = substituted_namespace
+            .computed_record_digest()
+            .expect("substituted-namespace policy digest");
+
+        let rotation_cases = [
+            (
+                "zero compare-and-swap digest",
+                RotatePrivacyBootleLanternIssuerPolicyV1::new(
+                    PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+                    rotated.clone(),
+                ),
+                "non-zero",
+            ),
+            (
+                "skipped policy epoch",
+                RotatePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, skipped_epoch),
+                "advance exactly once",
+            ),
+            (
+                "unchanged policy material",
+                RotatePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, unchanged),
+                "change",
+            ),
+            (
+                "substituted policy namespace",
+                RotatePrivacyBootleLanternIssuerPolicyV1::new(
+                    current.record_digest,
+                    substituted_namespace,
+                ),
+                "not registered",
+            ),
+        ];
+        for (label, instruction, expected_message) in rotation_cases {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = instruction
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err(label);
+            assert!(
+                smart_contract_parameter_message(&error).contains(expected_message),
+                "{label} returned {error:?}"
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .privacy_commitments
+                    .get(&key)
+                    .and_then(PrivacyStateItemRecordV1::bootle_lantern_issuer_policy),
+                Some(&current),
+                "{label} changed the current policy"
+            );
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("rejected rotation preserves a valid registry"),
+                1,
+                "{label} changed the registry count"
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                budget_before,
+                "{label} reserved privacy budget"
+            );
+        }
+
+        let mut mutating_revocation = rotated.clone();
+        mutating_revocation.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        mutating_revocation.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        mutating_revocation.record_digest = mutating_revocation
+            .computed_record_digest()
+            .expect("mutating-revocation policy digest");
+        let revocation_cases = [
+            (
+                "active revocation successor",
+                RevokePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, rotated),
+                "revoked",
+            ),
+            (
+                "revocation that rotates issuer material",
+                RevokePrivacyBootleLanternIssuerPolicyV1::new(
+                    current.record_digest,
+                    mutating_revocation,
+                ),
+                "preserve",
+            ),
+        ];
+        for (label, instruction, expected_message) in revocation_cases {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = instruction
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err(label);
+            assert!(
+                smart_contract_parameter_message(&error).contains(expected_message),
+                "{label} returned {error:?}"
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .privacy_commitments
+                    .get(&key)
+                    .and_then(PrivacyStateItemRecordV1::bootle_lantern_issuer_policy),
+                Some(&current),
+                "{label} changed the current policy"
+            );
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("rejected revocation preserves a valid registry"),
+                1,
+                "{label} changed the registry count"
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                budget_before,
+                "{label} reserved privacy budget"
             );
         }
     }

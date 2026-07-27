@@ -2035,11 +2035,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "REPLACE_PARAMETER_ID".to_owned(),
-                "REPLACE_PARAMETER_DIGEST".to_owned(),
-                "REPLACE_VERIFIER_DIGEST".to_owned(),
-                "REPLACE_STATEMENT_SCHEMA_DIGEST".to_owned(),
-                "REPLACE_ENGINE_MANIFEST_DIGEST".to_owned(),
+                "c27b9c1fd4fcb0f157fbd2b5c4894ef0c78b15acf0c450512051c8dee8b69380".to_owned(),
+                "c2daca46ce1c3d8afb40963f56e3b9638516bb431cc0bf5da5bb2525e03e66b7".to_owned(),
+                "e04e5cf10087f6fb94c192da1ebf4cf6c5da21bd676acce79cd2991e198f9d9c".to_owned(),
+                "9c7c4f65128a4d924955b8b0fb6bfcc56ec34d14224ddfefebe32771c19a9e54".to_owned(),
+                "2506045cee0cce69014f6e27b697d81c5342abd1a98cb05c3bc355718c815ad9".to_owned(),
             ),
             "every consensus-critical Bootle/Lantern binding is a pinned KAT"
         );

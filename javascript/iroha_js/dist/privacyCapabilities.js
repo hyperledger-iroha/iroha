@@ -1,8 +1,7 @@
 /**
  * Fail-closed parser for the authoritative `PrivacyCapabilitySnapshotV1` Torii
- * response.  This is intentionally independent of the editorial
- * `privacyAlgorithms` catalog: a catalog entry is not an authority to submit
- * or accept a privacy proof.
+ * response. This snapshot is the sole first-release privacy catalog contract;
+ * only committed, typed protocol state can authorize proof submission.
  */
 
 export const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1 = 1;

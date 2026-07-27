@@ -69,9 +69,7 @@ export PYTHONDONTWRITEBYTECODE=1
   test/privacyFfiContractParity.test.js \
   test/privacyCatalogParity.test.js \
   test/privacyNative.test.js
-"${NODE_BIN}" --test --test-name-pattern "privacy native wrappers reject wrong-operation result schemas" \
-  test/instructionBuilders.test.js
-"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports privacy native archive helpers|package dist privacy native wrappers reject wrong-operation result schemas|package declarations mark privacy capability metadata readonly" \
+"${NODE_BIN}" --test --test-name-pattern "package dist entrypoint exports only the canonical privacy capability bridge" \
   test/package_dist.test.js
-"${NODE_BIN}" --test --test-name-pattern "browser crypto exposes native-only helpers as safe stubs" \
+"${NODE_BIN}" --test --test-name-pattern "browser crypto exposes only the privacy capability bridge as a safe stub" \
   test/crypto.browser.test.js

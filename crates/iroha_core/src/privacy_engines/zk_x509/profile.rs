@@ -196,7 +196,7 @@ pub(crate) const ZK_X509_CRL_PROFILE_V1: &[u8] = b"rfc5280-crl-closed-v1:der-onl
 /// PolicyMappings, CertificatePolicies, PolicyConstraints, InhibitAnyPolicy,
 /// alternate names, distribution points, and every other extension are
 /// forbidden rather than silently ignored.
-pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:utc-time-1970-2049:generalized-time-2050-9999:seconds-z-no-fraction:certificate-validity-inclusive:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-aki-ski-basicconstraints-keyusage-and-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign:direct-leaf-issuer-crlsign:pathlen:root-self-name-self-signature:leaf-revocation-only:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points:no-freshest-crl";
+pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:name-oids-only-c-o-ou-cn:no-duplicate-name-attributes:c-printablestring-two-uppercase-ascii:o-ou-cn-utf8string-or-printablestring:max-name-value256:utf8-well-formed-no-u0000-u001f-u007f-u009f:utc-time-1970-2049:generalized-time-2050-9999:seconds-z-no-fraction:certificate-validity-inclusive:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-order-aki-ski-keyusage-basicconstraints-and-optional-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign-and-crlsign-only:ca-pathlen-required-explicit:direct-leaf-issuer-crlsign:root-self-name-self-signature:leaf-revocation-only:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points:no-freshest-crl";
 
 /// ECDSA signature canonicalization rules.
 ///
@@ -206,7 +206,7 @@ pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-onl
 /// ownership signature is controlled by this protocol and must additionally
 /// use low `s`, eliminating an avoidable witness malleability.
 pub(crate) const ZK_X509_ECDSA_RULES_V1: &[u8] =
-    b"cert-and-crl:minimal-der-rs-valid-range-high-or-low-s|wallet:minimal-der-rs-valid-range-low-s";
+    b"cert-and-crl:ecdsa-with-sha256-over-exact-tbs:minimal-der-rs-valid-range-high-or-low-s|wallet:ecdsa-p256-prehash-over-exact-32-byte-ownership-digest:minimal-der-rs-valid-range-low-s";
 
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub(crate) const ZK_X509_GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
@@ -249,6 +249,13 @@ pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 8 * 1024 * 1024;
 /// Maximum number of independently mixed constraints in one segment.
 pub(crate) const ZK_X509_MAX_CONSTRAINTS_PER_SEGMENT_V1: u16 = 512;
+/// Complete provisional transparent-proof envelope descriptor.
+///
+/// It is included in the compiled profile digest, but explicitly records that
+/// no proof wire exists while the gap inventory is non-empty.  A released
+/// profile must replace this entire descriptor and protocol version together;
+/// it may not reinterpret the provisional bytes.
+pub(crate) const ZK_X509_PROVISIONAL_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks:0xffffffff00000001|segment-log-rows=20|max-segment-instances=16|max-columns=64|lde-column-batch=8|max-constraint-degree=4|fri-blowup=8|fri-queries=56|composition-lanes=3|fri-folding=2|fri-terminal-max=32|grinding-bits=20|target-soundness-bits=128|max-proof-bytes=8388608|proof-wire=unassigned-while-air-gaps-nonempty|activation=false";
 /// Whether an implementation-derived proof-system soundness analysis is fixed.
 ///
 /// A numeric estimate assembled from query count and blow-up factor alone is

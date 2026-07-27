@@ -22,15 +22,8 @@ GOST_3410_2012_512_PARAMSET_B_ALGORITHM: Final[str] = "gost3410-2012-512-paramse
 BLS_NORMAL_ALGORITHM: Final[str] = "bls_normal"
 BLS_SMALL_ALGORITHM: Final[str] = "bls_small"
 SM2_ALGORITHM: Final[str] = "sm2"
-PRIVACY_FFI_VERSION_V1: Final[int] = 1
 PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 7
 PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Final[int] = 64 * 1024 * 1024
-PRIVACY_FFI_STATUS_ERROR: Final[int] = 1
-PRIVACY_FFI_ERROR_NULL_POINTER: Final[int] = 1
-PRIVACY_FFI_ERROR_MALFORMED_NORITO: Final[int] = 2
-PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM: Final[int] = 3
-PRIVACY_FFI_ERROR_PRODUCTION_DISABLED: Final[int] = 4
-PRIVACY_FFI_ERROR_INVALID_REQUEST: Final[int] = 5
 _PRIVACY_MAX_BRIDGE_ABI_VERSION: Final[int] = 0xFFFF_FFFF
 _PRIVACY_NORITO_HEADER_BYTES: Final[int] = 40
 _PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES: Final[int] = 64
@@ -38,9 +31,6 @@ _PRIVACY_NORITO_SUPPORTED_FLAGS_MASK: Final[int] = 0x27
 _PRIVACY_NORITO_FIELD_BITSET_FLAG: Final[int] = 0x20
 _PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS: Final[int] = 0x06
 _PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE: Final[int] = 0x50
-_PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE: Final[int] = 0x42
-_PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE: Final[int] = 0x56
-_PRIVACY_REQUEST_SCHEMA_BYTE: Final[int] = 0x52
 _PRIVACY_CRC64_MASK: Final[int] = 0xFFFF_FFFF_FFFF_FFFF
 _PRIVACY_CRC64_REFLECTED_POLY: Final[int] = 0xC96C_5795_D787_0F42
 _PRIVACY_NORITO_MAGIC: Final[bytes] = b"NRT0"
@@ -97,15 +87,8 @@ __all__ = [
     "BLS_NORMAL_ALGORITHM",
     "BLS_SMALL_ALGORITHM",
     "SM2_ALGORITHM",
-    "PRIVACY_FFI_VERSION_V1",
     "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION",
     "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES",
-    "PRIVACY_FFI_STATUS_ERROR",
-    "PRIVACY_FFI_ERROR_NULL_POINTER",
-    "PRIVACY_FFI_ERROR_MALFORMED_NORITO",
-    "PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM",
-    "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED",
-    "PRIVACY_FFI_ERROR_INVALID_REQUEST",
     "SUPPORTED_CRYPTO_ALGORITHMS",
     "ED25519_PRIVATE_KEY_LENGTH",
     "ED25519_PUBLIC_KEY_LENGTH",
@@ -192,10 +175,7 @@ __all__ = [
     "zk_ace_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
     "is_privacy_native_available",
-    "privacy_proof_request_v1",
     "privacy_capabilities_v1",
-    "privacy_build_proof_v1",
-    "privacy_verify_proof_v1",
     "sm2_fixture_from_seed",
 ]
 
@@ -1731,33 +1711,6 @@ def build_zk_ace_authorization_proof_v1(**kwargs: Any) -> Dict[str, Any]:
     return zk_ace_build_transfer_authorization_v1(**kwargs)
 
 
-def _privacy_request_archive(request_archive: bytes | bytearray | memoryview) -> bytearray:
-    if isinstance(request_archive, str):
-        raise TypeError("request_archive must be Norito V1 bytes, not a string")
-    view = _privacy_unsigned_byte_view(
-        request_archive,
-        bytes_like_message="request_archive must be bytes-like",
-        typed_message="request_archive must use unsigned byte elements",
-    )
-    if view.nbytes == 0:
-        raise ValueError("request_archive must not be empty")
-    if view.nbytes > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES:
-        raise ValueError(
-            f"request_archive must not exceed {PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes"
-        )
-    _assert_privacy_norito_archive(
-        "request_archive",
-        view,
-        native_output=False,
-        expected_schema_byte=_PRIVACY_REQUEST_SCHEMA_BYTE,
-    )
-    return bytearray(view)
-
-
-def _clear_privacy_request_archive(request_archive: bytearray) -> None:
-    request_archive[:] = b"\x00" * len(request_archive)
-
-
 def _privacy_unsigned_byte_view(
     value: object,
     *,
@@ -1817,28 +1770,6 @@ def _clear_privacy_native_output(result: object) -> None:
         view[:] = b"\x00" * view.nbytes
     except (TypeError, ValueError, BufferError):
         return
-
-
-def _privacy_request_component_bytes(
-    value: bytes | bytearray | memoryview,
-    name: str,
-    *,
-    allow_empty: bool,
-) -> bytes:
-    if isinstance(value, str):
-        raise TypeError(f"{name} must be bytes-like, not a string")
-    view = _privacy_unsigned_byte_view(
-        value,
-        bytes_like_message=f"{name} must be bytes-like",
-        typed_message=f"{name} must use unsigned byte elements",
-    )
-    if not allow_empty and view.nbytes == 0:
-        raise ValueError(f"{name} must not be empty")
-    if view.nbytes > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES:
-        raise ValueError(
-            f"{name} must not exceed {PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes"
-        )
-    return view.tobytes()
 
 
 def _privacy_crc64_table() -> tuple[int, ...]:
@@ -1939,30 +1870,15 @@ def _assert_privacy_norito_archive(
 
 
 def _privacy_expected_result_schema_byte(operation: str) -> int:
-    try:
-        return {
-            "privacy_capabilities_v1": _PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-            "privacy_build_proof_v1": _PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE,
-            "privacy_verify_proof_v1": _PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE,
-        }[operation]
-    except KeyError as exc:
+    if operation != "privacy_capabilities_v1":
         raise RuntimeError(
-            f"native {operation} is not a supported privacy native operation"
-        ) from exc
+            f"native {operation} is not a supported privacy capability operation"
+        )
+    return _PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE
 
 
-_PRIVACY_NATIVE_METHODS: Final[tuple[str, ...]] = (
-    "privacy_capabilities_v1",
-    "privacy_proof_request_v1",
-    "privacy_build_proof_v1",
-    "privacy_verify_proof_v1",
-)
 _PRIVACY_BRIDGE_ABI_VERSION_METHOD: Final[str] = "privacy_bridge_abi_version"
-_PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: Final[bytes] = (
-    b"NRT0\x00\x00"
-    + bytes([_PRIVACY_REQUEST_SCHEMA_BYTE]) * 16
-    + (b"\x00" * 18)
-)
+_PRIVACY_CAPABILITY_METHOD: Final[str] = "privacy_capabilities_v1"
 
 
 def _privacy_bridge_abi_version(module: object) -> int | None:
@@ -1971,8 +1887,6 @@ def _privacy_bridge_abi_version(module: object) -> int | None:
         return None
     try:
         version = method()
-    except (TypeError, ValueError, RuntimeError, OSError):
-        return None
     except Exception:
         return None
     if (
@@ -1987,235 +1901,64 @@ def _privacy_bridge_abi_version(module: object) -> int | None:
 
 def _has_privacy_bridge_abi(module: object) -> bool:
     version = _privacy_bridge_abi_version(module)
-    return (
-        version is not None
-        and version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
-    )
+    return version is not None and version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
 
 
-def _missing_privacy_native_methods(module: object) -> tuple[str, ...]:
-    return tuple(
-        operation
-        for operation in _PRIVACY_NATIVE_METHODS
-        if not callable(getattr(module, operation, None))
-    )
-
-
-def _privacy_native_method(operation: str):
-    if not _has_privacy_bridge_abi(_crypto):
+def _privacy_capability_method(module: object):
+    if not _has_privacy_bridge_abi(module):
         raise RuntimeError(
-            "privacy FFI requires native bridge ABI "
+            "privacy capabilities require native bridge ABI "
             f"{PRIVACY_REQUIRED_BRIDGE_ABI_VERSION}"
         )
-    missing_methods = _missing_privacy_native_methods(_crypto)
-    if missing_methods:
-        if operation in missing_methods:
-            raise RuntimeError(
-                f"iroha_python._crypto is missing {operation}; rebuild the extension"
-            )
+    method = getattr(module, _PRIVACY_CAPABILITY_METHOD, None)
+    if not callable(method):
         raise RuntimeError(
-            "privacy FFI requires complete native method surface; missing "
-            + ", ".join(missing_methods)
+            "iroha_python._crypto is missing privacy_capabilities_v1; rebuild the extension"
         )
-    method = getattr(_crypto, operation, None)
     return method
 
 
-def _call_privacy_native_method(method: object, *args: object) -> object:
-    if not callable(method):
-        raise TypeError("privacy native method is not callable")
-    try:
-        return method(*args)
-    except TypeError:
-        if any(isinstance(arg, bytearray) for arg in args):
-            return method(
-                *(bytes(arg) if isinstance(arg, bytearray) else arg for arg in args)
-            )
-        raise
-
-
-def _privacy_native_probe_returns_bytes(
-    module: object,
-    operation: str,
-    request_archive: bytes | None = None,
-) -> bool:
-    method = getattr(module, operation, None)
-    if not callable(method):
-        return False
-    request = bytearray(request_archive) if request_archive is not None else None
+def _privacy_native_probe_returns_bytes(module: object) -> bool:
     result: object | None = None
     try:
-        if request is None:
-            result = _call_privacy_native_method(method)
-        else:
-            result = _call_privacy_native_method(method, request)
-        _privacy_output_archive(operation, result)
+        result = _privacy_capability_method(module)()
+        _privacy_output_archive(_PRIVACY_CAPABILITY_METHOD, result)
         return True
     except Exception:
         return False
     finally:
         _clear_privacy_native_output(result)
-        if request is not None:
-            _clear_privacy_request_archive(request)
 
 
-def _privacy_proof_request_native_probe_returns_bytes(module: object) -> bool:
-    method = getattr(module, "privacy_proof_request_v1", None)
-    if not callable(method):
-        return False
-    public_inputs = bytearray(b"public-inputs")
-    result: object | None = None
+def _invoke_privacy_capability_native() -> object:
     try:
-        result = _call_privacy_native_method(
-            method,
-            _ZK_ACE_ALGORITHM_ID,
-            _ZK_ACE_PRODUCTION_ENTRYPOINT,
-            _ZK_ACE_PRODUCTION_VK_REF,
-            public_inputs,
-            b"",
-            b"",
-        )
-        view = _privacy_unsigned_byte_view(
-            result,
-            bytes_like_message="native privacy_proof_request_v1 returned non-byte output",
-            typed_message="native privacy_proof_request_v1 output must use unsigned byte elements",
-        )
-        request_archive = view.tobytes()
-        _assert_privacy_norito_archive(
-            "privacy_proof_request_v1",
-            request_archive,
-            expected_schema_byte=_PRIVACY_REQUEST_SCHEMA_BYTE,
-        )
-        return True
+        return _privacy_capability_method(_crypto)()
     except Exception:
-        return False
-    finally:
-        _clear_privacy_native_output(result)
-        _clear_privacy_request_archive(public_inputs)
-
-
-def _invoke_privacy_native(operation: str, *args: object) -> object:
-    method = _privacy_native_method(operation)
-    failed = False
-    try:
-        return _call_privacy_native_method(method, *args)
-    except Exception:
-        failed = True
-    if failed:
-        raise RuntimeError(f"native {operation} failed")
-    raise AssertionError("unreachable privacy native invocation state")
+        raise RuntimeError("native privacy_capabilities_v1 failed") from None
 
 
 def privacy_bridge_abi_version() -> int:
-    """Return the native bridge ABI version required by privacy FFI helpers."""
+    """Return the native bridge ABI version required by privacy capabilities."""
 
     version = _privacy_bridge_abi_version(_crypto)
     if version is None:
         raise RuntimeError(
-            "privacy FFI requires native bridge ABI "
+            "privacy capabilities require native bridge ABI "
             f"{PRIVACY_REQUIRED_BRIDGE_ABI_VERSION}"
         )
     return version
 
 
 def is_privacy_native_available() -> bool:
-    """Return whether the loaded native extension exposes the complete privacy FFI ABI."""
+    """Return whether the typed privacy capability snapshot bridge is available."""
 
-    return _has_privacy_bridge_abi(_crypto) and all(
-        _privacy_native_probe_returns_bytes(_crypto, operation)
-        if operation == "privacy_capabilities_v1"
-        else _privacy_proof_request_native_probe_returns_bytes(_crypto)
-        if operation == "privacy_proof_request_v1"
-        else _privacy_native_probe_returns_bytes(
-            _crypto,
-            operation,
-            _PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
-        )
-        for operation in _PRIVACY_NATIVE_METHODS
-    )
-
-
-def _privacy_native_archive(
-    operation: str,
-    request_archive: bytes | bytearray | memoryview,
-) -> bytes:
-    request = _privacy_request_archive(request_archive)
-    try:
-        result = _invoke_privacy_native(operation, request)
-        return _privacy_output_archive(operation, result)
-    finally:
-        _clear_privacy_request_archive(request)
+    return _privacy_native_probe_returns_bytes(_crypto)
 
 
 def privacy_capabilities_v1() -> bytes:
-    """Return Norito V1 privacy capability records from the native production gate."""
+    """Return the canonical Norito V1 privacy capability snapshot archive."""
 
     return _privacy_output_archive(
-        "privacy_capabilities_v1",
-        _invoke_privacy_native("privacy_capabilities_v1"),
+        _PRIVACY_CAPABILITY_METHOD,
+        _invoke_privacy_capability_native(),
     )
-
-
-def privacy_proof_request_v1(
-    *,
-    algorithm_id: str,
-    entrypoint: str,
-    vk_ref: str,
-    public_inputs: bytes | bytearray | memoryview,
-    witness: bytes | bytearray | memoryview = b"",
-    proof: bytes | bytearray | memoryview = b"",
-) -> bytes:
-    """Encode a Norito V1 `PrivacyProofRequest` for the native build/verify FFI."""
-
-    public_inputs_bytes = _privacy_request_component_bytes(
-        public_inputs,
-        "public_inputs",
-        allow_empty=False,
-    )
-    witness_bytes = _privacy_request_component_bytes(
-        witness,
-        "witness",
-        allow_empty=True,
-    )
-    proof_bytes = _privacy_request_component_bytes(
-        proof,
-        "proof",
-        allow_empty=True,
-    )
-    method = _privacy_native_method("privacy_proof_request_v1")
-    archive = method(
-        str(algorithm_id),
-        str(entrypoint),
-        str(vk_ref),
-        public_inputs_bytes,
-        witness_bytes,
-        proof_bytes,
-    )
-    view = _privacy_unsigned_byte_view(
-        archive,
-        bytes_like_message="native privacy_proof_request_v1 returned non-byte output",
-        typed_message="native privacy_proof_request_v1 output must use unsigned byte elements",
-    )
-    if view.nbytes == 0:
-        raise RuntimeError("native privacy_proof_request_v1 returned empty output")
-    if view.nbytes > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES:
-        raise RuntimeError("native privacy_proof_request_v1 returned oversized output")
-    request_archive = view.tobytes()
-    _assert_privacy_norito_archive(
-        "privacy_proof_request_v1",
-        request_archive,
-        expected_schema_byte=_PRIVACY_REQUEST_SCHEMA_BYTE,
-    )
-    return request_archive
-
-
-def privacy_build_proof_v1(request_archive: bytes | bytearray | memoryview) -> bytes:
-    """Build a privacy proof via the native Rust engine, returning a Norito V1 result archive."""
-
-    return _privacy_native_archive("privacy_build_proof_v1", request_archive)
-
-
-def privacy_verify_proof_v1(request_archive: bytes | bytearray | memoryview) -> bytes:
-    """Verify a privacy proof via the native Rust engine, returning a Norito V1 result archive."""
-
-    return _privacy_native_archive("privacy_verify_proof_v1", request_archive)

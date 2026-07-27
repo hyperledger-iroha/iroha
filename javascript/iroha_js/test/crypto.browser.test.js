@@ -84,13 +84,20 @@ test("browser crypto exposes recovery phrase helpers in source and dist bundles"
   }
 });
 
-test("browser crypto exposes privacy native helpers as safe stubs", () => {
+test("browser crypto exposes only the privacy capability bridge as a safe stub", () => {
   for (const [label, crypto] of [["src", srcBrowserCrypto], ["dist", distBrowserCrypto]]) {
-    assert.equal(crypto.isPrivacyNativeAvailable(), false, ` privacy bridge must be unavailable`);
+    assert.equal(crypto.isPrivacyNativeAvailable(), false, `${label} privacy bridge must be unavailable`);
     assert.throws(
       () => crypto.privacyCapabilitiesV1(),
       /unavailable in browser-only crypto builds/,
     );
+    for (const retired of [
+      "privacyProofRequestV1",
+      "privacyBuildProofV1",
+      "privacyVerifyProofV1",
+    ]) {
+      assert.equal(retired in crypto, false, `${label} ${retired} must be retired`);
+    }
   }
 });
 

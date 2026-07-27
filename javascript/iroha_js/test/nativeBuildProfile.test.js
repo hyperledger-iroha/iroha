@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
+  existsSync,
   linkSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -13,6 +18,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   cargoBuildArgsForNativeProfile,
@@ -31,6 +37,11 @@ import {
 
 const SOURCE_DIGEST = "b".repeat(64);
 const SOURCE_REVISION = "a".repeat(40);
+const RUN_CONTAINER_PREFIX = ".iroha-js-native-build-run-";
+const RUN_INITIALIZER_PREFIX = ".iroha-js-native-build-init-v1-";
+const RUN_TRASH_PREFIX = ".iroha-js-native-build-trash-v1-";
+const RUN_OWNER_FILENAME = ".iroha-js-native-build-run-owner-v1.json";
+const BUILD_NATIVE_SCRIPT = path.resolve("scripts/build-native.mjs");
 
 function sourceState(overrides = {}) {
   return {
@@ -51,7 +62,7 @@ function isPathInside(parent, child) {
 
 function createFixtureSnapshot(snapshotTargetRoot, state) {
   const snapshotRoot = mkdtempSync(
-    path.join(snapshotTargetRoot, ".iroha-js-source-snapshot-fixture-"),
+    path.join(snapshotTargetRoot, ".iroha-js-source-snapshot-"),
   );
   const sourcePath = path.join(
     snapshotRoot,
@@ -61,6 +72,14 @@ function createFixtureSnapshot(snapshotTargetRoot, state) {
     "lib.rs",
   );
   mkdirSync(path.dirname(sourcePath), { recursive: true });
+  writeFileSync(
+    path.join(snapshotRoot, "Cargo.toml"),
+    '[workspace.package]\nversion = "0.0.0"\n',
+  );
+  writeFileSync(
+    path.join(snapshotRoot, "crates", "iroha_js_host", "Cargo.toml"),
+    '[package]\nname = "iroha_js_host"\nversion.workspace = true\n',
+  );
   writeFileSync(sourcePath, "pub fn fixture() {}\n");
   return {
     snapshotRoot,
@@ -74,9 +93,15 @@ function cleanupFixtureSnapshot(snapshot) {
 }
 
 function intendedCargoArtifact(snapshot, nativePath, overrides = {}) {
+  const packageRoot = path.join(
+    snapshot.snapshotRoot,
+    "crates",
+    "iroha_js_host",
+  );
   const artifact = {
     reason: "compiler-artifact",
-    package_id: `path+file://${snapshot.snapshotRoot}/crates/iroha_js_host#iroha_js_host@0.0.0`,
+    package_id: `path+${pathToFileURL(packageRoot).href}#0.0.0`,
+    manifest_path: path.join(packageRoot, "Cargo.toml"),
     target: {
       crate_types: ["cdylib"],
       kind: ["cdylib"],
@@ -89,8 +114,11 @@ function intendedCargoArtifact(snapshot, nativePath, overrides = {}) {
         "lib.rs",
       ),
     },
+    executable: null,
+    features: [],
     filenames: [nativePath],
     fresh: false,
+    profile: cargoArtifactProfile("debug"),
   };
   return {
     ...artifact,
@@ -102,12 +130,57 @@ function intendedCargoArtifact(snapshot, nativePath, overrides = {}) {
   };
 }
 
+function cargoArtifactProfile(cargoProfile) {
+  const optimized = cargoProfile === "release" || cargoProfile === "deploy";
+  return {
+    opt_level: optimized ? "3" : "0",
+    debuginfo: 0,
+    debug_assertions: !optimized,
+    overflow_checks: !optimized,
+    test: false,
+  };
+}
+
+function intendedCargoBuildScriptArtifact(snapshot) {
+  const packageRoot = path.join(
+    snapshot.snapshotRoot,
+    "crates",
+    "iroha_js_host",
+  );
+  return {
+    reason: "compiler-artifact",
+    package_id: `path+${pathToFileURL(packageRoot).href}#0.0.0`,
+    manifest_path: path.join(packageRoot, "Cargo.toml"),
+    target: {
+      crate_types: ["bin"],
+      kind: ["custom-build"],
+      name: "build-script-build",
+      src_path: path.join(packageRoot, "build.rs"),
+    },
+    executable: null,
+    features: [],
+    filenames: [
+      path.join(
+        snapshot.targetRoot,
+        "cargo-target",
+        "debug",
+        "build",
+        "iroha_js_host-fixture",
+        "build-script-build",
+      ),
+    ],
+    fresh: false,
+    profile: cargoArtifactProfile("debug"),
+  };
+}
+
 function cargoJson(...messages) {
   return `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`;
 }
 
 function successfulCargoJson(snapshot, nativePath, artifactOverrides = {}) {
   return cargoJson(
+    intendedCargoBuildScriptArtifact(snapshot),
     intendedCargoArtifact(snapshot, nativePath, artifactOverrides),
     { reason: "build-finished", success: true },
   );
@@ -143,12 +216,16 @@ function createInjectedSnapshotFactory({
   };
 }
 
-function finalNativePath(repoRoot, cargoProfile = "debug") {
+function finalNativePath(
+  repoRoot,
+  cargoProfile = "debug",
+  platform = "linux",
+) {
   return nativeBuildOutputPath({
     repoRoot,
     cargoProfile,
     env: {},
-    platform: "linux",
+    platform,
   });
 }
 
@@ -170,7 +247,11 @@ function runFixtureNativeBuild({
   bytes = "new-native-output",
   cargoHandler,
   publicationFailpoint,
+  publicationOwnerIsAlive,
+  platform = "linux",
   repoRoot,
+  runContainerFailpoint,
+  runContainerOwnerIsAlive,
   state = sourceState(),
   writeProvenance,
 }) {
@@ -183,18 +264,21 @@ function runFixtureNativeBuild({
   return runNativeBuild({
     repoRoot,
     env: {},
-    platform: "linux",
+    platform,
     createSourceSnapshot: snapshots.createSourceSnapshot,
     verifySourceSnapshot: () => state,
     cleanupSourceSnapshot: snapshots.cleanupSourceSnapshot,
+    publicationOwnerIsAlive,
     publicationFailpoint,
+    runContainerFailpoint,
+    runContainerOwnerIsAlive,
     writeProvenance,
     runCargo(args, options) {
       const runNativePath = nativeBuildOutputPath({
         repoRoot,
         cargoProfile: "debug",
         env: options.cargoEnv,
-        platform: "linux",
+        platform,
       });
       if (cargoHandler !== undefined) {
         return cargoHandler({
@@ -214,15 +298,181 @@ function runFixtureNativeBuild({
   });
 }
 
-function assertNoPublicationTransients(nativePath) {
+function assertNoPublicationTransients(
+  nativePath,
+  { allowedStaleOwners = [] } = {},
+) {
   const nativeName = path.basename(nativePath);
-  const unexpected = readdirSync(path.dirname(nativePath)).filter(
+  const unexpected = readdirSync(path.dirname(nativePath))
+    .filter(
     (name) =>
       name.startsWith(`.${nativeName}.stage-`) ||
       name.startsWith(`.${nativeName}.retired-`) ||
-      name === `.${nativeName}.publish-lock`,
+      name.startsWith(`.${nativeName}.publish-lock`),
+    )
+    .sort();
+  const expected = allowedStaleOwners
+    .map(
+      (ownerId) =>
+        `.${nativeName}.publish-lock-stale-${ownerId}`,
+    )
+    .sort();
+  assert.deepEqual(unexpected, expected);
+}
+
+function writePublicationLockFixture(
+  nativePath,
+  {
+    host = os.hostname(),
+    ownerId = "12345678-1234-4123-8123-123456789abc",
+    pid = process.pid,
+    suffix = ".publish-lock",
+  } = {},
+) {
+  const finalName = path.basename(nativePath);
+  const directory = path.dirname(nativePath);
+  const lockPath = path.join(directory, `.${finalName}${suffix}`);
+  mkdirSync(directory, { recursive: true });
+  mkdirSync(lockPath, { mode: 0o700, recursive: false });
+  writeFileSync(
+    path.join(lockPath, "owner.json"),
+    `${JSON.stringify({
+      version: 1,
+      final_name: finalName,
+      host,
+      owner_id: ownerId,
+      pid,
+      retired_name: `.${finalName}.retired-${ownerId}`,
+      stage_name: `.${finalName}.stage-${ownerId}`,
+    })}\n`,
   );
-  assert.deepEqual(unexpected, []);
+  return {
+    lockPath,
+    ownerId,
+    retiredPath: path.join(directory, `.${finalName}.retired-${ownerId}`),
+    stagePath: path.join(directory, `.${finalName}.stage-${ownerId}`),
+  };
+}
+
+function writeRunContainerFixture({
+  directChild,
+  host = os.hostname(),
+  kind = "run",
+  malformedOwner,
+  omitOwner = false,
+  pid = 2_000_000_001,
+  uid = typeof process.geteuid === "function" ? process.geteuid() : null,
+  withCargoTarget = false,
+  withSnapshot = false,
+} = {}) {
+  const parent = realpathSync(os.tmpdir());
+  const runId = randomUUID();
+  const artifactId = randomUUID();
+  const name =
+    kind === "run"
+      ? `${RUN_CONTAINER_PREFIX}${runId}`
+      : kind === "initializer"
+        ? `${RUN_INITIALIZER_PREFIX}${runId}-${artifactId}`
+        : `${RUN_TRASH_PREFIX}${runId}-${artifactId}`;
+  const artifactPath = path.join(parent, name);
+  mkdirSync(artifactPath, { mode: 0o700 });
+  const metadata = lstatSync(artifactPath, { bigint: true });
+  const ownerPath = path.join(artifactPath, RUN_OWNER_FILENAME);
+  if (omitOwner) {
+    // Exact-name unowned artifact: recovery must preserve it.
+  } else if (malformedOwner !== undefined) {
+    writeFileSync(ownerPath, malformedOwner, { mode: 0o600 });
+  } else {
+    writeFileSync(
+      ownerPath,
+      `${JSON.stringify({
+        version: 1,
+        run_id: runId,
+        run_name: `${RUN_CONTAINER_PREFIX}${runId}`,
+        host,
+        pid,
+        uid,
+        directory: {
+          birthtime_ns: String(metadata.birthtimeNs),
+          dev: String(metadata.dev),
+          ino: String(metadata.ino),
+        },
+      })}\n`,
+      { mode: 0o600 },
+    );
+  }
+  if (withCargoTarget) {
+    mkdirSync(path.join(artifactPath, "cargo-target"), { mode: 0o700 });
+    writeFileSync(
+      path.join(artifactPath, "cargo-target", "partial-output"),
+      "partial Cargo output",
+    );
+  }
+  if (withSnapshot) {
+    const snapshot = mkdtempSync(
+      path.join(artifactPath, ".iroha-js-source-snapshot-"),
+    );
+    writeFileSync(path.join(snapshot, "source.rs"), "snapshot source");
+  }
+  if (directChild !== undefined) {
+    writeFileSync(path.join(artifactPath, directChild), "must survive");
+  }
+  return {
+    artifactId,
+    artifactPath,
+    ownerPath,
+    parent,
+    pid,
+    runId,
+  };
+}
+
+function runRecoveryFixture({
+  repoRoot,
+  runContainerFailpoint,
+  runContainerOwnerIsAlive,
+}) {
+  return runFixtureNativeBuild({
+    repoRoot,
+    runContainerFailpoint,
+    runContainerOwnerIsAlive,
+    cargoHandler() {
+      return { status: 7, stdout: "" };
+    },
+  });
+}
+
+function cleanupExactTestArtifacts(...paths) {
+  for (const artifactPath of paths) {
+    if (artifactPath !== undefined) {
+      rmSync(artifactPath, { recursive: true, force: true });
+    }
+  }
+}
+
+const delay = (milliseconds) =>
+  new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+
+async function waitForCrashMarker(marker, child, timeoutMs = 10_000) {
+  const started = Date.now();
+  while (!existsSync(marker)) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `native build crash worker exited early: ${child.stderrText}`,
+      );
+    }
+    if (Date.now() - started > timeoutMs) {
+      throw new Error("timed out waiting for native build crash marker");
+    }
+    await delay(10);
+  }
+}
+
+function waitForChildExit(child) {
+  return new Promise((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("exit", (code, signal) => resolveExit({ code, signal }));
+  });
 }
 
 test("native build profile defaults to Cargo debug", () => {
@@ -257,6 +507,67 @@ test("native build profile rejects ambiguous or unsupported values", () => {
     () => cargoBuildArgsForNativeProfile("production"),
     /must be exactly "debug", "release", or "deploy"/,
   );
+});
+
+test("native build output paths use the exact platform library filename", () => {
+  const repoRoot = path.resolve("/fixture-repository");
+  assert.equal(
+    path.basename(
+      nativeBuildOutputPath({
+        repoRoot,
+        cargoProfile: "debug",
+        env: {},
+        platform: "linux",
+      }),
+    ),
+    "libiroha_js_host.so",
+  );
+  assert.equal(
+    path.basename(
+      nativeBuildOutputPath({
+        repoRoot,
+        cargoProfile: "release",
+        env: {},
+        platform: "darwin",
+      }),
+    ),
+    "libiroha_js_host.dylib",
+  );
+  assert.equal(
+    path.basename(
+      nativeBuildOutputPath({
+        repoRoot,
+        cargoProfile: "deploy",
+        env: {},
+        platform: "win32",
+      }),
+    ),
+    "iroha_js_host.dll",
+  );
+});
+
+test("native builds reject inherited Cargo profile environment overrides", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-profile-env-")),
+  );
+  try {
+    for (const key of [
+      "CARGO_PROFILE_DEPLOY_LTO",
+      "cargo_profile_deploy_lto",
+      "Cargo_Profile_Deploy_Lto",
+    ]) {
+      assert.throws(
+        () =>
+          runNativeBuild({
+            repoRoot,
+            env: { [key]: "false" },
+          }),
+        /forbids Cargo profile environment override/u,
+      );
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test("successful Cargo execution records provenance for the exact profile output", () => {
@@ -340,7 +651,9 @@ test("successful Cargo execution records provenance for the exact profile output
         writeFileSync(runNativePath, "deploy-native-output");
         return {
           status: 0,
-          stdout: successfulCargoJson(snapshots.snapshot, runNativePath),
+          stdout: successfulCargoJson(snapshots.snapshot, runNativePath, {
+            profile: cargoArtifactProfile("deploy"),
+          }),
         };
       },
       writeProvenance(path_, provenance) {
@@ -359,6 +672,75 @@ test("successful Cargo execution records provenance for the exact profile output
     assert.equal(written.provenance.source_tree_sha256, SOURCE_DIGEST);
     assert.equal(readFileSync(nativePath, "utf8"), "deploy-native-output");
     assert.equal(cleaned, 1);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("Cargo deps-to-profile hardlink uplift is copied into a singly linked publication source", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-hardlink-uplift-")),
+  );
+  try {
+    assert.equal(
+      runFixtureNativeBuild({
+        repoRoot,
+        cargoHandler({ runNativePath, snapshot }) {
+          const depsPath = path.join(
+            path.dirname(runNativePath),
+            "deps",
+            "libiroha_js_host-fixture.so",
+          );
+          mkdirSync(path.dirname(depsPath), { recursive: true });
+          writeFileSync(depsPath, "hardlinked Cargo output");
+          linkSync(depsPath, runNativePath);
+          assert.equal(lstatSync(depsPath, { bigint: true }).nlink, 2n);
+          assert.equal(
+            lstatSync(runNativePath, { bigint: true }).nlink,
+            2n,
+          );
+          return {
+            status: 0,
+            stdout: successfulCargoJson(snapshot, runNativePath),
+          };
+        },
+      }),
+      0,
+    );
+    const nativePath = finalNativePath(repoRoot);
+    assert.equal(readFileSync(nativePath, "utf8"), "hardlinked Cargo output");
+    assert.equal(lstatSync(nativePath, { bigint: true }).nlink, 1n);
+    assert.equal(
+      readNativeBuildProvenance(nativePath).source_tree_sha256,
+      SOURCE_DIGEST,
+    );
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("successful Windows publication selects and authenticates the DLL", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-windows-")),
+  );
+  try {
+    assert.equal(
+      runFixtureNativeBuild({
+        bytes: "windows-native-output",
+        platform: "win32",
+        repoRoot,
+      }),
+      0,
+    );
+    const nativePath = finalNativePath(repoRoot, "debug", "win32");
+    assert.equal(path.basename(nativePath), "iroha_js_host.dll");
+    assert.equal(readFileSync(nativePath, "utf8"), "windows-native-output");
+    assert.equal(
+      readNativeBuildProvenance(nativePath).source_tree_sha256,
+      SOURCE_DIGEST,
+    );
+    assertNoPublicationTransients(nativePath);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -628,6 +1010,41 @@ test("fresh, wrong-package, wrong-kind, and wrong-path artifacts are rejected", 
       }),
     },
     {
+      label: "lookalike workspace package",
+      mutate: (artifact) => ({
+        ...artifact,
+        package_id:
+          "path+file:///unrelated/iroha_js_host" +
+          "#999.0.0",
+      }),
+    },
+    {
+      label: "wrong workspace version",
+      mutate: (artifact) => ({
+        ...artifact,
+        package_id: artifact.package_id.replace(/#0\.0\.0$/u, "#999.0.0"),
+      }),
+    },
+    {
+      label: "pre-1.77 opaque package ID",
+      mutate: (artifact) => ({
+        ...artifact,
+        package_id:
+          "iroha_js_host 0.0.0 " +
+          `(path+${pathToFileURL(path.dirname(artifact.manifest_path)).href})`,
+      }),
+    },
+    {
+      label: "wrong manifest",
+      mutate: (artifact) => ({
+        ...artifact,
+        manifest_path: path.join(
+          path.dirname(artifact.manifest_path),
+          "unrelated.toml",
+        ),
+      }),
+    },
+    {
       label: "wrong kind",
       mutate: (artifact) => ({
         ...artifact,
@@ -635,6 +1052,30 @@ test("fresh, wrong-package, wrong-kind, and wrong-path artifacts are rejected", 
           ...artifact.target,
           crate_types: ["rlib"],
           kind: ["lib"],
+        },
+      }),
+    },
+    {
+      label: "enabled feature",
+      mutate: (artifact) => ({
+        ...artifact,
+        features: ["compact-len"],
+      }),
+    },
+    {
+      label: "library executable",
+      mutate: (artifact) => ({
+        ...artifact,
+        executable: artifact.filenames[0],
+      }),
+    },
+    {
+      label: "wrong compilation profile",
+      mutate: (artifact) => ({
+        ...artifact,
+        profile: {
+          ...artifact.profile,
+          overflow_checks: false,
         },
       }),
     },
@@ -680,6 +1121,542 @@ test("malformed Cargo JSON is rejected without provenance", () => {
     label: /malformed JSON build message/u,
     output: () => "{not-json}\n",
   });
+});
+
+test("run janitor removes only exact dead owned containers", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-dead-")),
+  );
+  const dead = writeRunContainerFixture({
+    withCargoTarget: true,
+    withSnapshot: true,
+  });
+  t.after(() => {
+    cleanupExactTestArtifacts(repoRoot, dead.artifactPath);
+  });
+
+  assert.equal(
+    runRecoveryFixture({
+      repoRoot,
+      runContainerOwnerIsAlive(pid) {
+        return pid !== dead.pid;
+      },
+    }),
+    7,
+  );
+  assert.equal(lstatSync(dead.parent).isDirectory(), true);
+  assert.equal(
+    readdirSync(dead.parent).some((name) => name.includes(dead.runId)),
+    false,
+  );
+});
+
+test("run janitor preserves live, foreign, malformed, and unexpected inventories", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-preserve-")),
+  );
+  const live = writeRunContainerFixture({
+    pid: process.pid,
+    withCargoTarget: true,
+  });
+  const foreign = writeRunContainerFixture({
+    host: "foreign-builder.invalid",
+    withCargoTarget: true,
+  });
+  const malformed = writeRunContainerFixture({
+    malformedOwner: '{"version":',
+  });
+  const unowned = writeRunContainerFixture({ omitOwner: true });
+  const unexpected = writeRunContainerFixture({
+    directChild: "keep.txt",
+  });
+  t.after(() => {
+    cleanupExactTestArtifacts(
+      repoRoot,
+      live.artifactPath,
+      foreign.artifactPath,
+      malformed.artifactPath,
+      unowned.artifactPath,
+      unexpected.artifactPath,
+    );
+  });
+
+  assert.equal(
+    runRecoveryFixture({
+      repoRoot,
+      runContainerOwnerIsAlive(pid) {
+        if (pid === live.pid) return true;
+        if (pid === foreign.pid) {
+          throw new Error("foreign owner liveness must not be queried");
+        }
+        return false;
+      },
+    }),
+    7,
+  );
+  for (const fixture of [
+    live,
+    foreign,
+    malformed,
+    unowned,
+    unexpected,
+  ]) {
+    assert.equal(lstatSync(fixture.artifactPath).isDirectory(), true);
+  }
+  assert.equal(
+    readFileSync(path.join(unexpected.artifactPath, "keep.txt"), "utf8"),
+    "must survive",
+  );
+});
+
+test("partial run initializer and broad prefix user data are forensic-only", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-init-")),
+  );
+  const partial = writeRunContainerFixture({
+    kind: "initializer",
+    malformedOwner: '{"version":',
+  });
+  const broad = path.join(
+    partial.parent,
+    `${RUN_CONTAINER_PREFIX}user-data-${randomUUID()}`,
+  );
+  mkdirSync(broad, { mode: 0o700 });
+  writeFileSync(path.join(broad, "keep.txt"), "broad prefix data");
+  t.after(() => {
+    cleanupExactTestArtifacts(repoRoot, partial.artifactPath, broad);
+  });
+
+  assert.equal(
+    runRecoveryFixture({
+      repoRoot,
+      runContainerOwnerIsAlive() {
+        return false;
+      },
+    }),
+    7,
+  );
+  assert.equal(readFileSync(partial.ownerPath, "utf8"), '{"version":');
+  assert.equal(
+    readFileSync(path.join(broad, "keep.txt"), "utf8"),
+    "broad prefix data",
+  );
+});
+
+test("run initialization crash states never publish an unowned final name", async (t) => {
+  await t.test("after initializer mkdir", (subtest) => {
+    const repoRoot = realpathSync(
+      mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-init-crash-")),
+    );
+    let initializerPath;
+    let runId;
+    subtest.after(() => {
+      cleanupExactTestArtifacts(repoRoot, initializerPath);
+    });
+
+    assert.throws(
+      () =>
+        runRecoveryFixture({
+          repoRoot,
+          runContainerFailpoint(phase, details) {
+            if (phase !== "run-initializer-created") return;
+            initializerPath = details.initializerPath;
+            runId = details.runId;
+            throw new Error("injected initializer mkdir crash");
+          },
+        }),
+      /injected initializer mkdir crash/u,
+    );
+    assert.deepEqual(readdirSync(initializerPath), []);
+    assert.equal(
+      readdirSync(realpathSync(os.tmpdir())).includes(
+        `${RUN_CONTAINER_PREFIX}${runId}`,
+      ),
+      false,
+    );
+    assert.equal(runRecoveryFixture({ repoRoot }), 7);
+    assert.deepEqual(readdirSync(initializerPath), []);
+  });
+
+  await t.test("during owner durability", (subtest) => {
+    const repoRoot = realpathSync(
+      mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-owner-crash-")),
+    );
+    let initializerPath;
+    let ownerPath;
+    let runId;
+    subtest.after(() => {
+      cleanupExactTestArtifacts(repoRoot, initializerPath);
+    });
+
+    assert.throws(
+      () =>
+        runRecoveryFixture({
+          repoRoot,
+          runContainerFailpoint(phase, details) {
+            if (phase !== "run-owner-written") return;
+            initializerPath = details.path;
+            ownerPath = details.ownerPath;
+            runId = details.runId;
+            writeFileSync(ownerPath, '{"version":');
+            throw new Error("injected partial owner crash");
+          },
+        }),
+      /injected partial owner crash/u,
+    );
+    assert.equal(readFileSync(ownerPath, "utf8"), '{"version":');
+    assert.equal(
+      readdirSync(realpathSync(os.tmpdir())).includes(
+        `${RUN_CONTAINER_PREFIX}${runId}`,
+      ),
+      false,
+    );
+    assert.equal(runRecoveryFixture({ repoRoot }), 7);
+    assert.equal(readFileSync(ownerPath, "utf8"), '{"version":');
+  });
+});
+
+test("fully owned initialization crash phases are recoverable after owner death", async (t) => {
+  for (const phase of [
+    "run-owner-synced",
+    "run-container-renamed",
+    "run-container-created",
+  ]) {
+    await t.test(phase, (subtest) => {
+      const repoRoot = realpathSync(
+        mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-owned-crash-")),
+      );
+      let interruptedPath;
+      let runId;
+      subtest.after(() => {
+        cleanupExactTestArtifacts(repoRoot, interruptedPath);
+      });
+
+      assert.throws(
+        () =>
+          runRecoveryFixture({
+            repoRoot,
+            runContainerFailpoint(actual, details) {
+              if (actual !== phase) return;
+              interruptedPath = details.path;
+              runId = details.runId;
+              throw new Error(`injected ${phase}`);
+            },
+          }),
+        new RegExp(`injected ${phase}`, "u"),
+      );
+      assert.equal(lstatSync(interruptedPath).isDirectory(), true);
+      assert.equal(
+        readFileSync(
+          path.join(interruptedPath, RUN_OWNER_FILENAME),
+          "utf8",
+        ).includes(runId),
+        true,
+      );
+
+      assert.equal(
+        runRecoveryFixture({
+          repoRoot,
+          runContainerOwnerIsAlive(pid) {
+            return pid !== process.pid;
+          },
+        }),
+        7,
+      );
+      assert.equal(
+        readdirSync(realpathSync(os.tmpdir())).some((name) =>
+          name.includes(runId),
+        ),
+        false,
+      );
+    });
+  }
+});
+
+test("run janitor never follows an exact-name symlink root", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-symlink-")),
+  );
+  const external = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-victim-")),
+  );
+  const runId = randomUUID();
+  const linkPath = path.join(
+    realpathSync(os.tmpdir()),
+    `${RUN_CONTAINER_PREFIX}${runId}`,
+  );
+  writeFileSync(path.join(external, "keep.txt"), "external victim");
+  symlinkSync(external, linkPath);
+  t.after(() => {
+    cleanupExactTestArtifacts(repoRoot, linkPath, external);
+  });
+
+  assert.equal(
+    runRecoveryFixture({
+      repoRoot,
+      runContainerOwnerIsAlive() {
+        return false;
+      },
+    }),
+    7,
+  );
+  assert.equal(lstatSync(linkPath).isSymbolicLink(), true);
+  assert.equal(
+    readFileSync(path.join(external, "keep.txt"), "utf8"),
+    "external victim",
+  );
+});
+
+test("run janitor detects a replacement after dead-owner validation", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-replace-")),
+  );
+  const dead = writeRunContainerFixture({ withCargoTarget: true });
+  const preserved = `${dead.artifactPath}.preserved`;
+  let replaced = false;
+  t.after(() => {
+    cleanupExactTestArtifacts(
+      repoRoot,
+      dead.artifactPath,
+      preserved,
+    );
+  });
+
+  assert.throws(
+    () =>
+      runRecoveryFixture({
+        repoRoot,
+        runContainerOwnerIsAlive(pid) {
+          return pid !== dead.pid;
+        },
+        runContainerFailpoint(phase, details) {
+          if (
+            phase !== "run-stale-verified" ||
+            details.runId !== dead.runId
+          ) {
+            return;
+          }
+          renameSync(dead.artifactPath, preserved);
+          mkdirSync(dead.artifactPath, { mode: 0o700 });
+          writeFileSync(
+            path.join(dead.artifactPath, "keep.txt"),
+            "replacement directory",
+          );
+          replaced = true;
+        },
+      }),
+    /no complete ownership inventory|unsafe|changed/u,
+  );
+  assert.equal(replaced, true);
+  assert.equal(
+    readFileSync(path.join(dead.artifactPath, "keep.txt"), "utf8"),
+    "replacement directory",
+  );
+  assert.equal(
+    readFileSync(path.join(preserved, RUN_OWNER_FILENAME), "utf8").includes(
+      dead.runId,
+    ),
+    true,
+  );
+});
+
+test("run trash recovery resumes every deletion crash phase", async (t) => {
+  const phases = [
+    "run-trash-renamed",
+    "run-trash-synced",
+    "run-payload-removed:cargo-target",
+    "run-owner-retired",
+    "run-trash-directory-removed",
+  ];
+  for (const phase of phases) {
+    await t.test(phase, (subtest) => {
+      const repoRoot = realpathSync(
+        mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-crash-")),
+      );
+      const dead = writeRunContainerFixture({ withCargoTarget: true });
+      subtest.after(() => {
+        cleanupExactTestArtifacts(repoRoot);
+        for (const name of readdirSync(dead.parent)) {
+          if (name.includes(dead.runId)) {
+            cleanupExactTestArtifacts(path.join(dead.parent, name));
+          }
+        }
+      });
+      let interruptedPath;
+
+      assert.throws(
+        () =>
+          runRecoveryFixture({
+            repoRoot,
+            runContainerOwnerIsAlive(pid) {
+              return pid !== dead.pid;
+            },
+            runContainerFailpoint(actual, details) {
+              if (actual !== phase || details.runId !== dead.runId) return;
+              interruptedPath = details.path;
+              throw new Error(`injected ${phase}`);
+            },
+          }),
+        new RegExp(`injected ${phase}`, "u"),
+      );
+      assert.ok(interruptedPath);
+      assert.equal(
+        readdirSync(dead.parent).some((name) => name.includes(dead.runId)),
+        true,
+      );
+
+      assert.equal(
+        runRecoveryFixture({
+          repoRoot,
+          runContainerOwnerIsAlive() {
+            return true;
+          },
+        }),
+        7,
+      );
+      assert.equal(
+        readdirSync(dead.parent).some((name) => name.includes(dead.runId)),
+        false,
+      );
+    });
+  }
+});
+
+test("a crash during normal run retirement is reaped by the next build", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-normal-crash-")),
+  );
+  let interrupted;
+  t.after(() => {
+    cleanupExactTestArtifacts(repoRoot, interrupted);
+  });
+
+  assert.throws(
+    () =>
+      runRecoveryFixture({
+        repoRoot,
+        runContainerFailpoint(phase, details) {
+          if (phase !== "run-trash-renamed") return;
+          interrupted = details.path;
+          throw new Error("injected normal run retirement crash");
+        },
+      }),
+    /injected normal run retirement crash/u,
+  );
+  assert.ok(interrupted);
+  assert.equal(lstatSync(interrupted).isDirectory(), true);
+
+  assert.equal(
+    runRecoveryFixture({
+      repoRoot,
+      runContainerOwnerIsAlive() {
+        return true;
+      },
+    }),
+    7,
+  );
+  assert.equal(
+    readdirSync(realpathSync(os.tmpdir())).some((name) =>
+      name === path.basename(interrupted),
+    ),
+    false,
+  );
+});
+
+test("SIGKILL after run retirement is recovered without Cargo", async (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-sigkill-")),
+  );
+  const marker = path.join(repoRoot, "run-retired.marker.json");
+  let interruptedPath;
+  t.after(() => {
+    cleanupExactTestArtifacts(repoRoot, interruptedPath);
+  });
+  const workerSource = String.raw`
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import { runNativeBuild } from ${JSON.stringify(pathToFileURL(BUILD_NATIVE_SCRIPT).href)};
+const blocker = new Int32Array(new SharedArrayBuffer(4));
+const state = {
+  sourceGitRevision: ${JSON.stringify(SOURCE_REVISION)},
+  sourceTreeClean: true,
+  sourceTreeSha256: ${JSON.stringify(SOURCE_DIGEST)},
+};
+await runNativeBuild({
+  repoRoot: process.env.REPO_ROOT,
+  env: {},
+  createSourceSnapshot(_root, targetRoot) {
+    const snapshotRoot = mkdtempSync(
+      join(targetRoot, ".iroha-js-source-snapshot-"),
+    );
+    mkdirSync(join(snapshotRoot, "fixture"), { recursive: true });
+    return { snapshotRoot, targetRoot };
+  },
+  verifySourceSnapshot() {
+    return state;
+  },
+  cleanupSourceSnapshot(snapshot) {
+    rmSync(snapshot.snapshotRoot, { recursive: true, force: true });
+  },
+  runCargo() {
+    return { status: 7, stdout: "" };
+  },
+  runContainerFailpoint(phase, details) {
+    if (phase !== "run-trash-renamed") return;
+    const owner = JSON.parse(
+      readFileSync(
+        join(
+          details.path,
+          ".iroha-js-native-build-run-owner-v1.json",
+        ),
+        "utf8",
+      ),
+    );
+    if (owner.pid !== process.pid) return;
+    writeFileSync(
+      process.env.MARKER,
+      JSON.stringify(details),
+      { flag: "wx" },
+    );
+    Atomics.wait(blocker, 0, 0);
+  },
+});
+`;
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "--eval", workerSource],
+    {
+      env: {
+        ...process.env,
+        MARKER: marker,
+        REPO_ROOT: repoRoot,
+      },
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  child.stderrText = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
+    child.stderrText += chunk;
+  });
+
+  await waitForCrashMarker(marker, child);
+  interruptedPath = JSON.parse(readFileSync(marker, "utf8")).path;
+  assert.equal(lstatSync(interruptedPath).isDirectory(), true);
+  const exited = waitForChildExit(child);
+  assert.equal(child.kill("SIGKILL"), true);
+  const exit = await exited;
+  assert.equal(exit.code, null);
+  assert.equal(exit.signal, "SIGKILL");
+
+  assert.equal(runRecoveryFixture({ repoRoot }), 7);
+  assert.equal(existsSync(interruptedPath), false);
 });
 
 test("overlapping native builds use distinct private Cargo targets", () => {
@@ -767,6 +1744,243 @@ test("the publication lock rejects an overlapping publisher and removes its stag
   }
 });
 
+test("a dead publication owner is recovered with only its durable ABA guard retained", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-stale-lock-")),
+  );
+  try {
+    const nativePath = finalNativePath(repoRoot);
+    const stale = writePublicationLockFixture(nativePath, { pid: 424242 });
+    const candidateOwner = "23456781-2345-4234-8234-23456789abcd";
+    writePublicationLockFixture(nativePath, {
+      ownerId: candidateOwner,
+      pid: 424242,
+      suffix: `.publish-lock-candidate-${candidateOwner}`,
+    });
+    const releasedOwner = "34567812-3456-4345-8345-3456789abcde";
+    writePublicationLockFixture(nativePath, {
+      ownerId: releasedOwner,
+      pid: 424242,
+      suffix: `.publish-lock-released-${releasedOwner}`,
+    });
+    writeFileSync(stale.stagePath, "partial-staged-output");
+    writeFileSync(stale.retiredPath, "retired-prior-output");
+    assert.equal(
+      runFixtureNativeBuild({
+        bytes: "recovered-new-output",
+        publicationOwnerIsAlive(pid) {
+          assert.equal(pid, 424242);
+          return false;
+        },
+        repoRoot,
+      }),
+      0,
+    );
+    assert.equal(readFileSync(nativePath, "utf8"), "recovered-new-output");
+    assert.equal(
+      readNativeBuildProvenance(nativePath).source_tree_sha256,
+      SOURCE_DIGEST,
+    );
+    assertNoPublicationTransients(nativePath, {
+      allowedStaleOwners: [stale.ownerId],
+    });
+    assert.deepEqual(
+      readdirSync(`${stale.lockPath}-stale-${stale.ownerId}`).sort(),
+      ["owner.json", "recovered.json"],
+    );
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a delayed stale-owner recovery cannot displace the newer publisher", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-lock-aba-")),
+  );
+  try {
+    const nativePath = finalNativePath(repoRoot);
+    const stale = writePublicationLockFixture(nativePath, { pid: 424242 });
+    let newerStatus;
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          bytes: "delayed-publisher-output",
+          publicationOwnerIsAlive(pid) {
+            assert.equal(pid, 424242);
+            newerStatus = runFixtureNativeBuild({
+              bytes: "newer-publisher-output",
+              publicationOwnerIsAlive(candidatePid) {
+                return candidatePid !== 424242;
+              },
+              repoRoot,
+            });
+            return false;
+          },
+          repoRoot,
+        }),
+      /stale publication lock recovery is already pending/u,
+    );
+    assert.equal(newerStatus, 0);
+    assert.equal(readFileSync(nativePath, "utf8"), "newer-publisher-output");
+    assert.equal(
+      readNativeBuildProvenance(nativePath).source_tree_sha256,
+      SOURCE_DIGEST,
+    );
+    assertNoPublicationTransients(nativePath, {
+      allowedStaleOwners: [stale.ownerId],
+    });
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a live publication owner is never displaced", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-live-lock-")),
+  );
+  try {
+    const nativePath = finalNativePath(repoRoot);
+    const live = writePublicationLockFixture(nativePath);
+    assert.throws(
+      () => runFixtureNativeBuild({ repoRoot }),
+      /publication is in progress/u,
+    );
+    assert.deepEqual(readdirSync(live.lockPath), ["owner.json"]);
+    const names = readdirSync(path.dirname(nativePath)).filter((name) =>
+      name.startsWith(`.${path.basename(nativePath)}.publish-lock`),
+    );
+    assert.deepEqual(names, [path.basename(live.lockPath)]);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("recovery marker link and partial-write crash states converge safely", () => {
+  for (const state of ["linked", "partial"]) {
+    const repoRoot = realpathSync(
+      mkdtempSync(
+        path.join(os.tmpdir(), `iroha-js-native-recovery-${state}-`),
+      ),
+    );
+    try {
+      const nativePath = finalNativePath(repoRoot);
+      const ownerId =
+        state === "linked"
+          ? "45678123-4567-4456-8456-456789abcdef"
+          : "56781234-5678-4567-8567-56789abcdef0";
+      const tombstone = writePublicationLockFixture(nativePath, {
+        ownerId,
+        pid: 424242,
+        suffix: `.publish-lock-stale-${ownerId}`,
+      });
+      const recoveredBy = "67812345-6789-4678-8678-6789abcdef01";
+      const temporaryPath = path.join(
+        tombstone.lockPath,
+        `.recovered.json.${recoveredBy}.tmp`,
+      );
+      if (state === "linked") {
+        writeFileSync(
+          temporaryPath,
+          `${JSON.stringify({ version: 1, recovered_by: recoveredBy })}\n`,
+        );
+        linkSync(
+          temporaryPath,
+          path.join(tombstone.lockPath, "recovered.json"),
+        );
+      } else {
+        writeFileSync(temporaryPath, '{"version":');
+      }
+      assert.equal(
+        runFixtureNativeBuild({
+          repoRoot,
+          publicationOwnerIsAlive(pid) {
+            if (state === "linked") {
+              assert.fail(`recovered guard unexpectedly probed PID ${pid}`);
+            }
+            assert.equal(pid, 424242);
+            return false;
+          },
+        }),
+        0,
+      );
+      assert.deepEqual(readdirSync(tombstone.lockPath).sort(), [
+        "owner.json",
+        "recovered.json",
+      ]);
+      assertNoPublicationTransients(nativePath, {
+        allowedStaleOwners: [ownerId],
+      });
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("an incomplete off-name lock initializer is forensic-only and never self-deadlocks", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-lock-init-")),
+  );
+  try {
+    const nativePath = finalNativePath(repoRoot);
+    const ownerId = "78123456-789a-4789-8789-789abcdef012";
+    const initializerPath = path.join(
+      path.dirname(nativePath),
+      `.${path.basename(nativePath)}.publish-lock-candidate-${ownerId}`,
+    );
+    mkdirSync(initializerPath, { mode: 0o700, recursive: true });
+    writeFileSync(path.join(initializerPath, "owner.json"), '{"version":');
+    assert.equal(
+      runFixtureNativeBuild({
+        bytes: "first-output",
+        repoRoot,
+      }),
+      0,
+    );
+    assert.equal(
+      runFixtureNativeBuild({
+        bytes: "second-output",
+        repoRoot,
+      }),
+      0,
+    );
+    assert.equal(readFileSync(nativePath, "utf8"), "second-output");
+    assert.equal(
+      readFileSync(path.join(initializerPath, "owner.json"), "utf8"),
+      '{"version":',
+    );
+    const canonicalLock = path.join(
+      path.dirname(nativePath),
+      `.${path.basename(nativePath)}.publish-lock`,
+    );
+    assert.equal(readdirSync(path.dirname(nativePath)).includes(
+      path.basename(canonicalLock),
+    ), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("an uninitialized legacy publication lock is preserved and rejected", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-unsafe-lock-")),
+  );
+  try {
+    const nativePath = finalNativePath(repoRoot);
+    const lockPath = path.join(
+      path.dirname(nativePath),
+      `.${path.basename(nativePath)}.publish-lock`,
+    );
+    mkdirSync(lockPath, { mode: 0o700, recursive: true });
+    assert.throws(
+      () => runFixtureNativeBuild({ repoRoot }),
+      /invalid inventory/u,
+    );
+    assert.deepEqual(readdirSync(lockPath), []);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test("Cargo failure or missing artifact leaves the prior authenticated pair valid", () => {
   const repoRoot = realpathSync(
     mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-prepublish-")),
@@ -843,6 +2057,115 @@ test("failure after invalidation leaves the old binary unauthenticated", () => {
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test("failure after retiring the old binary restores it before releasing ownership", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-retire-fail-")),
+  );
+  try {
+    const oldState = sourceState({
+      sourceGitRevision: "c".repeat(40),
+      sourceTreeSha256: "d".repeat(64),
+    });
+    const { nativePath } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      oldState,
+    );
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          bytes: "replacement-native-output",
+          repoRoot,
+          publicationFailpoint(stage) {
+            if (stage === "after-binary-retire") {
+              throw new Error("injected failure after binary retirement");
+            }
+          },
+        }),
+      /injected failure after binary retirement/u,
+    );
+    assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
+    assert.throws(
+      () => readNativeBuildProvenance(nativePath),
+      /ENOENT|unreadable/u,
+    );
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("failure immediately after stage rename rolls back only the exact owned binary", async (t) => {
+  await t.test("replacement restores the prior binary", () => {
+    const repoRoot = realpathSync(
+      mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-rename-rollback-")),
+    );
+    try {
+      const { nativePath } = writeAuthenticatedPair(
+        repoRoot,
+        "prior-native-output",
+        sourceState({
+          sourceGitRevision: "c".repeat(40),
+          sourceTreeSha256: "d".repeat(64),
+        }),
+      );
+      assert.throws(
+        () =>
+          runFixtureNativeBuild({
+            bytes: "replacement-native-output",
+            repoRoot,
+            publicationFailpoint(stage) {
+              if (stage === "after-binary-rename") {
+                throw new Error("injected failure after binary rename");
+              }
+            },
+          }),
+        /injected failure after binary rename/u,
+      );
+      assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
+      assert.throws(
+        () => readNativeBuildProvenance(nativePath),
+        /ENOENT|unreadable/u,
+      );
+      assertNoPublicationTransients(nativePath);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  await t.test("first publication removes its unpublished binary", () => {
+    const repoRoot = realpathSync(
+      mkdtempSync(
+        path.join(os.tmpdir(), "iroha-js-native-rename-first-rollback-"),
+      ),
+    );
+    try {
+      const nativePath = finalNativePath(repoRoot);
+      assert.throws(
+        () =>
+          runFixtureNativeBuild({
+            bytes: "first-native-output",
+            repoRoot,
+            publicationFailpoint(stage) {
+              if (stage === "after-binary-rename") {
+                throw new Error("injected first failure after binary rename");
+              }
+            },
+          }),
+        /injected first failure after binary rename/u,
+      );
+      assert.throws(() => readFileSync(nativePath), /ENOENT/u);
+      assert.throws(
+        () => readNativeBuildProvenance(nativePath),
+        /ENOENT|unreadable/u,
+      );
+      assertNoPublicationTransients(nativePath);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 test("failure after binary publication cannot leave stale provenance valid", () => {

@@ -13,32 +13,17 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
-/** Pure SDK encoders for the native confidential-v2 privacy proof witness/request ABI. */
+/** Pure SDK encoders for typed confidential-v2 witness values. */
 public final class PrivacyConfidentialWitness {
   public static final String SCHEMA_PRIVACY_CONFIDENTIAL_WITNESS_V1 =
       "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV1";
-  public static final String SCHEMA_PRIVACY_PROOF_REQUEST_V1 =
-      "connect_norito_bridge::PrivacyProofRequestV1";
-  public static final String CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID =
-      "confidential-transfer-v2";
-  public static final String CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT =
-      "buildConfidentialTransferProofV2";
-  public static final String CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF =
-      "halo2-ipa-pasta:confidential_transfer_v2";
-  public static final String CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID = "unshield";
-  public static final String CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT =
-      "buildConfidentialUnshieldProofV3";
-  public static final String CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF =
-      "halo2-ipa-pasta:confidential_unshield_v3";
   public static final int CONFIDENTIAL_TREE_CAPACITY_V2 = 1 << 16;
   public static final int CONFIDENTIAL_MAX_INPUTS_V2 = 2;
   public static final int CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2 = 2;
   public static final int CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3 = 1;
 
-  private static final int CONFIDENTIAL_PROOF_MAX_BYTES = 32 * 1024 * 1024;
   private static final int NORITO_HEADER_BYTES = 40;
   private static final int REQUEST_FLAGS = NoritoHeader.COMPACT_LEN;
-  private static final int PRIVACY_REQUEST_SCHEMA_BYTE = 0x52;
   private static final int WITNESS_HEADER_PADDING_BYTES = 8;
   private static final BigInteger U128_MAX = BigInteger.ONE.shiftLeft(128).subtract(BigInteger.ONE);
   private static final BigInteger BYTE_MASK = BigInteger.valueOf(0xffL);
@@ -83,72 +68,6 @@ public final class PrivacyConfidentialWitness {
     return encodeWitness(witness);
   }
 
-  public static byte[] buildConfidentialTransferProofRequestV1(final WitnessV1 witness) {
-    return buildConfidentialTransferProofRequestV1(witness, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF);
-  }
-
-  public static byte[] buildConfidentialTransferProofRequestV1(
-      final WitnessV1 witness, final String vkRef) {
-    validateVkRef(vkRef, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF);
-    return encodePrivacyProofRequest(
-        CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
-        CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT,
-        vkRef,
-        TRANSFER_PUBLIC_INPUTS_SCHEMA,
-        encodeTransferWitness(witness),
-        new byte[0]);
-  }
-
-  public static byte[] buildConfidentialUnshieldProofRequestV1(final WitnessV1 witness) {
-    return buildConfidentialUnshieldProofRequestV1(witness, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF);
-  }
-
-  public static byte[] buildConfidentialUnshieldProofRequestV1(
-      final WitnessV1 witness, final String vkRef) {
-    validateVkRef(vkRef, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF);
-    return encodePrivacyProofRequest(
-        CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID,
-        CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT,
-        vkRef,
-        UNSHIELD_PUBLIC_INPUTS_SCHEMA,
-        encodeUnshieldWitness(witness),
-        new byte[0]);
-  }
-
-  public static byte[] buildConfidentialTransferVerifyRequestV1(final byte[] proof) {
-    return buildConfidentialTransferVerifyRequestV1(proof, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF);
-  }
-
-  public static byte[] buildConfidentialTransferVerifyRequestV1(
-      final byte[] proof, final String vkRef) {
-    validateVkRef(vkRef, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF);
-    final byte[] proofBytes = copyNonEmptyProof(proof);
-    return encodePrivacyProofRequest(
-        CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
-        CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT,
-        vkRef,
-        TRANSFER_PUBLIC_INPUTS_SCHEMA,
-        new byte[0],
-        proofBytes);
-  }
-
-  public static byte[] buildConfidentialUnshieldVerifyRequestV1(final byte[] proof) {
-    return buildConfidentialUnshieldVerifyRequestV1(proof, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF);
-  }
-
-  public static byte[] buildConfidentialUnshieldVerifyRequestV1(
-      final byte[] proof, final String vkRef) {
-    validateVkRef(vkRef, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF);
-    final byte[] proofBytes = copyNonEmptyProof(proof);
-    return encodePrivacyProofRequest(
-        CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID,
-        CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT,
-        vkRef,
-        UNSHIELD_PUBLIC_INPUTS_SCHEMA,
-        new byte[0],
-        proofBytes);
-  }
-
   private static void validateTransferWitness(final WitnessV1 witness) {
     Objects.requireNonNull(witness, "witness");
     require("0".equals(witness.publicAmount()),
@@ -167,29 +86,6 @@ public final class PrivacyConfidentialWitness {
         "confidential unshield witness must not include transferOutputs");
     require(witness.unshieldChange().size() <= CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3,
         "confidential unshield witness supports at most one unshieldChange output");
-  }
-
-  private static byte[] encodePrivacyProofRequest(
-      final String algorithmId,
-      final String entrypoint,
-      final String vkRef,
-      final byte[] publicInputs,
-      final byte[] witness,
-      final byte[] proof) {
-    final byte[] archive =
-        NoritoCodec.encode(
-            new ProofRequestPayload(
-                requestText(algorithmId, "algorithmId"),
-                requestText(entrypoint, "entrypoint"),
-                requestText(vkRef, "vkRef"),
-                publicInputs.clone(),
-                witness.clone(),
-                proof.clone()),
-            SCHEMA_PRIVACY_PROOF_REQUEST_V1,
-            PROOF_REQUEST_ADAPTER,
-            REQUEST_FLAGS);
-    Arrays.fill(archive, 6, 22, (byte) PRIVACY_REQUEST_SCHEMA_BYTE);
-    return archive;
   }
 
   private static byte[] addNoritoHeaderPadding(final byte[] archive, final int paddingBytes) {
@@ -459,24 +355,6 @@ public final class PrivacyConfidentialWitness {
         }
       };
 
-  private static final TypeAdapter<ProofRequestPayload> PROOF_REQUEST_ADAPTER =
-      new TypeAdapter<>() {
-        @Override
-        public void encode(final NoritoEncoder encoder, final ProofRequestPayload value) {
-          writeField(encoder, child -> writeString(child, value.algorithmId));
-          writeField(encoder, child -> writeString(child, value.entrypoint));
-          writeField(encoder, child -> writeString(child, value.vkRef));
-          writeField(encoder, child -> writeBytesVec(child, value.publicInputs));
-          writeField(encoder, child -> writeBytesVec(child, value.witness));
-          writeField(encoder, child -> writeBytesVec(child, value.proof));
-        }
-
-        @Override
-        public ProofRequestPayload decode(final NoritoDecoder decoder) {
-          throw new UnsupportedOperationException("privacy proof requests are encode-only");
-        }
-      };
-
   private static void writeField(final NoritoEncoder parent, final FieldWriter writer) {
     final NoritoEncoder child = parent.childEncoder();
     writer.write(child);
@@ -540,37 +418,9 @@ public final class PrivacyConfidentialWitness {
     return trimmed;
   }
 
-  private static String requestText(final String value, final String name) {
-    final String text = canonicalText(value, name);
-    require(text.length() <= 1024, name + " must not exceed 1024 characters");
-    for (int i = 0; i < text.length(); i++) {
-      final char ch = text.charAt(i);
-      require(ch >= 0x21 && ch <= 0x7e, name + " must be printable ASCII without whitespace");
-      require(Character.isLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.' || ch == ':',
-          name + " must use portable privacy request characters");
-    }
-    return text;
-  }
-
-  private static void validateVkRef(final String value, final String expected) {
-    final String text = requestText(value, "vkRef");
-    require(expected.equals(text), "vkRef must be " + expected);
-  }
-
   private static byte[] fixed32(final byte[] value, final String name) {
     if (value == null || value.length != 32) {
       throw new IllegalArgumentException(name + " must be 32 bytes");
-    }
-    return value.clone();
-  }
-
-  private static byte[] copyNonEmptyProof(final byte[] value) {
-    if (value == null || value.length == 0) {
-      throw new IllegalArgumentException("proof must not be empty");
-    }
-    if (value.length > CONFIDENTIAL_PROOF_MAX_BYTES) {
-      throw new IllegalArgumentException(
-          "proof must not exceed " + CONFIDENTIAL_PROOF_MAX_BYTES + " bytes");
     }
     return value.clone();
   }
@@ -608,27 +458,4 @@ public final class PrivacyConfidentialWitness {
     void write(NoritoEncoder encoder, T value);
   }
 
-  private static final class ProofRequestPayload {
-    private final String algorithmId;
-    private final String entrypoint;
-    private final String vkRef;
-    private final byte[] publicInputs;
-    private final byte[] witness;
-    private final byte[] proof;
-
-    private ProofRequestPayload(
-        final String algorithmId,
-        final String entrypoint,
-        final String vkRef,
-        final byte[] publicInputs,
-        final byte[] witness,
-        final byte[] proof) {
-      this.algorithmId = algorithmId;
-      this.entrypoint = entrypoint;
-      this.vkRef = vkRef;
-      this.publicInputs = publicInputs;
-      this.witness = witness;
-      this.proof = proof;
-    }
-  }
 }
