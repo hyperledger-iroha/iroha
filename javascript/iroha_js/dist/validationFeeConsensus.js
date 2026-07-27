@@ -106,13 +106,13 @@ const FINALIZATION_KEYS = Object.freeze([
   "reject",
 ]);
 const PAYOUT_KEYS = Object.freeze([
-  "batchSbdMinorUnits",
+  "batchDsMinorUnits",
   "codeHash",
   "contractAddress",
+  "dsAssetDefinitionId",
+  "dsScale",
   "entrypoint",
   "recipients",
-  "sbdAssetDefinitionId",
-  "sbdScale",
   "treasuryAccountId",
   "vaultAccountId",
   "xorAssetDefinitionId",
@@ -535,16 +535,16 @@ function validatePayout(value, label) {
       `${label}.entrypoint must be autonomous_validation_fee_tick`,
     );
   }
-  canonicalText(payout.sbdAssetDefinitionId, `${label}.sbdAssetDefinitionId`);
+  canonicalText(payout.dsAssetDefinitionId, `${label}.dsAssetDefinitionId`);
   canonicalText(payout.xorAssetDefinitionId, `${label}.xorAssetDefinitionId`);
   canonicalText(payout.treasuryAccountId, `${label}.treasuryAccountId`);
   canonicalText(payout.vaultAccountId, `${label}.vaultAccountId`);
-  const batchSbdMinorUnits = u128String(
-    payout.batchSbdMinorUnits,
-    `${label}.batchSbdMinorUnits`,
+  const batchDsMinorUnits = u128String(
+    payout.batchDsMinorUnits,
+    `${label}.batchDsMinorUnits`,
     true,
   );
-  const sbdScale = unsignedInteger(payout.sbdScale, 255, `${label}.sbdScale`);
+  const dsScale = unsignedInteger(payout.dsScale, 255, `${label}.dsScale`);
   const xorOutputMin = u128String(
     payout.xorOutputMin,
     `${label}.xorOutputMin`,
@@ -556,10 +556,10 @@ function validatePayout(value, label) {
     true,
   );
   if (
-    payout.sbdAssetDefinitionId === payout.xorAssetDefinitionId ||
+    payout.dsAssetDefinitionId === payout.xorAssetDefinitionId ||
     payout.treasuryAccountId === payout.vaultAccountId ||
-    batchSbdMinorUnits !== 1_000n ||
-    sbdScale !== 2 ||
+    batchDsMinorUnits !== 1_000n ||
+    dsScale !== 2 ||
     xorOutputMin !== 4n ||
     xorOutputMax !== 100n
   ) {
@@ -594,7 +594,7 @@ function validatePayout(value, label) {
     }
     recipients.add(account);
   }
-  return { sbdScale };
+  return { dsScale };
 }
 
 function validateCurrentPolicy(value, label) {
@@ -635,8 +635,8 @@ function validateCurrentPolicy(value, label) {
   const parliament = validateParliament(policy.parliament, `${label}.parliament`);
   const payout = validatePayout(policy.payout, `${label}.payout`);
   if (
-    policy.feeAssetDefinitionId !== policy.payout.sbdAssetDefinitionId ||
-    feeScale !== payout.sbdScale ||
+    policy.feeAssetDefinitionId !== policy.payout.dsAssetDefinitionId ||
+    feeScale !== payout.dsScale ||
     parliament.policy.rules.rules.voting_asset_id !==
       policy.payout.xorAssetDefinitionId ||
     parliament.payout.rules.rules.voting_asset_id !==

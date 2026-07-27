@@ -12500,12 +12500,12 @@ export interface ValidationFeeVerifiedPayoutV1 {
   readonly contractAddress: string;
   readonly codeHash: string;
   readonly entrypoint: "autonomous_validation_fee_tick";
-  readonly sbdAssetDefinitionId: string;
+  readonly dsAssetDefinitionId: string;
   readonly xorAssetDefinitionId: string;
   readonly treasuryAccountId: string;
   readonly vaultAccountId: string;
-  readonly batchSbdMinorUnits: "1000";
-  readonly sbdScale: 2;
+  readonly batchDsMinorUnits: "1000";
+  readonly dsScale: 2;
   readonly xorOutputMin: "4";
   readonly xorOutputMax: "100";
   readonly recipients: ReadonlyArray<

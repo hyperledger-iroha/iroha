@@ -3986,10 +3986,10 @@ mod tests {
         rules
     }
 
-    fn validation_fee_guard_sbd_asset_id() -> AssetDefinitionId {
+    fn validation_fee_guard_ds_asset_id() -> AssetDefinitionId {
         AssetDefinitionId::new(
-            DomainId::try_new("sbd", "guard").expect("SBD guard domain"),
-            "sbd".parse().expect("SBD asset name"),
+            DomainId::try_new("ds", "guard").expect("DS guard domain"),
+            "ds".parse().expect("DS asset name"),
         )
     }
 
@@ -4011,10 +4011,10 @@ mod tests {
             entrypoint: "autonomous_validation_fee_tick"
                 .parse()
                 .expect("payout entrypoint"),
-            sbd_asset_id: validation_fee_guard_sbd_asset_id(),
+            ds_asset_id: validation_fee_guard_ds_asset_id(),
             xor_asset_id: rules.voting_asset_id.clone(),
             pool_vault_account_id: fixture_account(0xA2),
-            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+            batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
             min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
             max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
             recipients: (0xA3..=0xA6)
@@ -4045,7 +4045,7 @@ mod tests {
                     genesis_hash: [0x77; 32],
                     policy_version: 1,
                     previous_policy_hash: None,
-                    ds_asset_id: validation_fee_guard_sbd_asset_id(),
+                    ds_asset_id: validation_fee_guard_ds_asset_id(),
                     ds_scale: VALIDATION_FEE_DS_SCALE,
                     fee: Quantity::zero(),
                     treasury_account_id: fixture_account(0xA7),

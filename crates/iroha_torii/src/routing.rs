@@ -54022,10 +54022,10 @@ mod validation_fee_torii_ingress_tests {
             entrypoint: "autonomous_validation_fee_tick"
                 .parse()
                 .expect("payout entrypoint"),
-            sbd_asset_id: fee_asset.clone(),
+            ds_asset_id: fee_asset.clone(),
             xor_asset_id: xor_asset_definition_id(),
             pool_vault_account_id: account(20, "derive validation-fee pool vault").0,
-            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+            batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
             min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
             max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
             recipients: (21..=24)

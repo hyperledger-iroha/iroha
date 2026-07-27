@@ -319,7 +319,7 @@ pub struct ValidationFeeVerifiedPayoutV1 {
     #[norito(rename = "vaultAccountId")]
     pub vault_account_id: String,
     /// Exact DS payout batch in fee-asset minor units.
-    #[norito(rename = "batchSbdMinorUnits")]
+    #[norito(rename = "batchDsMinorUnits")]
     pub batch_ds_minor_units: String,
     /// DS asset scale.
     #[norito(rename = "dsScale")]
@@ -1561,7 +1561,7 @@ mod tests {
             "rosterRoot",
             "memberCount",
             "contractAddress",
-            "batchSbdMinorUnits",
+            "batchDsMinorUnits",
             "account_id",
             "share_basis_points",
         ] {
