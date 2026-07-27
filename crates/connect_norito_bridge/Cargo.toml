@@ -28,8 +28,9 @@ norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = fals
 # Keep the bridge feature closure explicit so it does not silently inherit a
 # daemon consensus mode. Core currently requires BLS and unconditionally uses
 # its JSON/FAST-DSL surfaces; the production bridge additionally needs the
-# complete Halo2/IPA circuit-parameter path.
-iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
+# complete Halo2/IPA circuit-parameter path and every verifier imported by
+# core's exhaustive privacy-admission boundary.
+iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "zk-stark", "circuit-params"] }
 iroha_zkp_halo2 = { workspace = true }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
@@ -56,7 +57,7 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 tempfile = { workspace = true }
 
 [dev-dependencies]
-iroha_core = { path = "../iroha_core", default-features = false, features = ["iroha-core-tests", "json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
+iroha_core = { path = "../iroha_core", default-features = false, features = ["iroha-core-tests", "json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "zk-stark", "circuit-params"] }
 sorafs_chunker = { workspace = true }
 
 [build-dependencies]
