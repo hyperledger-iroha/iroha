@@ -23,15 +23,14 @@ pub(crate) const ZK_X509_MIN_CHAIN_DEPTH_V1: usize = 2;
 pub(crate) const ZK_X509_MAX_CHAIN_DEPTH_V1: usize = 3;
 /// Maximum DER bytes in the private CRL witness.
 ///
-/// Deployments with larger revocation sets must publish partitioned,
-/// issuer-scoped CRLs and corresponding policy records.  Unbounded parsing is
-/// deliberately excluded from a consensus circuit.
+/// Unbounded parsing is deliberately excluded from a consensus circuit.
 pub(crate) const ZK_X509_MAX_CRL_BYTES_V1: usize = 16 * 1024;
 /// Maximum revoked-certificate entries accepted in the private DER CRL.
 ///
 /// The sparse root is reconstructed from every entry in-circuit.  Sixty-four
-/// entries keep that SHA-256 work bounded; issuers use partitioned CRLs for
-/// larger populations.
+/// entries keep that SHA-256 work bounded. A policy whose issuer's complete
+/// base CRL exceeds this ceiling is unusable under v0; partitioning, delta
+/// CRLs, and omission are not fallback paths.
 pub(crate) const ZK_X509_MAX_CRL_ENTRIES_V1: usize = 64;
 /// Maximum canonical unsigned certificate-serial bytes.
 pub(crate) const ZK_X509_MAX_SERIAL_BYTES_V1: usize = 20;
@@ -122,7 +121,16 @@ pub(crate) const ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1: &[u8] =
 /// `issuer_spki_digest`, both times, and `revoked_serials_root` from the
 /// private signed CRL.  Thus the signature check and non-revocation predicate
 /// cannot refer to unrelated revocation sources.
-pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"version:u16|trust_anchor_id:bytes32|certificate_policy_id:bytes32|record_epoch:u64|der_digest:sha256|issuer_spki_digest:sha256|this_update_unix_seconds:u64|next_update_unix_seconds:u64|revoked_serials_root:sha256|root_epoch:u64|previous_record_digest:option<bytes32>|lifecycle:active-or-revoked|record_digest:bytes32";
+pub(crate) const ZK_X509_CRL_REVISION_SCHEMA_V1: &[u8] = b"implicit_version:u16-be=1|trust_anchor_id:bytes32|certificate_policy_id:bytes32|record_epoch:u64-be|crl_number:u64-be-strictly-increasing|crl_der_digest:domain-framed-sha256|issuer_spki_digest:domain-framed-sha256|this_update_unix_seconds:u64-be|next_update_unix_seconds:u64-be|revoked_serials_root:sha256|root_epoch:u64-be-active-equals-record-epoch-revoked-preserves-predecessor|previous_record_digest:tag-plus-bytes32|lifecycle:u8-active-or-revoked|record_digest:domain-framed-sha256";
+/// Closed revocation scope for the first release.
+///
+/// One certificate-policy lineage identifies exactly one leaf-certificate
+/// issuer and its complete, non-partitioned signed CRL. The relation checks
+/// revocation of the leaf certificate only. Deployments with multiple
+/// intermediate issuers use separate policy lineages; delta CRLs, indirect
+/// CRLs, distribution-point partitions, and incomplete shard claims are
+/// rejected rather than interpreted.
+pub(crate) const ZK_X509_CRL_SCOPE_PROFILE_V1: &[u8] = b"leaf-only:one-issuer-per-certificate-policy:complete-base-crl:no-delta:no-indirect:no-partition:no-distribution-point";
 
 /// Exact extension roles admitted on every certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,7 +147,7 @@ pub(crate) enum ZkX509CertificateExtensionV1 {
     ExtendedKeyUsage,
 }
 
-/// Complete certificate extension allow-list in DER OID order.
+/// Complete certificate extension allow-list in canonical engine role order.
 pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1: [ZkX509CertificateExtensionV1; 5] = [
     ZkX509CertificateExtensionV1::AuthorityKeyIdentifier,
     ZkX509CertificateExtensionV1::SubjectKeyIdentifier,
@@ -147,6 +155,30 @@ pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1: [ZkX509CertificateEx
     ZkX509CertificateExtensionV1::BasicConstraints,
     ZkX509CertificateExtensionV1::ExtendedKeyUsage,
 ];
+
+/// Exact extension roles admitted on the complete base CRL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ZkX509CrlExtensionV1 {
+    /// RFC 5280 authority key identifier, non-critical.
+    AuthorityKeyIdentifier,
+    /// RFC 5280 monotonically increasing CRLNumber, non-critical.
+    CrlNumber,
+}
+
+/// Complete CRL extension allow-list in canonical engine role order.
+pub(crate) const ZK_X509_ALLOWED_CRL_EXTENSIONS_V1: [ZkX509CrlExtensionV1; 2] = [
+    ZkX509CrlExtensionV1::AuthorityKeyIdentifier,
+    ZkX509CrlExtensionV1::CrlNumber,
+];
+
+/// Canonical rules for the admitted complete base CRL.
+///
+/// Every CRL is v2, direct, complete, and issuer-scoped. AKI and CRLNumber are
+/// required exactly once and non-critical. CRLNumber must fit `u64` and
+/// strictly increase in governance. Delta, indirect, partitioned, and
+/// distribution-point CRLs are forbidden. No CRL-entry extension is allowed,
+/// including certificateIssuer and reasonCode.
+pub(crate) const ZK_X509_CRL_PROFILE_V1: &[u8] = b"rfc5280-crl-closed-v1:der-only:v2:ecdsa-sha256-absent-params:aki-required-noncritical:crl-number-required-noncritical-u64-strictly-increasing:no-delta-crl-indicator:no-issuing-distribution-point:no-freshest-crl:no-indirect:no-partition:no-entry-extensions:complete-base-crl:max64-revoked-entries";
 
 /// Canonical rules for the admitted RFC 5280 subset.
 ///
@@ -164,7 +196,7 @@ pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1: [ZkX509CertificateEx
 /// PolicyMappings, CertificatePolicies, PolicyConstraints, InhibitAnyPolicy,
 /// alternate names, distribution points, and every other extension are
 /// forbidden rather than silently ignored.
-pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:utc-time-1950-2049:generalized-time-2050-9999:seconds-z-no-fraction:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-aki-ski-basicconstraints-keyusage-and-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign:direct-issuer-crlsign:pathlen:root-self-name-self-signature:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points";
+pub(crate) const ZK_X509_RFC5280_PROFILE_V1: &[u8] = b"rfc5280-closed-v1:der-only:v3:serial-positive-nonzero-max20:exact-name-der:utc-time-1970-2049:generalized-time-2050-9999:seconds-z-no-fraction:certificate-validity-inclusive:no-unique-id:ecdsa-sha256-absent-params:spki-id-ec-public-key-prime256v1-uncompressed:extensions-exact-aki-ski-basicconstraints-keyusage-and-leaf-eku:no-duplicates-no-unknown:aki-ski-linked:bc-ku-eku-critical:ca-keycertsign:direct-leaf-issuer-crlsign:pathlen:root-self-name-self-signature:leaf-revocation-only:no-nameconstraints:no-policy-mapping:no-certificate-policies:no-policy-constraints:no-inhibit-any-policy:no-alt-names:no-distribution-points:no-freshest-crl";
 
 /// ECDSA signature canonicalization rules.
 ///
@@ -206,14 +238,24 @@ pub(crate) const ZK_X509_FRI_FOLDING_ARITY_V1: u8 = 2;
 pub(crate) const ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1: u16 = 32;
 /// Fiat-Shamir proof-of-work grinding bits.
 pub(crate) const ZK_X509_GRINDING_BITS_V1: u8 = 20;
-/// Claimed minimum computational soundness after conservative loss budget.
-pub(crate) const ZK_X509_MIN_SOUNDNESS_BITS_V1: u16 = 128;
+/// Required computational-soundness target for the released proof system.
+///
+/// This is a release requirement, not a claim about the provisional
+/// parameters below.  The finalized analysis must derive its bound from the
+/// implemented AIR degree schedule, FRI proximity theorem, transcript,
+/// opening schedule, hash assumptions, and every verifier union-bound event.
+pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 /// Consensus proof-byte ceiling inherited by this engine.
 pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 8 * 1024 * 1024;
 /// Maximum number of independently mixed constraints in one segment.
 pub(crate) const ZK_X509_MAX_CONSTRAINTS_PER_SEGMENT_V1: u16 = 512;
-/// Conservative upper bound on events union-bounded by the verifier.
-pub(crate) const ZK_X509_MAX_SOUNDNESS_EVENTS_V1: u16 = 32;
+/// Whether an implementation-derived proof-system soundness analysis is fixed.
+///
+/// A numeric estimate assembled from query count and blow-up factor alone is
+/// not a soundness proof.  This gate remains false until the native verifier's
+/// exact degree, proximity, opening, transcript, and hash schedules exist and
+/// their aggregate bound meets [`ZK_X509_TARGET_SOUNDNESS_BITS_V1`].
+pub(crate) const ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1: bool = false;
 /// Whether release-machine measurements have fixed row, time, and memory use.
 ///
 /// This is separate from cryptographic correctness: a prover that is sound
@@ -342,6 +384,8 @@ pub(crate) struct ZkX509ReadinessV1 {
     pub(crate) adversarial_tests: bool,
     /// Native relation and AIR witness execution agree differentially.
     pub(crate) differential_tests: bool,
+    /// The implemented verifier has a complete, reviewed soundness analysis.
+    pub(crate) soundness_analysis: bool,
     /// Release benchmarks fix measured rows, time, and peak memory below ceilings.
     pub(crate) resource_benchmarks: bool,
 }
@@ -359,6 +403,7 @@ impl ZkX509ReadinessV1 {
             && self.known_answer_tests
             && self.adversarial_tests
             && self.differential_tests
+            && self.soundness_analysis
             && self.resource_benchmarks
     }
 }
@@ -378,9 +423,6 @@ pub(crate) enum ZkX509ProfileErrorV1 {
     /// Proof cap is zero or exceeds Taira's fixed per-action ceiling.
     #[error("zk-X509 proof cap is invalid")]
     InvalidProofCap,
-    /// FRI and algebraic batching do not meet the explicit soundness floor.
-    #[error("zk-X509 explicit soundness-loss bound is below the release floor")]
-    InvalidSoundnessBound,
     /// Consensus activation was requested before every implementation gate passed.
     #[error("zk-X509 engine is not complete and cannot be activated")]
     EngineIncomplete,
@@ -388,36 +430,63 @@ pub(crate) enum ZkX509ProfileErrorV1 {
 
 /// Validate the immutable profile constants.
 pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
-    let mut expected_start = 0;
-    for segment in ZK_X509_TRACE_SEGMENTS_V1 {
-        if segment.start_row != expected_start
-            || segment.start_row >= segment.end_row
-            || segment.end_row > ZK_X509_TRACE_ROWS_V1
+    let mut total_instances = 0_usize;
+    let mut total_rows = 0_u64;
+    for (index, segment) in ZK_X509_TRACE_SEGMENTS_V1.iter().copied().enumerate() {
+        if segment.name.is_empty()
+            || segment.max_rows == 0
+            || !segment.max_rows.is_power_of_two()
+            || segment.max_rows > ZK_X509_SEGMENT_ROWS_V1
+            || segment.max_instances == 0
+            || ZK_X509_TRACE_SEGMENTS_V1[..index]
+                .iter()
+                .any(|other| other.name == segment.name)
         {
-            return Err(ZkX509ProfileErrorV1::InvalidTracePartition);
+            return Err(ZkX509ProfileErrorV1::InvalidTraceEnvelope);
         }
         if segment.columns == 0
             || segment.columns > ZK_X509_MAX_TRACE_COLUMNS_V1
+            || ZK_X509_LDE_COLUMN_BATCH_V1 == 0
+            || segment.columns % ZK_X509_LDE_COLUMN_BATCH_V1 != 0
             || segment.constraint_degree < 2
             || segment.constraint_degree > ZK_X509_MAX_CONSTRAINT_DEGREE_V1
         {
             return Err(ZkX509ProfileErrorV1::InvalidTraceSegmentBound);
         }
-        expected_start = segment.end_row;
+        total_instances = total_instances
+            .checked_add(usize::from(segment.max_instances))
+            .ok_or(ZkX509ProfileErrorV1::InvalidTraceEnvelope)?;
+        total_rows = total_rows
+            .checked_add(segment.total_rows())
+            .ok_or(ZkX509ProfileErrorV1::InvalidTraceEnvelope)?;
     }
-    if expected_start != ZK_X509_TRACE_ROWS_V1 {
-        return Err(ZkX509ProfileErrorV1::InvalidTracePartition);
+    let streaming_lde_batch_bytes = u64::from(ZK_X509_SEGMENT_ROWS_V1)
+        .checked_mul(u64::from(ZK_X509_LDE_COLUMN_BATCH_V1))
+        .and_then(|value| value.checked_mul(core::mem::size_of::<u64>() as u64))
+        .and_then(|value| value.checked_mul(u64::from(ZK_X509_FRI_BLOWUP_FACTOR_V1)))
+        .ok_or(ZkX509ProfileErrorV1::InvalidTraceEnvelope)?;
+    if total_instances == 0
+        || total_instances > ZK_X509_MAX_TRACE_SEGMENTS_V1
+        || total_rows == 0
+        || streaming_lde_batch_bytes > ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
+        || ZK_X509_PROVER_TARGET_SECONDS_V1 == 0
+    {
+        return Err(ZkX509ProfileErrorV1::InvalidTraceEnvelope);
     }
     if ZK_X509_GOLDILOCKS_MODULUS_V1 != 0xffff_ffff_0000_0001
+        || !ZK_X509_FRI_BLOWUP_FACTOR_V1.is_power_of_two()
         || ZK_X509_FRI_BLOWUP_FACTOR_V1 < 8
         || ZK_X509_FRI_QUERY_COUNT_V1 < 48
         || ZK_X509_COMPOSITION_LANES_V1 < 3
         || ZK_X509_FRI_FOLDING_ARITY_V1 != 2
         || ZK_X509_FRI_FINAL_POLYNOMIAL_LENGTH_V1 > 32
         || ZK_X509_GRINDING_BITS_V1 < 20
-        || ZK_X509_MIN_SOUNDNESS_BITS_V1 < 128
+        || ZK_X509_TARGET_SOUNDNESS_BITS_V1 < 128
     {
         return Err(ZkX509ProfileErrorV1::InvalidStarkParameters);
+    }
+    if ZK_X509_MAX_CONSTRAINTS_PER_SEGMENT_V1 == 0 {
+        return Err(ZkX509ProfileErrorV1::InvalidTraceSegmentBound);
     }
     if ZK_X509_MAX_PROOF_BYTES_V1 == 0 || ZK_X509_MAX_PROOF_BYTES_V1 > 8 * 1024 * 1024 {
         return Err(ZkX509ProfileErrorV1::InvalidProofCap);
@@ -430,7 +499,11 @@ pub(crate) fn require_activation_readiness_v1(
     readiness: ZkX509ReadinessV1,
 ) -> Result<(), ZkX509ProfileErrorV1> {
     validate_profile_v1()?;
-    if !ZK_X509_ENGINE_ACTIVATION_READY_V1 || !readiness.is_complete() {
+    if !ZK_X509_ENGINE_ACTIVATION_READY_V1
+        || !ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1
+        || !ZK_X509_RESOURCE_PROFILE_FINALIZED_V1
+        || !readiness.is_complete()
+    {
         return Err(ZkX509ProfileErrorV1::EngineIncomplete);
     }
     Ok(())
@@ -446,10 +519,13 @@ mod tests {
         assert_eq!(
             ZK_X509_TRACE_SEGMENTS_V1
                 .iter()
-                .map(|segment| segment.rows())
-                .sum::<u32>(),
-            ZK_X509_TRACE_ROWS_V1
+                .map(|segment| usize::from(segment.max_instances))
+                .sum::<usize>(),
+            15
         );
+        assert_eq!(ZK_X509_TARGET_SOUNDNESS_BITS_V1, 128);
+        assert!(!ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1);
+        assert!(!ZK_X509_RESOURCE_PROFILE_FINALIZED_V1);
         assert!(!ZK_X509_ENGINE_ACTIVATION_READY_V1);
         assert_eq!(
             require_activation_readiness_v1(ZkX509ReadinessV1 {
@@ -463,6 +539,8 @@ mod tests {
                 known_answer_tests: true,
                 adversarial_tests: true,
                 differential_tests: true,
+                soundness_analysis: true,
+                resource_benchmarks: true,
             }),
             Err(ZkX509ProfileErrorV1::EngineIncomplete)
         );
@@ -511,6 +589,14 @@ mod tests {
                 differential_tests: false,
                 ..complete_readiness()
             },
+            ZkX509ReadinessV1 {
+                soundness_analysis: false,
+                ..complete_readiness()
+            },
+            ZkX509ReadinessV1 {
+                resource_benchmarks: false,
+                ..complete_readiness()
+            },
         ];
         for gate in gates {
             assert!(!gate.is_complete());
@@ -553,6 +639,8 @@ mod tests {
             known_answer_tests: true,
             adversarial_tests: true,
             differential_tests: true,
+            soundness_analysis: true,
+            resource_benchmarks: true,
         }
     }
 }

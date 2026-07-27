@@ -13,29 +13,33 @@ use iroha_data_model::{
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
             RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
-            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509TrustAnchorV1,
-            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
+            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyZkAcePolicyV1,
+            RevokePrivacyZkX509CertificatePolicyV1, RevokePrivacyZkX509CrlV1,
             RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyZkAcePolicyV1,
-            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509TrustAnchorV1,
-            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
-            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
+            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
+            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
+            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
+            TransitionPrivacyProtocolLifecycleV1,
         },
     },
     permission::Permission,
     prelude::{Account, AccountId, Quantity, Register, Transfer},
     privacy::{
-        PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyConsensusPolicyTighteningV1,
-        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1,
-        PrivacyRootRoleV1, PrivacyStatementV1, PrivacyValueBalanceDirectionV1,
-        PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsActionV1, PrivacyZkX509RecordLifecycleV1,
+        PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyConsensusPolicyTighteningV1, PrivacyNamespaceV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1,
+        PrivacyRootManagementV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyStatementV1,
+        PrivacyValueBalanceDirectionV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsActionV1,
+        PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
         TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
+        ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
         ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
         validate_zk_ace_policy_revocation_v1, validate_zk_ace_policy_rotation_v1,
         validate_zk_x509_certificate_policy_revocation_v1,
-        validate_zk_x509_certificate_policy_rotation_v1,
-        validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
-        zk_ams_issuer_policy_record_digest_v1, zk_ams_registry_record_digest_v1,
+        validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_crl_revocation_v1,
+        validate_zk_x509_crl_rotation_v1, validate_zk_x509_trust_anchor_revocation_v1,
+        validate_zk_x509_trust_anchor_rotation_v1, zk_ams_issuer_policy_record_digest_v1,
+        zk_ams_registry_record_digest_v1,
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
@@ -65,9 +69,15 @@ use crate::{
         compute_privacy_pgc_account_state_root_v1, load_privacy_orchard_pool_snapshot_v1,
         load_privacy_pgc_pool_snapshot_v1, load_privacy_zk_ace_policy_v1,
         load_privacy_zk_ams_registry_snapshot_v1, load_privacy_zk_x509_authoritative_state_v1,
-        load_privacy_zk_x509_certificate_policy_v1, load_privacy_zk_x509_trust_anchor_v1,
-        plan_privacy_root_history_update_v1, privacy_zk_ace_policy_count_v1,
-        privacy_zk_x509_governance_record_counts_v1, validate_privacy_zk_x509_statement_state_v1,
+        load_privacy_zk_x509_certificate_policy_v1, load_privacy_zk_x509_crl_v1,
+        load_privacy_zk_x509_trust_anchor_v1, plan_privacy_root_history_update_v1,
+        privacy_zk_ace_policy_count_v1, privacy_zk_x509_ca_namespace_v1,
+        privacy_zk_x509_crl_lineage_count_v1, privacy_zk_x509_governance_record_counts_v1,
+        privacy_zk_x509_policy_namespace_v1,
+        validate_privacy_zk_x509_policy_revocation_dependencies_v1,
+        validate_privacy_zk_x509_statement_state_v1,
+        validate_privacy_zk_x509_trust_anchor_revocation_dependencies_v1,
+        validate_privacy_zk_x509_trust_anchor_root_state_v1,
         validate_unanchored_privacy_root_retention_v1,
     },
     privacy_verifier::{
@@ -363,86 +373,37 @@ impl Execute for PublishPrivacyRootV1 {
                 "ZK-AMS AccountRegistry roots require the typed registry bootstrap and verified proof successors",
             ));
         }
+        if self.publication.namespace.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+            return Err(invalid_privacy_parameter(
+                "X.509 CA and CRL roots are derived atomically by their typed governance instructions and cannot be published generically",
+            ));
+        }
         let current_height = state_transaction._curr_block.height().get();
-        let zk_x509_records = if self.publication.namespace.protocol_id()
-            == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
-        {
-            let PrivacyNamespaceScopeV1::TrustAnchorPolicy(scope) =
-                self.publication.namespace.scope()
-            else {
-                return Err(invalid_privacy_parameter(
-                    "X.509 root publication requires an exact trust-anchor/policy namespace",
-                ));
-            };
-            privacy_zk_x509_governance_record_counts_v1(
-                &state_transaction.world.privacy_commitments,
-            )
-            .map_err(|error| {
-                Error::InvariantViolation(
-                    format!("persisted X.509 governance state is invalid: {error}").into(),
-                )
-            })?;
-            let trust_anchor = load_privacy_zk_x509_trust_anchor_v1(
-                scope.trust_anchor_id,
-                &state_transaction.world.privacy_commitments,
-            )
-            .map_err(|error| {
+        let activation_key = PrivacyActivationKeyV1::new(self.publication.namespace.protocol_id());
+        let activation = state_transaction
+            .world
+            .privacy_activations
+            .get(&activation_key)
+            .copied()
+            .ok_or_else(|| {
                 invalid_privacy_parameter(format!(
-                    "X.509 root publication requires a registered trust anchor: {error}"
+                    "privacy protocol {:?} is not registered",
+                    self.publication.namespace.protocol_id()
                 ))
             })?;
-            if trust_anchor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
-                return Err(invalid_privacy_parameter(
-                    "X.509 root publication requires an active trust-anchor revision",
-                ));
-            }
-            let certificate_policy = load_privacy_zk_x509_certificate_policy_v1(
-                scope.trust_anchor_id,
-                scope.policy_id,
-                &state_transaction.world.privacy_commitments,
-            )
-            .map_err(|error| {
-                invalid_privacy_parameter(format!(
-                    "X.509 root publication requires a registered certificate policy: {error}"
-                ))
-            })?;
-            if certificate_policy.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
-                return Err(invalid_privacy_parameter(
-                    "X.509 root publication requires an active certificate-policy revision",
-                ));
-            }
-            Some((trust_anchor, certificate_policy))
-        } else {
-            let activation_key =
-                PrivacyActivationKeyV1::new(self.publication.namespace.protocol_id());
-            let activation = state_transaction
-                .world
-                .privacy_activations
-                .get(&activation_key)
-                .copied()
-                .ok_or_else(|| {
-                    invalid_privacy_parameter(format!(
-                        "privacy protocol {:?} is not registered",
-                        self.publication.namespace.protocol_id()
-                    ))
-                })?;
-            activation.validate().map_err(|error| {
-                invalid_privacy_parameter(format!(
-                    "registered privacy activation is invalid: {error}"
-                ))
-            })?;
-            if matches!(activation.lifecycle, PrivacyProtocolLifecycleV1::Retired(_)) {
-                return Err(invalid_privacy_parameter(
-                    "cannot publish a root for a retired privacy protocol",
-                ));
-            }
-            if self.publication.role.management() == PrivacyRootManagementV1::ProofManaged {
-                return Err(invalid_privacy_parameter(
-                    "proof-managed privacy roots require their protocol-specific typed bootstrap and cannot be published generically",
-                ));
-            }
-            None
-        };
+        activation.validate().map_err(|error| {
+            invalid_privacy_parameter(format!("registered privacy activation is invalid: {error}"))
+        })?;
+        if matches!(activation.lifecycle, PrivacyProtocolLifecycleV1::Retired(_)) {
+            return Err(invalid_privacy_parameter(
+                "cannot publish a root for a retired privacy protocol",
+            ));
+        }
+        if self.publication.role.management() == PrivacyRootManagementV1::ProofManaged {
+            return Err(invalid_privacy_parameter(
+                "proof-managed privacy roots require their protocol-specific typed bootstrap and cannot be published generically",
+            ));
+        }
 
         let head_key = PrivacyRootHeadKeyV1::new(self.publication.namespace, self.publication.role)
             .map_err(invalid_privacy_parameter)?;
@@ -451,39 +412,21 @@ impl Execute for PublishPrivacyRootV1 {
             .privacy_root_heads
             .get(&head_key)
             .copied();
-        if zk_x509_records.is_some() {
-            match current_head {
-                None if self.publication.epoch != 1 => {
-                    return Err(invalid_privacy_parameter(
-                        "initial X.509 root publication must use epoch one",
-                    ));
-                }
-                Some(head) if head.epoch().checked_add(1) != Some(self.publication.epoch) => {
-                    return Err(invalid_privacy_parameter(format!(
-                        "X.509 root epoch must advance exactly from {} to {}",
-                        head.epoch(),
-                        head.epoch().saturating_add(1)
-                    )));
-                }
-                None | Some(_) => {}
+        match (self.publication.role.management(), current_head) {
+            (PrivacyRootManagementV1::ProofManaged, Some(_)) => {
+                return Err(invalid_privacy_parameter(
+                    "governance may initialize but cannot advance a proof-managed privacy root",
+                ));
             }
-        } else {
-            match (self.publication.role.management(), current_head) {
-                (PrivacyRootManagementV1::ProofManaged, Some(_)) => {
-                    return Err(invalid_privacy_parameter(
-                        "governance may initialize but cannot advance a proof-managed privacy root",
-                    ));
-                }
-                (PrivacyRootManagementV1::GovernanceManaged, Some(head))
-                    if self.publication.epoch <= head.epoch() =>
-                {
-                    return Err(invalid_privacy_parameter(format!(
-                        "governance-managed privacy root epoch must advance current epoch {}",
-                        head.epoch()
-                    )));
-                }
-                _ => {}
+            (PrivacyRootManagementV1::GovernanceManaged, Some(head))
+                if self.publication.epoch <= head.epoch() =>
+            {
+                return Err(invalid_privacy_parameter(format!(
+                    "governance-managed privacy root epoch must advance current epoch {}",
+                    head.epoch()
+                )));
             }
+            _ => {}
         }
 
         if let Some(head) = current_head {
@@ -525,24 +468,8 @@ impl Execute for PublishPrivacyRootV1 {
         let publication_digest = self.publication.digest().map_err(|error| {
             invalid_privacy_parameter(format!("privacy root publication encoding failed: {error}"))
         })?;
-        let provenance = if let Some((trust_anchor, certificate_policy)) = zk_x509_records {
-            PrivacyRootProvenanceV1::zk_x509_governance(
-                publication_digest,
-                self.publication.namespace,
-                self.publication.role,
-                self.publication.epoch,
-                self.publication.root,
-                trust_anchor.record_digest,
-                trust_anchor.record_epoch,
-                certificate_policy.record_digest,
-                certificate_policy.record_epoch,
-                current_height,
-            )
-            .map_err(invalid_privacy_parameter)?
-        } else {
-            PrivacyRootProvenanceV1::governance(publication_digest, current_height)
-                .map_err(invalid_privacy_parameter)?
-        };
+        let provenance = PrivacyRootProvenanceV1::governance(publication_digest, current_height)
+            .map_err(invalid_privacy_parameter)?;
         let removals = plan_privacy_root_history_update_v1(
             &state_transaction.world.privacy_roots,
             &[root_key],
@@ -1274,6 +1201,249 @@ fn validate_zk_ace_policy_references(
     Ok(())
 }
 
+struct PlannedZkX509RootAppendV1 {
+    root_key: PrivacyRootKeyV1,
+    provenance: PrivacyRootProvenanceV1,
+    head_key: PrivacyRootHeadKeyV1,
+    next_head: PrivacyRootHeadRecordV1,
+    removals: Vec<PrivacyRootKeyV1>,
+}
+
+fn plan_zk_x509_root_append_v1(
+    publication: PrivacyRootPublicationV1,
+    provenance: PrivacyRootProvenanceV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<PlannedZkX509RootAppendV1, Error> {
+    publication.validate().map_err(|error| {
+        invalid_privacy_parameter(format!("X.509 root publication rejected: {error}"))
+    })?;
+    provenance
+        .validate()
+        .map_err(|error| invalid_privacy_parameter(format!("invalid X.509 provenance: {error}")))?;
+    let root_key = PrivacyRootKeyV1::new(
+        publication.namespace,
+        publication.role,
+        publication.epoch,
+        publication.root,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    let head_key = PrivacyRootHeadKeyV1::new(publication.namespace, publication.role)
+        .map_err(invalid_privacy_parameter)?;
+    let current_head = state_transaction
+        .world
+        .privacy_root_heads
+        .get(&head_key)
+        .copied();
+    match current_head {
+        None if publication.epoch != 1 => {
+            return Err(invalid_privacy_parameter(
+                "initial X.509 root publication must use epoch one",
+            ));
+        }
+        Some(head) => {
+            head.validate().map_err(|error| {
+                Error::InvariantViolation(
+                    format!("persisted X.509 root head is invalid: {error}").into(),
+                )
+            })?;
+            let expected_epoch = head.epoch().checked_add(1).ok_or_else(|| {
+                invalid_privacy_parameter("X.509 root epoch cannot advance past u64::MAX")
+            })?;
+            if publication.epoch != expected_epoch {
+                return Err(invalid_privacy_parameter(format!(
+                    "X.509 root epoch must advance exactly from {} to {expected_epoch}",
+                    head.epoch()
+                )));
+            }
+            let retained_head = PrivacyRootKeyV1::new(
+                head_key.namespace(),
+                head_key.role(),
+                head.epoch(),
+                head.root(),
+            )
+            .map_err(invalid_privacy_parameter)?;
+            if state_transaction.world.privacy_roots.get(&retained_head) != Some(&head.provenance())
+            {
+                return Err(Error::InvariantViolation(
+                    "X.509 root head is inconsistent with retained history".into(),
+                ));
+            }
+        }
+        None => {
+            if state_transaction
+                .world
+                .privacy_roots
+                .range(PrivacyRootKeyV1::history_range(
+                    head_key.namespace(),
+                    head_key.role(),
+                ))
+                .next()
+                .is_some()
+            {
+                return Err(Error::InvariantViolation(
+                    "X.509 root history exists without a current head".into(),
+                ));
+            }
+        }
+    }
+
+    let removals = plan_privacy_root_history_update_v1(
+        &state_transaction.world.privacy_roots,
+        &[root_key],
+        state_transaction
+            .world
+            .privacy_consensus_policy
+            .get()
+            .admission_retained_root_count(),
+    )
+    .map_err(|error| {
+        invalid_privacy_parameter(format!("X.509 root publication rejected: {error}"))
+    })?;
+    let retention_anchor = removals
+        .last()
+        .map(|key| PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root()))
+        .transpose()
+        .map_err(invalid_privacy_parameter)?
+        .or_else(|| current_head.and_then(PrivacyRootHeadRecordV1::retention_anchor));
+    let next_head = PrivacyRootHeadRecordV1::new(
+        publication.epoch,
+        publication.root,
+        provenance,
+        retention_anchor,
+    )
+    .map_err(invalid_privacy_parameter)?;
+    Ok(PlannedZkX509RootAppendV1 {
+        root_key,
+        provenance,
+        head_key,
+        next_head,
+        removals,
+    })
+}
+
+fn plan_zk_x509_ca_root_append_v1(
+    record: PrivacyZkX509TrustAnchorRecordV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<PlannedZkX509RootAppendV1, Error> {
+    let namespace = privacy_zk_x509_ca_namespace_v1(record.trust_anchor_id)
+        .map_err(invalid_privacy_parameter)?;
+    let publication = PrivacyRootPublicationV1::new(
+        namespace,
+        PrivacyRootRoleV1::CertificateAuthorityMembership,
+        record.ca_membership_root_epoch,
+        record.ca_membership_root,
+    )
+    .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+    let publication_digest = publication.digest().map_err(|error| {
+        invalid_privacy_parameter(format!(
+            "X.509 CA-root publication encoding failed: {error}"
+        ))
+    })?;
+    let provenance = PrivacyRootProvenanceV1::zk_x509_ca_governance(
+        publication_digest,
+        publication.namespace,
+        publication.epoch,
+        publication.root,
+        record,
+        state_transaction.block_height(),
+    )
+    .map_err(invalid_privacy_parameter)?;
+    plan_zk_x509_root_append_v1(publication, provenance, state_transaction)
+}
+
+fn plan_zk_x509_crl_root_append_v1(
+    record: PrivacyZkX509CrlRecordV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<PlannedZkX509RootAppendV1, Error> {
+    let namespace =
+        privacy_zk_x509_policy_namespace_v1(record.trust_anchor_id, record.certificate_policy_id)
+            .map_err(invalid_privacy_parameter)?;
+    let publication = PrivacyRootPublicationV1::new(
+        namespace,
+        PrivacyRootRoleV1::CertificateRevocationNonmembership,
+        record.root_epoch,
+        record.revoked_serials_root,
+    )
+    .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
+    let publication_digest = publication.digest().map_err(|error| {
+        invalid_privacy_parameter(format!(
+            "X.509 CRL-root publication encoding failed: {error}"
+        ))
+    })?;
+    let provenance = PrivacyRootProvenanceV1::zk_x509_crl_governance(
+        publication_digest,
+        publication.namespace,
+        publication.epoch,
+        publication.root,
+        record,
+        state_transaction.block_height(),
+    )
+    .map_err(invalid_privacy_parameter)?;
+    plan_zk_x509_root_append_v1(publication, provenance, state_transaction)
+}
+
+fn apply_zk_x509_root_append_v1(
+    plan: PlannedZkX509RootAppendV1,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) {
+    for key in plan.removals {
+        state_transaction.world.privacy_roots.remove(key);
+    }
+    state_transaction
+        .world
+        .privacy_roots
+        .insert(plan.root_key, plan.provenance);
+    state_transaction
+        .world
+        .privacy_root_heads
+        .insert(plan.head_key, plan.next_head);
+}
+
+fn validate_zk_x509_crl_freshness_v1(
+    record: PrivacyZkX509CrlRecordV1,
+    block_timestamp_ms: u64,
+) -> Result<(), Error> {
+    let block_unix_seconds = block_timestamp_ms / 1_000;
+    if block_unix_seconds < record.this_update_unix_seconds
+        || block_unix_seconds >= record.next_update_unix_seconds
+    {
+        return Err(invalid_privacy_parameter(
+            "X.509 signed CRL is not current at the executing block timestamp",
+        ));
+    }
+    let age = block_unix_seconds
+        .checked_sub(record.this_update_unix_seconds)
+        .ok_or_else(|| invalid_privacy_parameter("X.509 signed CRL begins in the future"))?;
+    if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {
+        return Err(invalid_privacy_parameter(format!(
+            "X.509 signed CRL age {age}s exceeds the {}s freshness limit",
+            ZK_X509_MAX_CRL_AGE_SECONDS_V1
+        )));
+    }
+    Ok(())
+}
+
+fn validate_current_zk_x509_ca_root_v1(
+    trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    validate_privacy_zk_x509_trust_anchor_root_state_v1(
+        trust_anchor,
+        state_transaction
+            .world
+            .privacy_consensus_policy
+            .get()
+            .admission_retained_root_count(),
+        &state_transaction.world.privacy_roots,
+        &state_transaction.world.privacy_root_heads,
+    )
+    .map_err(|error| {
+        Error::InvariantViolation(
+            format!("persisted X.509 CA-root state is invalid: {error}").into(),
+        )
+    })
+}
+
 fn preflight_x509_governance_action_v1<T: norito::codec::Encode>(
     instruction: &T,
     label: &str,
@@ -1403,12 +1573,14 @@ impl Execute for RegisterPrivacyZkX509TrustAnchorV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
+        let root_plan = plan_zk_x509_ca_root_append_v1(self.record, state_transaction)?;
 
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
             .privacy_commitments
             .insert(key, state_record);
+        apply_zk_x509_root_append_v1(root_plan, state_transaction);
         Ok(())
     }
 }
@@ -1489,12 +1661,14 @@ impl Execute for RotatePrivacyZkX509TrustAnchorV1 {
             state_transaction.block_height(),
         )
         .map_err(invalid_privacy_parameter)?;
+        let root_plan = plan_zk_x509_ca_root_append_v1(self.successor, state_transaction)?;
 
         state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
         state_transaction
             .world
             .privacy_commitments
             .insert(key, state_record);
+        apply_zk_x509_root_append_v1(root_plan, state_transaction);
         Ok(())
     }
 }
@@ -1559,6 +1733,13 @@ impl Execute for RevokePrivacyZkX509TrustAnchorV1 {
                 ))
             },
         )?;
+        validate_privacy_zk_x509_trust_anchor_revocation_dependencies_v1(
+            self.successor.trust_anchor_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!("X.509 trust-anchor revocation rejected: {error}"))
+        })?;
         let key = PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision(
             self.successor.trust_anchor_id,
             self.successor.record_epoch,
@@ -1634,6 +1815,7 @@ impl Execute for RegisterPrivacyZkX509CertificatePolicyV1 {
                 "X.509 certificate-policy registration requires an active trust anchor",
             ));
         }
+        validate_current_zk_x509_ca_root_v1(trust_anchor, state_transaction)?;
         if x509_certificate_policy_lineage_revision_count_v1(
             self.record.trust_anchor_id,
             self.record.policy_id,
@@ -1710,6 +1892,7 @@ impl Execute for RotatePrivacyZkX509CertificatePolicyV1 {
                 "X.509 certificate-policy rotation requires an active trust anchor",
             ));
         }
+        validate_current_zk_x509_ca_root_v1(trust_anchor, state_transaction)?;
         let lineage_count = x509_certificate_policy_lineage_revision_count_v1(
             self.successor.trust_anchor_id,
             self.successor.policy_id,
@@ -1847,6 +2030,16 @@ impl Execute for RevokePrivacyZkX509CertificatePolicyV1 {
                 ))
             },
         )?;
+        validate_privacy_zk_x509_policy_revocation_dependencies_v1(
+            self.successor.trust_anchor_id,
+            self.successor.policy_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "X.509 certificate-policy revocation rejected: {error}"
+            ))
+        })?;
         let key = PrivacyCommitmentKeyV1::zk_x509_certificate_policy_revision(
             self.successor.trust_anchor_id,
             self.successor.policy_id,
@@ -1864,6 +2057,230 @@ impl Execute for RevokePrivacyZkX509CertificatePolicyV1 {
             ));
         }
         let state_record = PrivacyStateItemRecordV1::zk_x509_certificate_policy_governance(
+            self.successor,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, state_record);
+        Ok(())
+    }
+}
+
+impl Execute for RegisterPrivacyZkX509CrlV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let (expected_action_index, encoded_action_bytes) = preflight_x509_governance_action_v1(
+            &self,
+            "X.509 signed-CRL registration",
+            state_transaction,
+        )?;
+        self.record.validate_initial().map_err(|error| {
+            invalid_privacy_parameter(format!("X.509 signed-CRL registration rejected: {error}"))
+        })?;
+        let crl_lineage_count =
+            privacy_zk_x509_crl_lineage_count_v1(&state_transaction.world.privacy_commitments)
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("persisted X.509 governance state is invalid: {error}").into(),
+                    )
+                })?;
+        if crl_lineage_count >= ZK_X509_MAX_CRL_LINEAGES_V1 {
+            return Err(invalid_privacy_parameter(format!(
+                "X.509 signed-CRL registry is full at {} lineages",
+                ZK_X509_MAX_CRL_LINEAGES_V1
+            )));
+        }
+        let trust_anchor = load_privacy_zk_x509_trust_anchor_v1(
+            self.record.trust_anchor_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "X.509 signed-CRL registration requires a trust anchor: {error}"
+            ))
+        })?;
+        if trust_anchor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+            return Err(invalid_privacy_parameter(
+                "X.509 signed-CRL registration requires an active trust anchor",
+            ));
+        }
+        validate_current_zk_x509_ca_root_v1(trust_anchor, state_transaction)?;
+        let certificate_policy = load_privacy_zk_x509_certificate_policy_v1(
+            self.record.trust_anchor_id,
+            self.record.certificate_policy_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "X.509 signed-CRL registration requires a certificate policy: {error}"
+            ))
+        })?;
+        if certificate_policy.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+            return Err(invalid_privacy_parameter(
+                "X.509 signed-CRL registration requires an active certificate policy",
+            ));
+        }
+        validate_zk_x509_crl_freshness_v1(
+            self.record,
+            state_transaction.block_unix_timestamp_ms(),
+        )?;
+        let key = PrivacyCommitmentKeyV1::zk_x509_crl_current(
+            self.record.trust_anchor_id,
+            self.record.certificate_policy_id,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_commitments
+            .get(&key)
+            .is_some()
+        {
+            return Err(invalid_privacy_parameter(
+                "X.509 signed-CRL lineage is already registered",
+            ));
+        }
+        let state_record = PrivacyStateItemRecordV1::zk_x509_crl_governance(
+            self.record,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let root_plan = plan_zk_x509_crl_root_append_v1(self.record, state_transaction)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, state_record);
+        apply_zk_x509_root_append_v1(root_plan, state_transaction);
+        Ok(())
+    }
+}
+
+impl Execute for RotatePrivacyZkX509CrlV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let (expected_action_index, encoded_action_bytes) = preflight_x509_governance_action_v1(
+            &self,
+            "X.509 signed-CRL rotation",
+            state_transaction,
+        )?;
+        if self.expected_current_record_digest.is_zero() {
+            return Err(invalid_privacy_parameter(
+                "X.509 expected current signed-CRL digest must be non-zero",
+            ));
+        }
+        let retained_root_count = state_transaction
+            .world
+            .privacy_consensus_policy
+            .get()
+            .admission_retained_root_count();
+        let authoritative = load_privacy_zk_x509_authoritative_state_v1(
+            self.successor.trust_anchor_id,
+            self.successor.certificate_policy_id,
+            retained_root_count,
+            &state_transaction.world.privacy_commitments,
+            &state_transaction.world.privacy_roots,
+            &state_transaction.world.privacy_root_heads,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!("X.509 signed-CRL rotation rejected: {error}"))
+        })?;
+        let current = authoritative.crl_record();
+        if current.record_digest != self.expected_current_record_digest {
+            return Err(invalid_privacy_parameter(
+                "X.509 signed-CRL rotation expected a stale or substituted current revision",
+            ));
+        }
+        validate_zk_x509_crl_rotation_v1(&current, &self.successor).map_err(|error| {
+            invalid_privacy_parameter(format!("X.509 signed-CRL rotation rejected: {error}"))
+        })?;
+        validate_zk_x509_crl_freshness_v1(
+            self.successor,
+            state_transaction.block_unix_timestamp_ms(),
+        )?;
+        let key = PrivacyCommitmentKeyV1::zk_x509_crl_current(
+            self.successor.trust_anchor_id,
+            self.successor.certificate_policy_id,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let state_record = PrivacyStateItemRecordV1::zk_x509_crl_governance(
+            self.successor,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let root_plan = plan_zk_x509_crl_root_append_v1(self.successor, state_transaction)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, state_record);
+        apply_zk_x509_root_append_v1(root_plan, state_transaction);
+        Ok(())
+    }
+}
+
+impl Execute for RevokePrivacyZkX509CrlV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let (expected_action_index, encoded_action_bytes) = preflight_x509_governance_action_v1(
+            &self,
+            "X.509 signed-CRL revocation",
+            state_transaction,
+        )?;
+        if self.expected_current_record_digest.is_zero() {
+            return Err(invalid_privacy_parameter(
+                "X.509 expected current signed-CRL digest must be non-zero",
+            ));
+        }
+        let retained_root_count = state_transaction
+            .world
+            .privacy_consensus_policy
+            .get()
+            .admission_retained_root_count();
+        let authoritative = load_privacy_zk_x509_authoritative_state_v1(
+            self.successor.trust_anchor_id,
+            self.successor.certificate_policy_id,
+            retained_root_count,
+            &state_transaction.world.privacy_commitments,
+            &state_transaction.world.privacy_roots,
+            &state_transaction.world.privacy_root_heads,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!("X.509 signed-CRL revocation rejected: {error}"))
+        })?;
+        let current = authoritative.crl_record();
+        if current.record_digest != self.expected_current_record_digest {
+            return Err(invalid_privacy_parameter(
+                "X.509 signed-CRL revocation expected a stale or substituted current revision",
+            ));
+        }
+        validate_zk_x509_crl_revocation_v1(&current, &self.successor).map_err(|error| {
+            invalid_privacy_parameter(format!("X.509 signed-CRL revocation rejected: {error}"))
+        })?;
+        let key = PrivacyCommitmentKeyV1::zk_x509_crl_current(
+            self.successor.trust_anchor_id,
+            self.successor.certificate_policy_id,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let state_record = PrivacyStateItemRecordV1::zk_x509_crl_governance(
             self.successor,
             state_transaction.block_height(),
         )
@@ -2498,6 +2915,7 @@ impl Execute for SubmitPrivacyProofV1 {
             validate_privacy_zk_x509_statement_state_v1(
                 statement,
                 &snapshot,
+                state_transaction.block_unix_timestamp_ms(),
                 &state_transaction
                     .world
                     .privacy_consensus_policy
@@ -3951,6 +4369,8 @@ mod tests {
             x509_trust_anchor_id(),
             epoch,
             PrivacyX509TrustStoreDigestV1::new([trust_store_byte; 32]),
+            PrivacyRootV1::new([trust_store_byte.wrapping_add(1); 32]),
+            epoch,
             previous,
             lifecycle,
         )

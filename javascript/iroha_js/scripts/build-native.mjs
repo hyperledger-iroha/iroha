@@ -59,10 +59,10 @@ export function runNativeBuild({
     "iroha_js_host",
     ...cargoBuildArgsForNativeProfile(cargoProfile),
   ];
-  const sourceBefore = readSourceState(repoRoot);
+  const sourceBefore = readSourceState(repoRoot, { env });
   const build = runCargo(buildArgs);
   if (build.status !== 0) return build.status ?? 1;
-  const sourceAfter = readSourceState(repoRoot);
+  const sourceAfter = readSourceState(repoRoot, { env });
   const nativePath = nativeBuildOutputPath({
     repoRoot,
     cargoProfile,

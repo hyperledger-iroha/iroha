@@ -68297,7 +68297,8 @@ seiyaku SequentialNfts {
         let value =
             norito::json::to_value(&missing_reserve).expect("serialize missing-reserve snapshot");
         let error = deserialize_state_snapshot_value(value)
-            .expect_err("missing Orchard reserve account must fail closed");
+            .err()
+            .expect("missing Orchard reserve account must fail closed");
         let error = error.to_string();
         assert!(error.contains("world.privacy_state"), "{error}");
         assert!(
@@ -68317,7 +68318,8 @@ seiyaku SequentialNfts {
         let value = norito::json::to_value(&missing_definition)
             .expect("serialize missing-definition snapshot");
         let error = deserialize_state_snapshot_value(value)
-            .expect_err("missing Orchard asset definition must fail closed");
+            .err()
+            .expect("missing Orchard asset definition must fail closed");
         let error = error.to_string();
         assert!(error.contains("world.privacy_state"), "{error}");
         assert!(

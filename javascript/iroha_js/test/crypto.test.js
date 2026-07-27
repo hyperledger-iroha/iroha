@@ -181,7 +181,12 @@ test("a present native file with a bad checksum never falls back", () => {
       join(directory, "iroha_js_host.checksums.json"),
       `${JSON.stringify({
         entries: {
-          [`${process.platform}-${process.arch}`]: { sha256: "0".repeat(64) },
+          [`${process.platform}-${process.arch}`]: {
+            sha256: "0".repeat(64),
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
+          },
         },
       })}\n`,
     );

@@ -14,5 +14,6 @@
 //! [`profile::ZK_X509_ENGINE_ACTIVATION_READY_V1`] is true and all named
 //! readiness requirements validate.
 
+pub(crate) mod der;
 pub(crate) mod merkle;
 pub(crate) mod profile;

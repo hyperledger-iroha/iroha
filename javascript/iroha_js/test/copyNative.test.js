@@ -33,14 +33,16 @@ const NATIVE_FILENAME = "iroha_js_host.node";
 const MANIFEST_FILENAME = "iroha_js_host.checksums.json";
 const COPY_NATIVE_SCRIPT = path.resolve("scripts/copy-native.mjs");
 const SOURCE_REVISION = "a".repeat(40);
+const SOURCE_TREE_DIGEST = "b".repeat(64);
 
 function fixtureBuildProvenance(source, cargoProfile = "debug") {
   return {
-    version: 1,
+    version: 2,
     cargo_profile: cargoProfile,
     native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
     source_git_revision: SOURCE_REVISION,
     source_tree_clean: true,
+    source_tree_sha256: SOURCE_TREE_DIGEST,
   };
 }
 
@@ -76,11 +78,12 @@ await publishNativeBinding({
   cargoProfile: "debug",
   readBuildProvenance(source) {
     return {
-      version: 1,
+      version: 2,
       cargo_profile: "debug",
       native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
       source_git_revision: ${JSON.stringify(SOURCE_REVISION)},
       source_tree_clean: true,
+      source_tree_sha256: ${JSON.stringify(SOURCE_TREE_DIGEST)},
     };
   },
   log() {},
@@ -211,6 +214,7 @@ test("native publication replaces an existing pair repeatably without rename-ove
       cargo_profile: "debug",
       source_git_revision: SOURCE_REVISION,
       source_tree_clean: true,
+      source_tree_sha256: SOURCE_TREE_DIGEST,
     },
   );
 
@@ -334,6 +338,34 @@ test("publisher rejects a stale build-provenance binary before destination mutat
     /does not match the compiled binary/u,
   );
   assert.equal(existsSync(layout.destDir), false);
+});
+
+test("publisher rejects malformed V2 source seals before destination mutation", async (t) => {
+  const layout = createLayout(t);
+  writeFileSync(layout.source, "current-native-output");
+  const missingDigest = fixtureBuildProvenance(layout.source);
+  delete missingDigest.source_tree_sha256;
+  for (const malformed of [
+    missingDigest,
+    {
+      ...fixtureBuildProvenance(layout.source),
+      source_tree_sha256: "B".repeat(64),
+    },
+    { ...fixtureBuildProvenance(layout.source), unexpected: true },
+    { ...fixtureBuildProvenance(layout.source), version: 1 },
+  ]) {
+    await assert.rejects(
+      publishNativeBinding(
+        publicationOptions(layout, {
+          readBuildProvenance() {
+            return malformed;
+          },
+        }),
+      ),
+      /unexpected or missing fields|does not match the compiled binary/u,
+    );
+    assert.equal(existsSync(layout.destDir), false);
+  }
 });
 
 test("probe, signing, and post-publish verification failures preserve the old pair", async (t) => {
