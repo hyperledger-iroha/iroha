@@ -20045,11 +20045,11 @@ async fn handler_status_tail(
     let nexus = app.state.nexus_snapshot();
     let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let offline = status_offline_snapshot(&app);
     // Allowlist bypass
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+        let authoritative_block_height =
+            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
@@ -20090,6 +20090,8 @@ async fn handler_status_tail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let authoritative_block_height =
+        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
@@ -20112,10 +20114,10 @@ async fn handler_status_root(
     let nexus = app.state.nexus_snapshot();
     let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let offline = status_offline_snapshot(&app);
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+        let authoritative_block_height =
+            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
@@ -20154,6 +20156,8 @@ async fn handler_status_root(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let authoritative_block_height =
+        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),

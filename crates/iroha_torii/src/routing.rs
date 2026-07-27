@@ -80049,19 +80049,22 @@ pub async fn handle_status(
 }
 
 #[cfg(feature = "telemetry")]
-/// Keep the public chain-height field monotonic and anchored to applied state.
+/// Anchor the public chain-height field to applied state.
 ///
 /// The Prometheus block counter is populated by a lazy Kura scan and can trail
-/// while a peer applies a catch-up batch. The state block-hash journal publishes
-/// query-visible committed height on the apply path, so `/status.blocks` must
-/// not wait for that telemetry scan.
+/// while a peer applies a catch-up batch. Kura is also persisted before the WSV
+/// commit boundary, so that counter can briefly lead query-visible state. The
+/// state block-hash journal publishes query-visible committed height on the
+/// apply path, so `/status.blocks` must use that height exactly whenever the
+/// handler provides it. Direct callers without a state anchor retain the legacy
+/// monotonic CommitQC fallback.
 fn normalize_status_block_visibility(status: &mut Status, authoritative_block_height: Option<u64>) {
     let telemetry_commit_height = status
         .sumeragi
         .as_ref()
         .map_or(0, |sumeragi| sumeragi.commit_qc_height);
-    let visible_height = authoritative_block_height.unwrap_or(telemetry_commit_height);
-    status.blocks = status.blocks.max(visible_height);
+    status.blocks =
+        authoritative_block_height.unwrap_or_else(|| status.blocks.max(telemetry_commit_height));
 }
 
 #[cfg(feature = "telemetry")]
@@ -80468,10 +80471,16 @@ mod tests {
             "a CommitQC pending apply must not lead query-visible state"
         );
 
-        super::normalize_status_block_visibility(&mut status, Some(4_200));
+        let metrics = Metrics::default();
+        metrics.block_height.inc_by(4_275);
+        let mut status = Status::from(&metrics);
+        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
+        sumeragi.commit_qc_height = 4_276;
+
+        super::normalize_status_block_visibility(&mut status, Some(4_274));
         assert_eq!(
             status.blocks, 4_274,
-            "an older reducer snapshot must not regress visible height"
+            "a Kura-backed telemetry scan pending WSV apply must not lead state"
         );
     }
 
