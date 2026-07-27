@@ -261,6 +261,7 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         expiry_height: 1_000,
         direction: 0, // approve
         duration_blocks,
+        custody: None,
     };
     locks.locks.insert(owner, rec);
     let prev_height = raw_state.view().height();

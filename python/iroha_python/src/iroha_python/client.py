@@ -3169,6 +3169,59 @@ class GovernanceProposalResult:
 
 
 @dataclass(frozen=True)
+class GovernanceLockCustody:
+    """Immutable asset custody retained with a governance lock."""
+
+    escrowed: bool
+    asset_definition_id: str
+    bond_escrow_account: str
+    slash_receiver_account: str
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceLockCustody":
+        if not isinstance(payload, Mapping):
+            raise TypeError("governance lock custody must be an object")
+        expected_fields = {
+            "escrowed",
+            "asset_definition_id",
+            "bond_escrow_account",
+            "slash_receiver_account",
+        }
+        if set(payload) != expected_fields:
+            raise TypeError(
+                "governance lock custody must contain exactly "
+                "`escrowed`, `asset_definition_id`, `bond_escrow_account`, and "
+                "`slash_receiver_account`"
+            )
+        escrowed = payload["escrowed"]
+        if not isinstance(escrowed, bool):
+            raise TypeError("governance lock custody `escrowed` must be bool")
+        identifiers: Dict[str, str] = {}
+        for field in (
+            "asset_definition_id",
+            "bond_escrow_account",
+            "slash_receiver_account",
+        ):
+            value = payload[field]
+            if not isinstance(value, str) or not value:
+                raise TypeError(
+                    f"governance lock custody `{field}` must be a non-empty string"
+                )
+            if value.strip() != value:
+                raise TypeError(
+                    f"governance lock custody `{field}` must not contain "
+                    "surrounding whitespace"
+                )
+            identifiers[field] = value
+        return cls(
+            escrowed=escrowed,
+            asset_definition_id=identifiers["asset_definition_id"],
+            bond_escrow_account=identifiers["bond_escrow_account"],
+            slash_receiver_account=identifiers["slash_receiver_account"],
+        )
+
+
+@dataclass(frozen=True)
 class GovernanceLockRecord:
     """Governance lock record stored for a referendum."""
 
@@ -3178,6 +3231,7 @@ class GovernanceLockRecord:
     expiry_height: int
     direction: int
     duration_blocks: int
+    custody: Optional[GovernanceLockCustody]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceLockRecord":
@@ -3218,6 +3272,14 @@ class GovernanceLockRecord:
             duration_blocks = int(duration_raw)
         except (TypeError, ValueError) as exc:
             raise TypeError("governance lock record `duration_blocks` must be numeric") from exc
+        if "custody" not in payload:
+            raise TypeError("governance lock record missing nullable `custody` field")
+        custody_raw = payload["custody"]
+        custody = (
+            None
+            if custody_raw is None
+            else GovernanceLockCustody.from_payload(custody_raw)
+        )
         return cls(
             owner=owner,
             amount=amount,
@@ -3225,6 +3287,7 @@ class GovernanceLockRecord:
             expiry_height=expiry_height,
             direction=direction,
             duration_blocks=duration_blocks,
+            custody=custody,
         )
 
 

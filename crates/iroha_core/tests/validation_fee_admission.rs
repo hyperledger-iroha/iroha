@@ -87,6 +87,8 @@ fn plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
         voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
             .parse()
             .expect("voting asset id"),
+        bond_escrow_account: payout_contract_address().subject_id(),
+        slash_receiver_account: account(6).0,
         ballot_amount: 150_u64.into(),
         ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
         citizenship_amount: 10_000_u64.into(),
@@ -665,6 +667,12 @@ fn seed_open_proposal(
         .world
         .governance_stage_approvals_mut()
         .insert(referendum_id.clone(), approvals);
+    let custody = iroha_core::state::GovernanceLockCustody {
+        escrowed: true,
+        asset_definition_id: rules.voting_asset_id.clone(),
+        bond_escrow_account: rules.bond_escrow_account.clone(),
+        slash_receiver_account: rules.slash_receiver_account.clone(),
+    };
     let voter = proposer.clone();
     state_transaction.world.governance_locks_mut().insert(
         referendum_id,
@@ -678,6 +686,7 @@ fn seed_open_proposal(
                     expiry_height: window.upper,
                     direction: 0,
                     duration_blocks: rules.ballot_duration_blocks,
+                    custody: Some(custody),
                 },
             )]),
         },

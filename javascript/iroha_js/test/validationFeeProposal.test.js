@@ -12,8 +12,16 @@ import {
 import { makeNativeTest } from "./helpers/native.js";
 
 const nativeTest = makeNativeTest(test);
+const bondEscrowAccount = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x21))),
+}).toI105();
+const slashReceiverAccount = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(Buffer.alloc(32, 0x22))),
+}).toI105();
 const plainElectorateRules = Object.freeze({
   voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+  bond_escrow_account: bondEscrowAccount,
+  slash_receiver_account: slashReceiverAccount,
   ballot_amount: "150",
   ballot_duration_blocks: "3600",
   citizenship_amount: "10000",

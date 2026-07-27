@@ -18949,6 +18949,57 @@ public struct ToriiGovernanceProposalGetResponse: Decodable, Sendable {
     public let proposal: ToriiGovernanceProposalRecord?
 }
 
+public struct ToriiGovernanceLockCustody: Decodable, Sendable, Equatable {
+    public let escrowed: Bool
+    public let assetDefinitionId: String
+    public let bondEscrowAccount: String
+    public let slashReceiverAccount: String
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case escrowed
+        case assetDefinitionId = "asset_definition_id"
+        case bondEscrowAccount = "bond_escrow_account"
+        case slashReceiverAccount = "slash_receiver_account"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownJSONFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.stringValue)),
+            debugName: "governance lock custody"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        escrowed = try container.decode(Bool.self, forKey: .escrowed)
+        let decodedAssetDefinitionId = try container.decode(
+            String.self,
+            forKey: .assetDefinitionId
+        )
+        assetDefinitionId = try ToriiValidation.normalizedExactNonEmpty(
+            decodedAssetDefinitionId,
+            field: "governance lock custody.asset_definition_id",
+            codingPath: container.codingPath + [CodingKeys.assetDefinitionId]
+        )
+        let decodedBondEscrowAccount = try container.decode(
+            String.self,
+            forKey: .bondEscrowAccount
+        )
+        bondEscrowAccount = try ToriiValidation.normalizedExactNonEmpty(
+            decodedBondEscrowAccount,
+            field: "governance lock custody.bond_escrow_account",
+            codingPath: container.codingPath + [CodingKeys.bondEscrowAccount]
+        )
+        let decodedSlashReceiverAccount = try container.decode(
+            String.self,
+            forKey: .slashReceiverAccount
+        )
+        slashReceiverAccount = try ToriiValidation.normalizedExactNonEmpty(
+            decodedSlashReceiverAccount,
+            field: "governance lock custody.slash_receiver_account",
+            codingPath: container.codingPath + [CodingKeys.slashReceiverAccount]
+        )
+    }
+}
+
 public struct ToriiGovernanceLockRecord: Decodable, Sendable {
     public let owner: String
     public let amount: String
@@ -18956,6 +19007,7 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
     public let expiryHeight: UInt64
     public let direction: UInt8
     public let durationBlocks: UInt64
+    public let custody: ToriiGovernanceLockCustody?
 
     private enum CodingKeys: String, CodingKey {
         case owner
@@ -18964,6 +19016,7 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
         case expiryHeight = "expiry_height"
         case direction
         case durationBlocks = "duration_blocks"
+        case custody
     }
 
     public init(from decoder: Decoder) throws {
@@ -18984,6 +19037,19 @@ public struct ToriiGovernanceLockRecord: Decodable, Sendable {
         expiryHeight = try container.decode(UInt64.self, forKey: .expiryHeight)
         direction = try container.decode(UInt8.self, forKey: .direction)
         durationBlocks = try container.decodeIfPresent(UInt64.self, forKey: .durationBlocks) ?? 0
+        guard container.contains(.custody) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.custody,
+                .init(
+                    codingPath: container.codingPath,
+                    debugDescription: "governance lock custody is required (explicit null is allowed)"
+                )
+            )
+        }
+        custody = try container.decodeIfPresent(
+            ToriiGovernanceLockCustody.self,
+            forKey: .custody
+        )
     }
 }
 

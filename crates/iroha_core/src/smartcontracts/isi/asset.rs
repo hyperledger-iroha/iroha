@@ -213,6 +213,36 @@ pub mod isi {
             }
             Ok(())
         }
+
+        /// Atomically move an exact numeric amount without emitting transfer events.
+        ///
+        /// The complete source and destination state is prevalidated before either
+        /// balance changes, so callers cannot observe a partial debit or credit.
+        pub(crate) fn transfer_numeric_asset_exact(
+            &mut self,
+            source_id: &AssetId,
+            destination_id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<(), Error> {
+            let source_id = self.resolve_asset_id_for_current_scope(source_id)?;
+            let destination_id = self.resolve_asset_id_for_current_scope(destination_id)?;
+            if sccp_registry_references_custody_asset(self.sccp_registry.get(), &source_id) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP custody can only be debited by verified native inbound settlement".into(),
+                )
+                .into());
+            }
+            let delta = self.precheck_numeric_asset_transfer_delta_exact(
+                &source_id,
+                &destination_id,
+                amount,
+            )?;
+            self.apply_prechecked_numeric_asset_transfer_delta_exact(
+                &source_id,
+                &destination_id,
+                &delta,
+            )
+        }
     }
 
     /// Assert that `object` matches the provided `asset_spec`.

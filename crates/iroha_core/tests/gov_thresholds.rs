@@ -145,6 +145,7 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
             expiry_height: 100,
             direction: 0,
             duration_blocks: 0,
+            custody: None,
         },
     );
     map.locks.insert(
@@ -156,6 +157,7 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
             expiry_height: 100,
             direction: 1,
             duration_blocks: 0,
+            custody: None,
         },
     );
     stx.world.governance_locks_mut().insert(rid.clone(), map);
@@ -227,6 +229,7 @@ fn min_turnout_rejects_when_below_threshold() {
             expiry_height: 100,
             direction: 0,
             duration_blocks: 0,
+            custody: None,
         },
     );
     stx.world.governance_locks_mut().insert(rid.clone(), map);
@@ -294,6 +297,7 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
                 expiry_height: u64::MAX,
                 direction: 0,
                 duration_blocks: u64::MAX - 1,
+                custody: None,
             },
         );
     }
