@@ -25,13 +25,12 @@ use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
     ValidationFeeCurrentPolicyProofV1, ValidationFeeParliamentBodyProgressV1,
-    ValidationFeeParliamentSnapshotV1, ValidationFeeProposalDetailQueryV1,
-    ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
-    ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
-    ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
-    ValidationFeePlainBallotDirectionV1, ValidationFeePlainBallotDraftRequestV1,
-    ValidationFeePlainBallotDraftResponseV1,
-    ValidationFeeProposalLockV1, ValidationFeeProposalLocksV1,
+    ValidationFeeParliamentSnapshotV1, ValidationFeePlainBallotDirectionV1,
+    ValidationFeePlainBallotDraftRequestV1, ValidationFeePlainBallotDraftResponseV1,
+    ValidationFeeProposalDetailQueryV1, ValidationFeeProposalDetailV1,
+    ValidationFeeProposalDraftPayloadV1, ValidationFeeProposalDraftRequestV1,
+    ValidationFeeProposalDraftResponseV1, ValidationFeeProposalInstructionDraftV1,
+    ValidationFeeProposalListV1, ValidationFeeProposalLockV1, ValidationFeeProposalLocksV1,
     ValidationFeeProposalPipelineStageV1, ValidationFeeProposalPipelineV1,
     ValidationFeeProposalRecordV1, ValidationFeeProposalReferendumV1,
     ValidationFeeProposalStatusV1, ValidationFeeProposalTallyV1,
@@ -41,8 +40,7 @@ use mv::storage::StorageReadOnly as _;
 
 use crate::{
     Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
-    gov::validation_fee_plain_electorate_rules,
-    utils::extractors::NoritoOnly,
+    gov::validation_fee_plain_electorate_rules, utils::extractors::NoritoOnly,
 };
 
 fn inconsistent(message: impl Into<String>) -> Error {
@@ -441,34 +439,35 @@ pub(crate) async fn handler_proposal_detail(
         gov.parliament_quorum_bps,
         query.account_id.as_ref(),
     )?;
-    let (approve, reject, abstain, approved) =
-        if let Some(evidence) = proposal.finalization_evidence.as_ref() {
-            if evidence.mode != VotingMode::Plain
-                || evidence.min_turnout != plain_electorate_rules.min_turnout
-                || evidence.approval_threshold_numerator
-                    != plain_electorate_rules.approval_threshold_numerator
-                || evidence.approval_threshold_denominator
-                    != plain_electorate_rules.approval_threshold_denominator
-            {
-                return Err(inconsistent(
-                    "validation-fee finalization evidence differs from retained PLAIN electorate rules",
-                ));
-            }
-            (
-                evidence.approve,
-                evidence.reject,
-                evidence.abstain,
-                Some(evidence.approved),
-            )
-        } else {
-            let (approve, reject, abstain) = live_plain_tally(
-                world.governance_locks().get(&proposal_id),
-                referendum.h_end,
-                plain_electorate_rules.conviction_step_blocks,
-                plain_electorate_rules.max_conviction,
-            )?;
-            (approve, reject, abstain, None)
-        };
+    let (approve, reject, abstain, approved) = if let Some(evidence) =
+        proposal.finalization_evidence.as_ref()
+    {
+        if evidence.mode != VotingMode::Plain
+            || evidence.min_turnout != plain_electorate_rules.min_turnout
+            || evidence.approval_threshold_numerator
+                != plain_electorate_rules.approval_threshold_numerator
+            || evidence.approval_threshold_denominator
+                != plain_electorate_rules.approval_threshold_denominator
+        {
+            return Err(inconsistent(
+                "validation-fee finalization evidence differs from retained PLAIN electorate rules",
+            ));
+        }
+        (
+            evidence.approve,
+            evidence.reject,
+            evidence.abstain,
+            Some(evidence.approved),
+        )
+    } else {
+        let (approve, reject, abstain) = live_plain_tally(
+            world.governance_locks().get(&proposal_id),
+            referendum.h_end,
+            plain_electorate_rules.conviction_step_blocks,
+            plain_electorate_rules.max_conviction,
+        )?;
+        (approve, reject, abstain, None)
+    };
     let turnout = approve
         .checked_add(reject)
         .and_then(|value| value.checked_add(abstain))
@@ -779,9 +778,10 @@ pub(crate) async fn handler_plain_ballot_draft(
             "validation-fee referendum accepts one effective ballot per account",
         ));
     }
-    let citizen = world.citizens().get(&request.owner).ok_or_else(|| {
-        bad_request("validation-fee ballot owner has no retained citizen record")
-    })?;
+    let citizen = world
+        .citizens()
+        .get(&request.owner)
+        .ok_or_else(|| bad_request("validation-fee ballot owner has no retained citizen record"))?;
     if citizen.amount < rules.citizenship_amount {
         return Err(bad_request(
             "validation-fee ballot owner is below the proposal-bound citizenship amount",

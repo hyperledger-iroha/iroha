@@ -1089,7 +1089,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 733 tests across thirty-eight Rust
+The current pre-network release inventory names 738 tests across thirty-eight Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1168,7 +1168,10 @@ crash regressions cover state replacement before directory sync and root
 replacement before predecessor cleanup, yielding the 732-test checkpoint.
 The foreign-context CommitQC Apply rejection adds one exact `v2_effects`
 regression, yielding the current
-733-test, 38-module inventory. The complete source-sealed
+733-test checkpoint. Five exact-Serve lifecycle regressions cover
+Pending/Reserved rollback, shutdown rollback, and route-neutral tombstone
+replay, plus cached replay after the singular future-slot barrier, yielding the
+current 738-test, 38-module inventory. The complete source-sealed
 pre-network corridor
 contains 81 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
@@ -1239,7 +1242,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66`.
+`667de672926523b356e785a3d11ca1a31875b4cbb7057a0a03c5943a3867bb1f`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

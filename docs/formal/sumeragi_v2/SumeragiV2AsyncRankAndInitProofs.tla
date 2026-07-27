@@ -338,6 +338,18 @@ BY SMT
        AsyncConfiguration, SerializedRuntimeStep,
        DrainableIngressTurnReachRank
 
+THEOREM ExactTicketTurnDecreasesDrainableIngressTurnReach ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncServeIngressTargetOnlyTurn(node)
+    => DrainableIngressTurnReachRank(node)'
+         < DrainableIngressTurnReachRank(node)
+BY SMT
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration, AsyncServeIngressTargetOnlyTurn,
+       DrainableIngressTurnReachRank
+
 THEOREM SchedulerRankArithmeticBound ==
   \A capacity \in Nat \ {0}:
     \A ordinal \in 1..capacity, distance \in 0..2:

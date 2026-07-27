@@ -85,13 +85,13 @@ use super::v2_core::{
     IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
     ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
     ProductionDurableBodyIdentityProjection, ProductionHistoricalBodyPipelineTraceProjection,
-    ProductionQuorumCertificateIdentityProjection, TagProjection, exact_body_stage_is_owned,
+    ProductionQuorumCertificateIdentityProjection, TagProjection,
+    check_production_decision_recovery_transition,
+    check_production_historical_body_pipeline_transition, exact_body_stage_is_owned,
     plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting,
     production_body_capacity_retirement_preserves_effective_lock_kernel,
     production_body_ownership_preserves_effective_lock_kernel,
-    production_decision_trace_refines_recovery_witness_kernel,
-    production_historical_body_pipeline_trace_refines_indexed_async_kernel,
 };
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
@@ -119,8 +119,8 @@ use super::{
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
         CertifiedBodyRequestRegistrationPlan, CertifiedBodyRequestRetirementPlan,
-        OutstandingCertifiedBodyRequests, V2TransportError, authenticate_certified_body_request,
-        authenticate_payload_chunk,
+        CertifiedBodyResponseClaimDisposition, OutstandingCertifiedBodyRequests, V2TransportError,
+        authenticate_certified_body_request, authenticate_payload_chunk,
     },
 };
 use crate::kura::KuraV2CommitReceipt;
@@ -1637,6 +1637,119 @@ struct BodyPipelineOwnerBindingPlan {
     key: (wire::ConsensusRound, wire::BlockSubject),
     owner: BodyPipelineOwner,
     already_owned: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn historical_body_pipeline_projection(
+    context: &wire::HeightContext,
+    task: &BodyFetchTask,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    pending_request_hash: HashOf<wire::CertifiedBodyRequest>,
+    authenticated_request_hash: HashOf<wire::CertifiedBodyRequest>,
+    response_manifest: &wire::PayloadManifest,
+    ready_manifest: &wire::PayloadManifest,
+    body_payload_hash: Hash,
+    owner_after: Option<BodyPipelineOwner>,
+    pending_fetch_present_after: bool,
+    request_present_after: bool,
+) -> ProductionHistoricalBodyPipelineTraceProjection {
+    let key = (task.round, task.subject);
+    ProductionHistoricalBodyPipelineTraceProjection {
+        context_id: canonical_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            context.id().0,
+        ),
+        context_height: context.height,
+        request_hash: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+            request_hash,
+        ),
+        pending_request_hash: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+            pending_request_hash,
+        ),
+        authenticated_request_hash: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+            authenticated_request_hash,
+        ),
+        fetch_tag: TagProjection {
+            height: task.tag.height(),
+            view: task.tag.view(),
+            generation: task.tag.generation().get(),
+        },
+        round_context_id: canonical_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            task.round.context_id.0,
+        ),
+        round_height: task.round.height,
+        round_view: task.round.view,
+        subject: canonical_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            HashOf::new(&task.subject),
+        ),
+        manifest_round_context_id: canonical_typed_identity(
+            IDENTITY_DOMAIN_CONTEXT,
+            IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+            response_manifest.round.context_id.0,
+        ),
+        manifest_round_height: response_manifest.round.height,
+        manifest_round_view: response_manifest.round.view,
+        manifest_subject: canonical_typed_identity(
+            IDENTITY_DOMAIN_SUBJECT,
+            IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+            HashOf::new(&response_manifest.subject),
+        ),
+        response_manifest: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_PAYLOAD_MANIFEST,
+            HashOf::new(response_manifest),
+        ),
+        ready_manifest: canonical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_PAYLOAD_MANIFEST,
+            HashOf::new(ready_manifest),
+        ),
+        subject_payload_hash: canonical_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            task.subject.payload_hash,
+        ),
+        body_payload_hash: canonical_hash_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CANONICAL_PAYLOAD,
+            body_payload_hash,
+        ),
+        owner_present_after: owner_after.is_some(),
+        owner_tag: owner_after.map_or(TagProjection::default(), |owner| TagProjection {
+            height: owner.tag.height(),
+            view: owner.tag.view(),
+            generation: owner.tag.generation().get(),
+        }),
+        owner_round_context_id: owner_after.map_or(CanonicalIdentityProjection::zero(), |_| {
+            canonical_typed_identity(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                key.0.context_id.0,
+            )
+        }),
+        owner_round_height: owner_after.map_or(0, |_| key.0.height),
+        owner_round_view: owner_after.map_or(0, |_| key.0.view),
+        owner_subject: owner_after.map_or(CanonicalIdentityProjection::zero(), |_| {
+            canonical_typed_identity(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                HashOf::new(&key.1),
+            )
+        }),
+        pending_fetch_present_after,
+        request_present_after,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -4681,7 +4794,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             authenticated_responder,
         )?;
         let authenticated_request_hash = authenticated.response().request_hash;
-        let response = authenticated.into_inner();
+        let response = authenticated.response().clone();
         let request_hash = response.request_hash;
         let response_manifest = response.manifest;
         let body_payload_hash = Hash::new(&response.body);
@@ -4697,114 +4810,67 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         let ready_manifest = ready_body.manifest.clone();
+        let key = (task.round, task.subject);
+        let prospective_owner = self.body_pipeline_owners.get(&key).copied();
+        let prospective_trace = historical_body_pipeline_projection(
+            &self.context,
+            &task,
+            request_hash,
+            pending_request_hash,
+            authenticated_request_hash,
+            &response_manifest,
+            &ready_manifest,
+            body_payload_hash,
+            prospective_owner,
+            false,
+            false,
+        );
+        let Some(checked_transition) =
+            check_production_historical_body_pipeline_transition(prospective_trace)
+        else {
+            return Err(self.fail_closed_transport(
+                "certified body admission failed its prospective historical pipeline gate",
+                services,
+            ));
+        };
+        let prospective_trace = checked_transition.into_projection();
         let plan = self.plan_fetch_completion(&task, ready_body, None, services)?;
+        match self
+            .outstanding_requests
+            .claim_authenticated_response(&authenticated)
+        {
+            Ok(CertifiedBodyResponseClaimDisposition::Acquired) => {}
+            Ok(CertifiedBodyResponseClaimDisposition::Coalesced) => {
+                self.abort_fetch_completion(plan);
+                return Ok(CompletionDisposition::Stale);
+            }
+            Err(error) => {
+                self.abort_fetch_completion(plan);
+                return Err(error.into());
+            }
+        }
         if let Err(error) = services.complete_certified_body_fetch(&task) {
             self.abort_fetch_completion(plan);
             return Err(self.fail_closed_transport(error, services));
         }
         self.commit_fetch_completion(plan);
-        let key = (task.round, task.subject);
         let owner_after = self.body_pipeline_owners.get(&key).copied();
-        let historical_trace = ProductionHistoricalBodyPipelineTraceProjection {
-            context_id: canonical_typed_identity(
-                IDENTITY_DOMAIN_CONTEXT,
-                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
-                self.context.id().0,
-            ),
-            context_height: self.context.height,
-            request_hash: canonical_typed_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
-                request_hash,
-            ),
-            pending_request_hash: canonical_typed_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
-                pending_request_hash,
-            ),
-            authenticated_request_hash: canonical_typed_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
-                authenticated_request_hash,
-            ),
-            fetch_tag: TagProjection {
-                height: task.tag.height(),
-                view: task.tag.view(),
-                generation: task.tag.generation().get(),
-            },
-            round_context_id: canonical_typed_identity(
-                IDENTITY_DOMAIN_CONTEXT,
-                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
-                task.round.context_id.0,
-            ),
-            round_height: task.round.height,
-            round_view: task.round.view,
-            subject: canonical_typed_identity(
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
-                HashOf::new(&task.subject),
-            ),
-            manifest_round_context_id: canonical_typed_identity(
-                IDENTITY_DOMAIN_CONTEXT,
-                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
-                response_manifest.round.context_id.0,
-            ),
-            manifest_round_height: response_manifest.round.height,
-            manifest_round_view: response_manifest.round.view,
-            manifest_subject: canonical_typed_identity(
-                IDENTITY_DOMAIN_SUBJECT,
-                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
-                HashOf::new(&response_manifest.subject),
-            ),
-            response_manifest: canonical_typed_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_PAYLOAD_MANIFEST,
-                HashOf::new(&response_manifest),
-            ),
-            ready_manifest: canonical_typed_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_PAYLOAD_MANIFEST,
-                HashOf::new(&ready_manifest),
-            ),
-            subject_payload_hash: canonical_hash_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CANONICAL_PAYLOAD,
-                task.subject.payload_hash,
-            ),
-            body_payload_hash: canonical_hash_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CANONICAL_PAYLOAD,
-                body_payload_hash,
-            ),
-            owner_present_after: owner_after.is_some(),
-            owner_tag: owner_after.map_or(TagProjection::default(), |owner| TagProjection {
-                height: owner.tag.height(),
-                view: owner.tag.view(),
-                generation: owner.tag.generation().get(),
-            }),
-            owner_round_context_id: owner_after.map_or(CanonicalIdentityProjection::zero(), |_| {
-                canonical_typed_identity(
-                    IDENTITY_DOMAIN_CONTEXT,
-                    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
-                    key.0.context_id.0,
-                )
-            }),
-            owner_round_height: owner_after.map_or(0, |_| key.0.height),
-            owner_round_view: owner_after.map_or(0, |_| key.0.view),
-            owner_subject: owner_after.map_or(CanonicalIdentityProjection::zero(), |_| {
-                canonical_typed_identity(
-                    IDENTITY_DOMAIN_SUBJECT,
-                    IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
-                    HashOf::new(&key.1),
-                )
-            }),
-            pending_fetch_present_after: self.pending_fetches.contains_key(&task.id()),
-            request_present_after: self.outstanding_requests.contains(request_hash),
-        };
-        if !production_historical_body_pipeline_trace_refines_indexed_async_kernel(historical_trace)
-        {
+        let observed_trace = historical_body_pipeline_projection(
+            &self.context,
+            &task,
+            request_hash,
+            pending_request_hash,
+            authenticated_request_hash,
+            &response_manifest,
+            &ready_manifest,
+            body_payload_hash,
+            owner_after,
+            self.pending_fetches.contains_key(&task.id()),
+            self.outstanding_requests.contains(request_hash),
+        );
+        if observed_trace != prospective_trace {
             return Err(self.fail_closed_transport(
-                "certified body admission did not preserve its exact historical pipeline owner",
+                "certified body admission diverged from its checked prospective transition",
                 services,
             ));
         }
@@ -8635,11 +8701,13 @@ fn verify_pending_kura_apply_parts(
     let recovery_trace = evidence.recovery_refinement_projection().ok_or_else(|| {
         mismatch("replayed Decision recovery evidence cannot be represented losslessly")
     })?;
-    if !production_decision_trace_refines_recovery_witness_kernel(recovery_trace) {
+    let Some(checked_recovery) = check_production_decision_recovery_transition(recovery_trace)
+    else {
         return Err(mismatch(
             "replayed Decision recovery evidence failed the shared exact-identity kernel",
         ));
-    }
+    };
+    let _authorized_recovery = checked_recovery.into_projection();
     Ok((genesis_context, evidence))
 }
 
@@ -17105,6 +17173,10 @@ mod tests {
             assert_eq!(executor.pending_fetches.len(), 1);
             assert_eq!(executor.certified_work.len(), 1);
             assert_eq!(executor.outstanding_requests.len(), 1);
+            assert!(
+                executor.outstanding_requests.response_claim_count() == 0,
+                "authenticated junk cannot acquire the physical response occurrence"
+            );
             assert!(services.completed_certified_fetches.is_empty());
             assert!(services.closed.is_empty());
             assert!(!executor.status().fail_closed);
@@ -17212,6 +17284,10 @@ mod tests {
         assert_eq!(executor.pending_fetches.len(), 1);
         assert_eq!(executor.certified_work.len(), 1);
         assert_eq!(executor.outstanding_requests.len(), 1);
+        assert!(
+            executor.outstanding_requests.response_claim_count() == 0,
+            "a noncanonical response cannot pin the physical response occurrence"
+        );
         assert!(services.completed_certified_fetches.is_empty());
         assert!(services.closed.is_empty());
         assert!(!executor.status().fail_closed);
@@ -18982,6 +19058,10 @@ mod tests {
         assert_eq!(executor.pending_fetches.len(), 1);
         assert_eq!(executor.certified_work.len(), 1);
         assert_eq!(executor.outstanding_requests.len(), 1);
+        assert!(
+            executor.outstanding_requests.response_claim_count() == 0,
+            "capacity rejection precedes response-occurrence acquisition"
+        );
         assert!(!executor.status().fail_closed);
 
         executor.config.max_ready_body_bytes =

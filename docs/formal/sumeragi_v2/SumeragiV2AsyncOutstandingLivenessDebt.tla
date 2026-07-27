@@ -3,7 +3,7 @@ EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs
 
 THEOREM TimeoutViewProgressObligation ==
   \A initialContext:
-    TimeoutViewProgressProperty(AsyncSpecAt(initialContext))
+    TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))
 
 (***************************************************************************
 Locked-body reproposal progress.
@@ -70,7 +70,7 @@ LockedBodyReproposalProgressProperty(spec) ==
 
 THEOREM LockedBodyReproposalProgressObligation ==
   \A initialContext:
-    LockedBodyReproposalProgressProperty(AsyncSpecAt(initialContext))
+    LockedBodyReproposalProgressProperty(AsyncLiveSpecAt(initialContext))
 
 THEOREM RotatingLeaderProgressObligation ==
   \A initialContext:

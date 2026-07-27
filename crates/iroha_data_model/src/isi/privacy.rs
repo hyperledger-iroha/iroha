@@ -9,8 +9,7 @@ use crate::privacy::{
     PrivacyConsensusLimitsV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1,
     PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
     PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1,
-    PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
-    PrivacyZkAmsRegistryBootstrapV1,
+    PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsRegistryBootstrapV1,
 };
 
 isi! {

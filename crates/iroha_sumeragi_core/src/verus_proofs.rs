@@ -4114,46 +4114,70 @@ pub struct ProductionHistoricalBodyPipelineTraceProjection {
     pub request_present_after: bool,
 }
 
-/// Exact typed applied-successor projection consumed by the cross-tool theorem.
-pub closed spec fn production_applied_successor_trace_projection(
+/// Total applied-successor gate mirrored by the production consumer.
+pub closed spec fn check_production_applied_successor_transition(
     projection: ProductionAppliedSuccessorTraceProjection,
-) -> ProductionAppliedSuccessorTraceProjection {
-    projection
+) -> Option<ProductionAppliedSuccessorTraceProjection> {
+    if production_applied_successor_trace_refines_indexed_activation_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed recovered-successor projection consumed by the cross-tool theorem.
-pub closed spec fn production_recovered_successor_trace_projection(
+/// Total recovered-successor gate mirrored by the production consumer.
+pub closed spec fn check_production_recovered_successor_transition(
     projection: ProductionRecoveredSuccessorTraceProjection,
-) -> ProductionRecoveredSuccessorTraceProjection {
-    projection
+) -> Option<ProductionRecoveredSuccessorTraceProjection> {
+    if production_recovered_successor_trace_refines_indexed_activation_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed startup-lifecycle projection consumed by the cross-tool theorem.
-pub closed spec fn production_successor_startup_lifecycle_projection(
+/// Total successor-startup lifecycle gate mirrored by production.
+pub closed spec fn check_production_successor_startup_lifecycle_transition(
     projection: ProductionSuccessorStartupLifecycleProjection,
-) -> ProductionSuccessorStartupLifecycleProjection {
-    projection
+) -> Option<ProductionSuccessorStartupLifecycleProjection> {
+    if production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed historical-certificate projection consumed by the cross-tool theorem.
-pub closed spec fn production_historical_certificate_trace_projection(
+/// Total historical-certificate gate mirrored by production.
+pub closed spec fn check_production_historical_certificate_transition(
     projection: ProductionHistoricalCertificateTraceProjection,
-) -> ProductionHistoricalCertificateTraceProjection {
-    projection
+) -> Option<ProductionHistoricalCertificateTraceProjection> {
+    if production_historical_certificate_trace_refines_indexed_async_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed historical-body projection consumed by the cross-tool theorem.
-pub closed spec fn production_historical_body_pipeline_trace_projection(
+/// Total historical-body pipeline gate mirrored by production.
+pub closed spec fn check_production_historical_body_pipeline_transition(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
-) -> ProductionHistoricalBodyPipelineTraceProjection {
-    projection
+) -> Option<ProductionHistoricalBodyPipelineTraceProjection> {
+    if production_historical_body_pipeline_trace_refines_indexed_async_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed durable-intent projection consumed by the cross-tool theorem.
-pub closed spec fn production_durable_intent_trace_projection(
+/// Total reducer durable-intent gate mirrored by production.
+pub closed spec fn check_production_durable_intent_transition(
     projection: ProductionDurableIntentTraceProjection,
-) -> ProductionDurableIntentTraceProjection {
-    projection
+) -> Option<ProductionDurableIntentTraceProjection> {
+    if production_durable_intent_trace_refines_progress_witness_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
 /// Exact typed locked-Commit progress projection consumed by the cross-tool theorem.
@@ -4163,60 +4187,104 @@ pub closed spec fn locked_commit_progress_witness_projection(
     projection
 }
 
-/// Exact typed pending-Decision projection consumed by the cross-tool theorem.
-pub closed spec fn production_decision_recovery_trace_projection(
+/// Total pending-Decision recovery gate mirrored by production.
+pub closed spec fn check_production_decision_recovery_transition(
     projection: ProductionDecisionRecoveryTraceProjection,
-) -> ProductionDecisionRecoveryTraceProjection {
-    projection
+) -> Option<ProductionDecisionRecoveryTraceProjection> {
+    if production_decision_trace_refines_recovery_witness_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed scheduler projection consumed by the cross-tool theorem.
-pub closed spec fn production_scheduler_trace_projection(
+/// Total protected scheduler gate mirrored by production.
+pub closed spec fn check_production_scheduler_transition(
     projection: ProductionSchedulerTraceProjection,
-) -> ProductionSchedulerTraceProjection {
-    projection
+) -> Option<ProductionSchedulerTraceProjection> {
+    if production_scheduler_trace_refines_protected_ownership_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed ingress projection consumed by the cross-tool theorem.
-pub closed spec fn production_ingress_identity_and_class_trace_projection(
+/// Total bounded-ingress gate mirrored by production.
+pub closed spec fn check_production_ingress_transition(
     projection: ProductionIngressIdentityAndClassTraceProjection,
-) -> ProductionIngressIdentityAndClassTraceProjection {
-    projection
+) -> Option<ProductionIngressIdentityAndClassTraceProjection> {
+    if production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed two-stage retry projection consumed by the cross-tool theorem.
-pub closed spec fn production_two_stage_relay_retry_trace_projection(
+/// Total two-stage retry gate mirrored by production.
+pub closed spec fn check_production_two_stage_relay_retry_transition(
     projection: ProductionTwoStageRelayRetryTraceProjection,
-) -> ProductionTwoStageRelayRetryTraceProjection {
-    projection
+) -> Option<ProductionTwoStageRelayRetryTraceProjection> {
+    if production_two_stage_relay_retry_trace_refines_source_fairness_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed flush projection consumed by the cross-tool theorem.
-pub closed spec fn production_reliable_flush_trace_projection(
+/// Total worker-side reliable-flush gate mirrored by production.
+pub closed spec fn check_production_reliable_flush_worker_transition(
     projection: ProductionReliableFlushTraceProjection,
-) -> ProductionReliableFlushTraceProjection {
-    projection
+) -> Option<ProductionReliableFlushTraceProjection> {
+    if production_reliable_flush_trace_refines_outbound_ownership_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed lane-application projection consumed by the linked theorem.
-pub closed spec fn production_reliable_flush_application_projection(
+/// Total lane-application reliable-flush gate mirrored by production.
+pub closed spec fn check_production_reliable_flush_application_transition(
     projection: ProductionReliableFlushApplicationProjection,
-) -> ProductionReliableFlushApplicationProjection {
-    projection
+) -> Option<ProductionReliableFlushApplicationProjection> {
+    if production_reliable_flush_application_refines_source_lane_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed application projection consumed by the cross-tool theorem.
-pub closed spec fn production_application_trace_projection(
+/// Total two-phase reliable-flush link gate mirrored by production.
+pub closed spec fn check_production_reliable_flush_link_transition(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+) -> Option<(ProductionReliableFlushTraceProjection, ProductionReliableFlushApplicationProjection)> {
+    if production_reliable_flush_two_phase_link_kernel(worker, application) {
+        Some((worker, application))
+    } else {
+        None
+    }
+}
+
+/// Total durable-application gate mirrored by production.
+pub closed spec fn check_production_application_transition(
     projection: ProductionApplicationTraceProjection,
-) -> ProductionApplicationTraceProjection {
-    projection
+) -> Option<ProductionApplicationTraceProjection> {
+    if production_application_trace_refines_decision_completion_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
-/// Exact typed terminal-application boundary consumed by the cross-tool theorem.
-pub closed spec fn production_terminal_application_without_successor_activation_projection(
+/// Total terminal-application boundary gate mirrored by production.
+pub closed spec fn check_production_terminal_application_transition(
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
-) -> ProductionTerminalApplicationWithoutSuccessorActivationProjection {
-    projection
+) -> Option<ProductionTerminalApplicationWithoutSuccessorActivationProjection> {
+    if production_terminal_application_without_successor_activation_kernel(projection) {
+        Some(projection)
+    } else {
+        None
+    }
 }
 
 /// Exact Verus mirror of the durable predecessor production gate.
@@ -4351,25 +4419,20 @@ pub closed spec fn production_terminal_application_without_successor_activation_
 pub proof fn production_applied_successor_trace_refines_indexed_activation(
     projection: ProductionAppliedSuccessorTraceProjection,
 )
-    requires
-        production_applied_successor_trace_body!(projection),
     ensures
-        production_applied_successor_trace_refines_indexed_activation_kernel(
-            production_applied_successor_trace_projection(projection),
+        check_production_applied_successor_transition(projection) == Some(projection) ==> (
+            production_applied_successor_trace_refines_indexed_activation_kernel(projection)
+            && projection.predecessor_stage_before
+                == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING)
+            && projection.predecessor_stage_after
+                == refinement_tag_value!(SUCCESSOR_STAGE_COMPLETE)
+            && projection.successor.height
+                == projection.binding.expected_predecessor.height + 1u64
+            && projection.successor.marker_height == projection.successor.height
         ),
-        projection.predecessor_stage_before
-            == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING),
-        projection.predecessor_stage_after
-            == refinement_tag_value!(SUCCESSOR_STAGE_COMPLETE),
-        projection.successor.height
-            == projection.binding.expected_predecessor.height + 1u64,
-        projection.successor.marker_height == projection.successor.height,
 {
+    reveal(check_production_applied_successor_transition);
     reveal(production_applied_successor_trace_refines_indexed_activation_kernel);
-    reveal(production_applied_successor_trace_projection);
-    assert(production_applied_successor_trace_refines_indexed_activation_kernel(
-        production_applied_successor_trace_projection(projection),
-    ));
 }
 
 /// A foreign same-height block or artifact identity cannot satisfy the exact
@@ -4404,26 +4467,23 @@ pub proof fn production_foreign_same_height_predecessor_is_rejected(
 pub proof fn production_recovered_successor_trace_refines_indexed_activation(
     projection: ProductionRecoveredSuccessorTraceProjection,
 )
-    requires
-        production_recovered_successor_trace_body!(projection),
     ensures
-        production_recovered_successor_trace_refines_indexed_activation_kernel(
-            production_recovered_successor_trace_projection(projection),
+        check_production_recovered_successor_transition(projection) == Some(projection) ==> (
+            production_recovered_successor_trace_refines_indexed_activation_kernel(projection)
+            && projection.published_status_height_before == 0u64
+            && projection.successor.last_committed_height < u64::MAX
+            && projection.successor.height
+                == projection.successor.last_committed_height + 1u64
+            && (
+                projection.authority_kind
+                    == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP)
+                || projection.authority_kind
+                    == refinement_tag_value!(SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP)
+            )
         ),
-        projection.published_status_height_before == 0u64,
-        projection.successor.last_committed_height < u64::MAX,
-        projection.successor.height
-            == projection.successor.last_committed_height + 1u64,
-        projection.authority_kind
-                == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP)
-            || projection.authority_kind
-                == refinement_tag_value!(SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP),
 {
+    reveal(check_production_recovered_successor_transition);
     reveal(production_recovered_successor_trace_refines_indexed_activation_kernel);
-    reveal(production_recovered_successor_trace_projection);
-    assert(production_recovered_successor_trace_refines_indexed_activation_kernel(
-        production_recovered_successor_trace_projection(projection),
-    ));
 }
 
 /// Startup failure preserves the Running owner, while a fresh retry can use
@@ -4431,25 +4491,27 @@ pub proof fn production_recovered_successor_trace_refines_indexed_activation(
 pub proof fn production_startup_failure_and_restart_refines_indexed_lifecycle(
     projection: ProductionSuccessorStartupLifecycleProjection,
 )
-    requires
-        production_startup_failure_and_restart_trace_body!(projection),
     ensures
-        production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
-            production_successor_startup_lifecycle_projection(projection),
-        ),
-        projection.status_height > 0u64,
-        projection.published_height_after == projection.published_height_before,
-        projection.transition_kind == refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
-            ==> projection.stage_after == projection.stage_before
-                && projection.restart_required_after,
-        projection.transition_kind != refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
-            ==> !projection.restart_required_after,
+        check_production_successor_startup_lifecycle_transition(projection)
+            == Some(projection) ==> (
+                production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(projection)
+                && projection.status_height > 0u64
+                && projection.published_height_after == projection.published_height_before
+                && (
+                    projection.transition_kind
+                        == refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
+                    ==> projection.stage_after == projection.stage_before
+                        && projection.restart_required_after
+                )
+                && (
+                    projection.transition_kind
+                        != refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
+                    ==> !projection.restart_required_after
+                )
+            ),
 {
+    reveal(check_production_successor_startup_lifecycle_transition);
     reveal(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel);
-    reveal(production_successor_startup_lifecycle_projection);
-    assert(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
-        production_successor_startup_lifecycle_projection(projection),
-    ));
 }
 
 /// An authenticated historical CommitQC can retire discovery ownership only
@@ -4457,26 +4519,21 @@ pub proof fn production_startup_failure_and_restart_refines_indexed_lifecycle(
 pub proof fn production_historical_certificate_trace_refines_indexed_async(
     projection: ProductionHistoricalCertificateTraceProjection,
 )
-    requires
-        production_historical_certificate_trace_body!(projection),
     ensures
-        production_historical_certificate_trace_refines_indexed_async_kernel(
-            production_historical_certificate_trace_projection(projection),
-        ),
-        projection.context_height > 0u64,
-        projection.certificate_height == projection.context_height,
-        projection.request_present_before,
-        !projection.request_present_after,
-        canonical_identity_equal_body!(
-            projection.message_hash,
-            projection.admitted_message_hash
+        check_production_historical_certificate_transition(projection) == Some(projection) ==> (
+            production_historical_certificate_trace_refines_indexed_async_kernel(projection)
+            && projection.context_height > 0u64
+            && projection.certificate_height == projection.context_height
+            && projection.request_present_before
+            && !projection.request_present_after
+            && canonical_identity_equal_body!(
+                projection.message_hash,
+                projection.admitted_message_hash
+            )
         ),
 {
+    reveal(check_production_historical_certificate_transition);
     reveal(production_historical_certificate_trace_refines_indexed_async_kernel);
-    reveal(production_historical_certificate_trace_projection);
-    assert(production_historical_certificate_trace_refines_indexed_async_kernel(
-        production_historical_certificate_trace_projection(projection),
-    ));
 }
 
 /// An authenticated historical body can retire its signed request only after
@@ -4484,24 +4541,19 @@ pub proof fn production_historical_certificate_trace_refines_indexed_async(
 pub proof fn production_historical_body_pipeline_trace_refines_indexed_async(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
 )
-    requires
-        production_historical_body_pipeline_trace_body!(projection),
     ensures
-        production_historical_body_pipeline_trace_refines_indexed_async_kernel(
-            production_historical_body_pipeline_trace_projection(projection),
+        check_production_historical_body_pipeline_transition(projection) == Some(projection) ==> (
+            production_historical_body_pipeline_trace_refines_indexed_async_kernel(projection)
+            && projection.owner_present_after
+            && projection.owner_tag.height == projection.fetch_tag.height
+            && projection.owner_tag.view == projection.fetch_tag.view
+            && projection.owner_tag.generation == projection.fetch_tag.generation
+            && !projection.pending_fetch_present_after
+            && !projection.request_present_after
         ),
-        projection.owner_present_after,
-        projection.owner_tag.height == projection.fetch_tag.height,
-        projection.owner_tag.view == projection.fetch_tag.view,
-        projection.owner_tag.generation == projection.fetch_tag.generation,
-        !projection.pending_fetch_present_after,
-        !projection.request_present_after,
 {
+    reveal(check_production_historical_body_pipeline_transition);
     reveal(production_historical_body_pipeline_trace_refines_indexed_async_kernel);
-    reveal(production_historical_body_pipeline_trace_projection);
-    assert(production_historical_body_pipeline_trace_refines_indexed_async_kernel(
-        production_historical_body_pipeline_trace_projection(projection),
-    ));
 }
 
 /// A reducer step which satisfies the primitive WAL lifecycle owns either its
@@ -4509,36 +4561,52 @@ pub proof fn production_historical_body_pipeline_trace_refines_indexed_async(
 pub proof fn production_durable_intent_trace_refines_progress_witness(
     projection: ProductionDurableIntentTraceProjection,
 )
-    requires
-        production_durable_intent_trace_body!(projection),
     ensures
-        production_durable_intent_trace_refines_progress_witness_kernel(
-            production_durable_intent_trace_projection(projection),
+        check_production_durable_intent_transition(projection) == Some(projection) ==> (
+            production_durable_intent_trace_refines_progress_witness_kernel(projection)
+            && effect_slots_authorized_body!(projection.effects)
+            && effect_count_body!(
+                projection.effects,
+                refinement_tag_value!(EFFECT_PERSIST)
+            ) <= 1u64
+            && projection.durable_sequence_after >= projection.durable_sequence_before
+            && (
+                projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
+                ==> projection.durable_sequence_before < u64::MAX
+            )
+            && (
+                projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
+                ==> projection.pending_after.persistence_id
+                    == projection.durable_sequence_before + 1
+            )
+            && (
+                projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
+                ==> projection.durable_sequence_after == projection.durable_sequence_before
+            )
+            && (
+                projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
+                ==> projection.durable_sequence_before < u64::MAX
+            )
+            && (
+                projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
+                ==> projection.durable_sequence_after
+                    == projection.durable_sequence_before + 1
+            )
+            && (
+                projection.boundary_claimed.kind
+                    == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
+                ==> projection.pending_before.persistence_id
+                    == projection.durable_sequence_after
+            )
         ),
-        effect_slots_authorized_body!(projection.effects),
-        effect_count_body!(projection.effects, refinement_tag_value!(EFFECT_PERSIST)) <= 1u64,
-        projection.durable_sequence_after >= projection.durable_sequence_before,
-        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
-            ==> projection.durable_sequence_before < u64::MAX,
-        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
-            ==> projection.pending_after.persistence_id
-                == projection.durable_sequence_before + 1,
-        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_BEGIN_WAL)
-            ==> projection.durable_sequence_after == projection.durable_sequence_before,
-        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
-            ==> projection.durable_sequence_before < u64::MAX,
-        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
-            ==> projection.durable_sequence_after
-                == projection.durable_sequence_before + 1,
-        projection.boundary_claimed.kind == refinement_tag_value!(BOUNDARY_ACKNOWLEDGE_WAL)
-            ==> projection.pending_before.persistence_id
-                == projection.durable_sequence_after,
 {
+    reveal(check_production_durable_intent_transition);
     reveal(production_durable_intent_trace_refines_progress_witness_kernel);
-    reveal(production_durable_intent_trace_projection);
-    assert(production_durable_intent_trace_refines_progress_witness_kernel(
-        production_durable_intent_trace_projection(projection),
-    ));
 }
 
 /// An exact active Commit, pending LockAndCommit, durable current-view timeout,
@@ -4566,104 +4634,65 @@ pub proof fn locked_commit_progress_witness_is_valid(
 pub proof fn production_decision_trace_refines_recovery_witness(
     projection: ProductionDecisionRecoveryTraceProjection,
 )
-    requires
-        production_decision_recovery_trace_body!(projection),
     ensures
-        production_decision_trace_refines_recovery_witness_kernel(
-            production_decision_recovery_trace_projection(projection),
+        check_production_decision_recovery_transition(projection) == Some(projection) ==> (
+            production_decision_trace_refines_recovery_witness_kernel(projection)
+            && projection.expected_height > 0u64
+            && projection.state_height <= projection.expected_height
+            && projection.expected_height - projection.state_height <= 1u64
+            && projection.durable_body.height == projection.frozen_height
+            && projection.stage == 1u8
+            && projection.replay_tag.height == projection.owner_tag.height
+            && projection.replay_tag.view == projection.owner_tag.view
+            && projection.replay_tag.generation == projection.owner_tag.generation
+            && projection.manifest_round.view == projection.durable_body.view
+            && projection.durable_body.view == projection.commit_qc.decision.proposal_view
         ),
-        projection.expected_height > 0u64,
-        projection.state_height <= projection.expected_height,
-        projection.expected_height - projection.state_height <= 1u64,
-        projection.durable_body.height == projection.frozen_height,
-        projection.stage == 1u8,
-        projection.replay_tag.height == projection.owner_tag.height,
-        projection.replay_tag.view == projection.owner_tag.view,
-        projection.replay_tag.generation == projection.owner_tag.generation,
-        projection.manifest_round.view == projection.durable_body.view,
-        projection.durable_body.view == projection.commit_qc.decision.proposal_view,
 {
+    reveal(check_production_decision_recovery_transition);
     reveal(production_decision_trace_refines_recovery_witness_kernel);
-    reveal(production_decision_recovery_trace_projection);
-    assert(production_decision_trace_refines_recovery_witness_kernel(
-        production_decision_recovery_trace_projection(projection),
-    ));
 }
 
 /// One scheduler selection preserves the exact protected FIFO/timer owner.
 pub proof fn production_scheduler_trace_refines_protected_ownership(
     projection: ProductionSchedulerTraceProjection,
 )
-    requires
-        projection.timeout_due
-            ==> projection.selected == 1u8
-                && projection.fifo_owed_after == projection.fifo_ready,
-        !projection.timeout_due && projection.fifo_ready && projection.fifo_owed_before
-            ==> projection.selected == 3u8 && !projection.fifo_owed_after,
-        !projection.timeout_due
-            && !(projection.fifo_ready && projection.fifo_owed_before)
-            && projection.periodic_timer_due
-            ==> projection.selected == 2u8
-                && projection.fifo_owed_after == projection.fifo_ready,
-        !projection.timeout_due
-            && !(projection.fifo_ready && projection.fifo_owed_before)
-            && !projection.periodic_timer_due
-            && projection.fifo_ready
-            ==> projection.selected == 3u8 && !projection.fifo_owed_after,
-        !projection.timeout_due
-            && !projection.fifo_ready
-            && !projection.periodic_timer_due
-            ==> projection.selected == 0u8 && !projection.fifo_owed_after,
     ensures
-        production_scheduler_trace_refines_protected_ownership_kernel(
-            production_scheduler_trace_projection(projection),
+        check_production_scheduler_transition(projection) == Some(projection) ==> (
+            production_scheduler_trace_refines_protected_ownership_kernel(projection)
+            && projection.selected <= 3u8
+            && (projection.timeout_due ==> projection.selected == 1u8)
+            && (
+                !projection.timeout_due
+                    && !projection.fifo_ready
+                    && !projection.periodic_timer_due
+                ==> projection.selected == 0u8 && !projection.fifo_owed_after
+            )
         ),
-        projection.selected <= 3u8,
-        projection.timeout_due ==> projection.selected == 1u8,
-        !projection.timeout_due
-                && !projection.fifo_ready
-                && !projection.periodic_timer_due
-            ==> projection.selected == 0u8 && !projection.fifo_owed_after,
 {
+    reveal(check_production_scheduler_transition);
     reveal(production_scheduler_trace_refines_protected_ownership_kernel);
-    reveal(production_scheduler_trace_projection);
-    assert(production_scheduler_trace_refines_protected_ownership_kernel(
-        production_scheduler_trace_projection(projection),
-    ));
 }
 
 /// One bounded ingress admission preserves its complete tag and service class.
 pub proof fn production_ingress_identity_and_class_trace_refines_protected_ownership(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 )
-    requires
-        projection.incoming_height == projection.stored_height,
-        projection.incoming_view == projection.stored_view,
-        projection.incoming_generation == projection.stored_generation,
-        projection.incoming_class == projection.stored_class,
-        projection.incoming_class >= 1u8,
-        projection.incoming_class <= 3u8,
-        projection.queue_len_before < u64::MAX,
-        projection.queue_len_after == projection.queue_len_before + 1u64,
-        projection.queue_len_after <= projection.queue_capacity,
     ensures
-        production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
-            production_ingress_identity_and_class_trace_projection(projection),
+        check_production_ingress_transition(projection) == Some(projection) ==> (
+            production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+                projection
+            )
+            && projection.incoming_height == projection.stored_height
+            && projection.incoming_view == projection.stored_view
+            && projection.incoming_generation == projection.stored_generation
+            && projection.incoming_class == projection.stored_class
+            && projection.queue_len_after > projection.queue_len_before
+            && projection.queue_len_after <= projection.queue_capacity
         ),
-        projection.incoming_height == projection.stored_height,
-        projection.incoming_view == projection.stored_view,
-        projection.incoming_generation == projection.stored_generation,
-        projection.incoming_class == projection.stored_class,
-        projection.queue_len_after > projection.queue_len_before,
-        projection.queue_len_after <= projection.queue_capacity,
 {
+    reveal(check_production_ingress_transition);
     reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
-    reveal(production_ingress_identity_and_class_trace_projection);
-    assert(
-        production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
-            production_ingress_identity_and_class_trace_projection(projection),
-        )
-    );
 }
 
 /// One exact retry preserves its authenticated source owner and rotates both
@@ -4671,24 +4700,19 @@ pub proof fn production_ingress_identity_and_class_trace_refines_protected_owner
 pub proof fn production_two_stage_relay_retry_trace_refines_source_fairness(
     projection: ProductionTwoStageRelayRetryTraceProjection,
 )
-    requires
-        production_two_stage_relay_retry_trace_body!(projection),
     ensures
-        production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
-            production_two_stage_relay_retry_trace_projection(projection),
+        check_production_two_stage_relay_retry_transition(projection) == Some(projection) ==> (
+            production_two_stage_relay_retry_trace_refines_source_fairness_kernel(projection)
+            && projection.daemon_source_capacity_matches_two_upstream_lanes
+            && projection.class_corridor_covers_authenticated_sources
+            && projection.total_depth_after == projection.total_depth_before
+            && projection.selected_source_rank_after == projection.ready_sources_after - 1u64
+            && projection.selected_item_rank_after == projection.source_depth_after - 1u64
+            && projection.source_depth_after <= projection.source_capacity
         ),
-        projection.daemon_source_capacity_matches_two_upstream_lanes,
-        projection.class_corridor_covers_authenticated_sources,
-        projection.total_depth_after == projection.total_depth_before,
-        projection.selected_source_rank_after == projection.ready_sources_after - 1u64,
-        projection.selected_item_rank_after == projection.source_depth_after - 1u64,
-        projection.source_depth_after <= projection.source_capacity,
 {
+    reveal(check_production_two_stage_relay_retry_transition);
     reveal(production_two_stage_relay_retry_trace_refines_source_fairness_kernel);
-    reveal(production_two_stage_relay_retry_trace_projection);
-    assert(production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
-        production_two_stage_relay_retry_trace_projection(projection),
-    ));
 }
 
 /// Writer completion and lane application are one linked occurrence: the
@@ -4698,82 +4722,70 @@ pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
     worker: ProductionReliableFlushTraceProjection,
     application: ProductionReliableFlushApplicationProjection,
 )
-    requires
-        production_reliable_flush_trace_body!(worker),
-        production_reliable_flush_application_body!(application),
-        production_reliable_flush_two_phase_link_body!(worker, application),
     ensures
-        production_reliable_flush_trace_refines_outbound_ownership_kernel(
-            production_reliable_flush_trace_projection(worker),
+        (
+            check_production_reliable_flush_worker_transition(worker) == Some(worker)
+            && check_production_reliable_flush_application_transition(application)
+                == Some(application)
+            && check_production_reliable_flush_link_transition(worker, application)
+                == Some((worker, application))
+        ) ==> (
+            production_reliable_flush_trace_refines_outbound_ownership_kernel(worker)
+            && production_reliable_flush_application_refines_source_lane_kernel(application)
+            && production_reliable_flush_two_phase_link_kernel(worker, application)
+            && worker.status == 2u8
+            && worker.stream_epoch > 0u64
+            && application.stream_epoch > 0u64
+            && application.marker_stream_epoch > 0u64
+            && worker.stream_epoch == application.stream_epoch
+            && worker.stream_epoch == application.marker_stream_epoch
+            && application.stream_epoch == application.marker_stream_epoch
+            && worker.service_generation > 0u64
+            && application.service_generation > 0u64
+            && application.marker_service_generation > 0u64
+            && worker.service_generation == application.service_generation
+            && worker.service_generation == application.marker_service_generation
+            && application.service_generation == application.marker_service_generation
+            && worker.semantic_sequence > 0u64
+            && application.semantic_sequence > 0u64
+            && application.marker_semantic_sequence > 0u64
+            && worker.semantic_sequence == application.semantic_sequence
+            && worker.semantic_sequence == application.marker_semantic_sequence
+            && application.semantic_sequence == application.marker_semantic_sequence
+            && worker.reply_writer_timeout_attempt == application.reply_writer_timeout_attempt
+            && application.claim_acquired
+            && application.gate_marker_present_before
+            && !application.gate_marker_present_after
+            && application.gate_cursor_after == application.gate_cursor_before + 1u64
+            && application.chunk_cursor_after == application.gate_cursor_after
+            && application.sibling_records_equal
+            && canonical_identity_equal_body!(
+                application.sibling_state_before,
+                application.sibling_state_after
+            )
+            && application.outbound_order_count_after <= 1u64
+            && application.sibling_order_len_after == application.sibling_order_len_before
+            && canonical_identity_equal_body!(
+                worker.source_key_identity,
+                application.source_key_identity
+            )
+            && canonical_identity_equal_body!(
+                worker.delivery_route_identity,
+                application.delivery_route_identity
+            )
+            && canonical_identity_equal_body!(
+                worker.writer_occurrence_identity,
+                application.writer_occurrence_identity
+            )
+            && canonical_identity_equal_body!(worker.chunk_hash, application.chunk_hash)
         ),
-        production_reliable_flush_application_refines_source_lane_kernel(
-            production_reliable_flush_application_projection(application),
-        ),
-        production_reliable_flush_two_phase_link_kernel(
-            production_reliable_flush_trace_projection(worker),
-            production_reliable_flush_application_projection(application),
-        ),
-        worker.status == 2u8,
-        worker.stream_epoch > 0u64,
-        application.stream_epoch > 0u64,
-        application.marker_stream_epoch > 0u64,
-        worker.stream_epoch == application.stream_epoch,
-        worker.stream_epoch == application.marker_stream_epoch,
-        application.stream_epoch == application.marker_stream_epoch,
-        worker.service_generation > 0u64,
-        application.service_generation > 0u64,
-        application.marker_service_generation > 0u64,
-        worker.service_generation == application.service_generation,
-        worker.service_generation == application.marker_service_generation,
-        application.service_generation == application.marker_service_generation,
-        worker.semantic_sequence > 0u64,
-        application.semantic_sequence > 0u64,
-        application.marker_semantic_sequence > 0u64,
-        worker.semantic_sequence == application.semantic_sequence,
-        worker.semantic_sequence == application.marker_semantic_sequence,
-        application.semantic_sequence == application.marker_semantic_sequence,
-        worker.reply_writer_timeout_attempt == application.reply_writer_timeout_attempt,
-        application.claim_acquired,
-        application.gate_marker_present_before,
-        !application.gate_marker_present_after,
-        application.gate_cursor_after == application.gate_cursor_before + 1u64,
-        application.chunk_cursor_after == application.gate_cursor_after,
-        application.sibling_records_equal,
-        canonical_identity_equal_body!(
-            application.sibling_state_before,
-            application.sibling_state_after
-        ),
-        application.outbound_order_count_after <= 1u64,
-        application.sibling_order_len_after == application.sibling_order_len_before,
-        canonical_identity_equal_body!(
-            worker.source_key_identity,
-            application.source_key_identity
-        ),
-        canonical_identity_equal_body!(
-            worker.delivery_route_identity,
-            application.delivery_route_identity
-        ),
-        canonical_identity_equal_body!(
-            worker.writer_occurrence_identity,
-            application.writer_occurrence_identity
-        ),
-        canonical_identity_equal_body!(worker.chunk_hash, application.chunk_hash),
 {
+    reveal(check_production_reliable_flush_worker_transition);
+    reveal(check_production_reliable_flush_application_transition);
+    reveal(check_production_reliable_flush_link_transition);
     reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
     reveal(production_reliable_flush_application_refines_source_lane_kernel);
     reveal(production_reliable_flush_two_phase_link_kernel);
-    reveal(production_reliable_flush_trace_projection);
-    reveal(production_reliable_flush_application_projection);
-    assert(production_reliable_flush_trace_refines_outbound_ownership_kernel(
-        production_reliable_flush_trace_projection(worker),
-    ));
-    assert(production_reliable_flush_application_refines_source_lane_kernel(
-        production_reliable_flush_application_projection(application),
-    ));
-    assert(production_reliable_flush_two_phase_link_kernel(
-        production_reliable_flush_trace_projection(worker),
-        production_reliable_flush_application_projection(application),
-    ));
 }
 
 /// A durable writer occurrence without a stream incarnation cannot satisfy
@@ -4933,30 +4945,25 @@ pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_timeo
 pub proof fn production_application_trace_refines_decision_completion(
     projection: ProductionApplicationTraceProjection,
 )
-    requires
-        production_application_trace_body!(projection),
     ensures
-        production_application_trace_refines_decision_completion_kernel(
-            production_application_trace_projection(projection),
+        check_production_application_transition(projection) == Some(projection) ==> (
+            production_application_trace_refines_decision_completion_kernel(projection)
+            && projection.context_height > 0u64
+            && projection.state_height_after == projection.context_height
+            && projection.artifact_height == projection.context_height
+            && projection.completion_work_id == projection.task_work_id
+            && canonical_identity_equal_body!(
+                projection.artifact_context_id,
+                projection.context_id
+            )
+            && projection.task_tag.height == projection.owner_tag.height
+            && projection.task_tag.view == projection.owner_tag.view
+            && projection.task_tag.generation == projection.owner_tag.generation
+            && projection.validated_body.view == projection.commit_qc.decision.proposal_view
         ),
-        projection.context_height > 0u64,
-        projection.state_height_after == projection.context_height,
-        projection.artifact_height == projection.context_height,
-        projection.completion_work_id == projection.task_work_id,
-        canonical_identity_equal_body!(
-            projection.artifact_context_id,
-            projection.context_id
-        ),
-        projection.task_tag.height == projection.owner_tag.height,
-        projection.task_tag.view == projection.owner_tag.view,
-        projection.task_tag.generation == projection.owner_tag.generation,
-        projection.validated_body.view == projection.commit_qc.decision.proposal_view,
 {
+    reveal(check_production_application_transition);
     reveal(production_application_trace_refines_decision_completion_kernel);
-    reveal(production_application_trace_projection);
-    assert(production_application_trace_refines_decision_completion_kernel(
-        production_application_trace_projection(projection),
-    ));
 }
 
 /// Exact application finalization has no pending successor activation; the
@@ -4964,31 +4971,26 @@ pub proof fn production_application_trace_refines_decision_completion(
 pub proof fn production_terminal_application_without_successor_activation_refines_indexed_terminal(
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 )
-    requires
-        production_terminal_application_without_successor_activation_body!(projection),
     ensures
-        production_terminal_application_without_successor_activation_kernel(
-            production_terminal_application_without_successor_activation_projection(projection),
-        ),
-        projection.context_height > 0u64,
-        projection.receipt_height == projection.context_height,
-        projection.artifact_height == projection.context_height,
-        projection.predecessor.height == projection.context_height,
-        !projection.pending_successor_activation_present,
-        canonical_identity_equal_body!(
-            projection.receipt_context_id,
-            projection.context_id
-        ),
-        canonical_identity_equal_body!(
-            projection.artifact_context_id,
-            projection.context_id
+        check_production_terminal_application_transition(projection) == Some(projection) ==> (
+            production_terminal_application_without_successor_activation_kernel(projection)
+            && projection.context_height > 0u64
+            && projection.receipt_height == projection.context_height
+            && projection.artifact_height == projection.context_height
+            && projection.predecessor.height == projection.context_height
+            && !projection.pending_successor_activation_present
+            && canonical_identity_equal_body!(
+                projection.receipt_context_id,
+                projection.context_id
+            )
+            && canonical_identity_equal_body!(
+                projection.artifact_context_id,
+                projection.context_id
+            )
         ),
 {
+    reveal(check_production_terminal_application_transition);
     reveal(production_terminal_application_without_successor_activation_kernel);
-    reveal(production_terminal_application_without_successor_activation_projection);
-    assert(production_terminal_application_without_successor_activation_kernel(
-        production_terminal_application_without_successor_activation_projection(projection),
-    ));
 }
 
 /// Verus-side shape of one fixed-width effect capability key.

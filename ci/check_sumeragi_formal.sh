@@ -57,6 +57,12 @@ bash scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh
 bash scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh
 bash scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh
 bash scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh
+bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh
+bash scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh
+bash scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh
+bash scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh
+bash scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh
+bash scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh
 bash scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
 bash scripts/formal/run_sumeragi_v2_tlc.sh ci
 bash scripts/formal/check_sumeragi_v2_replay_trace.sh
@@ -82,4 +88,4 @@ if [[ -n "$cross_tool_obligations" ]]; then
 fi
 python3 scripts/formal/check_sumeragi_v2_proof_ledger.py "${release_args[@]}"
 
-echo "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness mutations, bounded TLC, trace replay, and production Verus"
+echo "Sumeragi v2 formal gate passed: source-bound TLAPS, all registered adversarial scheduler/readiness/indexed-height/item-carrier/reply-writer/recovery/ownership mutations, bounded TLC, trace replay, and production Verus"

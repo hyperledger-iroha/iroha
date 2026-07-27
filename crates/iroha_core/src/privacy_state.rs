@@ -11,15 +11,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
     PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
-    PrivacyActivationValidationError,
-    PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+    PrivacyActivationValidationError, PrivacyConsensusPolicyV1, PrivacyNamespaceV1,
+    PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
     PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
-    PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
-    PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
+    PrivacyPolicyIdV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
+    PrivacyStatementDigestV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
     PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
-    PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1, PrivacyNullifierV1,
-    PrivacyPolicyIdV1,
+    PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
     ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
 };
 use mv::storage::StorageReadOnly;
@@ -1684,9 +1683,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             | PrivacyCommitmentKeyV1::ZkAmsPhc { namespace, .. }
             | PrivacyCommitmentKeyV1::ZkAmsSeedKey { namespace, .. } => {
                 let bootstrap_digest = zk_ams_bootstraps.get(namespace).ok_or_else(|| {
-                    format!(
-                        "ZK-AMS commitment {namespace:?} has no authoritative AccountRegistry"
-                    )
+                    format!("ZK-AMS commitment {namespace:?} has no authoritative AccountRegistry")
                 })?;
                 let role_matches = match key {
                     PrivacyCommitmentKeyV1::ZkAmsIssuerPolicyRecord { .. } => matches!(
@@ -1736,9 +1733,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             }
             PrivacyNullifierKeyV1::ZkAmsKeyImage { namespace, .. } => {
                 let bootstrap_digest = zk_ams_bootstraps.get(namespace).ok_or_else(|| {
-                    format!(
-                        "ZK-AMS nullifier {namespace:?} has no authoritative AccountRegistry"
-                    )
+                    format!("ZK-AMS nullifier {namespace:?} has no authoritative AccountRegistry")
                 })?;
                 if !matches!(
                     record,
@@ -3015,12 +3010,9 @@ impl PrivacyStateItemRecordV1 {
 
     /// Return the immutable ZK-AMS registry origin bound to this item, if any.
     #[must_use]
-    pub const fn zk_ams_bootstrap_digest(
-        &self,
-    ) -> Option<PrivacyZkAmsRegistryBootstrapDigestV1> {
+    pub const fn zk_ams_bootstrap_digest(&self) -> Option<PrivacyZkAmsRegistryBootstrapDigestV1> {
         match self {
-            Self::ZkAcePolicyGovernance { .. }
-            | Self::ZkAceVerifiedAuthorization { .. } => None,
+            Self::ZkAcePolicyGovernance { .. } | Self::ZkAceVerifiedAuthorization { .. } => None,
             Self::ZkAmsGovernance {
                 bootstrap_digest, ..
             }

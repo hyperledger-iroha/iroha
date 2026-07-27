@@ -29,8 +29,7 @@ use super::{
         VolatileSummary, WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT,
         WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT,
         WAL_RECORD_PROPOSAL_INTENT, WAL_RECORD_TIMEOUT_INTENT,
-        locked_commit_progress_witness_is_valid,
-        production_durable_intent_trace_refines_progress_witness_kernel,
+        check_production_durable_intent_transition, locked_commit_progress_witness_is_valid,
     },
 };
 
@@ -1042,11 +1041,12 @@ impl Reducer {
                     durable_sequence_before: self.durable.last_id().get(),
                     durable_sequence_after: next.durable.last_id().get(),
                 };
-                if !production_durable_intent_trace_refines_progress_witness_kernel(
-                    durable_intent_trace,
-                ) {
+                let Some(checked_transition) =
+                    check_production_durable_intent_transition(durable_intent_trace)
+                else {
                     return Err(ReducerError::RefinementViolation);
-                }
+                };
+                let _authorized_transition = checked_transition.into_projection();
                 if let Some(violation) = next.progress_witness_violation() {
                     return Err(ReducerError::ProgressWitnessViolation(violation));
                 }

@@ -40,7 +40,7 @@ use super::{
         IDENTITY_KIND_COMMIT_CERTIFICATE_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
         IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
         ProductionHistoricalCertificateTraceProjection,
-        production_historical_certificate_trace_refines_indexed_async_kernel,
+        check_production_historical_certificate_transition,
     },
     v2_effects::CommitCertificateReducerAdmission,
 };
@@ -470,15 +470,11 @@ impl V2BlockSyncDiscovery {
         let response_request_hash = discovered.response.request_hash;
         let certificate = discovered.response.certificate.clone();
         let request_present_before = self.outstanding.contains(request_hash);
-        let admission =
-            enqueue(message.clone()).map_err(CommitCertificateAdmissionError::Enqueue)?;
-        if !admission.matches(&message) {
-            return Err(CommitCertificateAdmissionError::MismatchedReducerAdmission);
-        }
-        let admitted_message_hash = admission.refinement_projection();
-        if !self.complete(discovered) {
-            return Err(CommitCertificateAdmissionError::RequestDisappeared);
-        }
+        let admitted_message_hash = historical_typed_identity(
+            IDENTITY_DOMAIN_PAYLOAD,
+            IDENTITY_KIND_CONSENSUS_MESSAGE,
+            HashOf::new(&message),
+        );
         let historical_trace = ProductionHistoricalCertificateTraceProjection {
             context_id: historical_typed_identity(
                 IDENTITY_DOMAIN_CONTEXT,
@@ -517,16 +513,28 @@ impl V2BlockSyncDiscovery {
                 }
                 _ => CanonicalIdentityProjection::zero(),
             },
-            message_hash: historical_typed_identity(
-                IDENTITY_DOMAIN_PAYLOAD,
-                IDENTITY_KIND_CONSENSUS_MESSAGE,
-                HashOf::new(&message),
-            ),
+            message_hash: admitted_message_hash,
             admitted_message_hash,
             request_present_before,
-            request_present_after: self.outstanding.contains(request_hash),
+            request_present_after: false,
         };
-        if !production_historical_certificate_trace_refines_indexed_async_kernel(historical_trace) {
+        let Some(checked_transition) =
+            check_production_historical_certificate_transition(historical_trace)
+        else {
+            return Err(CommitCertificateAdmissionError::RefinementRejected);
+        };
+        let historical_trace = checked_transition.into_projection();
+        let admission =
+            enqueue(message.clone()).map_err(CommitCertificateAdmissionError::Enqueue)?;
+        if !admission.matches(&message)
+            || admission.refinement_projection() != historical_trace.admitted_message_hash
+        {
+            return Err(CommitCertificateAdmissionError::MismatchedReducerAdmission);
+        }
+        if !self.complete(discovered) {
+            return Err(CommitCertificateAdmissionError::RequestDisappeared);
+        }
+        if self.outstanding.contains(request_hash) {
             return Err(CommitCertificateAdmissionError::RefinementRejected);
         }
         Ok(())

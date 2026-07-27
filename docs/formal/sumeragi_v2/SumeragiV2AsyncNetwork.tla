@@ -12,9 +12,11 @@ as `BoundedIngress`; normal, progress, and completion are admission classes
 over its total length.  Dispatch follows the production cyclic class cursor
 (Completion -> Progress -> Normal), removes the first queued command of the
 selected class, and therefore preserves FIFO order within each class.
-TimeoutElapsed and RetransmitElapsed are local scheduler inputs.  If the
-reducer is busy they are coalesced in the adapter's trusted deferred-completion
-set until the busy fence clears.
+TimeoutElapsed and RetransmitElapsed are local scheduler inputs.  Timeout work
+remains behind the reducer Busy fence.  RetransmitElapsed instead names the
+bounded run-loop program point immediately before production's unconditional
+`drive_block_sync` call: once armed, the next Runtime visit emits retained
+network work even while the reducer executor is busy.
 
 Queued stale I/O is deliberately retained in this model as a conservative
 service burden.  Production cancels queued certified-stale Sign/Store/Validate
@@ -143,6 +145,8 @@ AsyncIoCommandClasses == {"Serve", "Consensus", "Control"}
 AsyncControlKinds ==
   {"Proposal", "PrepareVote", "CommitVote", "PrepareQC", "CommitQC",
    "TimeoutVote", "TimeoutCertificate"}
+AsyncLeaderWireKinds ==
+  AsyncControlKinds \cup {"Chunk", "CertifiedResponse"}
 AsyncInstallRetainedControlKinds ==
   {"CommitVote", "PrepareQC", "CommitQC", "TimeoutCertificate"}
 
@@ -592,6 +596,107 @@ AsyncNetworkItems ==
   \cup {AsyncNetworkItem("Noise", source, envelope):
           source \in AsyncIngressSources, envelope \in AsyncBodyEnvelopeSet}
 
+(***************************************************************************
+Bounded internal service identity for retained control traffic.
+
+The exact authenticated wire tuple remains the retry identity, but production
+must not retain an ever-growing set of those tuples.  Instead every recipient,
+authenticated source, and protocol-owner class has one fixed service slot.
+Vote and timeout-vote slots name their signer; the other classes name their
+kind.  Cross-source relays deliberately remain distinct slots because the
+physical scheduler charges those source lanes separately.
+
+A slot stores the first immutable local admission ordinal for one
+context/height/view owner.  A strictly newer view may replace the slot.  An
+exact retry coalesces with its owner, and every later same/lower-view identity
+drains without replacing it.  Successful reducer service flips one monotone
+`consumed` bit.  A fresh successor-height Async instance starts with an empty
+table, so storage is roster/class bounded rather than history bounded.
+***************************************************************************)
+AsyncLeaderWireServiceIdentity(item) ==
+  [kind |-> item.kind,
+   source |-> item.source,
+   envelope |-> item.envelope]
+
+AsyncControlServiceProtocolOwner(kind, source) ==
+  IF kind \in {"PrepareVote", "CommitVote", "TimeoutVote"}
+  THEN source
+  ELSE kind
+
+AsyncControlServiceSlot(recipient, source, kind) ==
+  [recipient |-> recipient,
+   source |-> source,
+   kind |-> kind,
+   owner |-> AsyncControlServiceProtocolOwner(kind, source)]
+
+AsyncControlServiceSlotSet ==
+  {AsyncControlServiceSlot(recipient, source, kind):
+     recipient \in ValidatorIds,
+     source \in ValidatorIds,
+     kind \in AsyncControlKinds}
+
+AsyncControlItemContext(item) ==
+  CASE item.kind = "Proposal" -> item.envelope.proposal.context
+    [] item.kind \in {"PrepareVote", "CommitVote", "TimeoutVote"} ->
+         item.envelope.vote.context
+    [] item.kind \in {"PrepareQC", "CommitQC"} ->
+         item.envelope.qc.context
+    [] item.kind = "TimeoutCertificate" -> item.envelope.tc.context
+
+AsyncControlItemHeight(item) == AsyncControlItemContext(item).height
+
+AsyncControlItemView(item) ==
+  CASE item.kind = "Proposal" -> item.envelope.proposal.view
+    [] item.kind \in {"PrepareVote", "CommitVote", "TimeoutVote"} ->
+         item.envelope.vote.view
+    [] item.kind \in {"PrepareQC", "CommitQC"} -> item.envelope.qc.view
+    [] item.kind = "TimeoutCertificate" -> item.envelope.tc.view
+
+AsyncControlItemSubject(item) ==
+  CASE item.kind = "Proposal" -> item.envelope.proposal.subject
+    [] item.kind \in {"PrepareVote", "CommitVote"} ->
+         item.envelope.vote.subject
+    [] item.kind = "TimeoutVote" -> item.envelope.vote.highSubject
+    [] item.kind \in {"PrepareQC", "CommitQC"} -> item.envelope.qc.subject
+    [] item.kind = "TimeoutCertificate" -> NoSubject
+
+AsyncControlServiceRecord(item, ordinal, consumed) ==
+  [slot |->
+     AsyncControlServiceSlot(
+       item.envelope.recipient, item.source, item.kind),
+   context |-> AsyncControlItemContext(item),
+   height |-> AsyncControlItemHeight(item),
+   view |-> AsyncControlItemView(item),
+   subject |-> AsyncControlItemSubject(item),
+   phase |-> item.kind,
+   identity |-> AsyncLeaderWireServiceIdentity(item),
+   ordinal |-> ordinal,
+   consumed |-> consumed]
+
+AsyncControlServiceRecordSet ==
+  {AsyncControlServiceRecord(item, ordinal, consumed):
+     item \in {wire \in AsyncNetworkItems:
+                 wire.kind \in AsyncControlKinds},
+     ordinal \in Nat \ {0},
+     consumed \in BOOLEAN}
+
+THEOREM AsyncLeaderWireExactRetryRetainsServiceIdentity ==
+  \A left, right:
+    /\ left.kind = right.kind
+    /\ left.source = right.source
+    /\ left.envelope = right.envelope
+    => AsyncLeaderWireServiceIdentity(left)
+         = AsyncLeaderWireServiceIdentity(right)
+BY DEF AsyncLeaderWireServiceIdentity
+
+THEOREM AsyncControlServiceSlotCarrierIsRosterClassBounded ==
+  Cardinality(AsyncControlServiceSlotSet)
+    <= Cardinality(ValidatorIds)
+         * Cardinality(ValidatorIds)
+         * Cardinality(AsyncControlKinds)
+BY FS_Product, FS_Image, FS_Subset, Isa
+   DEF AsyncControlServiceSlotSet
+
 \* Exact evidence survives queue/pool epochs independently of the delivery
 \* envelope.  Durable restart replay therefore names the authenticated Core
 \* record which caused the work, while ordinary ingress keeps the exact wire
@@ -716,13 +821,19 @@ AsyncServeAdmission(node, identity, family, roundView, ordinal) ==
   [node |-> node, identity |-> identity, family |-> family,
    view |-> roundView, ordinal |-> ordinal]
 
+AsyncServeIngressAdmission(
+    node, identity, ordinal, ingressPredecessors) ==
+  [node |-> node, identity |-> identity, ordinal |-> ordinal,
+   ingressPredecessors |-> ingressPredecessors]
+
 AsyncServeReservation(
     node, identity, family, roundView, ordinal,
-    predecessors, ingressPredecessors) ==
+    predecessors, ingressPredecessors, rollbackTombstones) ==
   [node |-> node, identity |-> identity, family |-> family,
    view |-> roundView, ordinal |-> ordinal,
    predecessors |-> predecessors,
-   ingressPredecessors |-> ingressPredecessors]
+   ingressPredecessors |-> ingressPredecessors,
+   rollbackTombstones |-> rollbackTombstones]
 
 AsyncServeTombstone(
     node, identity, family, roundView, ordinal, outputs) ==
@@ -753,11 +864,13 @@ the pinned TLC set cap even in the initial state.  These predicates are the
 structural membership expansion for the only unbounded record branch.
 ***************************************************************************)
 AsyncTcRecordTyped(tc) ==
-  /\ DOMAIN tc = {"context", "height", "view", "votes"}
+  /\ DOMAIN tc =
+       {"context", "height", "view", "votes", "highestPrepareQc"}
   /\ tc.context \in ContextRecords
   /\ tc.height \in Heights
   /\ tc.view \in Views
   /\ tc.votes \subseteq TimeoutVoteRecordSet
+  /\ tc.highestPrepareQc \in PrepareQcOptionSet
 
 AsyncTcEnvelopeTyped(envelope) ==
   /\ DOMAIN envelope = {"recipient", "tc"}
@@ -884,6 +997,291 @@ AsyncCandidateTyped(candidate) ==
   /\ candidate.manifestIdentity \in SubjectOrNone
   /\ candidate.commitmentIdentity \in SubjectOrNone
 
+(***************************************************************************
+The service identity below is the route-neutral lifecycle key for one logical
+reducer occurrence.  Unlike `ExactAsyncCandidateIdentity`, it deliberately
+excludes the process-local consumer view and generation.  Coalescing state is
+split around the durability boundary:
+
+* every successful service installs a transient marker carrying the exact
+  consumer generation.  It prevents same-generation reactivation but becomes
+  inactive when Restart advances the generation and is deleted by the
+  responsive replay reset;
+* only a terminal nondispatchable discard installs a restart-durable
+  tombstone.  Such a tombstone remains route-neutral and cannot be resurrected
+  at the retired stage.
+
+The semantic round/view, frozen context, derived leader, subject, work phase,
+and immutable payload remain part of both keys.  Both record classes allocate
+from one immutable per-node ordinal high-watermark, so the fixed-GST producer
+episode remains finite without treating a pre-GST restart as progress.
+
+Authenticated aggregate certificates have one semantic reducer occurrence
+even when another valid quorum superset or aggregate encoding carries them.
+Their service key therefore retains the certificate reference
+`(context,height,view,phase,subject)`, and a TC additionally retains its
+selected highest-Prepare reference, but deliberately omits QC signer sets and
+TC timeout-vote/share composition.  Proposal and timeout-vote payloads apply
+the same projection to nested certificate evidence.  Exact wire
+authentication remains a delivery precondition; this projection is used only
+after that boundary to bound the durable serviced-owner table.
+
+Certified responses also normalize their relay hop to the
+aggregate-untrusted source used by the physical ingress owner.  Retried
+delivery through another relay consequently retains one service identity
+without weakening the signed request/body/certificate authority checked
+before service.
+***************************************************************************)
+AsyncCandidateQcSemanticPayload(qc) ==
+  CertificateRefOf(qc)
+
+AsyncCandidatePrepareQcSemanticPayload(qc) ==
+  IF qc = NoPrepareQC
+  THEN NoPrepareQC
+  ELSE AsyncCandidateQcSemanticPayload(qc)
+
+AsyncCandidateVoteSemanticPayload(vote) ==
+  [context |-> vote.context,
+   height |-> vote.height,
+   view |-> vote.view,
+   phase |-> vote.phase,
+   subject |-> vote.subject,
+   signer |-> vote.signer]
+
+AsyncCandidateTimeoutVoteSemanticPayload(vote) ==
+  [context |-> vote.context,
+   height |-> vote.height,
+   view |-> vote.view,
+   signer |-> vote.signer,
+   highestPrepareQc |->
+     AsyncCandidatePrepareQcSemanticPayload(vote.highestPrepareQc),
+   highRank |-> vote.highRank,
+   highSubject |-> vote.highSubject]
+
+AsyncCandidateTcSemanticPayload(tc) ==
+  IF tc = NoTimeoutCertificate
+  THEN NoTimeoutCertificate
+  ELSE [context |-> tc.context,
+        height |-> tc.height,
+        view |-> tc.view,
+        highestPrepareQc |->
+          AsyncCandidatePrepareQcSemanticPayload(
+            tc.highestPrepareQc)]
+
+AsyncCandidateProposalSemanticPayload(proposal) ==
+  [context |-> proposal.context,
+   height |-> proposal.height,
+   view |-> proposal.view,
+   subject |-> proposal.subject,
+   proposer |-> proposal.proposer,
+   timeoutCertificate |->
+     AsyncCandidateTcSemanticPayload(proposal.timeoutCertificate),
+   highestPrepareQc |->
+     AsyncCandidatePrepareQcSemanticPayload(
+       proposal.highestPrepareQc),
+   justifyRank |-> proposal.justifyRank,
+   justifySubject |-> proposal.justifySubject]
+
+AsyncCandidateCertifiedRequestHashSemanticPayload(requestHash) ==
+  LET signed == requestHash.exactSignedRequest
+      preimage == signed.preimage
+      signature == signed.signature
+  IN [round |-> preimage.round,
+      subject |-> preimage.subject,
+      certificate |->
+        AsyncCandidateQcSemanticPayload(preimage.certificate),
+      requester |-> preimage.requester,
+      signer |-> signature.signer,
+      signatureNonce |-> signature.nonce]
+
+AsyncCandidateCertifiedRequestItemSemanticPayload(item) ==
+  [recipient |-> item.envelope.recipient,
+   height |-> item.envelope.height,
+   view |-> item.envelope.view,
+   subject |-> item.envelope.subject,
+   requester |-> item.envelope.requester,
+   certificate |->
+     AsyncCandidateQcSemanticPayload(
+       item.envelope.certificate),
+   signatureNonce |-> item.envelope.signatureNonce]
+
+AsyncCandidateCommitRequestItemSemanticPayload(item) ==
+  [kind |-> item.kind,
+   source |-> item.source,
+   recipient |-> item.envelope.recipient,
+   height |-> item.envelope.height,
+   view |-> item.envelope.view,
+   subject |-> item.envelope.subject,
+   chunk |-> item.envelope.chunk,
+   nonce |-> item.envelope.nonce]
+
+AsyncRouteNeutralCandidateItem(item) ==
+  IF item = NoAsyncItem
+  THEN [kind |-> "NoItem",
+        source |-> 0,
+        payload |-> NoAsyncItem]
+  ELSE [kind |-> item.kind,
+        \* Aggregate certificate relays and recovery responses name one
+        \* semantic occurrence independently of their physical relay.
+        source |->
+          IF item.kind
+               \in {"PrepareQC", "CommitQC", "TimeoutCertificate",
+                    "CertifiedResponse", "CommitCertificateResponse"}
+          THEN AsyncUntrustedSource
+          ELSE item.source,
+        payload |->
+          CASE item.kind = "Proposal" ->
+                 [recipient |-> item.envelope.recipient,
+                  proposal |->
+                    AsyncCandidateProposalSemanticPayload(
+                      item.envelope.proposal)]
+            [] item.kind \in {"PrepareVote", "CommitVote"} ->
+                 [recipient |-> item.envelope.recipient,
+                  vote |->
+                    AsyncCandidateVoteSemanticPayload(
+                      item.envelope.vote)]
+            [] item.kind \in {"PrepareQC", "CommitQC"} ->
+                 [recipient |-> item.envelope.recipient,
+                  qc |->
+                    AsyncCandidateQcSemanticPayload(
+                      item.envelope.qc)]
+            [] item.kind = "TimeoutVote" ->
+                 [recipient |-> item.envelope.recipient,
+                  vote |->
+                    AsyncCandidateTimeoutVoteSemanticPayload(
+                      item.envelope.vote)]
+            [] item.kind = "TimeoutCertificate" ->
+                 [recipient |-> item.envelope.recipient,
+                  tc |->
+                    AsyncCandidateTcSemanticPayload(
+                      item.envelope.tc)]
+            [] item.kind = "CertifiedRequest" ->
+                 AsyncCandidateCertifiedRequestItemSemanticPayload(item)
+            [] item.kind = "CommitCertificateRequest" ->
+                 AsyncCandidateCommitRequestItemSemanticPayload(item)
+            [] item.kind = "CertifiedResponse" ->
+                 [recipient |-> item.envelope.recipient,
+                  height |-> item.envelope.height,
+                  view |-> item.envelope.view,
+                  subject |-> item.envelope.subject,
+                  requestHash |->
+                    AsyncCandidateCertifiedRequestHashSemanticPayload(
+                      item.envelope.requestHash),
+                  archiveServer |-> item.envelope.archiveServer,
+                  citedResponder |-> item.envelope.citedResponder,
+                  signatureOwner |-> item.envelope.signatureOwner]
+            [] item.kind = "CommitCertificateResponse" ->
+                 [recipient |-> item.envelope.recipient,
+                  request |->
+                    AsyncCandidateCommitRequestItemSemanticPayload(
+                      item.envelope.request),
+                  qc |->
+                    AsyncCandidateQcSemanticPayload(
+                      item.envelope.qc)]
+            [] OTHER -> item.envelope]
+
+AsyncRouteNeutralCandidateEvidence(evidence) ==
+  IF evidence = NoAsyncItem
+  THEN [kind |-> "NoEvidence", payload |-> NoAsyncItem]
+  ELSE IF AsyncItemTyped(evidence)
+       THEN [kind |-> "NetworkItem",
+             payload |-> AsyncRouteNeutralCandidateItem(evidence)]
+       ELSE IF evidence \in ProposalRecordSet
+            THEN [kind |-> "Proposal",
+                  payload |->
+                    AsyncCandidateProposalSemanticPayload(evidence)]
+            ELSE IF evidence \in VoteRecordSet
+                 THEN [kind |-> "Vote",
+                       payload |->
+                         AsyncCandidateVoteSemanticPayload(evidence)]
+                 ELSE IF evidence \in TimeoutVoteRecordSet
+                      THEN [kind |-> "TimeoutVote",
+                            payload |->
+                              AsyncCandidateTimeoutVoteSemanticPayload(
+                                evidence)]
+                      ELSE IF evidence \in QcRecordSet
+                           THEN [kind |-> "QC",
+                                 payload |->
+                                   AsyncCandidateQcSemanticPayload(
+                                     evidence)]
+                           ELSE IF evidence \in TcRecordSet
+                                THEN [kind |-> "TC",
+                                      payload |->
+                                        AsyncCandidateTcSemanticPayload(
+                                          evidence)]
+                                ELSE [kind |-> "Body",
+                                      payload |-> evidence]
+
+AsyncCandidateServicePayload(candidate) ==
+  [class |-> candidate.class,
+   workKind |-> candidate.kind,
+   item |-> AsyncRouteNeutralCandidateItem(candidate.item),
+   evidence |-> AsyncRouteNeutralCandidateEvidence(candidate.evidence),
+   body |-> candidate.bodyIdentity,
+   manifest |-> candidate.manifestIdentity,
+   commitment |-> candidate.commitmentIdentity]
+
+AsyncCandidateServiceIdentity(candidate) ==
+  [target |-> candidate.node,
+   context |-> candidate.consumerContext,
+   height |-> candidate.height,
+   leader |-> Leader(candidate.consumerContext, candidate.view),
+   view |-> candidate.view,
+   subject |-> candidate.subject,
+   phase |-> candidate.kind,
+   owner |-> candidate.node,
+   kind |-> "Candidate",
+   payload |-> AsyncCandidateServicePayload(candidate)]
+
+AsyncCandidateAdmissionIdentity(candidate) ==
+  [service |-> AsyncCandidateServiceIdentity(candidate),
+   consumer |-> AsyncConsumerEventTag(candidate)]
+
+AsyncCandidateAdmissionIdentitySet ==
+  {AsyncCandidateAdmissionIdentity(candidate):
+     candidate \in AsyncCandidateSet}
+
+AsyncRestartScopedCandidateServiceKinds ==
+  {"SignProposal", "SignVote", "SignTimeout"}
+
+AsyncCandidateServiceMarker(
+    candidate, episodeView, episodeGeneration, ordinal) ==
+  [identity |-> AsyncCandidateServiceIdentity(candidate),
+   node |-> candidate.node,
+   context |-> candidate.consumerContext,
+   height |-> candidate.height,
+   view |-> candidate.view,
+   episodeView |-> episodeView,
+   generation |-> episodeGeneration,
+   subject |-> candidate.subject,
+   phase |-> candidate.kind,
+   ordinal |-> ordinal]
+
+AsyncCandidateServiceMarkerSet ==
+  {AsyncCandidateServiceMarker(
+     candidate, episodeView, episodeGeneration, ordinal):
+     candidate \in AsyncCandidateSet,
+     episodeView \in Views,
+     episodeGeneration \in Generations,
+     ordinal \in Nat \ {0}}
+
+AsyncCandidateServiceTombstone(candidate, episodeView, ordinal) ==
+  [identity |-> AsyncCandidateServiceIdentity(candidate),
+   node |-> candidate.node,
+   context |-> candidate.consumerContext,
+   height |-> candidate.height,
+   view |-> candidate.view,
+   episodeView |-> episodeView,
+   subject |-> candidate.subject,
+   phase |-> candidate.kind,
+   ordinal |-> ordinal]
+
+AsyncCandidateServiceTombstoneSet ==
+  {AsyncCandidateServiceTombstone(candidate, episodeView, ordinal):
+     candidate \in AsyncCandidateSet,
+     episodeView \in Views,
+     ordinal \in Nat \ {0}}
+
 AsyncQueueTyped(queue) ==
   /\ queue \in Seq(Range(queue))
   /\ DOMAIN queue = 1..Len(queue)
@@ -921,6 +1319,8 @@ VARIABLES
   asyncNextLocalSource,
   asyncIoQueues,
   asyncNextServeAdmissionOrdinal,
+  asyncNextServeIngressOrdinal,
+  asyncServeIngressAdmissions,
   asyncServeAdmissions,
   asyncServeReservations,
   asyncServeTombstones,
@@ -948,6 +1348,7 @@ VARIABLES
   asyncIngressReady,
   asyncHeldChunks,
   asyncHistoricalRecoveryTargets,
+  asyncControlServiceState,
   asyncRecoveryPhase,
   asyncRecoveryNode,
   asyncRecoveryGeneration,
@@ -959,7 +1360,8 @@ AsyncSchedulerVars ==
     asyncFifoOwed, asyncTimeoutEmitted,
     asyncRunnerPhase, asyncRunnerBudget,
     asyncCausalAdmissionOwed, asyncNextLocalSource, asyncIoQueues,
-    asyncNextServeAdmissionOrdinal, asyncServeAdmissions,
+    asyncNextServeAdmissionOrdinal, asyncNextServeIngressOrdinal,
+    asyncServeIngressAdmissions, asyncServeAdmissions,
     asyncServeReservations, asyncServeTombstones,
     asyncOutstandingWork, asyncIoReadyCompletions,
     asyncLocalReadyCompletions, asyncNextCompletionSource,
@@ -973,14 +1375,16 @@ AsyncSchedulerVars ==
     asyncSentItems, asyncRetainedControl, asyncActiveRequests,
     asyncCertifiedResponseClaim, asyncTransport,
     asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
-    asyncHistoricalRecoveryTargets>>
+    asyncHistoricalRecoveryTargets,
+    asyncControlServiceState>>
 
 AsyncSchedulerExceptHistoricalRecoveryTargets ==
   <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
     asyncFifoOwed, asyncTimeoutEmitted,
     asyncRunnerPhase, asyncRunnerBudget,
     asyncCausalAdmissionOwed, asyncNextLocalSource, asyncIoQueues,
-    asyncNextServeAdmissionOrdinal, asyncServeAdmissions,
+    asyncNextServeAdmissionOrdinal, asyncNextServeIngressOrdinal,
+    asyncServeIngressAdmissions, asyncServeAdmissions,
     asyncServeReservations, asyncServeTombstones,
     asyncOutstandingWork, asyncIoReadyCompletions,
     asyncLocalReadyCompletions, asyncNextCompletionSource,
@@ -993,7 +1397,8 @@ AsyncSchedulerExceptHistoricalRecoveryTargets ==
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
     asyncSentItems, asyncRetainedControl, asyncActiveRequests,
     asyncCertifiedResponseClaim, asyncTransport,
-    asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+    asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+    asyncControlServiceState>>
 
 AsyncRecoveryLifecycleVars ==
   <<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>
@@ -1008,12 +1413,246 @@ AsyncRecoveryVars ==
 
 AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>
 
+(***************************************************************************
+The control service table is one bounded per-height structure.  Its
+`nextOrdinal` function never reuses a first-owner ordinal during the height;
+same-height restart retains that high-watermark, while `slots` contains at
+most one record for each fixed recipient/source/protocol-owner slot.
+***************************************************************************)
+AsyncControlServiceSlots == asyncControlServiceState.slots
+
+AsyncNextControlServiceOrdinal(node) ==
+  asyncControlServiceState.nextOrdinal[node]
+
+AsyncCertifiedResponseClaimRecords ==
+  asyncControlServiceState.certifiedResponseClaims
+
+AsyncNextCertifiedResponseClaimOrdinal(node) ==
+  asyncControlServiceState.certifiedResponseNextOrdinal[node]
+
+AsyncCandidateServiceMarkers ==
+  asyncControlServiceState.candidateServiceMarkers
+
+AsyncCandidateTerminalTombstones ==
+  asyncControlServiceState.candidateTerminalTombstones
+
+\* Compatibility projection for finite-owner proofs shared by the adequate
+\* leader and historical-recovery modules.  The two state classes remain
+\* explicit below; this union must never be used to suppress restart replay.
+AsyncCandidateServiceTombstones ==
+  AsyncCandidateServiceMarkers \cup AsyncCandidateTerminalTombstones
+
+AsyncNextCandidateServiceOrdinal(node) ==
+  asyncControlServiceState.candidateServiceNextOrdinal[node]
+
+AsyncCandidateTransientServiceRecordsForIdentity(identity) ==
+  {record \in AsyncCandidateServiceMarkers:
+     record.identity = identity}
+
+AsyncCandidateTerminalRecordsForIdentity(identity) ==
+  {record \in AsyncCandidateTerminalTombstones:
+     record.identity = identity}
+
+AsyncCandidateTransientServiceIdentityMarked(identity) ==
+  AsyncCandidateTransientServiceRecordsForIdentity(identity) # {}
+
+AsyncCandidateTerminalIdentityTombstoned(identity) ==
+  AsyncCandidateTerminalRecordsForIdentity(identity) # {}
+
+AsyncCandidateServiceRecordsForIdentity(identity) ==
+  AsyncCandidateTransientServiceRecordsForIdentity(identity)
+    \cup AsyncCandidateTerminalRecordsForIdentity(identity)
+
+\* Compatibility name: in a live generation either record class coalesces an
+\* exact retry.  Restart-specific code must use the terminal predicate above.
+AsyncCandidateServiceIdentityTombstoned(identity) ==
+  AsyncCandidateServiceRecordsForIdentity(identity) # {}
+
+AsyncCandidateTransientServiceRecordsFor(candidate) ==
+  AsyncCandidateTransientServiceRecordsForIdentity(
+    AsyncCandidateServiceIdentity(candidate))
+
+AsyncCandidateTerminalRecordsFor(candidate) ==
+  AsyncCandidateTerminalRecordsForIdentity(
+    AsyncCandidateServiceIdentity(candidate))
+
+AsyncCandidateServiceRecordsFor(candidate) ==
+  AsyncCandidateServiceRecordsForIdentity(
+    AsyncCandidateServiceIdentity(candidate))
+
+AsyncCandidateTransientServiceMarked(candidate) ==
+  AsyncCandidateTransientServiceRecordsFor(candidate) # {}
+
+AsyncCandidateTerminalTombstoned(candidate) ==
+  AsyncCandidateTerminalRecordsFor(candidate) # {}
+
+AsyncCandidateServiceCoalesced(candidate) ==
+  \/ AsyncCandidateTransientServiceMarked(candidate)
+  \/ AsyncCandidateTerminalTombstoned(candidate)
+
+AsyncCandidateServiceTombstoned(candidate) ==
+  AsyncCandidateServiceCoalesced(candidate)
+
+AsyncControlServiceRecordsForSlot(slot) ==
+  {record \in AsyncControlServiceSlots: record.slot = slot}
+
+AsyncControlServiceRecordsForItem(item) ==
+  AsyncControlServiceRecordsForSlot(
+    AsyncControlServiceSlot(
+      item.envelope.recipient, item.source, item.kind))
+
+AsyncControlServiceSlotOwned(item) ==
+  AsyncControlServiceRecordsForItem(item) # {}
+
+AsyncControlServiceRecordForItem(item) ==
+  CHOOSE record \in AsyncControlServiceRecordsForItem(item): TRUE
+
+AsyncControlServiceIdentityMatches(item, record) ==
+  record.identity = AsyncLeaderWireServiceIdentity(item)
+
+AsyncControlServiceCurrentHeightItem(item) ==
+  /\ item.kind \in AsyncControlKinds
+  /\ AsyncControlItemContext(item) = context
+  /\ AsyncControlItemHeight(item) = height
+
+AsyncControlServiceStrictlyNewerItem(item) ==
+  /\ AsyncControlServiceCurrentHeightItem(item)
+  /\ AsyncControlServiceSlotOwned(item)
+  /\ LET current == AsyncControlServiceRecordForItem(item)
+     IN \/ current.context # context
+        \/ current.height < height
+        \/ /\ current.context = context
+           /\ current.height = height
+           /\ AsyncControlItemView(item) > current.view
+
+AsyncControlServiceAdmissionStartsOrReplaces(item) ==
+  /\ AsyncControlServiceCurrentHeightItem(item)
+  /\ \/ ~AsyncControlServiceSlotOwned(item)
+     \/ AsyncControlServiceStrictlyNewerItem(item)
+
+AsyncControlServiceAdmissionCoalesced(item) ==
+  /\ AsyncControlServiceCurrentHeightItem(item)
+  /\ AsyncControlServiceSlotOwned(item)
+  /\ ~AsyncControlServiceStrictlyNewerItem(item)
+
+AsyncControlServiceOccurrenceIsCurrentOwner(item) ==
+  /\ item.kind \in AsyncControlKinds
+  /\ AsyncControlServiceSlotOwned(item)
+  /\ LET record == AsyncControlServiceRecordForItem(item)
+     IN /\ AsyncControlServiceIdentityMatches(item, record)
+        /\ ~record.consumed
+
+AsyncControlServiceOccurrenceRetired(item) ==
+  /\ item.kind \in AsyncControlKinds
+  /\ AsyncControlServiceSlotOwned(item)
+  /\ LET record == AsyncControlServiceRecordForItem(item)
+     IN \/ ~AsyncControlServiceIdentityMatches(item, record)
+        \/ record.consumed
+
+AsyncControlServiceConsumed(item) ==
+  /\ item.kind \in AsyncControlKinds
+  /\ AsyncControlServiceSlotOwned(item)
+  /\ LET record == AsyncControlServiceRecordForItem(item)
+     IN /\ AsyncControlServiceIdentityMatches(item, record)
+        /\ record.consumed
+
+\* Permanent logical retirement is narrower than physical occurrence
+\* retirement.  A mismatching lower-view record does not tombstone a strictly
+\* newer item because admission may atomically replace that record.  An exact
+\* consumed identity, or a same/higher-view identity already owning the slot,
+\* can never be replaced by this same/lower retry.
+AsyncControlServiceOccurrenceTombstoned(item) ==
+  /\ item.kind \in AsyncControlKinds
+  /\ AsyncControlServiceSlotOwned(item)
+  /\ LET record == AsyncControlServiceRecordForItem(item)
+     IN \/ /\ AsyncControlServiceIdentityMatches(item, record)
+              /\ record.consumed
+        \/ /\ ~AsyncControlServiceIdentityMatches(item, record)
+              /\ record.context = AsyncControlItemContext(item)
+              /\ record.height = AsyncControlItemHeight(item)
+              /\ record.view >= AsyncControlItemView(item)
+
+\* This is the durable service marker used by logical no-resurrection.  A
+\* same-view mismatching owner tombstones only that physical occurrence; it
+\* does not prove that the shared logical slot has been serviced.  The marker
+\* therefore accepts only the exact consumed identity or a strict view
+\* high-watermark which makes every retry at the old view permanently stale.
+AsyncControlServiceIdentityServicedOrAdvanced(item) ==
+  /\ item.kind \in AsyncControlKinds
+  /\ AsyncControlServiceSlotOwned(item)
+  /\ LET record == AsyncControlServiceRecordForItem(item)
+     IN \/ /\ AsyncControlServiceIdentityMatches(item, record)
+              /\ record.consumed
+        \/ /\ record.context = AsyncControlItemContext(item)
+              /\ record.height = AsyncControlItemHeight(item)
+              /\ record.view > AsyncControlItemView(item)
+
+AsyncControlServiceStateTypeInvariant ==
+  /\ DOMAIN asyncControlServiceState =
+       {"nextOrdinal", "slots",
+        "certifiedResponseNextOrdinal", "certifiedResponseClaims",
+        "candidateServiceNextOrdinal", "candidateServiceMarkers",
+        "candidateTerminalTombstones"}
+  /\ asyncControlServiceState.nextOrdinal
+       \in [ValidatorIds -> (Nat \ {0})]
+  /\ asyncControlServiceState.certifiedResponseNextOrdinal
+       \in [ValidatorIds -> (Nat \ {0})]
+  /\ asyncControlServiceState.candidateServiceNextOrdinal
+       \in [ValidatorIds -> (Nat \ {0})]
+  /\ IsFiniteSet(AsyncControlServiceSlots)
+  /\ IsFiniteSet(AsyncCertifiedResponseClaimRecords)
+  /\ IsFiniteSet(AsyncCandidateServiceMarkers)
+  /\ IsFiniteSet(AsyncCandidateTerminalTombstones)
+  /\ Cardinality(AsyncCertifiedResponseClaimRecords)
+       <= Cardinality(ValidatorIds)
+  /\ AsyncControlServiceSlots \subseteq AsyncControlServiceRecordSet
+  /\ AsyncCandidateServiceMarkers
+       \subseteq AsyncCandidateServiceMarkerSet
+  /\ AsyncCandidateTerminalTombstones
+       \subseteq AsyncCandidateServiceTombstoneSet
+  /\ \A left, right \in AsyncControlServiceSlots:
+       left.slot = right.slot => left = right
+  /\ \A record \in AsyncControlServiceSlots:
+       /\ record.slot \in AsyncControlServiceSlotSet
+       /\ record.ordinal
+            < AsyncNextControlServiceOrdinal(record.slot.recipient)
+  /\ \A record \in AsyncCertifiedResponseClaimRecords:
+       /\ DOMAIN record = {"recipient", "family", "identity", "ordinal"}
+       /\ record.recipient \in ValidatorIds
+       /\ record.family \in AsyncCertifiedRequestHashes
+       /\ record.ordinal \in Nat \ {0}
+       /\ record.ordinal
+            < AsyncNextCertifiedResponseClaimOrdinal(record.recipient)
+  /\ \A left, right \in AsyncCandidateServiceTombstones:
+       /\ (left.identity = right.identity => left = right)
+       /\ ((left.node = right.node /\ left.ordinal = right.ordinal)
+             => left = right)
+  /\ \A record \in AsyncCandidateServiceMarkers:
+       /\ record.generation \in Generations
+       /\ record.ordinal \in Nat \ {0}
+       /\ record.ordinal < AsyncNextCandidateServiceOrdinal(record.node)
+  /\ \A record \in AsyncCandidateTerminalTombstones:
+       /\ record.ordinal \in Nat \ {0}
+       /\ record.ordinal < AsyncNextCandidateServiceOrdinal(record.node)
+
+THEOREM AsyncControlServiceTableCardinalityIsSlotBounded ==
+  AsyncControlServiceStateTypeInvariant
+    => Cardinality(AsyncControlServiceSlots)
+         <= Cardinality(AsyncControlServiceSlotSet)
+BY FS_Subset, Isa
+   DEF AsyncControlServiceStateTypeInvariant,
+       AsyncControlServiceSlots
+
 AsyncServeLifecycleVars ==
   <<asyncNextServeAdmissionOrdinal, asyncServeAdmissions,
     asyncServeReservations, asyncServeTombstones>>
 
+AsyncServeIngressAdmissionVars ==
+  <<asyncNextServeIngressOrdinal, asyncServeIngressAdmissions>>
+
 AsyncIoVars ==
   <<asyncIoQueues, AsyncServeLifecycleVars,
+    AsyncServeIngressAdmissionVars,
     asyncOutstandingWork, asyncIoReadyCompletions,
     asyncLocalReadyCompletions, asyncNextCompletionSource,
     asyncIoControlAvailable>>
@@ -1112,6 +1751,50 @@ AsyncIoJobsBeforeServeIdentity(node, identity) ==
                AsyncIoServeIdentityIndices(node, identity):
             position < targetIndex}}
 
+AsyncServeIngressAdmissionRecords(node, identity) ==
+  {admission \in asyncServeIngressAdmissions:
+     /\ admission.node = node
+     /\ admission.identity = identity}
+
+AsyncServeIngressAdmissionOwned(node, identity) ==
+  AsyncServeIngressAdmissionRecords(node, identity) # {}
+
+AsyncServeIngressAdmissionRecord(node, identity) ==
+  CHOOSE admission \in
+    AsyncServeIngressAdmissionRecords(node, identity): TRUE
+
+AsyncServeIngressAdmissionOrdinal(node, identity) ==
+  AsyncServeIngressAdmissionRecord(node, identity).ordinal
+
+AsyncServeIngressAdmissionPredecessorCounts(node, identity) ==
+  IF AsyncServeIngressAdmissionOwned(node, identity)
+  THEN AsyncServeIngressAdmissionRecord(
+         node, identity).ingressPredecessors
+  ELSE [source \in AsyncIngressSources |-> 0]
+
+AsyncServeIngressAdmissionPredecessorDebtSlots(node, identity) ==
+  UNION {
+    {[source |-> source, slot |-> slot]:
+       slot \in
+         1..AsyncServeIngressAdmissionPredecessorCounts(
+              node, identity)[source]}:
+    source \in AsyncIngressSources}
+
+AsyncServeIngressAdmissionIdentities(node) ==
+  {admission.identity:
+     admission \in
+       {owned \in asyncServeIngressAdmissions:
+          owned.node = node}}
+
+AsyncServeIngressLifecycleOwnerIdentities(node) ==
+  AsyncServeIngressAdmissionIdentities(node)
+
+AsyncServeEarliestIngressLifecycleOwnerIdentity(node) ==
+  CHOOSE identity \in AsyncServeIngressLifecycleOwnerIdentities(node):
+    \A other \in AsyncServeIngressLifecycleOwnerIdentities(node):
+      AsyncServeIngressAdmissionOrdinal(node, identity)
+        <= AsyncServeIngressAdmissionOrdinal(node, other)
+
 AsyncServeAdmissionRecords(node, identity) ==
   {admission \in asyncServeAdmissions:
      /\ admission.node = node
@@ -1148,6 +1831,12 @@ AsyncServeLifecycleFamilyOwned(node, family) ==
 AsyncServeLifecycleTombstone(node, identity) ==
   AsyncServeTombstoneRecords(node, identity) # {}
 
+AsyncServeLogicalIdentityRequests(node, identity) ==
+  {request \in
+     AsyncCertifiedRequestItems \cup
+       AsyncCommitCertificateRequestItems:
+     AsyncServeLogicalRequestIdentity(node, request) = identity}
+
 AsyncServeLiveReservationOwned(node, identity) ==
   AsyncServeReservationRecords(node, identity) # {}
 
@@ -1156,6 +1845,12 @@ AsyncServeAdmissionRecord(node, identity) ==
 
 AsyncServeReservationRecord(node, identity) ==
   CHOOSE reservation \in AsyncServeReservationRecords(node, identity): TRUE
+
+AsyncServeRollbackTombstones(node, identity) ==
+  IF AsyncServeLiveReservationOwned(node, identity)
+  THEN AsyncServeReservationRecord(
+         node, identity).rollbackTombstones
+  ELSE {}
 
 AsyncServeTombstoneRecord(node, identity) ==
   CHOOSE tombstone \in AsyncServeTombstoneRecords(node, identity): TRUE
@@ -1184,6 +1879,22 @@ AsyncServeFrozenIngressPredecessorSet(node, identity) ==
        item |-> asyncIngressLanes[node][source][index]
      ]:
        index \in
+         1..AsyncServeFrozenIngressPredecessorCounts(
+              node, identity)[source]}:
+    source \in AsyncIngressSources}
+
+(***************************************************************************
+The item-bearing frozen-prefix set above is used to recognize the concrete
+runner action.  It is not a stable rank carrier: after draining slot one,
+the item formerly at slot two is re-indexed as slot one.  The count-slot set
+below deliberately omits the mutable item and index.  A frozen-prefix drain
+changes `1..n` to `1..(n - 1)`, so its rank carrier is a genuine subset and
+cannot be replenished by re-indexing the surviving items.
+***************************************************************************)
+AsyncServeFrozenIngressPredecessorDebtSlots(node, identity) ==
+  UNION {
+    {[source |-> source, slot |-> slot]:
+       slot \in
          1..AsyncServeFrozenIngressPredecessorCounts(
               node, identity)[source]}:
     source \in AsyncIngressSources}
@@ -1233,6 +1944,15 @@ AsyncServeFamilyHighWatermark(node, family) ==
   THEN AsyncServeFamilyReservationRecord(node, family).view
   ELSE AsyncServeFamilyTombstoneRecord(node, family).view
 
+AsyncServeLogicalIdentityRetiredOrSuperseded(node, identity) ==
+  \/ AsyncServeLifecycleTombstone(node, identity)
+  \/ \E request \in AsyncServeLogicalIdentityRequests(node, identity):
+       LET family == AsyncServeLifecycleFamily(node, request)
+       IN /\ AsyncServeLifecycleFamilyOwned(node, family)
+          /\ AsyncServeFamilyOwnerIdentity(node, family) # identity
+          /\ AsyncServeFamilyHighWatermark(node, family)
+               > AsyncServeRequestView(request)
+
 AsyncServeActiveFamilyRequests(node, family) ==
   {request \in asyncActiveRequests:
      /\ request.kind \in AsyncReplyRequestKinds
@@ -1274,10 +1994,19 @@ FreshAsyncIoServeNonce(node) ==
 AsyncIoCertifiedServeJob(node, candidate) ==
   AsyncIoJob("Serve", candidate, FreshAsyncIoServeNonce(node))
 
-AsyncServeReservationsWithout(node, identity) ==
-  {reservation \in asyncServeReservations:
+AsyncServeReservationsWithoutFrom(reservations, node, identity) ==
+  {reservation \in reservations:
      \/ reservation.node # node
      \/ reservation.identity # identity}
+
+AsyncServeReservationsWithout(node, identity) ==
+  AsyncServeReservationsWithoutFrom(
+    asyncServeReservations, node, identity)
+
+AsyncServeIngressAdmissionsWithout(node, identity) ==
+  {admission \in asyncServeIngressAdmissions:
+     \/ admission.node # node
+     \/ admission.identity # identity}
 
 AsyncServeAdmissionsWithout(node, identity) ==
   {admission \in asyncServeAdmissions:
@@ -1291,6 +2020,10 @@ AsyncServeTombstonesWithoutFamily(node, family) ==
 
 AsyncServeAdmissionsWithoutNode(node) ==
   {admission \in asyncServeAdmissions:
+     admission.node # node}
+
+AsyncServeIngressAdmissionsWithoutNode(node) ==
+  {admission \in asyncServeIngressAdmissions:
      admission.node # node}
 
 AsyncServeReservationsWithoutNode(node) ==
@@ -1321,7 +2054,12 @@ AsyncServeEarlierLiveReservationIdentities(node, identity) ==
             {owned \in asyncServeReservations:
                /\ owned.node = node
                /\ owned.ordinal
-                    < AsyncServeAdmissionOrdinal(node, identity)}}
+                    < AsyncServeAdmissionOrdinal(node, identity)
+               \* Once an earlier owner materializes, its physical I/O job is
+               \* charged to the ordinary capacity/FIFO component.  Keeping
+               \* both identities here would count the same finite owner
+               \* twice and turn materialization into a replenishment ascent.
+               /\ ~AsyncServeJobQueued(node, owned.identity)}}
   ELSE {}
 
 AsyncServeMaterializationPredecessorIndices(node, identity) ==
@@ -1357,7 +2095,8 @@ AsyncServeReservationsAfterIoService(node, job, completedIdentity) ==
      IF reservation.node = node
      THEN reservation.predecessors \ {job}
      ELSE reservation.predecessors,
-     reservation.ingressPredecessors):
+     reservation.ingressPredecessors,
+     reservation.rollbackTombstones):
      reservation \in
        {owned \in asyncServeReservations:
           \/ completedIdentity = NoAsyncItem
@@ -1376,8 +2115,30 @@ AsyncServeReservationsAfterIngressDrain(node, source, laneIndex) ==
            /\ laneIndex <=
                 reservation.ingressPredecessors[source]
      THEN [reservation.ingressPredecessors EXCEPT ![source] = @ - 1]
-     ELSE reservation.ingressPredecessors):
+     ELSE reservation.ingressPredecessors,
+     reservation.rollbackTombstones):
      reservation \in asyncServeReservations}
+
+AsyncServeIngressAdmissionsAfterIngressDrain(node, source, laneIndex) ==
+  LET item == asyncIngressLanes[node][source][laneIndex]
+      drained ==
+        {AsyncServeIngressAdmission(
+           admission.node,
+           admission.identity,
+           admission.ordinal,
+           IF /\ admission.node = node
+                 /\ laneIndex <=
+                      admission.ingressPredecessors[source]
+           THEN [admission.ingressPredecessors
+                   EXCEPT ![source] = @ - 1]
+           ELSE admission.ingressPredecessors):
+           admission \in asyncServeIngressAdmissions}
+  IN IF item.kind \in AsyncReplyRequestKinds
+     THEN {admission \in drained:
+             \/ admission.node # node
+             \/ admission.identity #
+                  AsyncServeLogicalRequestIdentity(node, item)}
+     ELSE drained
 
 AsyncIoServeNonceOwnership(queue) ==
   \A left, right \in AsyncIoServeIndices(queue):
@@ -1390,16 +2151,25 @@ AsyncIoSequenceTyped(queue) ==
 
 (***************************************************************************
 Hidden-ingress acceptance and the auxiliary-I/O reservation are one action.  A
-new exact request receives the next immutable process-local ordinal and
-freezes the complete current I/O FIFO and each current ingress-lane prefix
-before it becomes visible to the fair ingress runner.  The reservation is a
-logical future-slot ticket even when the physical I/O queue is full: while
-any ticket remains off-queue, ordinary producers observe full effective
-capacity, and the next physical slot belongs to the least admission ordinal.
+new exact request receives the next immutable per-height admission ordinal.
+That high-watermark is retained across same-height restart and reconstructed
+with the lifecycle tombstone before replay; only successor-height
+`AsyncTransportInit` resets it.  Admission freezes the complete current I/O
+FIFO and each current ingress-lane prefix before the request becomes visible
+to the fair ingress runner.  The reservation is a
+logical future-slot ticket even when the physical I/O queue is full.  The
+production receiver has one uncommitted Serve barrier, so a new lifecycle
+cannot reserve another future slot until that barrier materializes or rolls
+back.  A queued exact ingress owner also excludes a later reservation until
+the earlier ordinal drains; this keeps the Rust barrier filter aligned with
+the cross-source ingress selector.  While the barrier remains off-queue,
+ordinary producers observe full effective capacity, and its next physical
+slot is exclusive.
 Later causal, Consensus, Control, Completion, priority, and Serve work
-therefore cannot acquire a position ahead of it.  A retry either observes the
-existing reservation or terminal tombstone; neither allocates another
-ordinal.
+therefore cannot acquire a position ahead of it.  A duplicate while queued
+coalesces behind the existing ingress ordinal.  A later tombstone replay
+allocates only a new ingress turn; it observes the retained terminal lifecycle
+and never allocates another Serve ordinal or stage.
 ***************************************************************************)
 ReserveExactServeCapacity(node, candidate) ==
   LET identity ==
@@ -1408,14 +2178,25 @@ ReserveExactServeCapacity(node, candidate) ==
         AsyncServeLifecycleFamily(node, candidate.item)
       roundView == AsyncServeRequestView(candidate.item)
       ordinal == asyncNextServeAdmissionOrdinal[node]
+      ingressOrdinal == asyncNextServeIngressOrdinal[node]
   IN /\ candidate.kind = "AcceptCertifiedRequest"
      /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ ~AsyncServeIngressAdmissionOwned(node, identity)
+     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+     /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleFamilyOwned(node, family)
      /\ AsyncServeFamilyAdvanceRetiresPriorRequests(
           node, candidate.item)
      /\ UNCHANGED asyncIoQueues
      /\ asyncNextServeAdmissionOrdinal' =
           [asyncNextServeAdmissionOrdinal EXCEPT ![node] = @ + 1]
+     /\ asyncNextServeIngressOrdinal' =
+          [asyncNextServeIngressOrdinal EXCEPT ![node] = @ + 1]
+     /\ asyncServeIngressAdmissions' =
+          asyncServeIngressAdmissions
+            \cup {AsyncServeIngressAdmission(
+                    node, identity, ingressOrdinal,
+                    AsyncServeIngressPredecessorCounts(node))}
      /\ asyncServeAdmissions' =
           asyncServeAdmissions
             \cup {AsyncServeAdmission(
@@ -1426,7 +2207,7 @@ ReserveExactServeCapacity(node, candidate) ==
                     node, identity, family, roundView, ordinal,
                     {asyncIoQueues[node][index]:
                        index \in 1..Len(asyncIoQueues[node])},
-                    AsyncServeIngressPredecessorCounts(node))}
+                    AsyncServeIngressPredecessorCounts(node), {})}
      /\ UNCHANGED asyncServeTombstones
 
 AdvanceExactServeCapacity(node, candidate) ==
@@ -1436,8 +2217,12 @@ AdvanceExactServeCapacity(node, candidate) ==
         AsyncServeLifecycleFamily(node, candidate.item)
       roundView == AsyncServeRequestView(candidate.item)
       ordinal == asyncNextServeAdmissionOrdinal[node]
+      ingressOrdinal == asyncNextServeIngressOrdinal[node]
   IN /\ candidate.kind = "AcceptCertifiedRequest"
      /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ ~AsyncServeIngressAdmissionOwned(node, identity)
+     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+     /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleOwned(node, identity)
      /\ AsyncServeFamilyTombstoneRecords(node, family) # {}
      /\ roundView > AsyncServeFamilyHighWatermark(node, family)
@@ -1446,6 +2231,13 @@ AdvanceExactServeCapacity(node, candidate) ==
      /\ UNCHANGED asyncIoQueues
      /\ asyncNextServeAdmissionOrdinal' =
           [asyncNextServeAdmissionOrdinal EXCEPT ![node] = @ + 1]
+     /\ asyncNextServeIngressOrdinal' =
+          [asyncNextServeIngressOrdinal EXCEPT ![node] = @ + 1]
+     /\ asyncServeIngressAdmissions' =
+          asyncServeIngressAdmissions
+            \cup {AsyncServeIngressAdmission(
+                    node, identity, ingressOrdinal,
+                    AsyncServeIngressPredecessorCounts(node))}
      /\ asyncServeAdmissions' =
           asyncServeAdmissions
             \cup {AsyncServeAdmission(
@@ -1456,7 +2248,8 @@ AdvanceExactServeCapacity(node, candidate) ==
                     node, identity, family, roundView, ordinal,
                     {asyncIoQueues[node][index]:
                        index \in 1..Len(asyncIoQueues[node])},
-                    AsyncServeIngressPredecessorCounts(node))}
+                    AsyncServeIngressPredecessorCounts(node),
+                    AsyncServeFamilyTombstoneRecords(node, family))}
      /\ asyncServeTombstones' =
           AsyncServeTombstonesWithoutFamily(node, family)
 
@@ -1466,12 +2259,21 @@ CoalesceExactServeIngressCapacity(node, candidate) ==
       family ==
         AsyncServeLifecycleFamily(node, candidate.item)
       roundView == AsyncServeRequestView(candidate.item)
+      ingressOrdinal == asyncNextServeIngressOrdinal[node]
   IN /\ candidate.kind = "AcceptCertifiedRequest"
      /\ candidate.item.kind \in AsyncReplyRequestKinds
+     /\ ~AsyncServeIngressAdmissionOwned(node, identity)
      /\ \/ AsyncServeLifecycleOwned(node, identity)
         \/ /\ AsyncServeLifecycleFamilyOwned(node, family)
               /\ roundView <=
                    AsyncServeFamilyHighWatermark(node, family)
+     /\ asyncNextServeIngressOrdinal' =
+          [asyncNextServeIngressOrdinal EXCEPT ![node] = @ + 1]
+     /\ asyncServeIngressAdmissions' =
+          asyncServeIngressAdmissions
+            \cup {AsyncServeIngressAdmission(
+                    node, identity, ingressOrdinal,
+                    AsyncServeIngressPredecessorCounts(node))}
      /\ UNCHANGED <<asyncIoQueues, AsyncServeLifecycleVars>>
 
 AcceptOrReserveExactServeIngress(node, candidate) ==
@@ -1596,6 +2398,32 @@ CandidateScheduled(candidate) ==
     candidate, asyncCommandQueues,
     asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
     asyncDeferredNormalQueues, asyncCausalQueues, asyncOutstandingWork)
+
+CandidateScheduledAfter(candidate) ==
+  CandidateScheduledIn(
+    candidate, asyncCommandQueues',
+    asyncDeferredCompletionQueues', asyncDeferredProgressQueues',
+    asyncDeferredNormalQueues', asyncCausalQueues', asyncOutstandingWork')
+
+AsyncScheduledCandidateServiceIdentities ==
+  {AsyncCandidateServiceIdentity(candidate):
+     candidate \in
+       QueuedCandidates \cup DeferredCandidates
+         \cup CausalCandidates \cup TrackedWorkCandidates}
+
+AsyncScheduledCandidateAdmissionIdentities ==
+  {AsyncCandidateAdmissionIdentity(candidate):
+     candidate \in
+       QueuedCandidates \cup DeferredCandidates
+         \cup CausalCandidates \cup TrackedWorkCandidates}
+
+AsyncCandidateServiceIdentityScheduled(candidate) ==
+  AsyncCandidateServiceIdentity(candidate)
+    \in AsyncScheduledCandidateServiceIdentities
+
+CandidateAdmissionCoalesced(candidate) ==
+  AsyncCandidateServiceIdentityScheduled(candidate)
+    \/ AsyncCandidateServiceCoalesced(candidate)
 
 (***************************************************************************
 Responsive restart does not create a second durable owner.  The authority
@@ -1773,7 +2601,8 @@ AsyncLogicalCandidateOwnershipInvariant ==
 
 EnqueueCandidate(candidate) ==
   LET node == candidate.node
-  IN /\ asyncCommandQueues' =
+  IN /\ ~AsyncCandidateServiceCoalesced(candidate)
+     /\ asyncCommandQueues' =
           [asyncCommandQueues EXCEPT ![node] = Append(@, candidate)]
      /\ UNCHANGED asyncNextCommandClass
 
@@ -1832,6 +2661,24 @@ NodeHasDecision(node) ==
     /\ decision.node = node
     /\ decision.qc.context = context
     /\ decision.qc.phase = "Commit"
+
+AsyncCandidateAdmissionIdentityObsolete(identity) ==
+  LET consumer == identity.consumer
+  IN \/ consumer.context # context
+     \/ consumer.height # height
+     \/ identity.service.height # height
+     \/ consumer.view < nodeView[consumer.node]
+     \/ consumer.generation # generation[consumer.node]
+     \/ /\ identity.service.phase = "DeliverChunk"
+           /\ NodeHasDecision(consumer.node)
+
+AsyncCandidateAdmissionIdentityTerminallyCovered(identity) ==
+  \/ AsyncCandidateTerminalIdentityTombstoned(identity.service)
+  \/ AsyncCandidateAdmissionIdentityObsolete(identity)
+
+AsyncCandidateAdmissionIdentityLifecycleCovered(identity) ==
+  \/ AsyncCandidateTransientServiceIdentityMarked(identity.service)
+  \/ AsyncCandidateAdmissionIdentityTerminallyCovered(identity)
 
 NodeHasApplication(node) ==
   \E application \in applied:
@@ -2256,7 +3103,9 @@ Chunk cannot append a second FetchBody behind an already-owned FetchBody and
 thereby keep replacing the value at the same service rank forever.
 ***************************************************************************)
 FreshCandidateSequence(candidate) ==
-  IF CandidateScheduled(candidate) THEN <<>> ELSE <<candidate>>
+  IF CandidateAdmissionCoalesced(candidate)
+  THEN <<>>
+  ELSE <<candidate>>
 
 FreshCommandSuccessors(command) ==
   LET successors == CommandSuccessors(command)
@@ -2395,6 +3244,26 @@ AsyncCertifiedResponseCanonicalWireIdentity(item) ==
   [kind |-> item.kind,
    envelope |-> item.envelope]
 
+\* The model omits the response body bytes because `subject` is their
+\* collision-resistant content identity.  The complete canonical signed-wire
+\* record is therefore the exact response hash in this abstraction.
+AsyncCertifiedResponseHash(item) ==
+  AsyncCertifiedResponseCanonicalWireIdentity(item)
+
+AsyncCertifiedResponseWaiterFamily(item) ==
+  item.envelope.requestHash
+
+AsyncCertifiedResponseOccurrenceIdentity(item) ==
+  [requestHash |-> item.envelope.requestHash,
+   authenticatedResponder |-> item.envelope.archiveServer,
+   responseHash |-> AsyncCertifiedResponseHash(item)]
+
+AsyncCertifiedResponseClaimRecord(item, ordinal) ==
+  [recipient |-> item.envelope.recipient,
+   family |-> AsyncCertifiedResponseWaiterFamily(item),
+   identity |-> AsyncCertifiedResponseOccurrenceIdentity(item),
+   ordinal |-> ordinal]
+
 \* Compatibility name retained for proof-ledger and mutation artifacts.
 AsyncCertifiedResponseAuthProjection(item) ==
   AsyncCertifiedResponseCanonicalWireIdentity(item)
@@ -2522,6 +3391,26 @@ ActiveCertifiedRequestHashesAt(recipient) ==
           /\ candidate.kind = "CertifiedRequest"
           /\ candidate.envelope.requester = recipient}}
 
+CertifiedResponseClaimRecordsForFamily(requestHash) ==
+  {record \in AsyncCertifiedResponseClaimRecords:
+     record.family = requestHash}
+
+CertifiedResponseClaimRecordsAt(recipient) ==
+  {record \in AsyncCertifiedResponseClaimRecords:
+     record.recipient = recipient}
+
+CertifiedResponseClaimRecordsForIdentity(identity) ==
+  {record \in AsyncCertifiedResponseClaimRecords:
+     record.identity = identity}
+
+CertifiedResponseClaimRecordForItem(item) ==
+  CHOOSE record \in
+    CertifiedResponseClaimRecordsForIdentity(
+      AsyncCertifiedResponseOccurrenceIdentity(item)): TRUE
+
+CertifiedResponseClaimAdmissionOrdinal(item) ==
+  CertifiedResponseClaimRecordForItem(item).ordinal
+
 CertifiedResponseAuthorityClaimed(requestHash) ==
   \E projection \in asyncCertifiedResponseClaim:
     projection.envelope.requestHash = requestHash
@@ -2534,9 +3423,31 @@ CertifiedResponseClaimsAt(recipient) ==
   {projection \in asyncCertifiedResponseClaim:
      projection.envelope.recipient = recipient}
 
+CertifiedResponseClaimsForFamilyAt(recipient, requestHash) ==
+  {projection \in CertifiedResponseClaimsAt(recipient):
+     projection.envelope.requestHash = requestHash}
+
+CertifiedResponseClaimRecordsForFamilyAt(recipient, requestHash) ==
+  {record \in CertifiedResponseClaimRecordsAt(recipient):
+     record.family = requestHash}
+
+\* Rust keys the response waiter by request hash.  Claim availability is
+\* therefore family-local even though every admitted response shares the
+\* recipient's normalized physical-completion lane.  The physical-owner gate
+\* below still serializes actual reducer ownership; an unrelated logical
+\* family must not steal or indefinitely postpone this family's claim.
 CertifiedResponseRecipientClaimAvailable(item) ==
   /\ item.kind = "CertifiedResponse"
-  /\ CertifiedResponseClaimsAt(item.envelope.recipient) = {}
+  /\ CertifiedResponseClaimsForFamilyAt(
+       item.envelope.recipient, item.envelope.requestHash) = {}
+  /\ CertifiedResponseClaimRecordsForFamilyAt(
+       item.envelope.recipient, item.envelope.requestHash) = {}
+
+CertifiedResponseClaimMetadataMatches(item) ==
+  \E record \in AsyncCertifiedResponseClaimRecords:
+    /\ record.recipient = item.envelope.recipient
+    /\ record.family = AsyncCertifiedResponseWaiterFamily(item)
+    /\ record.identity = AsyncCertifiedResponseOccurrenceIdentity(item)
 
 CertifiedResponseClaimMatches(item) ==
   /\ item.kind = "CertifiedResponse"
@@ -2577,6 +3488,17 @@ CertifiedResponseClaimForRequests(requests) ==
   {projection \in asyncCertifiedResponseClaim:
      projection.envelope.requestHash
        \in ActiveCertifiedRequestHashesIn(requests)}
+
+CertifiedResponseClaimForRequestsExceptRecipient(
+    requests, recipient) ==
+  {projection \in CertifiedResponseClaimForRequests(requests):
+     projection.envelope.recipient # recipient}
+
+CertifiedResponseClaimRecordsFor(
+    records, requests, projections) ==
+  {record \in records:
+     /\ record.family \in ActiveCertifiedRequestHashesIn(requests)
+     /\ record.identity.responseHash \in projections}
 
 ActiveRequestsWithoutNode(node) ==
   {item \in asyncActiveRequests: item.source # node}
@@ -2709,9 +3631,12 @@ IngressUsesPhysicalCompletionOwner(item) ==
     \in {"CertifiedResponse", "TransportCompletion"}
 
 IngressCoalescingIdentity(item) ==
-  IF item.kind = "CertifiedResponse"
-  THEN AsyncCertifiedResponseAuthProjection(item)
-  ELSE item
+  IF item.kind \in AsyncReplyRequestKinds
+  THEN AsyncServeLogicalRequestIdentity(
+         item.envelope.recipient, item)
+  ELSE IF item.kind = "CertifiedResponse"
+       THEN AsyncCertifiedResponseAuthProjection(item)
+       ELSE item
 
 IngressHasCoalescingOwner(item) ==
   \E queued \in SequenceSet(
@@ -3160,6 +4085,12 @@ RetransmitDue(node) ==
   /\ RetransmitTagPresent(node)
   /\ ~TimeoutDue(node)
 
+AsyncRetransmitProgramCounterStates == {"AwaitDue", "DriveDue"}
+
+AsyncRetransmitProgramCounter(node) ==
+  IF "RetransmitElapsed" \in asyncOutstandingTags[node]
+  THEN "DriveDue"
+  ELSE "AwaitDue"
 
 (***************************************************************************
 Exact Core reducer command execution.
@@ -4033,6 +4964,7 @@ ExecuteApplyReady(command) ==
 ExecuteCoreDeliveryReady(command) ==
   LET item == command.item
   IN /\ item \in asyncSentItems
+     /\ AsyncControlServiceOccurrenceIsCurrentOwner(item)
      /\ command.node = item.envelope.recipient
      /\ \/ /\ command.kind = "DeliverProposal"
             /\ item.kind = "Proposal"
@@ -4383,7 +5315,11 @@ completion owner.  Each such relayed occurrence is rejected rather than
 returned for retry, so an older caller-side per-source FIFO entry cannot
 remain ahead of the exact response forever.  Other recipients and direct
 validator completion lanes remain admissible, and a fresh relay occurrence
-can be admitted after the recipient's request authority retires.
+can be admitted after the recipient's request authority retires.  Chunk
+service has a separate durable stage marker: an already held receipt, a
+strictly advanced consumer view, or durable Decision rejects retry admission.
+This permits bounded candidate-tombstone reclamation without recreating the
+old route-neutral chunk stage.
 ***************************************************************************)
 CertifiedResponsePacketPolicyRejected(item) ==
   /\ item.kind = "CertifiedResponse"
@@ -4394,9 +5330,27 @@ UntrustedGenericCompletionPacketPolicyRejected(item) ==
   /\ IngressResourceSource(item) = AsyncUntrustedSource
   /\ ActiveCertifiedRequestHashesAt(item.envelope.recipient) # {}
 
+AsyncCandidateServicePacketRetired(item) ==
+  AsyncCandidateServiceCoalesced(DeliveryCandidate(item))
+
+AsyncCandidateStageRetired(item) ==
+  IF item.kind = "Chunk"
+  THEN LET recipient == item.envelope.recipient
+           receipt ==
+             AsyncChunkReceipt(
+               recipient, item.envelope.view,
+               item.envelope.subject, item.envelope.chunk)
+       IN \/ receipt \in asyncHeldChunks
+          \/ item.envelope.view < nodeView[recipient]
+          \/ NodeHasDecision(recipient)
+  ELSE FALSE
+
 IngressPacketPolicyRejected(item) ==
   \/ CertifiedResponsePacketPolicyRejected(item)
   \/ UntrustedGenericCompletionPacketPolicyRejected(item)
+  \/ AsyncControlServiceAdmissionCoalesced(item)
+  \/ AsyncCandidateServicePacketRetired(item)
+  \/ AsyncCandidateStageRetired(item)
 
 CommitCertificateRequestAuthorized(item) ==
   /\ item.kind = "CommitCertificateRequest"
@@ -4469,6 +5423,9 @@ AsyncServeTransportAdmissionGateAllows(node, item) ==
   ELSE TRUE
 
 CanAdmitIngressItem(item) ==
+  /\ ~AsyncControlServiceAdmissionCoalesced(item)
+  /\ ~AsyncCandidateServicePacketRetired(item)
+  /\ ~AsyncCandidateStageRetired(item)
   /\ AsyncServeTransportAdmissionGateAllows(
        item.envelope.recipient, item)
   /\ IngressDepth(item.envelope.recipient)
@@ -4486,12 +5443,17 @@ ExactServeTransportAdmissionCanAdvance(node, request) ==
      THEN TRUE
      ELSE IF AsyncServeLifecycleSuperseded(node, request)
           THEN TRUE
-          ELSE IF AsyncServeLifecycleConflict(node, request)
-               THEN TRUE
-               ELSE IF ~AsyncServeLifecycleFamilyOwned(node, family)
-                    THEN TRUE
+     ELSE IF AsyncServeLifecycleConflict(node, request)
+          THEN TRUE
+          ELSE IF ~AsyncServeLifecycleFamilyOwned(node, family)
+                    THEN /\ AsyncServeIngressLifecycleOwnerIdentities(
+                               node) = {}
+                         /\ AsyncServeOffQueueReservations(node) = {}
                     ELSE /\ AsyncServeFamilyTombstoneRecords(
                                  node, family) # {}
+                         /\ AsyncServeIngressLifecycleOwnerIdentities(
+                              node) = {}
+                         /\ AsyncServeOffQueueReservations(node) = {}
                          /\ roundView >
                               AsyncServeFamilyHighWatermark(node, family)
                          /\ AsyncServeFamilyAdvanceRetiresPriorRequests(
@@ -4527,7 +5489,9 @@ AdmitHiddenPacket(recipient, source) ==
           ELSE asyncCertifiedResponseClaim
      /\ IF AsyncServeLifecycleAdmissionRequired(recipient, item)
         THEN AcceptOrReserveExactServeIngress(recipient, candidate)
-        ELSE UNCHANGED AsyncServeLifecycleVars
+        ELSE UNCHANGED
+               <<AsyncServeLifecycleVars,
+                 AsyncServeIngressAdmissionVars>>
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
      /\ UNCHANGED AsyncLocalAdmissionVars
@@ -4545,11 +5509,11 @@ AdmitHiddenPacket(recipient, source) ==
                     >>
 
 (*
-FairV2Ingress coalesces an exact wire retransmission while its normalized
-resource lane owns the same identity.  Certified responses use the
-route-neutral authenticated-envelope projection, so the same signed response
-coalesces across relay vias while that recipient's singleton claim remains
-unchanged.
+FairV2Ingress coalesces a reply request by its route-local logical lifecycle
+identity while its normalized resource lane owns the first occurrence.
+Certified responses use the route-neutral authenticated-envelope projection,
+so the same signed response coalesces across relay vias while that recipient's
+singleton claim remains unchanged.
 *)
 CoalesceHiddenPacket(recipient, source) ==
   LET packet == OldestDueSourcePacket(recipient, source)
@@ -4776,20 +5740,21 @@ IngressItemCanDrain(node, item) ==
                THEN TRUE
                ELSE IF item.kind = "CertifiedResponse"
                THEN \/ ~CertifiedResponseClaimAuthorized(item)
-                    \/ CandidateScheduled(
+                    \/ CandidateAdmissionCoalesced(
                          CertifiedResponseCandidate(item))
                     \/ /\ CanEnqueueCertifiedResponse(node)
-                          /\ ~CandidateScheduled(
+                          /\ ~CandidateAdmissionCoalesced(
                                CertifiedResponseCandidate(item))
                ELSE IF item.kind = "CommitCertificateResponse"
                     THEN \/ ~CommitCertificateResponseAuthorized(item)
-                         \/ CandidateScheduled(
+                         \/ CandidateAdmissionCoalesced(
                               CommitCertificateResponseCandidate(item))
                          \/ /\ ~NonCompletionCausalAdmissionDebt(node)
                                /\ CanEnqueueClass(node, "Progress")
-                               /\ ~CandidateScheduled(
+                               /\ ~CandidateAdmissionCoalesced(
                                     CommitCertificateResponseCandidate(item))
-               ELSE \/ CandidateScheduled(candidate)
+               ELSE \/ AsyncControlServiceOccurrenceRetired(item)
+                    \/ CandidateAdmissionCoalesced(candidate)
                     \/ /\ ~NonCompletionCausalAdmissionDebt(node)
                           /\ CanEnqueueClass(node, candidate.class)
 
@@ -4810,29 +5775,118 @@ AsyncServeIngressLiveReservations(node) ==
           \in AsyncServeIngressReservationIdentities(node)
      /\ ~AsyncServeJobQueued(node, reservation.identity)}
 
-AsyncServeEarliestIngressReservation(node) ==
-  CHOOSE reservation \in AsyncServeIngressLiveReservations(node):
-    \A other \in AsyncServeIngressLiveReservations(node):
-      reservation.ordinal <= other.ordinal
+AsyncServeIngressLiveReservationIdentities(node) ==
+  {reservation.identity:
+     reservation \in AsyncServeIngressLiveReservations(node)}
+
+(***************************************************************************
+Every serviceable exact request receives an immutable per-height ingress
+ordinal at the atomic transport-to-lane cut.  Its high-watermark is durable
+across same-height restart and is reconstructed with the retained lifecycle
+record before replay; only a successor-height instance starts again at zero.
+Exact duplicates coalesce behind that record while its occurrence remains
+queued.  A cached replay receives an ingress ordinal without recreating its
+retired Serve lifecycle; a later retry after the occurrence drains receives a
+later ingress turn.  The selector
+therefore orders the single live off-queue reservation, cached replays, and
+already-owned exact requests across all physical source lanes without letting
+later work leapfrog an admitted target.
+***************************************************************************)
+AsyncServeIngressIdentityFrozenByReservation(
+    node, reservation, identity) ==
+  \E source \in AsyncIngressSources:
+    \E index \in 1..reservation.ingressPredecessors[source]:
+      /\ asyncIngressLanes[node][source][index].kind
+           \in AsyncReplyRequestKinds
+      /\ AsyncServeLogicalRequestIdentity(
+           node, asyncIngressLanes[node][source][index]) = identity
+
+(***************************************************************************
+Every smaller ingress ordinal is a finite predecessor occurrence, including a
+cached tombstone replay or retry whose Serve job is already queued.  Draining
+one of those owners can rotate the physical ready-source ring, so exact rank
+accounting must charge the immutable ordinal even when there is no off-queue
+Serve barrier.  A retry after drain receives a larger ordinal and cannot
+replenish this set.
+***************************************************************************)
+AsyncServePreexistingIngressOwnerIdentities(node, identity) ==
+  IF AsyncServeIngressAdmissionOwned(node, identity)
+  THEN {admission.identity:
+          admission \in
+            {owned \in asyncServeIngressAdmissions:
+               /\ owned.node = node
+               /\ owned.identity # identity
+               /\ owned.ordinal
+                    < AsyncServeIngressAdmissionOrdinal(node, identity)}}
+  ELSE {}
+
+AsyncServePreexistingIngressOwnerPredecessorDebtSet(node, identity) ==
+  ({"ServeIngressOwner"} \X
+     AsyncServePreexistingIngressOwnerIdentities(node, identity))
+    \cup
+  ({"ServeIngressOwnerPrefix"} \X
+     UNION {
+       {[identity |-> ownerIdentity,
+         source |-> slot.source,
+         slot |-> slot.slot]:
+          slot \in
+            AsyncServeIngressAdmissionPredecessorDebtSlots(
+              node, ownerIdentity)}:
+       ownerIdentity \in
+         AsyncServePreexistingIngressOwnerIdentities(node, identity)})
+
+(***************************************************************************
+The singular Rust Serve barrier is the subset of those earlier ingress owners
+which still owns an unmaterialized Serve slot.  Its admission snapshot cannot
+contain the later target occurrence.  This derived identity is internal
+scheduler metadata; it is neither a wire field nor a new request identity.
+***************************************************************************)
+AsyncServePreexistingIngressBarrierIdentities(node, identity) ==
+  IF AsyncServeIngressAdmissionOwned(node, identity)
+  THEN {reservation.identity:
+          reservation \in
+            {owned \in AsyncServeIngressLiveReservations(node):
+               /\ owned.identity
+                    \in AsyncServePreexistingIngressOwnerIdentities(
+                         node, identity)
+               /\ ~AsyncServeIngressIdentityFrozenByReservation(
+                    node, owned, identity)}}
+  ELSE {}
+
+(***************************************************************************
+The singular preexisting barrier contributes only its frozen physical I/O
+jobs here; the generic earlier-owner set already charges its immutable ingress
+prefix and occurrence.  These jobs account for the full-to-resumable
+I/O-worker handoff and remain disjoint from the target lifecycle's own tags.
+***************************************************************************)
+AsyncServePreexistingIngressBarrierPredecessorDebtSet(node, identity) ==
+  UNION {
+    ({"ServeBarrierIo"} \X
+       AsyncServeFrozenPredecessorSet(node, barrierIdentity)):
+    barrierIdentity \in
+      AsyncServePreexistingIngressBarrierIdentities(node, identity)}
 
 (***************************************************************************
 The hidden-ingress acceptance cut freezes one prefix length per physical
-source lane.  Removing an occurrence inside a frozen prefix decrements that
-prefix; appending later traffic never increases it.  While an off-queue Serve
-reservation remains in ingress, only one of those frozen predecessors or the
-least-admission-ordinal target itself is selectable.  In particular a later
-claimed response, fenced completion, Control producer, or exact request
-cannot acquire a selector position ahead of the admitted target.
+source lane for every exact ingress occurrence, including a cached replay.
+Removing an occurrence inside a frozen prefix decrements that prefix;
+appending later traffic never increases it.  The earliest ingress owner admits
+one of those pre-cutoff entries or its exact request.  In particular a later
+claimed response, fenced completion, Control producer, or exact request cannot
+acquire a selector position ahead of the earliest ingress admission.
 ***************************************************************************)
 AsyncServeIngressIndexMayPrecedeAdmittedTarget(node, source, index) ==
-  IF AsyncServeIngressLiveReservations(node) = {}
+  IF AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   THEN TRUE
-  ELSE LET owner == AsyncServeEarliestIngressReservation(node)
+  ELSE LET ownerIdentity ==
+             AsyncServeEarliestIngressLifecycleOwnerIdentity(node)
            item == asyncIngressLanes[node][source][index]
-       IN \/ index <= owner.ingressPredecessors[source]
+       IN \/ index <=
+                AsyncServeIngressAdmissionPredecessorCounts(
+                  node, ownerIdentity)[source]
           \/ /\ item.kind \in AsyncReplyRequestKinds
              /\ AsyncServeLogicalRequestIdentity(node, item)
-                  = owner.identity
+                  = ownerIdentity
 
 DrainableIngressLaneIndices(node, source) ==
   {index \in 1..Len(IngressLane(node, source)):
@@ -4927,6 +5981,10 @@ PopSelectedIngress(node, index, laneIndex) ==
      /\ asyncServeReservations' =
           AsyncServeReservationsAfterIngressDrain(
             node, source, laneIndex)
+     /\ asyncServeIngressAdmissions' =
+          AsyncServeIngressAdmissionsAfterIngressDrain(
+            node, source, laneIndex)
+     /\ UNCHANGED asyncNextServeIngressOrdinal
 
 (***************************************************************************
 The serialized Rust ingress authenticates every reducer-directed envelope
@@ -4993,7 +6051,7 @@ DrainFairIngressSelected(node) ==
                   THEN IF CertifiedResponseClaimAuthorized(item)
                        THEN LET completion ==
                                   CertifiedResponseCandidate(item)
-                            IN /\ IF CandidateScheduled(completion)
+                            IN /\ IF CandidateAdmissionCoalesced(completion)
                                   THEN UNCHANGED <<
                                                     AsyncIoExceptServeReservationsVars,
                                                     asyncCommandQueues,
@@ -5022,7 +6080,7 @@ DrainFairIngressSelected(node) ==
                                        DiscoveredCommitQcItem(item)
                                      discoveredCandidate ==
                                        CommitCertificateResponseCandidate(item)
-                                 IN /\ IF CandidateScheduled(
+                                 IN /\ IF CandidateAdmissionCoalesced(
                                                discoveredCandidate)
                                         THEN UNCHANGED <<asyncCommandQueues,
                                                           asyncNextCommandClass>>
@@ -5044,10 +6102,13 @@ DrainFairIngressSelected(node) ==
                                                 asyncRetainedControl,
                                                 asyncActiveRequests,
                                                 asyncCertifiedResponseClaim>>
-                  ELSE /\ IF CandidateScheduled(candidate)
+                  ELSE /\ IF AsyncControlServiceOccurrenceRetired(item)
                           THEN UNCHANGED <<asyncCommandQueues,
                                            asyncNextCommandClass>>
-                          ELSE EnqueueCandidate(candidate)
+                          ELSE IF CandidateAdmissionCoalesced(candidate)
+                               THEN UNCHANGED <<asyncCommandQueues,
+                                                asyncNextCommandClass>>
+                               ELSE EnqueueCandidate(candidate)
                        /\ UNCHANGED AsyncIoExceptServeReservationsVars
                        /\ UNCHANGED <<asyncSentItems,
                                       asyncRetainedControl,
@@ -5070,6 +6131,40 @@ DrainFairIngressSelected(node) ==
                     asyncRetransmitDeadlines,
                     asyncHistoricalRecoveryTargets
                     >>
+
+(***************************************************************************
+Bounded control-slot mutation seams.
+
+The active-pass seam exposes the first immutable slot owner.  The retired-drop
+seam exposes both a consumed exact retry and a delayed identity displaced by a
+strictly newer view.  Theorems pinning these conditions appear after the
+complete slot transition and `AsyncNext`, so they cannot accidentally appeal
+to a downstream strong invariant.
+***************************************************************************)
+AsyncSelectedFairIngressItem(node) ==
+  LET index == FirstDrainableIngressIndex(node)
+      source == asyncIngressReady[node][index]
+      laneIndex == SelectedIngressLaneIndex(node, index)
+  IN asyncIngressLanes[node][source][laneIndex]
+
+AsyncActiveControlServiceAdmissionPassCondition(node) ==
+  LET item == AsyncSelectedFairIngressItem(node)
+      candidate == DeliveryCandidate(item)
+  IN /\ asyncIngressReady[node] # <<>>
+     /\ DrainableIngressIndices(node) # {}
+     /\ item.kind \in AsyncControlKinds
+     /\ AsyncControlServiceOccurrenceIsCurrentOwner(item)
+     /\ ~CandidateAdmissionCoalesced(candidate)
+     /\ ~NonCompletionCausalAdmissionDebt(node)
+     /\ CanEnqueueClass(node, candidate.class)
+
+AsyncRetiredControlServiceAdmissionDropCondition(node) ==
+  LET item == AsyncSelectedFairIngressItem(node)
+  IN /\ asyncIngressReady[node] # <<>>
+     /\ DrainableIngressIndices(node) # {}
+     /\ item.kind \in AsyncControlKinds
+     /\ AsyncControlServiceOccurrenceRetired(item)
+     /\ ~CandidateAdmissionCoalesced(DeliveryCandidate(item))
 
 (***************************************************************************
 After Apply, the production height loop exits immediately.  Its successor
@@ -5173,7 +6268,8 @@ AdmitCausalHead(node) ==
                              asyncLocalReadyCompletions,
                              asyncNextCompletionSource,
                              asyncIoControlAvailable,
-                             AsyncServeLifecycleVars>>
+                             AsyncServeLifecycleVars,
+                             AsyncServeIngressAdmissionVars>>
         ELSE IF candidate.class = "Completion"
              THEN /\ asyncIoQueues' =
                        [asyncIoQueues EXCEPT
@@ -5187,7 +6283,8 @@ AdmitCausalHead(node) ==
                                   asyncLocalReadyCompletions,
                                   asyncNextCompletionSource,
                                   asyncIoControlAvailable,
-                                  AsyncServeLifecycleVars>>
+                                  AsyncServeLifecycleVars,
+                                  AsyncServeIngressAdmissionVars>>
              ELSE /\ EnqueueCandidate(candidate)
                   /\ UNCHANGED AsyncIoVars
      /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
@@ -5297,7 +6394,8 @@ AdmitProducerCompletion(node) ==
      /\ asyncOutstandingWork' =
           [asyncOutstandingWork EXCEPT ![node] = @ \ {candidate}]
      /\ UNCHANGED <<asyncIoQueues, asyncIoControlAvailable,
-                     AsyncServeLifecycleVars>>
+                     AsyncServeLifecycleVars,
+                     AsyncServeIngressAdmissionVars>>
      /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncSentItems,
@@ -5355,6 +6453,7 @@ ServiceIoWorkerWork(node) ==
                             reservation.ordinal, responseItems)}
           ELSE asyncServeTombstones
      /\ UNCHANGED asyncNextServeAdmissionOrdinal
+     /\ UNCHANGED AsyncServeIngressAdmissionVars
      /\ asyncIoReadyCompletions' =
           IF job.class = "Consensus"
           THEN [asyncIoReadyCompletions EXCEPT
@@ -5396,6 +6495,10 @@ EnqueueIoLocalControlWork(node) ==
   /\ node \in up
   /\ ~ResponsiveReplayQuarantined(node)
   /\ ~NodeHasApplication(node)
+  \* An admitted exact ingress occurrence owns the next post-prefix service
+  \* corridor.  Preexisting Control jobs still drain through the I/O worker,
+  \* but a later poll cannot recreate Control capacity debt ahead of it.
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ asyncIoControlAvailable[node]
   /\ ~CompletionCausalAdmissionDebt(node)
   /\ CanEnqueueIoClass(node, "Control")
@@ -5403,7 +6506,8 @@ EnqueueIoLocalControlWork(node) ==
        [asyncIoQueues EXCEPT ![node] = Append(@, AsyncIoControlJob)]
   /\ asyncIoControlAvailable' =
        [asyncIoControlAvailable EXCEPT ![node] = FALSE]
-  /\ UNCHANGED AsyncServeLifecycleVars
+  /\ UNCHANGED <<AsyncServeLifecycleVars,
+                  AsyncServeIngressAdmissionVars>>
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
   /\ UNCHANGED AsyncLocalAdmissionVars
@@ -5512,6 +6616,7 @@ BeginTimeoutEnabled(node) == BeginTimeoutReady(node)
 
 CommitCertificateDiscoveryStepWork(node) ==
   /\ node \in up
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ UNCHANGED <<vars, asyncNow,
                  asyncCommandQueues, asyncNextCommandClass,
                  asyncFifoOwed, asyncTimeoutEmitted,
@@ -5635,7 +6740,9 @@ DeferredTimeoutStep(node) ==
 
 DeferredRetransmitStep(node) ==
   /\ "RetransmitElapsed" \in asyncOutstandingTags[node]
-  /\ NodeIdle(node)
+  \* This is the fixed production run-loop point after local reconciliation,
+  \* completion drain, and output retry.  `drive_block_sync` is not gated by
+  \* reducer idleness, so neither is this deferred program-counter state.
   /\ UNCHANGED vars
   /\ IF RetryableItems(node) # {}
      THEN SendNodeRetransmissions(node)
@@ -5656,11 +6763,18 @@ DeferredRetransmitStep(node) ==
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
                  asyncHistoricalRecoveryTargets>>
 
+THEOREM DeferredRetransmitConsumesDriveProgramCounter ==
+  \A node \in ValidatorIds:
+    DeferredRetransmitStep(node)
+      => /\ AsyncRetransmitProgramCounter(node) = "DriveDue"
+         /\ AsyncRetransmitProgramCounter(node)' = "AwaitDue"
+BY Isa
+   DEF DeferredRetransmitStep, AsyncRetransmitProgramCounter
+
 DeferredTagExecutable(node) ==
   DeferredTimeoutExecutable(node)
     \/ (/\ "TimeoutElapsed" \notin asyncOutstandingTags[node]
-        /\ "RetransmitElapsed" \in asyncOutstandingTags[node]
-        /\ NodeIdle(node))
+        /\ "RetransmitElapsed" \in asyncOutstandingTags[node])
 
 DeferredTagStep(node) ==
   IF DeferredTimeoutExecutable(node)
@@ -5856,6 +6970,10 @@ RuntimeStep(node) ==
 
 LocalAdmissionStep(node) ==
   /\ asyncRunnerPhase[node] = "Local"
+  \* A frozen exact ingress owner receives a target-only turn.  No producer,
+  \* causal, Completion, or other local admission may acquire a later
+  \* position before that owner reaches the ingress selector.
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ UNCHANGED AsyncDeferredVars
   /\ IF LocalAdmissionCanAdvance(node)
      THEN LET source == SelectedLocalSource(node)
@@ -5916,12 +7034,51 @@ IngressDrainStep(node) ==
 
 SerializedRuntimeStep(node) ==
   /\ asyncRunnerPhase[node] = "Runtime"
+  \* Runtime can enqueue causal successors, execute Completion work, and emit
+  \* retransmission/timeout producers.  Once an exact ingress ticket exists,
+  \* all of those are later than the ticket and this phase is skipped.
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ UNCHANGED AsyncIoVars
   /\ UNCHANGED AsyncLocalAdmissionVars
   /\ RuntimeStep(node)
   /\ asyncRunnerPhase' = [asyncRunnerPhase EXCEPT ![node] = "Local"]
   /\ asyncRunnerBudget' =
        [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
+
+AsyncServeIngressTargetOnlyTurn(node) ==
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+  /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
+  /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
+                 asyncFifoOwed, asyncTimeoutEmitted,
+                 AsyncLocalAdmissionVars, AsyncIoVars, AsyncDeferredVars,
+                 asyncCausalQueues, asyncOutstandingTags,
+                 asyncNodeDeadlines, asyncRetransmitDeadlines,
+                 asyncSentItems, asyncRetainedControl,
+                 asyncActiveRequests, asyncCertifiedResponseClaim,
+                 asyncTransport, asyncIngressLanes, asyncIngressReady,
+                 asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Ingress"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncIngressCapacity]
+
+THEOREM AsyncServeIngressTicketExcludesLaterLocalWork ==
+  \A node \in ValidatorIds:
+    AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+      => /\ ~LocalAdmissionStep(node)
+         /\ ~SerializedRuntimeStep(node)
+         /\ ~EnqueueIoLocalControlWork(node)
+         /\ ~CommitCertificateDiscoveryStepWork(node)
+BY DEF LocalAdmissionStep, SerializedRuntimeStep,
+       EnqueueIoLocalControlWork, CommitCertificateDiscoveryStepWork
+
+THEOREM AsyncServeIngressTargetOnlyTurnJumpsToIngress ==
+  \A node \in ValidatorIds:
+    AsyncServeIngressTargetOnlyTurn(node)
+      => /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
+         /\ asyncRunnerPhase'[node] = "Ingress"
+         /\ asyncRunnerBudget'[node] = AsyncIngressCapacity
+BY Isa DEF AsyncServeIngressTargetOnlyTurn
 
 RunNodeWork(node) ==
   /\ node \in up
@@ -5933,9 +7090,12 @@ RunNodeWork(node) ==
           /\ \/ LocalAdmissionStep(node)
              \/ IngressDrainStep(node)
              \/ SerializedRuntimeStep(node)
-     ELSE \/ LocalAdmissionStep(node)
-          \/ IngressDrainStep(node)
-          \/ SerializedRuntimeStep(node)
+     ELSE IF /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+             /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
+          THEN AsyncServeIngressTargetOnlyTurn(node)
+          ELSE \/ LocalAdmissionStep(node)
+               \/ IngressDrainStep(node)
+               \/ SerializedRuntimeStep(node)
   /\ UNCHANGED asyncNow
   /\ asyncNodeServiceDeadlines' =
        [asyncNodeServiceDeadlines EXCEPT
@@ -6182,6 +7342,46 @@ RestartReplay(node) ==
                ELSE RestartRunnerAssembly(node)
 
 (***************************************************************************
+Restart atomically discards every volatile scheduler carrier for `node`.
+Consequently replay must not coalesce against either a matching pre-crash
+queue owner or a same-generation transient service marker which that reset is
+about to erase.  Only a restart-durable terminal-discard tombstone can
+suppress reconstruction here.  Signature completion is deliberately
+restart-scoped: its durable intent must reissue a new-generation callback, so
+it is never eligible for a terminal replay tombstone.
+***************************************************************************)
+AsyncCandidateRestartReplayTombstoned(candidate) ==
+  AsyncCandidateTerminalTombstoned(candidate)
+
+FreshRestartCandidateSequence(replay) ==
+  CASE Len(replay) = 0 -> <<>>
+    [] Len(replay) = 1 ->
+         IF AsyncCandidateRestartReplayTombstoned(replay[1])
+         THEN <<>>
+         ELSE <<replay[1]>>
+    [] Len(replay) = 2 ->
+         (IF AsyncCandidateRestartReplayTombstoned(replay[1])
+          THEN <<>>
+          ELSE <<replay[1]>>)
+           \o
+         (IF AsyncCandidateRestartReplayTombstoned(replay[2])
+          THEN <<>>
+          ELSE <<replay[2]>>)
+    [] Len(replay) = 3 ->
+         (IF AsyncCandidateRestartReplayTombstoned(replay[1])
+          THEN <<>>
+          ELSE <<replay[1]>>)
+           \o
+         (IF AsyncCandidateRestartReplayTombstoned(replay[2])
+          THEN <<>>
+          ELSE <<replay[2]>>)
+           \o
+         (IF AsyncCandidateRestartReplayTombstoned(replay[3])
+          THEN <<>>
+          ELSE <<replay[3]>>)
+    [] OTHER -> <<>>
+
+(***************************************************************************
 While the first durable signature is active, the Fetch prefix may resolve a
 locally durable body and expose the deterministic Validate successor batch.
 These exact descendants remain quarantined with the recovering consumer; no
@@ -6214,6 +7414,21 @@ RestartDecisionQCs(node) ==
   {decision.qc:
      decision \in {entry \in decisions:
        entry.node = node /\ entry.qc.context = context}}
+
+RestartDecisionCertifiedRequest(node, request) ==
+  /\ request.kind = "CertifiedRequest"
+  /\ request.source = node
+  /\ \E qc \in RestartDecisionQCs(node):
+       request \in CertifiedRequestOutbox(node, qc)
+
+RestartDurableCertifiedRequest(node, request) ==
+  \/ RestartLockedCertifiedRequest(node, request)
+  \/ RestartDecisionCertifiedRequest(node, request)
+
+RestartRetainedActiveRequests(node) ==
+  {request \in asyncActiveRequests:
+     \/ request.source # node
+     \/ RestartDurableCertifiedRequest(node, request)}
 
 RestartInstalledTCs(node) ==
   {entry.tc:
@@ -6252,13 +7467,26 @@ RestartRetainedControl(node) ==
   IN RememberedControl(withDecision, RestartLastTCControl(node))
 
 (***************************************************************************
-Serve ordinals and response tombstones are process-local, not invented WAL
-records.  A pre-GST crash starts a new process incarnation and clears that
-node's lifecycle table together with its volatile ingress/I/O queues.
-Durable bodies and Kura certificates survive, so a still-active remote
-request is deterministically re-admitted under a fresh incarnation ordinal
-when retransmitted.  Responsive peers do not crash after GST.
+Same-height restart reconstruction.
+
+Ingress occurrences, uncommitted admissions, and reservations are volatile
+and are cleared for the restarted node.  Monotone ordinals and terminal
+response tombstones are not reset: production reconstructs this bounded
+high-watermark state from the durable Core/body/certificate catalog before
+reopening ingress.  A displaced lower-view tombstone temporarily carried by
+an in-flight reservation is restored as that reservation is abandoned.  Thus
+a drained logical request cannot re-enter its old Serve stage after replay.
+Only a fresh successor-height Async instance resets the tables in
+`AsyncIoInit`.
 ***************************************************************************)
+AsyncServeRestartRecoveredTombstones(node) ==
+  asyncServeTombstones
+    \cup
+  UNION {
+    reservation.rollbackTombstones:
+      reservation \in
+        {owned \in asyncServeReservations: owned.node = node}}
+
 ResetNodeSchedulerForRestart(node, replay) ==
   /\ asyncNow' = asyncNow
   /\ asyncCommandQueues' =
@@ -6277,11 +7505,14 @@ ResetNodeSchedulerForRestart(node, replay) ==
   /\ asyncNextLocalSource' =
        [asyncNextLocalSource EXCEPT ![node] = "Producer"]
   /\ asyncIoQueues' = [asyncIoQueues EXCEPT ![node] = <<>>]
-  /\ asyncNextServeAdmissionOrdinal' =
-       [asyncNextServeAdmissionOrdinal EXCEPT ![node] = 1]
+  /\ UNCHANGED <<asyncNextServeAdmissionOrdinal,
+                  asyncNextServeIngressOrdinal>>
+  /\ asyncServeIngressAdmissions' =
+       AsyncServeIngressAdmissionsWithoutNode(node)
   /\ asyncServeAdmissions' = AsyncServeAdmissionsWithoutNode(node)
   /\ asyncServeReservations' = AsyncServeReservationsWithoutNode(node)
-  /\ asyncServeTombstones' = AsyncServeTombstonesWithoutNode(node)
+  /\ asyncServeTombstones' =
+       AsyncServeRestartRecoveredTombstones(node)
   /\ asyncOutstandingWork' =
        [asyncOutstandingWork EXCEPT ![node] = {}]
   /\ asyncIoReadyCompletions' =
@@ -6304,7 +7535,9 @@ ResetNodeSchedulerForRestart(node, replay) ==
        [asyncNextDeferredClass EXCEPT ![node] = "Completion"]
   /\ asyncDeferredDrainOwed' =
        [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
-  /\ asyncCausalQueues' = [asyncCausalQueues EXCEPT ![node] = replay]
+  /\ asyncCausalQueues' =
+       [asyncCausalQueues EXCEPT
+          ![node] = FreshRestartCandidateSequence(replay)]
   /\ asyncOutstandingTags' =
        [asyncOutstandingTags EXCEPT ![node] = {}]
   /\ asyncNodeDeadlines' =
@@ -6321,13 +7554,19 @@ ResetNodeSchedulerForRestart(node, replay) ==
           ![node] = asyncNow + AsyncDeliveryBound]
   /\ asyncSentItems' = asyncSentItems
   /\ asyncRetainedControl' = RestartRetainedControl(node)
-  /\ asyncActiveRequests' =
-       {item \in asyncActiveRequests: item.source # node}
-  \* Reconfiguration clears this node's physical ingress lanes and request
-  \* registrations.  Filter their claims atomically while preserving the
-  \* independent claims owned by other recipients.
+  \* Same-height recovery reconstructs an outstanding certified-body request
+  \* from the durable Decision or retained-lock source.  It therefore keeps
+  \* the existing max-certified-requests charge and exact signed request hash
+  \* instead of allocating a second request lifecycle after replay.
+  /\ asyncActiveRequests' = RestartRetainedActiveRequests(node)
+  \* The authenticated response occurrence is process-local and volatile.
+  \* Recovery retires it even when its outstanding request survives, reopening
+  \* that request-hash family for a deterministic later responder.  The claim
+  \* ordinal high-watermark lives in `asyncControlServiceState` and is retained
+  \* by the global exact-wire transition below.
   /\ asyncCertifiedResponseClaim' =
-       CertifiedResponseClaimForRequests(asyncActiveRequests')
+       CertifiedResponseClaimForRequestsExceptRecipient(
+         asyncActiveRequests', node)
   /\ asyncTransport' = asyncTransport
   /\ asyncIngressLanes' =
        [asyncIngressLanes EXCEPT
@@ -6337,6 +7576,33 @@ ResetNodeSchedulerForRestart(node, replay) ==
        {receipt \in asyncHeldChunks: receipt.node # node}
   /\ asyncHistoricalRecoveryTargets' =
        asyncHistoricalRecoveryTargets \ {node}
+
+THEOREM SameHeightRestartPreservesServeHighWatermarks ==
+  \A node, replay:
+    ResetNodeSchedulerForRestart(node, replay)
+      => /\ asyncNextServeAdmissionOrdinal'
+              = asyncNextServeAdmissionOrdinal
+         /\ asyncNextServeIngressOrdinal'
+              = asyncNextServeIngressOrdinal
+         /\ asyncServeTombstones \subseteq asyncServeTombstones'
+BY Isa
+   DEF ResetNodeSchedulerForRestart,
+       AsyncServeRestartRecoveredTombstones
+
+THEOREM SameHeightRestartReopensDurableCertifiedResponseFamily ==
+  \A node, replay, request:
+    /\ request \in asyncActiveRequests
+    /\ RestartDurableCertifiedRequest(node, request)
+    /\ ResetNodeSchedulerForRestart(node, replay)
+    => /\ request \in asyncActiveRequests'
+       /\ CertifiedResponseClaimsAt(node)' = {}
+BY Isa
+   DEF ResetNodeSchedulerForRestart,
+       RestartRetainedActiveRequests,
+       RestartDurableCertifiedRequest,
+       CertifiedResponseClaimForRequestsExceptRecipient,
+       CertifiedResponseClaimForRequests,
+       CertifiedResponseClaimsAt
 
 AsyncSetGST ==
   /\ ~gst
@@ -6352,6 +7618,131 @@ Faults outside the trusted product loop.  Before GST packets may be lost and
 non-responsive validators may crash.  Byzantine noise is bounded in its own
 authenticated source lane and cannot occupy an honest source's slots.
 ***************************************************************************)
+
+AsyncServeIngressOccurrences(node, identity) ==
+  UNION {
+    {[source |-> source, index |-> index]:
+       index \in
+         {position \in 1..Len(asyncIngressLanes[node][source]):
+            /\ asyncIngressLanes[node][source][position].kind
+                 \in AsyncReplyRequestKinds
+            /\ AsyncServeLogicalRequestIdentity(
+                 node, asyncIngressLanes[node][source][position])
+                 = identity}}:
+    source \in AsyncIngressSources}
+
+AsyncServeReadyIndicesForSource(node, source) ==
+  {index \in 1..Len(asyncIngressReady[node]):
+     asyncIngressReady[node][index] = source}
+
+(***************************************************************************
+The Rust command channel can close after atomic Serve preparation but before
+the fair-ingress owner commits it.  Rollback covers both representations of
+that uncommitted transaction: an off-queue PendingCapacity future slot, or a
+materialized but unclaimed Reserved placeholder.  A higher-view preparation
+may have displaced a terminal family tombstone; the reservation carries that
+exact tombstone internally and rollback restores it atomically.  The admission
+ordinal is never reused.  This is a pre-GST teardown cut only: after GST a
+responsive dual quorum retains its receiver, while a completed/tombstoned
+lifecycle is never eligible for rollback (including when its current physical
+reply-route set is temporarily empty).
+***************************************************************************)
+PreGstPendingServeReceiverCloseRollback(node, identity) ==
+  LET occurrence ==
+        CHOOSE owned \in AsyncServeIngressOccurrences(node, identity): TRUE
+      source == occurrence.source
+      laneIndex == occurrence.index
+      readyIndex ==
+        CHOOSE index \in
+          AsyncServeReadyIndicesForSource(node, source): TRUE
+      drainedReservations ==
+        AsyncServeReservationsAfterIngressDrain(
+          node, source, laneIndex)
+  IN /\ ~gst
+     /\ AsyncServeLiveReservationOwned(node, identity)
+     /\ ~AsyncServeJobQueued(node, identity)
+     /\ Cardinality(
+          AsyncServeIngressOccurrences(node, identity)) = 1
+     /\ Cardinality(
+          AsyncServeReadyIndicesForSource(node, source)) = 1
+     /\ asyncIngressLanes' =
+          [asyncIngressLanes EXCEPT
+             ![node][source] =
+               SequenceWithoutIndex(@, laneIndex)]
+     /\ asyncIngressReady' =
+          [asyncIngressReady EXCEPT
+             ![node] = ReadyAfterSelectedDrain(node, readyIndex)]
+     /\ UNCHANGED asyncIoQueues
+     /\ asyncServeAdmissions' =
+          AsyncServeAdmissionsWithout(node, identity)
+     /\ asyncServeIngressAdmissions' =
+          AsyncServeIngressAdmissionsWithout(node, identity)
+     /\ asyncServeReservations' =
+          AsyncServeReservationsWithoutFrom(
+            drainedReservations, node, identity)
+     /\ asyncServeTombstones' =
+          asyncServeTombstones
+            \cup AsyncServeRollbackTombstones(node, identity)
+     /\ UNCHANGED <<asyncNextServeAdmissionOrdinal,
+                     asyncNextServeIngressOrdinal>>
+     /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
+                    asyncNextCommandClass, asyncFifoOwed,
+                    asyncTimeoutEmitted, asyncRunnerPhase,
+                    asyncRunnerBudget, AsyncLocalAdmissionVars,
+                    asyncOutstandingWork, asyncIoReadyCompletions,
+                    asyncLocalReadyCompletions,
+                    asyncNextCompletionSource,
+                    asyncIoControlAvailable, AsyncDeferredVars,
+                    asyncCausalQueues, asyncOutstandingTags,
+                    asyncNodeDeadlines, asyncRetransmitDeadlines,
+                    asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
+                    asyncSentItems, asyncRetainedControl,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncTransport, asyncHeldChunks,
+                    asyncHistoricalRecoveryTargets>>
+
+PreGstMaterializedServeReceiverCloseRollback(node, identity) ==
+  LET jobIndex ==
+        CHOOSE index \in
+          AsyncIoServeIdentityIndices(node, identity): TRUE
+      job == asyncIoQueues[node][jobIndex]
+  IN /\ ~gst
+     /\ AsyncServeLiveReservationOwned(node, identity)
+     /\ Cardinality(
+          AsyncIoServeIdentityIndices(node, identity)) = 1
+     /\ asyncIoQueues' =
+          [asyncIoQueues EXCEPT
+             ![node] = SequenceWithoutIndex(@, jobIndex)]
+     /\ asyncServeAdmissions' =
+          AsyncServeAdmissionsWithout(node, identity)
+     /\ UNCHANGED AsyncServeIngressAdmissionVars
+     /\ asyncServeReservations' =
+          AsyncServeReservationsAfterIoService(
+            node, job, identity)
+     /\ asyncServeTombstones' =
+          asyncServeTombstones
+            \cup AsyncServeRollbackTombstones(node, identity)
+     /\ UNCHANGED asyncNextServeAdmissionOrdinal
+     /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
+                    asyncNextCommandClass, asyncFifoOwed,
+                    asyncTimeoutEmitted, asyncRunnerPhase,
+                    asyncRunnerBudget, AsyncLocalAdmissionVars,
+                    asyncOutstandingWork, asyncIoReadyCompletions,
+                    asyncLocalReadyCompletions,
+                    asyncNextCompletionSource,
+                    asyncIoControlAvailable, AsyncDeferredVars,
+                    asyncCausalQueues, asyncOutstandingTags,
+                    asyncNodeDeadlines, asyncRetransmitDeadlines,
+                    asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
+                    asyncSentItems, asyncRetainedControl,
+                    asyncActiveRequests, asyncCertifiedResponseClaim,
+                    asyncTransport, asyncIngressLanes,
+                    asyncIngressReady, asyncHeldChunks,
+                    asyncHistoricalRecoveryTargets>>
+
+PreGstServeReceiverCloseRollback(node, identity) ==
+  \/ PreGstPendingServeReceiverCloseRollback(node, identity)
+  \/ PreGstMaterializedServeReceiverCloseRollback(node, identity)
 
 PreGstLosePacket(packet) ==
   /\ ~gst
@@ -6406,7 +7797,8 @@ PreGstResponsiveRestart ==
      /\ AsyncCoreOuterFrame
 
 RecoveryCoreReplay(node, candidate) ==
-  CASE candidate.kind = "SignProposal" ->
+  /\ ~AsyncCandidateRestartReplayTombstoned(candidate)
+  /\ CASE candidate.kind = "SignProposal" ->
          ResumeProposal(node, candidate.evidence)
     [] candidate.kind = "SignVote" ->
          ResumeVote(node, candidate.evidence)
@@ -6416,8 +7808,9 @@ RecoveryCoreReplay(node, candidate) ==
 
 PreGstResponsiveReplay ==
   LET node == asyncRecoveryNode
-      signatures == RestartSignatureReplay(node)
-      replay == RestartReplay(node)
+      signatures ==
+        FreshRestartCandidateSequence(RestartSignatureReplay(node))
+      replay == FreshRestartCandidateSequence(RestartReplay(node))
   IN /\ ~gst
      /\ asyncRecoveryPhase = "ReplayRequired"
      /\ node \in Responsive \cap up
@@ -6444,7 +7837,9 @@ DriveResponsiveReplayHead ==
      /\ node \in Responsive \cap up
      /\ generation[node] = asyncRecoveryGeneration
      /\ NodeIdle(node)
-     /\ RecoveryCoreReplay(node, candidate)
+     /\ IF AsyncCandidateRestartReplayTombstoned(candidate)
+        THEN UNCHANGED vars
+        ELSE RecoveryCoreReplay(node, candidate)
      /\ asyncCausalQueues' =
           [asyncCausalQueues EXCEPT
              ![node] = @ \o FreshCandidateSequence(candidate)]
@@ -6702,6 +8097,9 @@ AsyncByzantineTimeout(signer, roundView, highestPrepare) ==
 
 AsyncFaultStep ==
   \/ \E packet \in asyncTransport: PreGstLosePacket(packet)
+  \/ \E reservation \in asyncServeReservations:
+       PreGstServeReceiverCloseRollback(
+         reservation.node, reservation.identity)
   \/ \E node \in ValidatorIds: PreGstCrash(node)
   \/ \E source \in AsyncIngressSources, recipient \in ValidatorIds,
        nonce \in 0..(AsyncIngressCapacity - 1):
@@ -6774,7 +8172,8 @@ AsyncNonClockVars ==
     asyncSentItems, asyncRetainedControl, asyncActiveRequests,
     asyncCertifiedResponseClaim,
     asyncTransport, asyncIngressLanes, asyncIngressReady,
-    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+    asyncHeldChunks, asyncHistoricalRecoveryTargets,
+    asyncControlServiceState>>
 
 AsyncTick ==
   /\ AsyncTickEnabled
@@ -6818,6 +8217,1181 @@ AsyncNonCrashStep ==
   \/ /\ RearmResponsiveRecovery
      /\ UNCHANGED up
 
+(***************************************************************************
+One global frame owns the bounded control-slot table, the recipient-local
+certified-response claim metadata, and candidate service tombstones.  Durable
+external candidate markers are restart-stable; the three process-local
+signature-completion markers are retired when durable intents are replayed.
+
+Admission allocates or replaces one slot before the packet can enter the
+physical ingress lane.  The per-height ordinal is therefore frozen before
+Runtime, Completion, Control, or producer work can run.  Core delivery flips
+only the matching record's consumed bit.  Same-height replay preserves the
+bounded slot and ordinal table, but marks every slot whose volatile ingress
+was cleared as consumed.  That retirement treats an admission which never
+reached Core as a permitted pre-GST loss and prevents its retry from
+coalescing behind a dead owner.  Only a fresh successor-height instance
+receives the empty state from `AsyncTransportInit`.
+
+A certified response uses the already-charged outstanding `requestHash`
+family.  Admission records the exact `(requestHash, authenticated responder,
+response hash)` occurrence and an immutable recipient-local ordinal; it does
+not reserve a second request-capacity unit.  Consumption filters the record
+with the active request.  Same-height replay keeps the ordinal high-watermark
+but retires the volatile occurrence, so a surviving durable request family can
+accept a later responsive archive rather than pinning recovery to a crashed
+responder.
+
+Candidate retirement allocates one route-neutral immutable identity and
+per-node ordinal at either successful FIFO/deferred service or a terminal
+nondispatchable discard.  Successful service writes only the transient,
+generation-tagged marker; terminal discard writes the restart-durable
+tombstone.  Admission coalesces against either class in the live generation.
+Same-height responsive replay clears every transient marker for its node
+while preserving the ordinal high-watermark and durable tombstones, so
+volatile proposal/vote/QC state can be reconstructed.  Strict certified view
+advance and durable Decision reclaim either bounded record class only after
+the corresponding old-stage admission path is permanently disabled;
+successor-height initialization resets the complete table.
+***************************************************************************)
+AsyncControlServiceResetNodesThisStep ==
+  IF PreGstResponsiveReplay THEN {asyncRecoveryNode} ELSE {}
+
+AsyncControlServiceAdmissionsThisStep ==
+  {item \in {wire \in AsyncNetworkItems:
+               wire.kind \in AsyncControlKinds}:
+     /\ AsyncControlServiceAdmissionStartsOrReplaces(item)
+     /\ \E recipient \in ValidatorIds,
+           source \in AsyncIngressSources:
+          /\ DueSourcePackets(recipient, source) # {}
+          /\ item = OldestDueSourcePacket(recipient, source).item
+          /\ AdmitHiddenPacket(recipient, source)}
+
+AsyncControlServicesThisStep ==
+  {command.item:
+     command \in
+       {candidate \in AsyncCandidateSet:
+          /\ candidate.item.kind \in AsyncControlKinds
+          /\ ExecuteCoreDelivery(candidate)}}
+
+AsyncCertifiedResponseClaimAdmissionsThisStep ==
+  {item \in AsyncCertifiedResponseItems:
+     /\ CertifiedResponseFreshClaimGateAllows(item)
+     /\ \E recipient \in ValidatorIds,
+           source \in AsyncIngressSources:
+          /\ DueSourcePackets(recipient, source) # {}
+          /\ item = OldestDueSourcePacket(recipient, source).item
+          /\ AdmitHiddenPacket(recipient, source)}
+
+AsyncCandidateServiceMarkersAfterReset(state, resetNodes) ==
+  {record \in state.candidateServiceMarkers:
+     record.node \notin resetNodes}
+
+AsyncCandidateServiceTombstonesAfterReset(state, resetNodes) ==
+  AsyncCandidateServiceMarkersAfterReset(state, resetNodes)
+    \cup state.candidateTerminalTombstones
+
+AsyncControlServiceStateAfterReset(state, resetNodes) ==
+  [nextOrdinal |-> state.nextOrdinal,
+   slots |->
+     {IF record.slot.recipient \in resetNodes
+      THEN [record EXCEPT !.consumed = TRUE]
+      ELSE record:
+        record \in state.slots},
+   certifiedResponseNextOrdinal |->
+     state.certifiedResponseNextOrdinal,
+   certifiedResponseClaims |-> state.certifiedResponseClaims,
+   candidateServiceNextOrdinal |->
+     state.candidateServiceNextOrdinal,
+   candidateServiceMarkers |->
+     AsyncCandidateServiceMarkersAfterReset(state, resetNodes),
+   candidateTerminalTombstones |->
+     state.candidateTerminalTombstones]
+
+AsyncControlServiceStateAfterAdmission(state, item) ==
+  LET recipient == item.envelope.recipient
+      slot ==
+        AsyncControlServiceSlot(recipient, item.source, item.kind)
+      ordinal == state.nextOrdinal[recipient]
+  IN [nextOrdinal |->
+        [state.nextOrdinal EXCEPT ![recipient] = @ + 1],
+      slots |->
+        (state.slots \ {record \in state.slots:
+                          record.slot = slot})
+          \cup {AsyncControlServiceRecord(item, ordinal, FALSE)},
+      certifiedResponseNextOrdinal |->
+        state.certifiedResponseNextOrdinal,
+      certifiedResponseClaims |-> state.certifiedResponseClaims,
+      candidateServiceNextOrdinal |->
+        state.candidateServiceNextOrdinal,
+      candidateServiceMarkers |->
+        state.candidateServiceMarkers,
+      candidateTerminalTombstones |->
+        state.candidateTerminalTombstones]
+
+AsyncControlServiceStateAfterService(state, item) ==
+  [nextOrdinal |-> state.nextOrdinal,
+   slots |->
+     {IF record.identity = AsyncLeaderWireServiceIdentity(item)
+      THEN [record EXCEPT !.consumed = TRUE]
+      ELSE record:
+        record \in state.slots},
+   certifiedResponseNextOrdinal |->
+     state.certifiedResponseNextOrdinal,
+   certifiedResponseClaims |-> state.certifiedResponseClaims,
+   candidateServiceNextOrdinal |->
+     state.candidateServiceNextOrdinal,
+   candidateServiceMarkers |->
+     state.candidateServiceMarkers,
+   candidateTerminalTombstones |->
+     state.candidateTerminalTombstones]
+
+AsyncCertifiedResponseClaimStateAfterRetirement(state) ==
+  [state EXCEPT
+     !.certifiedResponseClaims =
+       CertifiedResponseClaimRecordsFor(
+         state.certifiedResponseClaims,
+         asyncActiveRequests',
+         asyncCertifiedResponseClaim')]
+
+AsyncCertifiedResponseClaimStateAfterAdmission(state, item) ==
+  LET recipient == item.envelope.recipient
+      ordinal == state.certifiedResponseNextOrdinal[recipient]
+  IN [state EXCEPT
+        !.certifiedResponseNextOrdinal[recipient] = @ + 1,
+        !.certifiedResponseClaims =
+          @ \cup {AsyncCertifiedResponseClaimRecord(item, ordinal)}]
+
+(***************************************************************************
+Successful FIFO or Busy-deferred execution retires the exact candidate only
+after its final scheduler carrier is gone.  A nondispatchable candidate which
+the reducer classifies as terminal is retired at the same boundary.  The
+global transition writes the route-neutral tombstone in that AsyncNext step;
+a transfer into executor work remains scheduled and is not retired.
+***************************************************************************)
+AsyncCandidateSuccessfullyServicedThisStep(candidate) ==
+  /\ CandidateScheduled(candidate)
+  /\ ~CandidateScheduledAfter(candidate)
+  /\ \/ \E node \in ValidatorIds:
+          /\ NodeQueueNonempty(node)
+          /\ candidate = NextNodeCommand(node)
+          /\ CommandDispatchable(candidate)
+          /\ FifoRuntimeStep(node)
+     \/ \E node \in ValidatorIds:
+          /\ DeferredQueueNonempty(node)
+          /\ candidate = NextDeferredCommand(node)
+          /\ DeferredHandoffAllowsExecution(node, candidate)
+          /\ DeferredDrainStep(node)
+
+AsyncCandidateServicesThisStep ==
+  {candidate \in AsyncCandidateSet:
+     AsyncCandidateSuccessfullyServicedThisStep(candidate)}
+
+AsyncCandidateTerminallyDiscardedThisStep(candidate) ==
+  /\ CandidateScheduled(candidate)
+  /\ ~CandidateScheduledAfter(candidate)
+  /\ ~CommandDispatchable(candidate)
+  /\ \/ \E node \in ValidatorIds:
+          /\ NodeQueueNonempty(node)
+          /\ candidate = NextNodeCommand(node)
+          /\ NodeIdle(node)
+          /\ FifoRuntimeStep(node)
+     \/ \E node \in ValidatorIds:
+          /\ DeferredQueueNonempty(node)
+          /\ candidate = NextDeferredCommand(node)
+          /\ ~DeferredHandoffAllowsExecution(node, candidate)
+          /\ ~DeferredHandoffBlocksExecution(node, candidate)
+          /\ DeferredDrainStep(node)
+
+AsyncCandidateTerminalDiscardsThisStep ==
+  {candidate \in AsyncCandidateSet:
+     AsyncCandidateTerminallyDiscardedThisStep(candidate)}
+
+AsyncCandidateTerminalRetirementsThisStep ==
+  AsyncCandidateTerminalDiscardsThisStep
+
+THEOREM AsyncCandidateCausalAdmissionTransfersSameOwner ==
+  \A node \in ValidatorIds:
+    /\ AsyncLogicalCandidateOwnershipInvariant
+    /\ CausalQueueNonempty(node)
+    /\ AdmitCausalHead(node)
+    => LET candidate == HeadCausalCandidate(node)
+       IN /\ CandidateScheduled(candidate)
+          /\ CandidateScheduledAfter(candidate)
+          /\ candidate \notin AsyncCandidateServicesThisStep
+BY IsaT(300)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AdmitCausalHead, CausalHeadCanAdvance,
+       CandidateInFlight,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates,
+       ConsensusIoCandidates, SequenceSet
+
+THEOREM AsyncCandidateIoCompletionTransfersSameOwner ==
+  \A node \in ValidatorIds:
+    LET job == Head(asyncIoQueues[node])
+    IN /\ AsyncOutstandingCarrierInvariant
+       /\ AsyncIoQueueDepth(node) > 0
+       /\ job.class = "Consensus"
+       /\ ServiceIoWorkerWork(node)
+       => /\ CandidateScheduled(job.candidate)
+          /\ CandidateScheduledAfter(job.candidate)
+          /\ job.candidate \notin AsyncCandidateServicesThisStep
+BY IsaT(300)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncOutstandingCarrierInvariant,
+       ServiceIoWorkerWork,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, TrackedWorkCandidates,
+       ConsensusIoCandidates, SequenceSet
+
+THEOREM AsyncCandidateProducerCompletionTransfersSameOwner ==
+  \A node \in ValidatorIds:
+    LET candidate == SelectedCompletionCandidate(node)
+    IN /\ AsyncOutstandingCarrierInvariant
+       /\ AdmitProducerCompletion(node)
+       => /\ CandidateScheduled(candidate)
+          /\ CandidateScheduledAfter(candidate)
+          /\ candidate \notin AsyncCandidateServicesThisStep
+BY IsaT(300)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncOutstandingCarrierInvariant,
+       AdmitProducerCompletion,
+       EnqueueCandidate,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, TrackedWorkCandidates,
+       ConsensusIoCandidates, SequenceSet
+
+THEOREM AsyncCandidateBusyDeferralTransfersSameOwner ==
+  \A node \in ValidatorIds:
+    LET candidate == NextNodeCommand(node)
+    IN /\ NodeQueueNonempty(node)
+       /\ ~CommandDispatchable(candidate)
+       /\ ~NodeIdle(node)
+       /\ FifoRuntimeStep(node)
+       => /\ CandidateScheduled(candidate)
+          /\ CandidateScheduledAfter(candidate)
+          /\ candidate \notin AsyncCandidateServicesThisStep
+BY IsaT(300)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       FifoRuntimeStep, DeferCommand,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, DeferredCandidates,
+       SequenceSet
+
+THEOREM AsyncCandidateDeferredHandoffRetainsSameOwner ==
+  \A node \in ValidatorIds:
+    LET candidate == NextDeferredCommand(node)
+    IN /\ DeferredQueueNonempty(node)
+       /\ ~DeferredHandoffAllowsExecution(node, candidate)
+       /\ ~NodeIdle(node)
+       /\ DeferredDrainStep(node)
+       => /\ CandidateScheduled(candidate)
+          /\ CandidateScheduledAfter(candidate)
+          /\ candidate \notin AsyncCandidateServicesThisStep
+BY IsaT(300)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       DeferredDrainStep, InstallDeferredHandoff,
+       RetainDeferredHandoffs,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, DeferredCandidates,
+       SequenceSet
+
+THEOREM AsyncCandidateDiscardIsNotSemanticService ==
+  \A candidate \in AsyncCandidateSet:
+    /\ ~CommandDispatchable(candidate)
+    /\ (\/ \E node \in ValidatorIds:
+             /\ candidate = NextNodeCommand(node)
+             /\ FifoRuntimeStep(node)
+        \/ \E node \in ValidatorIds:
+             /\ candidate = NextDeferredCommand(node)
+             /\ DeferredDrainStep(node))
+    => candidate \notin AsyncCandidateServicesThisStep
+BY Isa
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       DeferredHandoffAllowsExecution
+
+AsyncNodeHasDecisionAfter(node) ==
+  \E decision \in decisions':
+    /\ decision.node = node
+    /\ decision.qc.context = context'
+    /\ decision.qc.phase = "Commit"
+
+AsyncCandidateServiceRecordRetainedAfterStep(record) ==
+  /\ record.context = context'
+  /\ record.height = height'
+  /\ record.episodeView >= nodeView'[record.node]
+  /\ ~AsyncNodeHasDecisionAfter(record.node)
+
+AsyncCandidateServiceStateAfterReclamation(state) ==
+  [state EXCEPT
+     !.candidateServiceMarkers =
+       {record \in state.candidateServiceMarkers:
+          AsyncCandidateServiceRecordRetainedAfterStep(record)},
+     !.candidateTerminalTombstones =
+       {record \in state.candidateTerminalTombstones:
+          AsyncCandidateServiceRecordRetainedAfterStep(record)}]
+
+AsyncCandidateServiceEligibleAfterStep(candidate) ==
+  /\ candidate.consumerContext = context'
+  /\ candidate.height = height'
+  /\ nodeView[candidate.node] >= nodeView'[candidate.node]
+  /\ candidate.consumerGeneration = generation'[candidate.node]
+  /\ ~AsyncNodeHasDecisionAfter(candidate.node)
+
+AsyncCandidateTerminalRetirementEligibleAfterStep(candidate) ==
+  /\ candidate.consumerContext = context'
+  /\ candidate.height = height'
+  /\ nodeView[candidate.node] >= nodeView'[candidate.node]
+  /\ candidate.kind \notin AsyncRestartScopedCandidateServiceKinds
+  /\ ~AsyncNodeHasDecisionAfter(candidate.node)
+
+AsyncCandidateServiceStateAfterTerminalRetirement(state, candidate) ==
+  LET identity == AsyncCandidateServiceIdentity(candidate)
+      existing ==
+        {record \in
+           state.candidateServiceMarkers
+             \cup state.candidateTerminalTombstones:
+           record.identity = identity}
+      node == candidate.node
+      ordinal == state.candidateServiceNextOrdinal[node]
+  IN IF ~AsyncCandidateTerminalRetirementEligibleAfterStep(candidate)
+          \/ existing # {}
+     THEN state
+     ELSE [state EXCEPT
+             !.candidateServiceNextOrdinal[node] = @ + 1,
+             !.candidateTerminalTombstones =
+               @ \cup
+                 {AsyncCandidateServiceTombstone(
+                    candidate, nodeView[node], ordinal)}]
+
+AsyncCandidateServiceStateAfterSuccessfulService(state, candidate) ==
+  LET identity == AsyncCandidateServiceIdentity(candidate)
+      existing ==
+        {record \in
+           state.candidateServiceMarkers
+             \cup state.candidateTerminalTombstones:
+           record.identity = identity}
+      node == candidate.node
+      ordinal == state.candidateServiceNextOrdinal[node]
+  IN IF ~AsyncCandidateServiceEligibleAfterStep(candidate)
+          \/ existing # {}
+     THEN state
+     ELSE [state EXCEPT
+             !.candidateServiceNextOrdinal[node] = @ + 1,
+             !.candidateServiceMarkers =
+               @ \cup
+                 {AsyncCandidateServiceMarker(
+                    candidate, nodeView[node],
+                    candidate.consumerGeneration, ordinal)}]
+
+AsyncControlServiceSlotTransition ==
+  LET resetState ==
+        AsyncControlServiceStateAfterReset(
+          asyncControlServiceState,
+          AsyncControlServiceResetNodesThisStep)
+      admittedState ==
+        IF AsyncControlServiceAdmissionsThisStep = {}
+        THEN resetState
+        ELSE AsyncControlServiceStateAfterAdmission(
+               resetState,
+               CHOOSE item \in
+                 AsyncControlServiceAdmissionsThisStep: TRUE)
+      servicedState ==
+        IF AsyncControlServicesThisStep = {}
+        THEN admittedState
+        ELSE AsyncControlServiceStateAfterService(
+               admittedState,
+               CHOOSE item \in AsyncControlServicesThisStep: TRUE)
+      responseRetirementState ==
+        AsyncCertifiedResponseClaimStateAfterRetirement(servicedState)
+      responseState ==
+        IF AsyncCertifiedResponseClaimAdmissionsThisStep = {}
+        THEN responseRetirementState
+        ELSE AsyncCertifiedResponseClaimStateAfterAdmission(
+               responseRetirementState,
+               CHOOSE item \in
+                 AsyncCertifiedResponseClaimAdmissionsThisStep: TRUE)
+      candidateReclamationState ==
+        AsyncCandidateServiceStateAfterReclamation(responseState)
+  IN asyncControlServiceState' =
+       IF AsyncCandidateServicesThisStep # {}
+       THEN AsyncCandidateServiceStateAfterSuccessfulService(
+              candidateReclamationState,
+              CHOOSE candidate \in AsyncCandidateServicesThisStep: TRUE)
+       ELSE IF AsyncCandidateTerminalDiscardsThisStep # {}
+            THEN AsyncCandidateServiceStateAfterTerminalRetirement(
+                   candidateReclamationState,
+                   CHOOSE candidate \in
+                     AsyncCandidateTerminalDiscardsThisStep: TRUE)
+            ELSE candidateReclamationState
+
+AsyncCandidateServiceLifecycleInvariant ==
+  /\ AsyncControlServiceStateTypeInvariant
+  /\ \A record \in AsyncCandidateServiceMarkers:
+       /\ record.context = context
+       /\ record.height = height
+       /\ record.episodeView >= nodeView[record.node]
+       /\ record.generation <= generation[record.node]
+       /\ ~NodeHasDecision(record.node)
+  /\ \A record \in AsyncCandidateTerminalTombstones:
+       /\ record.context = context
+       /\ record.height = height
+       /\ record.episodeView >= nodeView[record.node]
+       /\ ~NodeHasDecision(record.node)
+  /\ \A candidate \in
+       QueuedCandidates \cup DeferredCandidates
+         \cup CausalCandidates \cup TrackedWorkCandidates:
+       ~AsyncCandidateServiceCoalesced(candidate)
+
+AsyncCandidateServiceTombstoneLifecycleInvariant ==
+  AsyncCandidateServiceLifecycleInvariant
+
+AsyncCandidateTransientServiceActive(candidate) ==
+  /\ AsyncCandidateTransientServiceMarked(candidate)
+  /\ candidate.consumerContext = context
+  /\ candidate.height = height
+  /\ candidate.consumerGeneration = generation[candidate.node]
+  /\ \A record \in AsyncCandidateTransientServiceRecordsFor(candidate):
+       record.episodeView >= nodeView[candidate.node]
+  /\ \A record \in AsyncCandidateTransientServiceRecordsFor(candidate):
+       record.generation = candidate.consumerGeneration
+  /\ ~NodeHasDecision(candidate.node)
+  /\ ~CandidateScheduled(candidate)
+
+AsyncCandidateTerminalTombstoneActive(candidate) ==
+  /\ AsyncCandidateTerminalTombstoned(candidate)
+  /\ candidate.consumerContext = context
+  /\ candidate.height = height
+  /\ \A record \in AsyncCandidateTerminalRecordsFor(candidate):
+       record.episodeView >= nodeView[candidate.node]
+  /\ ~NodeHasDecision(candidate.node)
+  /\ ~CandidateScheduled(candidate)
+
+AsyncCandidateServiceActiveTombstone(candidate) ==
+  \/ AsyncCandidateTransientServiceActive(candidate)
+  \/ AsyncCandidateTerminalTombstoneActive(candidate)
+
+AsyncCandidateTransientMarkerExitThisStep(candidate) ==
+  \/ candidate.consumerContext # context'
+  \/ candidate.height # height'
+  \/ nodeView'[candidate.node] > nodeView[candidate.node]
+  \/ candidate.consumerGeneration # generation'[candidate.node]
+  \/ AsyncNodeHasDecisionAfter(candidate.node)
+  \/ /\ PreGstResponsiveReplay
+     /\ candidate.node = asyncRecoveryNode
+
+AsyncCandidateTerminalTombstoneExitThisStep(candidate) ==
+  \/ candidate.consumerContext # context'
+  \/ candidate.height # height'
+  \/ nodeView'[candidate.node] > nodeView[candidate.node]
+  \/ AsyncNodeHasDecisionAfter(candidate.node)
+
+AsyncCandidateServiceExitThisStep(candidate) ==
+  AsyncCandidateTransientMarkerExitThisStep(candidate)
+
+THEOREM AsyncCandidateServiceIdentityIgnoresConsumerIncarnation ==
+  \A left, right \in AsyncCandidateSet:
+    /\ left.node = right.node
+    /\ left.consumerContext = right.consumerContext
+    /\ left.height = right.height
+    /\ left.view = right.view
+    /\ left.subject = right.subject
+    /\ left.kind = right.kind
+    /\ AsyncCandidateServicePayload(left)
+         = AsyncCandidateServicePayload(right)
+    => AsyncCandidateServiceIdentity(left)
+         = AsyncCandidateServiceIdentity(right)
+BY Isa
+   DEF AsyncCandidateServiceIdentity
+
+THEOREM AsyncCandidateServiceRouteNeutralResponseRetryIsStable ==
+  \A left, right \in AsyncCandidateSet:
+    /\ left.node = right.node
+    /\ left.consumerContext = right.consumerContext
+    /\ left.height = right.height
+    /\ left.view = right.view
+    /\ left.subject = right.subject
+    /\ left.kind = right.kind
+    /\ left.class = right.class
+    /\ left.item # NoAsyncItem
+    /\ right.item # NoAsyncItem
+    /\ left.item.kind = "CertifiedResponse"
+    /\ right.item =
+         [left.item EXCEPT !.source = right.item.source]
+    /\ AsyncRouteNeutralCandidateEvidence(left.evidence)
+         = AsyncRouteNeutralCandidateEvidence(right.evidence)
+    /\ left.bodyIdentity = right.bodyIdentity
+    /\ left.manifestIdentity = right.manifestIdentity
+    /\ left.commitmentIdentity = right.commitmentIdentity
+    => AsyncCandidateServiceIdentity(left)
+         = AsyncCandidateServiceIdentity(right)
+BY Isa
+   DEF AsyncCandidateServiceIdentity,
+       AsyncCandidateServicePayload,
+       AsyncRouteNeutralCandidateItem,
+       AsyncRouteNeutralCandidateEvidence
+
+THEOREM AsyncCandidateServiceTombstoneCoalescesFreshCandidate ==
+  \A candidate:
+    AsyncCandidateServiceCoalesced(candidate)
+      => /\ CandidateAdmissionCoalesced(candidate)
+         /\ FreshCandidateSequence(candidate) = <<>>
+         /\ ~ENABLED EnqueueCandidate(candidate)
+BY Isa
+   DEF CandidateAdmissionCoalesced,
+       FreshCandidateSequence,
+       EnqueueCandidate
+
+THEOREM AsyncCandidateTransientMarkerCoalescesFreshCandidate ==
+  \A candidate:
+    AsyncCandidateTransientServiceMarked(candidate)
+      => /\ CandidateAdmissionCoalesced(candidate)
+         /\ FreshCandidateSequence(candidate) = <<>>
+         /\ ~ENABLED EnqueueCandidate(candidate)
+BY AsyncCandidateServiceTombstoneCoalescesFreshCandidate, Isa
+   DEF AsyncCandidateServiceCoalesced
+
+THEOREM AsyncCandidateTerminalTombstoneCoalescesFreshCandidate ==
+  \A candidate:
+    AsyncCandidateTerminalTombstoned(candidate)
+      => /\ CandidateAdmissionCoalesced(candidate)
+         /\ FreshCandidateSequence(candidate) = <<>>
+         /\ ~ENABLED EnqueueCandidate(candidate)
+BY AsyncCandidateServiceTombstoneCoalescesFreshCandidate, Isa
+   DEF AsyncCandidateServiceCoalesced
+
+THEOREM AsyncCandidateServiceTombstoneRejectsTransportReadmission ==
+  \A item \in AsyncNetworkItems:
+    AsyncCandidateServiceCoalesced(DeliveryCandidate(item))
+      => /\ IngressPacketPolicyRejected(item)
+         /\ ~CanAdmitIngressItem(item)
+BY DEF AsyncCandidateServicePacketRetired,
+       IngressPacketPolicyRejected,
+       CanAdmitIngressItem
+
+THEOREM AsyncCandidateSuccessfulServiceInstallsTransientMarker ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateServicesThisStep = {candidate}
+    /\ AsyncCandidateServiceEligibleAfterStep(candidate)
+    /\ AsyncControlServiceSlotTransition
+    => /\ AsyncCandidateTransientServiceMarked(candidate)'
+       /\ ~CandidateScheduled(candidate)'
+       /\ AsyncCandidateTransientServiceActive(candidate)'
+BY IsaT(300)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateTransientServiceMarked,
+       AsyncCandidateTransientServiceRecordsFor,
+       AsyncCandidateTransientServiceRecordsForIdentity,
+       AsyncCandidateServiceRecordsFor,
+       AsyncCandidateServiceRecordsForIdentity,
+       AsyncCandidateServiceMarkers,
+       AsyncCandidateTerminalTombstones,
+       AsyncCandidateServiceTombstones,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceMarkersAfterReset,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateServiceEligibleAfterStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceMarker,
+       AsyncCandidateTransientServiceActive,
+       NodeHasDecision,
+       AsyncControlServiceSlotTransition
+
+THEOREM AsyncCandidateSuccessfulServiceInstallsTombstone ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateServicesThisStep = {candidate}
+    /\ AsyncCandidateServiceEligibleAfterStep(candidate)
+    /\ AsyncControlServiceSlotTransition
+    => /\ AsyncCandidateServiceTombstoned(candidate)'
+       /\ ~CandidateScheduled(candidate)'
+BY AsyncCandidateSuccessfulServiceInstallsTransientMarker, Isa
+   DEF AsyncCandidateServiceTombstoned,
+       AsyncCandidateServiceCoalesced
+
+THEOREM AsyncCandidateSuccessfulServiceAllocatesExactOrdinal ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateServicesThisStep = {candidate}
+    /\ AsyncCandidateServiceEligibleAfterStep(candidate)
+    /\ ~AsyncCandidateServiceCoalesced(candidate)
+    /\ AsyncControlServiceSlotTransition
+    => LET node == candidate.node
+           ordinal == AsyncNextCandidateServiceOrdinal(node)
+       IN /\ AsyncCandidateServiceMarker(
+                candidate, nodeView[node],
+                candidate.consumerGeneration, ordinal)
+              \in AsyncCandidateServiceMarkers'
+          /\ AsyncNextCandidateServiceOrdinal(node)' = ordinal + 1
+BY IsaT(300)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateServiceCoalesced,
+       AsyncCandidateTransientServiceMarked,
+       AsyncCandidateServiceRecordsFor,
+       AsyncCandidateServiceRecordsForIdentity,
+       AsyncCandidateServiceMarkers,
+       AsyncCandidateTerminalTombstones,
+       AsyncCandidateServiceTombstones,
+       AsyncNextCandidateServiceOrdinal,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceMarkersAfterReset,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateServiceEligibleAfterStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceMarker,
+       AsyncControlServiceSlotTransition
+
+THEOREM AsyncCandidateTransientMarkerPersistsWithinGeneration ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateTransientServiceActive(candidate)
+    /\ AsyncControlServiceSlotTransition
+    /\ ~AsyncCandidateTransientMarkerExitThisStep(candidate)
+    => AsyncCandidateTransientServiceActive(candidate)'
+BY IsaT(300)
+   DEF AsyncCandidateTransientServiceActive,
+       AsyncCandidateTransientMarkerExitThisStep,
+       AsyncCandidateTransientServiceMarked,
+       AsyncCandidateTransientServiceRecordsFor,
+       AsyncCandidateTransientServiceRecordsForIdentity,
+       AsyncCandidateServiceMarkers,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceMarkersAfterReset,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateServiceEligibleAfterStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncControlServiceSlotTransition,
+       CandidateScheduled,
+       CandidateScheduledAfter,
+       CandidateAdmissionCoalesced,
+       FreshCandidateSequence,
+       EnqueueCandidate,
+       NodeHasDecision
+
+THEOREM AsyncCandidateServicedMarkerPersistsWithoutExit ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateTransientServiceActive(candidate)
+    /\ AsyncControlServiceSlotTransition
+    /\ ~AsyncCandidateServiceExitThisStep(candidate)
+    => AsyncCandidateServiceTombstoned(candidate)'
+BY AsyncCandidateTransientMarkerPersistsWithinGeneration, Isa
+   DEF AsyncCandidateServiceExitThisStep,
+       AsyncCandidateServiceTombstoned,
+       AsyncCandidateServiceCoalesced
+
+THEOREM AsyncCandidateTerminalTombstonePersistsWithoutExit ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateTerminalTombstoneActive(candidate)
+    /\ AsyncControlServiceSlotTransition
+    /\ ~AsyncCandidateTerminalTombstoneExitThisStep(candidate)
+    => AsyncCandidateTerminalTombstoneActive(candidate)'
+BY IsaT(300)
+   DEF AsyncCandidateTerminalTombstoneActive,
+       AsyncCandidateTerminalTombstoneExitThisStep,
+       AsyncCandidateTerminalTombstoned,
+       AsyncCandidateTerminalRecordsFor,
+       AsyncCandidateTerminalRecordsForIdentity,
+       AsyncCandidateTerminalTombstones,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncControlServiceSlotTransition,
+       CandidateScheduled, CandidateScheduledAfter,
+       NodeHasDecision
+
+\* Compatibility theorem name retained for importing proof shards.  Its
+\* corrected statement says that responsive replay clears, rather than
+\* preserves, a pre-restart transient marker.
+THEOREM AsyncCandidateSameHeightRestartPreservesServicedIdentity ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateTransientServiceActive(candidate)
+    /\ candidate.node = asyncRecoveryNode
+    /\ PreGstResponsiveReplay
+    /\ AsyncControlServiceSlotTransition
+    => ~AsyncCandidateTransientServiceMarked(candidate)'
+BY IsaT(300)
+   DEF AsyncCandidateTransientServiceActive,
+       AsyncCandidateTransientServiceMarked,
+       AsyncCandidateTransientServiceRecordsFor,
+       AsyncCandidateTransientServiceRecordsForIdentity,
+       AsyncCandidateServiceMarkers,
+       AsyncNodeHasDecisionAfter,
+       PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       AsyncCandidateServiceMarkersAfterReset,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       FreshRestartCandidateSequence,
+       AsyncCandidateRestartReplayTombstoned,
+       FreshCandidateSequence,
+       CandidateAdmissionCoalesced
+
+\* Same-height restart deletes every transient record for the recovering node,
+\* retains terminal tombstones until their stage is independently obsolete,
+\* and never rewinds the shared ordinal high-watermark.
+THEOREM AsyncCandidateSameHeightRestartPreservesTombstone ==
+  /\ AsyncCandidateServiceLifecycleInvariant
+  /\ PreGstResponsiveReplay
+  /\ AsyncControlServiceSlotTransition
+  => /\ AsyncCandidateServiceMarkers'
+          = {record \in AsyncCandidateServiceMarkers:
+               /\ record.node # asyncRecoveryNode
+               /\ AsyncCandidateServiceRecordRetainedAfterStep(record)}
+     /\ AsyncCandidateTerminalTombstones'
+          = {record \in AsyncCandidateTerminalTombstones:
+               AsyncCandidateServiceRecordRetainedAfterStep(record)}
+     /\ asyncControlServiceState'.candidateServiceNextOrdinal
+          = asyncControlServiceState.candidateServiceNextOrdinal
+BY IsaT(300)
+   DEF AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateServiceMarkers,
+       AsyncCandidateTerminalTombstones,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateServiceEligibleAfterStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceMarkersAfterReset,
+       AsyncNodeHasDecisionAfter,
+       PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart
+
+THEOREM AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateTransientServiceMarked(candidate)
+    /\ ~AsyncCandidateTerminalTombstoned(candidate)
+    => ~AsyncCandidateRestartReplayTombstoned(candidate)
+BY DEF AsyncCandidateRestartReplayTombstoned
+
+THEOREM AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction ==
+  \A item \in AsyncNetworkItems:
+    LET candidate == DeliveryCandidate(item)
+    IN /\ candidate.node = asyncRecoveryNode
+       /\ AsyncCandidateTransientServiceActive(candidate)
+       /\ ~AsyncCandidateTerminalTombstoned(candidate)
+       /\ PreGstResponsiveReplay
+       /\ AsyncControlServiceSlotTransition
+       => /\ ~AsyncCandidateTransientServiceMarked(candidate)'
+          /\ ~AsyncCandidateServicePacketRetired(item)'
+BY AsyncCandidateSameHeightRestartPreservesServicedIdentity,
+   AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay,
+   IsaT(300)
+   DEF AsyncCandidateServicePacketRetired,
+       AsyncCandidateServiceCoalesced,
+       AsyncCandidateTerminalTombstoned,
+       AsyncCandidateTerminalRecordsFor,
+       AsyncCandidateTerminalRecordsForIdentity,
+       AsyncCandidateTerminalTombstones,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       PreGstResponsiveReplay
+
+THEOREM AsyncCandidateStrictViewAdvanceReclaimsOlderTombstones ==
+  \A record \in AsyncCandidateServiceTombstones:
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ nodeView'[record.node] > record.episodeView
+    /\ AsyncControlServiceSlotTransition
+    => record \notin AsyncCandidateServiceTombstones'
+BY Isa
+   DEF AsyncCandidateServiceTombstones,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceTombstonesAfterReset,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceTombstone
+
+THEOREM AsyncCandidateDecisionReclaimsNodeTombstones ==
+  \A record \in AsyncCandidateServiceTombstones:
+    /\ AsyncNodeHasDecisionAfter(record.node)
+    /\ AsyncControlServiceSlotTransition
+    => record \notin AsyncCandidateServiceTombstones'
+BY Isa
+   DEF AsyncCandidateServiceTombstones,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceTombstonesAfterReset,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceTombstone
+
+THEOREM AsyncCandidateTombstoneSubsetIsBoundedByFrozenOwnerCarrier ==
+  \A records, carrier:
+    /\ IsFiniteSet(carrier)
+    /\ records \subseteq AsyncCandidateServiceTombstones
+    /\ {record.identity: record \in records}
+         \subseteq carrier
+    /\ AsyncControlServiceStateTypeInvariant
+    => Cardinality(records)
+         <= Cardinality(carrier)
+BY FS_Subset, Isa
+   DEF AsyncControlServiceStateTypeInvariant,
+       AsyncCandidateServiceTombstones
+
+THEOREM AsyncCandidateTombstonesAreBoundedByFrozenOwnerCarrier ==
+  \A carrier:
+    /\ IsFiniteSet(carrier)
+    /\ {record.identity: record \in AsyncCandidateServiceTombstones}
+         \subseteq carrier
+    /\ AsyncControlServiceStateTypeInvariant
+    => Cardinality(AsyncCandidateServiceTombstones)
+         <= Cardinality(carrier)
+BY AsyncCandidateTombstoneSubsetIsBoundedByFrozenOwnerCarrier, Isa
+
+THEOREM AsyncControlServiceExactRetryCoalesces ==
+  \A item:
+    /\ AsyncControlServiceCurrentHeightItem(item)
+    /\ AsyncControlServiceSlotOwned(item)
+    /\ AsyncControlServiceIdentityMatches(
+         item, AsyncControlServiceRecordForItem(item))
+    /\ AsyncControlItemView(item)
+         = AsyncControlServiceRecordForItem(item).view
+    => AsyncControlServiceAdmissionCoalesced(item)
+BY DEF AsyncControlServiceAdmissionCoalesced,
+       AsyncControlServiceStrictlyNewerItem
+
+THEOREM AsyncControlServiceSameOrLowerViewCannotReplace ==
+  \A item:
+    /\ AsyncControlServiceCurrentHeightItem(item)
+    /\ AsyncControlServiceSlotOwned(item)
+    /\ AsyncControlServiceRecordForItem(item).context = context
+    /\ AsyncControlServiceRecordForItem(item).height = height
+    /\ AsyncControlItemView(item)
+         <= AsyncControlServiceRecordForItem(item).view
+    => /\ AsyncControlServiceAdmissionCoalesced(item)
+       /\ ~AsyncControlServiceAdmissionStartsOrReplaces(item)
+BY Isa
+   DEF AsyncControlServiceAdmissionCoalesced,
+       AsyncControlServiceAdmissionStartsOrReplaces,
+       AsyncControlServiceStrictlyNewerItem
+
+THEOREM AsyncControlServiceReplacementIsStrictlyNewer ==
+  \A item:
+    /\ AsyncControlServiceSlotOwned(item)
+    /\ AsyncControlServiceAdmissionStartsOrReplaces(item)
+    => AsyncControlServiceStrictlyNewerItem(item)
+BY DEF AsyncControlServiceAdmissionStartsOrReplaces
+
+THEOREM AsyncControlServiceConsumedBitIsMonotoneWithoutReplacement ==
+  \A item:
+    /\ AsyncControlServiceConsumed(item)
+    /\ AsyncControlServiceSlotTransition
+    /\ AsyncControlServiceResetNodesThisStep = {}
+    /\ \A admitted \in AsyncControlServiceAdmissionsThisStep:
+         AsyncControlServiceSlot(
+           admitted.envelope.recipient, admitted.source, admitted.kind)
+           # AsyncControlServiceSlot(
+               item.envelope.recipient, item.source, item.kind)
+    => AsyncControlServiceConsumed(item)'
+BY Isa
+   DEF AsyncControlServiceConsumed,
+       AsyncControlServiceSlotOwned,
+       AsyncControlServiceRecordsForItem,
+       AsyncControlServiceRecordsForSlot,
+       AsyncControlServiceSlots,
+       AsyncControlServiceIdentityMatches,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService
+
+THEOREM AsyncControlServiceConsumedOccurrenceIsRetired ==
+  \A item:
+    AsyncControlServiceConsumed(item)
+      => /\ AsyncControlServiceIdentityServicedOrAdvanced(item)
+         /\ AsyncControlServiceOccurrenceTombstoned(item)
+         /\ AsyncControlServiceOccurrenceRetired(item)
+         /\ ~AsyncControlServiceOccurrenceIsCurrentOwner(item)
+BY DEF AsyncControlServiceConsumed,
+       AsyncControlServiceIdentityServicedOrAdvanced,
+       AsyncControlServiceOccurrenceTombstoned,
+       AsyncControlServiceOccurrenceRetired,
+       AsyncControlServiceOccurrenceIsCurrentOwner
+
+\* A consumed exact identity may lose the physical record only when the same
+\* bounded slot advances to a strictly newer identity.  Either post-state is
+\* terminal for the old identity: it remains consumed or mismatches the new
+\* record.  Same/lower retries cannot replace the slot and therefore cannot
+\* recreate the old live owner.
+THEOREM AsyncControlServiceConsumedIdentityCannotReactivate ==
+  \A item:
+    /\ AsyncControlServiceCurrentHeightItem(item)
+    /\ AsyncControlServiceConsumed(item)
+    /\ AsyncControlServiceSlotTransition
+    => /\ AsyncControlServiceIdentityServicedOrAdvanced(item)'
+       /\ AsyncControlServiceOccurrenceTombstoned(item)'
+       /\ AsyncControlServiceOccurrenceRetired(item)'
+       /\ ~AsyncControlServiceOccurrenceIsCurrentOwner(item)'
+BY IsaT(300)
+   DEF AsyncControlServiceConsumed,
+       AsyncControlServiceIdentityServicedOrAdvanced,
+       AsyncControlServiceOccurrenceTombstoned,
+       AsyncControlServiceOccurrenceRetired,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       AsyncControlServiceSlotOwned,
+       AsyncControlServiceRecordsForItem,
+       AsyncControlServiceRecordsForSlot,
+       AsyncControlServiceSlots,
+       AsyncControlServiceIdentityMatches,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncControlServiceAdmissionStartsOrReplaces,
+       AsyncControlServiceAdmissionCoalesced,
+       AsyncControlServiceStrictlyNewerItem
+
+THEOREM AsyncControlServiceServicedIdentityCannotResurrect ==
+  \A item:
+    /\ AsyncControlServiceCurrentHeightItem(item)
+    /\ AsyncControlServiceIdentityServicedOrAdvanced(item)
+    /\ AsyncControlServiceSlotTransition
+    => /\ AsyncControlServiceIdentityServicedOrAdvanced(item)'
+       /\ AsyncControlServiceOccurrenceTombstoned(item)'
+       /\ ~AsyncControlServiceOccurrenceIsCurrentOwner(item)'
+BY IsaT(300)
+   DEF AsyncControlServiceIdentityServicedOrAdvanced,
+       AsyncControlServiceOccurrenceTombstoned,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       AsyncControlServiceSlotOwned,
+       AsyncControlServiceRecordsForItem,
+       AsyncControlServiceRecordsForSlot,
+       AsyncControlServiceSlots,
+       AsyncControlServiceIdentityMatches,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncControlServiceAdmissionStartsOrReplaces,
+       AsyncControlServiceAdmissionCoalesced,
+       AsyncControlServiceStrictlyNewerItem
+
+THEOREM AsyncControlServiceTombstoneCannotReactivate ==
+  \A item:
+    /\ AsyncControlServiceCurrentHeightItem(item)
+    /\ AsyncControlServiceOccurrenceTombstoned(item)
+    /\ AsyncControlServiceSlotTransition
+    => /\ AsyncControlServiceOccurrenceTombstoned(item)'
+       /\ ~AsyncControlServiceOccurrenceIsCurrentOwner(item)'
+BY IsaT(300)
+   DEF AsyncControlServiceOccurrenceTombstoned,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       AsyncControlServiceSlotOwned,
+       AsyncControlServiceRecordsForItem,
+       AsyncControlServiceRecordsForSlot,
+       AsyncControlServiceSlots,
+       AsyncControlServiceIdentityMatches,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncControlServiceAdmissionStartsOrReplaces,
+       AsyncControlServiceAdmissionCoalesced,
+       AsyncControlServiceStrictlyNewerItem
+
+AsyncControlServiceOccupiedSlotSet ==
+  {record.slot: record \in AsyncControlServiceSlots}
+
+THEOREM AsyncControlServiceSameHeightRecoveryRetiresVolatileOwners ==
+  /\ PreGstResponsiveReplay
+  /\ AsyncControlServiceSlotTransition
+  => /\ AsyncControlServiceOccupiedSlotSet'
+          = AsyncControlServiceOccupiedSlotSet
+     /\ asyncControlServiceState'.nextOrdinal
+          = asyncControlServiceState.nextOrdinal
+     /\ asyncControlServiceState'.certifiedResponseNextOrdinal
+          = asyncControlServiceState.certifiedResponseNextOrdinal
+     /\ CertifiedResponseClaimRecordsAt(asyncRecoveryNode)' = {}
+     /\ \A record \in AsyncControlServiceSlots':
+          record.slot.recipient = asyncRecoveryNode
+            => record.consumed
+BY Isa
+   DEF AsyncControlServiceSlotTransition,
+       AsyncControlServiceResetNodesThisStep,
+       AsyncControlServiceAdmissionsThisStep,
+       AsyncControlServicesThisStep,
+       AsyncCertifiedResponseClaimAdmissionsThisStep,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncControlServiceSlots,
+       AsyncControlServiceOccupiedSlotSet,
+       CertifiedResponseClaimRecordsAt,
+       CertifiedResponseClaimRecordsFor,
+       AsyncCertifiedResponseClaimRecords,
+       PreGstResponsiveReplay, AsyncNonCrashStep
+
+THEOREM CertifiedResponseClaimAdmissionAllocatesExactOrdinal ==
+  \A item:
+    /\ AsyncCertifiedResponseClaimAdmissionsThisStep = {item}
+    /\ AsyncControlServiceSlotTransition
+    => LET recipient == item.envelope.recipient
+           ordinal == AsyncNextCertifiedResponseClaimOrdinal(recipient)
+       IN /\ AsyncCertifiedResponseClaimRecord(item, ordinal)
+                \in AsyncCertifiedResponseClaimRecords'
+          /\ AsyncNextCertifiedResponseClaimOrdinal(recipient)'
+               = ordinal + 1
+BY Isa
+   DEF AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCertifiedResponseClaimRecords,
+       AsyncNextCertifiedResponseClaimOrdinal
+
+THEOREM CertifiedResponseExactRetryKeepsOneClaimOrdinal ==
+  \A recipient, source, item:
+    /\ CertifiedResponseClaimMatches(item)
+    /\ CertifiedResponseClaimMetadataMatches(item)
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ item = OldestDueSourcePacket(recipient, source).item
+    /\ CoalesceHiddenPacket(recipient, source)
+    /\ AsyncControlServiceSlotTransition
+    => /\ CertifiedResponseClaimMatches(item)'
+       /\ CertifiedResponseClaimMetadataMatches(item)'
+       /\ CertifiedResponseClaimAdmissionOrdinal(item)'
+            = CertifiedResponseClaimAdmissionOrdinal(item)
+       /\ AsyncNextCertifiedResponseClaimOrdinal(recipient)'
+            = AsyncNextCertifiedResponseClaimOrdinal(recipient)
+BY IsaT(300)
+   DEF CertifiedResponseClaimMatches,
+       CertifiedResponseClaimMetadataMatches,
+       CertifiedResponseClaimAdmissionOrdinal,
+       CertifiedResponseClaimRecordForItem,
+       CertifiedResponseClaimRecordsForIdentity,
+       AsyncCertifiedResponseClaimRecords,
+       AsyncCertifiedResponseOccurrenceIdentity,
+       CoalesceHiddenPacket,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimAdmissionsThisStep,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       CertifiedResponseClaimRecordsFor,
+       AsyncNextCertifiedResponseClaimOrdinal
+
+THEOREM CertifiedResponseCompetingResponderCannotDoubleChargeFamily ==
+  \A claimed, competitor:
+    /\ AsyncCertifiedResponseClaimInvariant
+    /\ claimed \in AsyncCertifiedResponseClaimRecords
+    /\ competitor.kind = "CertifiedResponse"
+    /\ AsyncCertifiedResponseWaiterFamily(competitor) = claimed.family
+    /\ AsyncCertifiedResponseOccurrenceIdentity(competitor)
+         # claimed.identity
+    => /\ ~CertifiedResponseAuthorityReady(claimed.family)
+       /\ ~CertifiedResponseFreshClaimGateAllows(competitor)
+       /\ Cardinality(
+            CertifiedResponseClaimRecordsForFamily(
+              claimed.family)) = 1
+BY Isa
+   DEF AsyncCertifiedResponseClaimInvariant,
+       CertifiedResponseAuthorityReady,
+       CertifiedResponseAuthorityClaimed,
+       CertifiedResponseFreshClaimGateAllows,
+       CertifiedResponseRecipientClaimAvailable,
+       CertifiedResponseClaimsForFamilyAt,
+       CertifiedResponseClaimRecordsForFamilyAt,
+       CertifiedResponseClaimRecordsForFamily,
+       AsyncCertifiedResponseWaiterFamily
+
+THEOREM CertifiedResponseConsumedFamilyCannotRetainClaim ==
+  \A requestHash:
+    /\ requestHash \notin ActiveCertifiedRequestHashes'
+    /\ AsyncControlServiceSlotTransition
+    => CertifiedResponseClaimRecordsForFamily(requestHash)' = {}
+BY Isa
+   DEF CertifiedResponseClaimRecordsForFamily,
+       AsyncCertifiedResponseClaimRecords,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceStateAfterReset,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncCertifiedResponseClaimAdmissionsThisStep,
+       AsyncCertifiedResponseClaimStateAfterRetirement,
+       AsyncCertifiedResponseClaimStateAfterAdmission,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       CertifiedResponseClaimRecordsFor
+
+THEOREM CertifiedResponseSameHeightRecoveryReopensDurableFamily ==
+  \A request:
+    /\ PreGstResponsiveReplay
+    /\ request \in asyncActiveRequests
+    /\ RestartDurableCertifiedRequest(asyncRecoveryNode, request)
+    /\ AsyncControlServiceSlotTransition
+    => /\ request \in asyncActiveRequests'
+       /\ CertifiedResponseClaimsAt(asyncRecoveryNode)' = {}
+       /\ CertifiedResponseClaimRecordsAt(asyncRecoveryNode)' = {}
+       /\ AsyncNextCertifiedResponseClaimOrdinal(asyncRecoveryNode)'
+            = AsyncNextCertifiedResponseClaimOrdinal(asyncRecoveryNode)
+BY SameHeightRestartReopensDurableCertifiedResponseFamily,
+   AsyncControlServiceSameHeightRecoveryRetiresVolatileOwners, Isa
+   DEF PreGstResponsiveReplay
+
 AsyncNext ==
   /\ (AsyncNonCrashStep
         \/ (\E node \in ValidatorIds: PreGstCrash(node))
@@ -6825,8 +9399,446 @@ AsyncNext ==
         \/ PreGstResponsiveRestart
         \/ PreGstResponsiveReplay)
   /\ AsyncHistoricalLockRestartAuthorityTransition
+  /\ AsyncControlServiceSlotTransition
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
+
+THEOREM AsyncServeQueuedIdentityDepartureInstallsTombstone ==
+  \A node \in ValidatorIds,
+     identity \in AsyncServeLogicalRequestIdentities:
+    /\ AsyncServeLifecycleTypeInvariant
+    /\ gst
+    /\ AsyncServeJobQueued(node, identity)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~AsyncServeJobQueued(node, identity)'
+    => AsyncServeLifecycleTombstone(node, identity)'
+BY IsaT(600)
+   DEF AsyncServeJobQueued, AsyncIoServeIdentities,
+       AsyncIoServeJobIdentity,
+       AsyncServeLifecycleTombstone,
+       AsyncServeTombstoneRecords,
+       AsyncServeLifecycleTypeInvariant,
+       AsyncServeLifecyclePartitionInvariant,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       AsyncServeReservationsAfterIoService,
+       AsyncServeAdmissionsWithout,
+       AsyncServeTombstonesWithoutFamily,
+       AsyncServeReservationRecord, AsyncServeTombstone,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       AsyncAllVars
+
+THEOREM AsyncServeRetiredIdentityCannotRequeueAtGst ==
+  \A node \in ValidatorIds,
+     identity \in AsyncServeLogicalRequestIdentities:
+    /\ AsyncServeLifecycleTypeInvariant
+    /\ AsyncServeLogicalIdentityRetiredOrSuperseded(node, identity)
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    => /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
+            node, identity)'
+       /\ ~AsyncServeJobQueued(node, identity)'
+BY IsaT(900)
+   DEF AsyncServeLogicalIdentityRetiredOrSuperseded,
+       AsyncServeLogicalIdentityRequests,
+       AsyncServeLifecycleTombstone,
+       AsyncServeTombstoneRecords,
+       AsyncServeLifecycleFamilyOwned,
+       AsyncServeFamilyOwnerIdentity,
+       AsyncServeFamilyHighWatermark,
+       AsyncServeLifecycleTypeInvariant,
+       AsyncServeLifecyclePartitionInvariant,
+       AsyncServeFamilyHighWatermarkInvariant,
+       AsyncServeJobQueued, AsyncIoServeIdentities,
+       AsyncIoServeJobIdentity,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       DrainFairIngressSelected, DrainHistoricalIngressSelected,
+       AcceptOrCoalesceExactServeRequest,
+       ReserveExactServeCapacity, AdvanceExactServeCapacity,
+       CoalesceExactServeIngressCapacity,
+       ResumeExactServeCapacity, CoalesceExactServeCapacity,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       AsyncServeReservationsAfterIoService,
+       AsyncServeAdmissionsWithout,
+       AsyncServeTombstonesWithoutFamily,
+       AsyncServeReservationRecord, AsyncServeTombstone,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       AsyncAllVars
+
+THEOREM AsyncServeTombstonedIdentityCannotRequeueAtGst ==
+  \A node \in ValidatorIds,
+     identity \in AsyncServeLogicalRequestIdentities:
+    /\ AsyncServeLifecycleTypeInvariant
+    /\ AsyncServeLifecycleTombstone(node, identity)
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    => /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
+            node, identity)'
+       /\ ~AsyncServeJobQueued(node, identity)'
+BY AsyncServeRetiredIdentityCannotRequeueAtGst, Isa
+   DEF AsyncServeLogicalIdentityRetiredOrSuperseded
+
+THEOREM AsyncCandidateServicesThisStepIsSingleton ==
+  /\ AsyncLogicalCandidateOwnershipInvariant
+  /\ AsyncNext
+  => Cardinality(AsyncCandidateServicesThisStep) <= 1
+BY FS_Singleton, FS_Subset, IsaT(600)
+   DEF AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       SerializedRuntimeStep, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       CandidateScheduled, CandidateScheduledAfter
+
+THEOREM AsyncCandidateTerminalRetirementsThisStepIsSingleton ==
+  /\ AsyncLogicalCandidateOwnershipInvariant
+  /\ AsyncNext
+  => Cardinality(AsyncCandidateTerminalRetirementsThisStep) <= 1
+BY FS_Singleton, FS_Subset, IsaT(600)
+   DEF AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       SerializedRuntimeStep, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn
+
+THEOREM AsyncCandidateDiscardInstallsTerminalTombstone ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncLogicalCandidateOwnershipInvariant
+    /\ AsyncCandidateTerminallyDiscardedThisStep(candidate)
+    /\ AsyncCandidateTerminalRetirementEligibleAfterStep(candidate)
+    /\ AsyncNext
+    => AsyncCandidateTerminalTombstoned(candidate)'
+BY AsyncCandidateTerminalRetirementsThisStepIsSingleton,
+   IsaT(600)
+   DEF AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateTerminalTombstoned,
+       AsyncCandidateTerminalIdentityTombstoned,
+       AsyncCandidateTerminalRecordsFor,
+       AsyncCandidateTerminalRecordsForIdentity,
+       AsyncCandidateTerminalTombstones,
+       AsyncCandidateServiceIdentityScheduled,
+       AsyncScheduledCandidateServiceIdentities,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceTombstone,
+       CandidateScheduled, CandidateScheduledAfter
+
+THEOREM AsyncCandidateTerminalDiscardAllocatesExactOrdinal ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncLogicalCandidateOwnershipInvariant
+    /\ AsyncCandidateTerminallyDiscardedThisStep(candidate)
+    /\ AsyncCandidateTerminalRetirementEligibleAfterStep(candidate)
+    /\ ~AsyncCandidateServiceCoalesced(candidate)
+    /\ AsyncNext
+    => LET node == candidate.node
+           ordinal == AsyncNextCandidateServiceOrdinal(node)
+       IN /\ AsyncCandidateServiceTombstone(
+                candidate, nodeView[node], ordinal)
+              \in AsyncCandidateTerminalTombstones'
+          /\ AsyncNextCandidateServiceOrdinal(node)' = ordinal + 1
+BY AsyncCandidateTerminalRetirementsThisStepIsSingleton,
+   IsaT(600)
+   DEF AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateServiceCoalesced,
+       AsyncCandidateTerminalTombstoned,
+       AsyncCandidateTerminalRecordsFor,
+       AsyncCandidateTerminalRecordsForIdentity,
+       AsyncCandidateTerminalTombstones,
+       AsyncNextCandidateServiceOrdinal,
+       AsyncControlServiceSlotTransition,
+       AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceTombstone,
+       AsyncNext, AsyncAllVars
+
+THEOREM AsyncCandidateDiscardRetiresLogicalLifecycle ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncLogicalCandidateOwnershipInvariant
+    /\ candidate.kind = "DeliverChunk"
+    /\ AsyncCandidateTerminallyDiscardedThisStep(candidate)
+    /\ AsyncNext
+    => AsyncCandidateAdmissionIdentityTerminallyCovered(
+         AsyncCandidateAdmissionIdentity(candidate))'
+BY AsyncCandidateDiscardInstallsTerminalTombstone, IsaT(600)
+   DEF AsyncCandidateAdmissionIdentityTerminallyCovered,
+       AsyncCandidateAdmissionIdentityObsolete,
+       AsyncCandidateAdmissionIdentity,
+       AsyncCandidateTerminalIdentityTombstoned,
+       AsyncScheduledCandidateAdmissionIdentities,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateServiceExitThisStep,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, AsyncAllVars
+
+THEOREM AsyncCandidateAdmissionIdentityObsolescenceIsMonotoneAtGst ==
+  \A identity \in AsyncCandidateAdmissionIdentitySet:
+    /\ AsyncCandidateAdmissionIdentityObsolete(identity)
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    => AsyncCandidateAdmissionIdentityObsolete(identity)'
+BY IsaT(300)
+   DEF AsyncCandidateAdmissionIdentityObsolete,
+       AsyncCandidateAdmissionIdentitySet,
+       AsyncCandidateAdmissionIdentity,
+       AsyncConsumerEventTag,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       NodeHasDecision, AsyncAllVars
+
+THEOREM AsyncCandidateObsoleteAdmissionIdentityCannotReappearAtGst ==
+  \A identity \in AsyncCandidateAdmissionIdentitySet:
+    /\ AsyncCandidateAdmissionIdentityObsolete(identity)
+    /\ identity \notin AsyncScheduledCandidateAdmissionIdentities
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    => identity \notin AsyncScheduledCandidateAdmissionIdentities'
+BY AsyncCandidateAdmissionIdentityObsolescenceIsMonotoneAtGst,
+   IsaT(600)
+   DEF AsyncCandidateAdmissionIdentityObsolete,
+       AsyncCandidateAdmissionIdentity,
+       AsyncScheduledCandidateAdmissionIdentities,
+       CandidateAdmissionCoalesced,
+       FreshCandidateSequence, EnqueueCandidate,
+       AsyncCandidateStageRetired,
+       IngressPacketPolicyRejected, CanAdmitIngressItem,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       DrainFairIngressSelected, AdmitCausalHead,
+       AdmitProducerCompletion,
+       FifoRuntimeStep, DeferredDrainStep,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       CandidateScheduledIn, AsyncAllVars
+
+THEOREM AsyncCandidateTerminalIdentityCannotReactivateAtGst ==
+  \A identity \in AsyncCandidateAdmissionIdentitySet:
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ identity.service.phase = "DeliverChunk"
+    /\ AsyncCandidateTerminalIdentityTombstoned(identity.service)
+    /\ identity \notin AsyncScheduledCandidateAdmissionIdentities
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    => /\ AsyncCandidateAdmissionIdentityTerminallyCovered(identity)'
+       /\ identity \notin AsyncScheduledCandidateAdmissionIdentities'
+BY AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateAdmissionIdentityObsolescenceIsMonotoneAtGst,
+   AsyncCandidateObsoleteAdmissionIdentityCannotReappearAtGst,
+   IsaT(600)
+   DEF AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateAdmissionIdentityTerminallyCovered,
+       AsyncCandidateAdmissionIdentityObsolete,
+       AsyncCandidateAdmissionIdentitySet,
+       AsyncCandidateAdmissionIdentity,
+       AsyncCandidateTerminalIdentityTombstoned,
+       AsyncCandidateTerminalRecordsForIdentity,
+       AsyncCandidateTerminalTombstones,
+       AsyncScheduledCandidateAdmissionIdentities,
+       AsyncScheduledCandidateServiceIdentities,
+       AsyncCandidateServiceIdentityScheduled,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateServiceRecordRetainedAfterStep,
+       AsyncCandidateServiceStateAfterSuccessfulService,
+       AsyncCandidateServiceEligibleAfterStep,
+       AsyncCandidateServiceMarkersAfterReset,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceResetNodesThisStep,
+       CandidateAdmissionCoalesced,
+       FreshCandidateSequence, EnqueueCandidate,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       DrainFairIngressSelected, AdmitCausalHead,
+       AdmitProducerCompletion,
+       FifoRuntimeStep, DeferredDrainStep,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       AsyncAllVars
+
+THEOREM AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst ==
+  \A identity \in AsyncCandidateAdmissionIdentitySet:
+    /\ AsyncLogicalCandidateOwnershipInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ identity.service.phase = "DeliverChunk"
+    /\ identity \in AsyncScheduledCandidateAdmissionIdentities
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    /\ identity \notin AsyncScheduledCandidateAdmissionIdentities'
+    => AsyncCandidateAdmissionIdentityLifecycleCovered(identity)'
+BY AsyncCandidateSuccessfulServiceInstallsTransientMarker,
+   AsyncCandidateDiscardRetiresLogicalLifecycle,
+   AsyncCandidateTerminalRetirementsThisStepIsSingleton,
+   IsaT(900)
+   DEF AsyncCandidateAdmissionIdentityLifecycleCovered,
+       AsyncCandidateAdmissionIdentityTerminallyCovered,
+       AsyncCandidateAdmissionIdentityObsolete,
+       AsyncCandidateAdmissionIdentitySet,
+       AsyncCandidateAdmissionIdentity,
+       AsyncScheduledCandidateAdmissionIdentities,
+       AsyncScheduledCandidateServiceIdentities,
+       AsyncCandidateServiceIdentityScheduled,
+       AsyncCandidateTransientServiceIdentityMarked,
+       AsyncCandidateTerminalIdentityTombstoned,
+       AsyncCandidateServiceRecordsForIdentity,
+       AsyncCandidateServiceTombstones,
+       AsyncCandidateTerminalRetirementsThisStep,
+       AsyncCandidateTerminalDiscardsThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateServiceEligibleAfterStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncProgressOwnershipInvariant,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, AsyncAllVars
+
+THEOREM AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateServiceLifecycleInvariant
+    /\ AsyncCandidateTransientServiceActive(candidate)
+    /\ candidate.consumerGeneration = generation[candidate.node]
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~AsyncCandidateTransientMarkerExitThisStep(candidate)
+    => /\ AsyncCandidateTransientServiceActive(candidate)'
+       /\ ~CandidateScheduled(candidate)'
+BY AsyncCandidateTransientMarkerPersistsWithinGeneration,
+   AsyncCandidateTransientMarkerCoalescesFreshCandidate,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   IsaT(600)
+   DEF AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateTransientServiceActive,
+       AsyncCandidateTransientMarkerExitThisStep,
+       AsyncCandidateTransientServiceMarked,
+       AsyncCandidateTransientServiceRecordsFor,
+       AsyncCandidateTransientServiceRecordsForIdentity,
+       AsyncCandidateServiceMarkers,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       DrainFairIngressSelected, AdmitCausalHead,
+       AdmitProducerCompletion, EnqueueCandidate,
+       FifoRuntimeStep, DeferredDrainStep,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       FreshCandidateSequence, CandidateAdmissionCoalesced,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       IngressPacketPolicyRejected,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
+       FreshRestartCandidateSequence,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn, NodeHasDecision
+
+THEOREM AsyncCandidateServicedIdentityCannotReactivate ==
+  \A candidate \in AsyncCandidateSet:
+    /\ AsyncCandidateTransientServiceActive(candidate)
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~AsyncCandidateServiceExitThisStep(candidate)
+    => AsyncCandidateTransientServiceActive(candidate)'
+BY AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst, Isa
+   DEF AsyncCandidateServiceExitThisStep
+
+THEOREM AsyncActiveControlServiceAdmissionPassesSlotGuard ==
+  \A node \in ValidatorIds:
+    LET item == AsyncSelectedFairIngressItem(node)
+        candidate == DeliveryCandidate(item)
+    IN /\ AsyncActiveControlServiceAdmissionPassCondition(node)
+       /\ AsyncNext
+       /\ DrainFairIngressSelected(node)
+       => CandidateScheduled(candidate)'
+BY IsaT(300)
+   DEF AsyncActiveControlServiceAdmissionPassCondition,
+       AsyncSelectedFairIngressItem,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       AsyncControlServiceSlotTransition,
+       DrainFairIngressSelected, IngressItemCanDrain,
+       DeliveryCandidate, CandidateScheduled,
+       CandidateAdmissionCoalesced,
+       AsyncNext, AsyncAllVars
+
+THEOREM AsyncRetiredControlServiceAdmissionDropsWithoutCandidate ==
+  \A node \in ValidatorIds:
+    LET item == AsyncSelectedFairIngressItem(node)
+        candidate == DeliveryCandidate(item)
+    IN /\ AsyncRetiredControlServiceAdmissionDropCondition(node)
+       /\ AsyncNext
+       /\ DrainFairIngressSelected(node)
+       => ~CandidateScheduled(candidate)'
+BY IsaT(300)
+   DEF AsyncRetiredControlServiceAdmissionDropCondition,
+       AsyncSelectedFairIngressItem,
+       AsyncControlServiceOccurrenceRetired,
+       AsyncControlServiceSlotTransition,
+       DrainFairIngressSelected, IngressItemCanDrain,
+       DeliveryCandidate, CandidateScheduled,
+       CandidateAdmissionCoalesced,
+       AsyncNext, AsyncAllVars
 
 PostGstRunNode(node) ==
   /\ gst
@@ -6990,6 +10002,9 @@ AsyncIoInit ==
   /\ asyncIoQueues = [node \in ValidatorIds |-> <<>>]
   /\ asyncNextServeAdmissionOrdinal =
        [node \in ValidatorIds |-> 1]
+  /\ asyncNextServeIngressOrdinal =
+       [node \in ValidatorIds |-> 1]
+  /\ asyncServeIngressAdmissions = {}
   /\ asyncServeAdmissions = {}
   /\ asyncServeReservations = {}
   /\ asyncServeTombstones = {}
@@ -7027,6 +10042,46 @@ AsyncTransportInit ==
   /\ asyncTransport = {}
   /\ asyncHeldChunks = {}
   /\ asyncHistoricalRecoveryTargets = {}
+  /\ asyncControlServiceState =
+       [nextOrdinal |-> [node \in ValidatorIds |-> 1],
+        slots |-> {},
+        certifiedResponseNextOrdinal |->
+          [node \in ValidatorIds |-> 1],
+        certifiedResponseClaims |-> {},
+        candidateServiceNextOrdinal |->
+          [node \in ValidatorIds |-> 1],
+        candidateServiceMarkers |-> {},
+        candidateTerminalTombstones |-> {}]
+
+THEOREM AsyncControlServiceRolloverInstanceStartsEmpty ==
+  AsyncTransportInit
+    => /\ AsyncControlServiceSlots = {}
+       /\ \A node \in ValidatorIds:
+            AsyncNextControlServiceOrdinal(node) = 1
+BY DEF AsyncTransportInit, AsyncControlServiceSlots,
+       AsyncNextControlServiceOrdinal
+
+THEOREM AsyncCertifiedResponseClaimRolloverInstanceStartsEmpty ==
+  AsyncTransportInit
+    => /\ AsyncCertifiedResponseClaimRecords = {}
+       /\ \A node \in ValidatorIds:
+            AsyncNextCertifiedResponseClaimOrdinal(node) = 1
+BY DEF AsyncTransportInit,
+       AsyncCertifiedResponseClaimRecords,
+       AsyncNextCertifiedResponseClaimOrdinal
+
+THEOREM AsyncCandidateServiceRolloverInstanceStartsEmpty ==
+  AsyncTransportInit
+    => /\ AsyncCandidateServiceMarkers = {}
+       /\ AsyncCandidateTerminalTombstones = {}
+       /\ AsyncCandidateServiceTombstones = {}
+       /\ \A node \in ValidatorIds:
+            AsyncNextCandidateServiceOrdinal(node) = 1
+BY DEF AsyncTransportInit,
+       AsyncCandidateServiceMarkers,
+       AsyncCandidateTerminalTombstones,
+       AsyncCandidateServiceTombstones,
+       AsyncNextCandidateServiceOrdinal
 
 AsyncIngressInit ==
   /\ asyncIngressLanes =
@@ -7138,6 +10193,16 @@ AsyncRuntimeTypeInvariant ==
   /\ AsyncRuntimeScalarTypeInvariant
   /\ AsyncCausalTypeInvariant
 
+AsyncServeIngressAdmissionTyped(admission) ==
+  /\ DOMAIN admission =
+       {"node", "identity", "ordinal", "ingressPredecessors"}
+  /\ admission.node \in ValidatorIds
+  /\ admission.identity \in AsyncServeLogicalRequestIdentities
+  /\ admission.identity.owner = admission.node
+  /\ admission.ordinal \in Nat \ {0}
+  /\ admission.ingressPredecessors
+       \in [AsyncIngressSources -> 0..AsyncIngressCapacity]
+
 AsyncServeAdmissionTyped(admission) ==
   /\ DOMAIN admission =
        {"node", "identity", "family", "view", "ordinal"}
@@ -7152,25 +10217,18 @@ AsyncServeAdmissionTyped(admission) ==
        admission.family, admission.view)
   /\ admission.ordinal \in Nat \ {0}
 
-AsyncServeReservationTyped(reservation) ==
-  /\ DOMAIN reservation =
-       {"node", "identity", "family", "view", "ordinal",
-        "predecessors", "ingressPredecessors"}
-  /\ reservation.node \in ValidatorIds
-  /\ reservation.identity \in AsyncServeLogicalRequestIdentities
-  /\ reservation.family \in AsyncServeLifecycleFamilies
-  /\ reservation.identity.owner = reservation.node
-  /\ reservation.family.owner = reservation.node
-  /\ reservation.view \in Views
-  /\ AsyncServeLifecycleCoordinates(
-       reservation.node, reservation.identity,
-       reservation.family, reservation.view)
-  /\ reservation.ordinal \in Nat \ {0}
-  /\ IsFiniteSet(reservation.predecessors)
-  /\ Cardinality(reservation.predecessors) <= AsyncIoCapacity
-  /\ \A job \in reservation.predecessors: AsyncIoJobTyped(job)
-  /\ reservation.ingressPredecessors
-       \in [AsyncIngressSources -> 0..AsyncIngressCapacity]
+AsyncServeTombstoneOutputMatchesIdentity(tombstone, output) ==
+  IF tombstone.identity.request.kind = "CertifiedRequest"
+  THEN /\ output.kind = "CertifiedResponse"
+       /\ output.envelope.archiveServer = tombstone.node
+       /\ output.envelope.requestHash =
+            tombstone.identity.request.requestHash
+  ELSE /\ tombstone.identity.request.kind =
+             "CommitCertificateRequest"
+       /\ output.kind = "CommitCertificateResponse"
+       /\ AsyncServeLogicalRequestIdentity(
+            tombstone.node, output.envelope.request)
+            = tombstone.identity
 
 AsyncServeTombstoneTyped(tombstone) ==
   /\ DOMAIN tombstone =
@@ -7191,6 +10249,37 @@ AsyncServeTombstoneTyped(tombstone) ==
        {item \in AsyncNetworkItems:
           item.kind \in {"CertifiedResponse",
                          "CommitCertificateResponse"}}
+  /\ \A output \in tombstone.outputs:
+       AsyncServeTombstoneOutputMatchesIdentity(
+         tombstone, output)
+
+AsyncServeReservationTyped(reservation) ==
+  /\ DOMAIN reservation =
+       {"node", "identity", "family", "view", "ordinal",
+        "predecessors", "ingressPredecessors", "rollbackTombstones"}
+  /\ reservation.node \in ValidatorIds
+  /\ reservation.identity \in AsyncServeLogicalRequestIdentities
+  /\ reservation.family \in AsyncServeLifecycleFamilies
+  /\ reservation.identity.owner = reservation.node
+  /\ reservation.family.owner = reservation.node
+  /\ reservation.view \in Views
+  /\ AsyncServeLifecycleCoordinates(
+       reservation.node, reservation.identity,
+       reservation.family, reservation.view)
+  /\ reservation.ordinal \in Nat \ {0}
+  /\ IsFiniteSet(reservation.predecessors)
+  /\ Cardinality(reservation.predecessors) <= AsyncIoCapacity
+  /\ \A job \in reservation.predecessors: AsyncIoJobTyped(job)
+  /\ reservation.ingressPredecessors
+       \in [AsyncIngressSources -> 0..AsyncIngressCapacity]
+  /\ IsFiniteSet(reservation.rollbackTombstones)
+  /\ Cardinality(reservation.rollbackTombstones) <= 1
+  /\ \A tombstone \in reservation.rollbackTombstones:
+       /\ AsyncServeTombstoneTyped(tombstone)
+       /\ tombstone.node = reservation.node
+       /\ tombstone.family = reservation.family
+       /\ tombstone.view < reservation.view
+       /\ tombstone.ordinal < reservation.ordinal
 
 AsyncServeAdmissionUniquenessInvariant ==
   /\ \A left, right \in asyncServeAdmissions:
@@ -7202,6 +10291,44 @@ AsyncServeAdmissionUniquenessInvariant ==
        /\ left.ordinal = right.ordinal
        => left = right
 
+AsyncServeIngressAdmissionInvariant ==
+  /\ \A admission \in asyncServeIngressAdmissions:
+       /\ AsyncServeIngressAdmissionTyped(admission)
+       /\ admission.identity
+            \in AsyncServeIngressReservationIdentities(admission.node)
+       /\ \A source \in AsyncIngressSources:
+            admission.ingressPredecessors[source]
+              <= Len(asyncIngressLanes[admission.node][source])
+  /\ \A left, right \in asyncServeIngressAdmissions:
+       /\ left.node = right.node
+       /\ left.identity = right.identity
+       => left = right
+  /\ \A left, right \in asyncServeIngressAdmissions:
+       /\ left.node = right.node
+       /\ left.ordinal = right.ordinal
+       => left = right
+  /\ \A node \in ValidatorIds,
+       source \in AsyncIngressSources,
+       index \in 1..Len(asyncIngressLanes[node][source]):
+       LET item == asyncIngressLanes[node][source][index]
+       IN AsyncServeLifecycleAdmissionRequired(node, item)
+            =>
+          Cardinality(
+            AsyncServeIngressAdmissionRecords(
+              node,
+              AsyncServeLogicalRequestIdentity(node, item))) = 1
+
+AsyncServeTombstoneOutputBindingInvariant ==
+  /\ \A tombstone \in asyncServeTombstones:
+       \A output \in tombstone.outputs:
+         AsyncServeTombstoneOutputMatchesIdentity(
+           tombstone, output)
+  /\ \A reservation \in asyncServeReservations:
+       \A tombstone \in reservation.rollbackTombstones:
+         \A output \in tombstone.outputs:
+           AsyncServeTombstoneOutputMatchesIdentity(
+             tombstone, output)
+
 AsyncServeLifecyclePartitionInvariant ==
   /\ \A admission \in asyncServeAdmissions:
        AsyncServeReservationRecords(
@@ -7212,7 +10339,9 @@ AsyncServeLifecyclePartitionInvariant ==
               AsyncServeFrozenPredecessorSet(
                 admission.node, admission.identity),
               AsyncServeFrozenIngressPredecessorCounts(
-                admission.node, admission.identity))}
+                admission.node, admission.identity),
+              AsyncServeReservationRecord(
+                admission.node, admission.identity).rollbackTombstones)}
   /\ \A reservation \in asyncServeReservations:
        AsyncServeAdmissionRecords(
          reservation.node, reservation.identity) =
@@ -7225,6 +10354,13 @@ AsyncServeLifecyclePartitionInvariant ==
             tombstone.node, tombstone.identity) = {}
        /\ AsyncServeReservationRecords(
             tombstone.node, tombstone.identity) = {}
+  /\ \A reservation \in asyncServeReservations:
+       \A tombstone \in reservation.rollbackTombstones:
+         /\ tombstone \notin asyncServeTombstones
+         /\ AsyncServeAdmissionRecords(
+              tombstone.node, tombstone.identity) = {}
+         /\ AsyncServeReservationRecords(
+              tombstone.node, tombstone.identity) = {}
 
 AsyncServeFamilyHighWatermarkInvariant ==
   \A node \in ValidatorIds,
@@ -7282,6 +10418,21 @@ AsyncServeReservationOwnershipInvariant ==
                  asyncIoQueues[node][index]
                    \notin reservation.predecessors
 
+AsyncServeSingularOffQueueBarrierInvariant ==
+  \A node \in ValidatorIds:
+    Cardinality(AsyncServeOffQueueReservations(node)) <= 1
+
+AsyncServeBarrierOwnsEarliestIngressOrdinalInvariant ==
+  \A node \in ValidatorIds:
+    \A reservation \in AsyncServeOffQueueReservations(node):
+      /\ AsyncServeIngressAdmissionOwned(
+           node, reservation.identity)
+      /\ \A identity \in
+           AsyncServeIngressLifecycleOwnerIdentities(node):
+           AsyncServeIngressAdmissionOrdinal(
+             node, reservation.identity)
+             <= AsyncServeIngressAdmissionOrdinal(node, identity)
+
 AsyncServeOrdinalQueueInvariant ==
   \A node \in ValidatorIds:
     \A left, right \in
@@ -7303,18 +10454,21 @@ AsyncServeIngressPredecessorInvariant ==
          reservation.ingressPredecessors[source]
            <= Len(asyncIngressLanes[reservation.node][source])
   /\ \A node \in ValidatorIds:
-       AsyncServeIngressLiveReservations(node) # {} =>
-         LET owner == AsyncServeEarliestIngressReservation(node)
+       AsyncServeIngressLifecycleOwnerIdentities(node) # {} =>
+         LET ownerIdentity ==
+               AsyncServeEarliestIngressLifecycleOwnerIdentity(node)
          IN \A source \in AsyncIngressSources:
               \A index \in
                    DrainableIngressLaneIndices(node, source):
-                \/ index <= owner.ingressPredecessors[source]
+                \/ index <=
+                     AsyncServeIngressAdmissionPredecessorCounts(
+                       node, ownerIdentity)[source]
                 \/ /\ asyncIngressLanes[node][source][index].kind
                          \in AsyncReplyRequestKinds
                    /\ AsyncServeLogicalRequestIdentity(
                         node,
                         asyncIngressLanes[node][source][index])
-                        = owner.identity
+                        = ownerIdentity
 
 AsyncServeServiceabilityInvariant ==
   \A node \in ValidatorIds:
@@ -7331,16 +10485,26 @@ AsyncServeServiceabilityInvariant ==
            node, asyncIoQueues[node][index].candidate.item)
 
 AsyncServeOrdinalInvariant ==
+  /\ asyncNextServeIngressOrdinal
+       \in [ValidatorIds -> Nat \ {0}]
   /\ asyncNextServeAdmissionOrdinal
        \in [ValidatorIds -> Nat \ {0}]
+  /\ \A admission \in asyncServeIngressAdmissions:
+       admission.ordinal <
+         asyncNextServeIngressOrdinal[admission.node]
   /\ \A admission \in asyncServeAdmissions:
        admission.ordinal <
          asyncNextServeAdmissionOrdinal[admission.node]
   /\ \A tombstone \in asyncServeTombstones:
        tombstone.ordinal <
          asyncNextServeAdmissionOrdinal[tombstone.node]
+  /\ \A reservation \in asyncServeReservations:
+       \A tombstone \in reservation.rollbackTombstones:
+         tombstone.ordinal <
+           asyncNextServeAdmissionOrdinal[tombstone.node]
 
 AsyncServeLifecycleTypeInvariant ==
+  /\ IsFiniteSet(asyncServeIngressAdmissions)
   /\ IsFiniteSet(asyncServeAdmissions)
   /\ IsFiniteSet(asyncServeReservations)
   /\ IsFiniteSet(asyncServeTombstones)
@@ -7352,11 +10516,15 @@ AsyncServeLifecycleTypeInvariant ==
        AsyncServeReservationTyped(reservation)
   /\ \A tombstone \in asyncServeTombstones:
        AsyncServeTombstoneTyped(tombstone)
+  /\ AsyncServeIngressAdmissionInvariant
   /\ AsyncServeAdmissionUniquenessInvariant
+  /\ AsyncServeTombstoneOutputBindingInvariant
   /\ AsyncServeLifecyclePartitionInvariant
   /\ AsyncServeFamilyHighWatermarkInvariant
   /\ AsyncServeHighWatermarkActiveRequestInvariant
   /\ AsyncServeReservationOwnershipInvariant
+  /\ AsyncServeSingularOffQueueBarrierInvariant
+  /\ AsyncServeBarrierOwnsEarliestIngressOrdinalInvariant
   /\ AsyncServeOrdinalQueueInvariant
   /\ AsyncServeIngressPredecessorInvariant
   /\ AsyncServeServiceabilityInvariant
@@ -7659,6 +10827,16 @@ AsyncTransportClockTypeInvariant ==
   /\ asyncNodeServiceDeadlines \in [ValidatorIds -> Nat]
   /\ asyncIoServiceDeadlines \in [ValidatorIds -> Nat]
 
+THEOREM AsyncRetransmitProgramCounterIsBounded ==
+  AsyncTransportClockTypeInvariant
+    => \A node \in ValidatorIds:
+         AsyncRetransmitProgramCounter(node)
+           \in AsyncRetransmitProgramCounterStates
+BY Isa
+   DEF AsyncTransportClockTypeInvariant,
+       AsyncRetransmitProgramCounter,
+       AsyncRetransmitProgramCounterStates
+
 AsyncActiveRequestLogicalIndexConsistencyInvariant ==
   AsyncCertifiedRequestLogicalIndexConsistent(asyncActiveRequests)
 
@@ -7666,6 +10844,31 @@ AsyncCertifiedResponseClaimInvariant ==
   /\ IsFiniteSet(asyncCertifiedResponseClaim)
   /\ asyncCertifiedResponseClaim
        \subseteq AsyncCertifiedResponseClaimValues
+  /\ \A record \in AsyncCertifiedResponseClaimRecords:
+       /\ record.family \in ActiveCertifiedRequestHashes
+       /\ record.identity.requestHash = record.family
+       /\ record.identity.responseHash
+            \in asyncCertifiedResponseClaim
+       /\ \E item \in AsyncCertifiedResponseItems:
+            /\ record =
+                 AsyncCertifiedResponseClaimRecord(
+                   item, record.ordinal)
+            /\ AsyncCertifiedResponseCanonicalWireIdentity(item)
+                 \in asyncCertifiedResponseClaim
+  /\ \A projection \in asyncCertifiedResponseClaim:
+       Cardinality(
+         {record \in AsyncCertifiedResponseClaimRecords:
+            record.identity.responseHash = projection}) = 1
+  /\ \A left, right \in AsyncCertifiedResponseClaimRecords:
+       /\ left.recipient = right.recipient
+       /\ left.ordinal = right.ordinal
+       => left = right
+  /\ \A requestHash \in AsyncCertifiedRequestHashes:
+       Cardinality(
+         CertifiedResponseClaimRecordsForFamily(requestHash)) <= 1
+  /\ \A recipient \in ValidatorIds:
+       Cardinality(
+         CertifiedResponseClaimRecordsAt(recipient)) <= 1
   /\ \A recipient \in ValidatorIds:
        Cardinality(CertifiedResponseClaimsAt(recipient)) <= 1
   /\ \A projection \in asyncCertifiedResponseClaim:
@@ -7680,6 +10883,23 @@ AsyncCertifiedResponseClaimInvariant ==
        Cardinality(
          {projection.envelope.requestHash:
             projection \in CertifiedResponseClaimsAt(recipient)}) <= 1
+
+THEOREM CertifiedResponseClaimsShareOutstandingRequestCharge ==
+  AsyncCertifiedResponseClaimInvariant
+    => /\ Cardinality(AsyncCertifiedResponseClaimRecords)
+             <= Cardinality(ActiveCertifiedRequestHashes)
+       /\ \A record \in AsyncCertifiedResponseClaimRecords:
+            record.family \in ActiveCertifiedRequestHashesAt(
+              record.recipient)
+BY FS_Subset, Isa
+   DEF AsyncCertifiedResponseClaimInvariant,
+       ActiveCertifiedRequestHashes,
+       ActiveCertifiedRequestHashesAt,
+       ActiveCertifiedRequestHashesIn,
+       AsyncCertifiedResponseClaimRecords,
+       AsyncCertifiedResponseClaimRecord,
+       AsyncCertifiedResponseOccurrenceIdentity,
+       AsyncCertifiedResponseWaiterFamily
 
 CertifiedResponseClaimIngressOwner(projection) ==
   \E recipient \in ValidatorIds:
@@ -7701,6 +10921,23 @@ owner but deliberately does not claim uniqueness of queue occurrences.
 AsyncCertifiedResponseClaimIngressOwnershipInvariant ==
   \A projection \in asyncCertifiedResponseClaim:
     CertifiedResponseClaimIngressOwner(projection)
+
+THEOREM CertifiedResponseFamilyLocalClaimsRemainPhysicallySerialized ==
+  \A item:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ item.kind = "CertifiedResponse"
+    /\ CertifiedResponseClaimsAt(item.envelope.recipient) # {}
+    => ~AsyncTransportCompletionOwnerGateAllows(item)
+BY Isa
+   DEF AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       CertifiedResponseClaimIngressOwner,
+       AsyncTransportCompletionOwnerGateAllows,
+       IngressLaneHasTransportCompletionIn,
+       IngressUsesPhysicalCompletionOwner,
+       IngressAdmissionClass,
+       IngressResourceSource,
+       IngressLane, IngressLaneDepth,
+       SequenceSet
 
 AsyncTransportHistoryTypeInvariant ==
   /\ IsFiniteSet(asyncSentItems)
@@ -7852,7 +11089,7 @@ AsyncRecoveryTypeInvariant ==
              IngressLane(asyncRecoveryNode, source) = <<>>
         /\ \A request \in asyncActiveRequests:
              \/ request.source # asyncRecoveryNode
-             \/ RestartLockedCertifiedRequest(
+             \/ RestartDurableCertifiedRequest(
                   asyncRecoveryNode, request)
         /\ \A candidate \in
              ResponsiveReplayScheduledCandidates(asyncRecoveryNode):

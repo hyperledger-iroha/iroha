@@ -41,8 +41,7 @@ pub const ZK_AMS_REGISTRY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
 pub const ZK_AMS_REGISTRY_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-ams:registry-bootstrap:v1";
 /// Domain separator for canonical authoritative ZK-ACE policy records.
-pub const ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:zk-ace:policy-record:v1";
+pub const ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:policy-record:v1";
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -4151,9 +4150,7 @@ impl PrivacyZkAcePolicyRecordV1 {
     /// # Errors
     ///
     /// Requires a valid active record at the canonical origin epoch.
-    pub fn validate_initial(
-        &self,
-    ) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
+    pub fn validate_initial(&self) -> Result<(), PrivacyZkAcePolicyRecordValidationErrorV1> {
         self.validate()?;
         if self.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
             return Err(PrivacyZkAcePolicyRecordValidationErrorV1::InitialPolicyNotActive);
@@ -4246,9 +4243,7 @@ impl PrivacyZkAcePolicyRecordV1 {
             .windows(2)
             .any(|pair| pair[0] >= pair[1])
         {
-            return Err(
-                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist,
-            );
+            return Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist);
         }
         Ok(())
     }
@@ -4380,14 +4375,10 @@ pub fn validate_zk_ace_policy_rotation_v1(
         );
     }
     if successor.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive);
     }
     if successor.identity_commitment == current.identity_commitment {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged);
     }
     Ok(())
 }
@@ -4427,18 +4418,14 @@ pub fn validate_zk_ace_policy_revocation_v1(
         );
     }
     if successor.lifecycle != PrivacyZkAcePolicyLifecycleV1::Revoked {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked);
     }
     if successor.identity_commitment != current.identity_commitment
         || successor.policy_digest != current.policy_digest
         || successor.asset_definition_id != current.asset_definition_id
         || successor.source_allowlist != current.source_allowlist
     {
-        return Err(
-            PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged,
-        );
+        return Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged);
     }
     Ok(())
 }

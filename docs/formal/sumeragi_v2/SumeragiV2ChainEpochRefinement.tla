@@ -975,12 +975,12 @@ remain available to RunHistoricalServer after validators advance.
 
 The nested tuple layout is exactly
 <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>: 46 Core components followed
-by 36 scheduler/transport components and five responsive-node recovery
+by 37 scheduler/transport components and five responsive-node recovery
 components. The scheduler tuple includes the certified-response claim before
-the transport state; its final component owns the exact historical-recovery
-target set, while the final recovery component owns the exact historical-lock
-restart-authority projection. Shape predicates exclude unmodelled fields and
-make every instance projection extensional.
+the transport state; its final component owns the fixed roster/class-bounded
+control-service slot table, while the final recovery component owns the exact
+historical-lock restart-authority projection. Shape predicates exclude
+unmodelled fields and make every instance projection extensional.
 ***************************************************************************)
 IndexedCore(initialContext, component) ==
   indexedAsyncState[initialContext][1][component]
@@ -1105,6 +1105,7 @@ IndexedAsync(initialContext) ==
        asyncIngressReady <- IndexedScheduler(initialContext, 34),
        asyncHeldChunks <- IndexedScheduler(initialContext, 35),
        asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 36),
+       asyncControlServiceState <- IndexedScheduler(initialContext, 37),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
@@ -1260,6 +1261,7 @@ VerificationAsyncProof ==
        asyncIngressReady <- VerificationScheduler(34),
        asyncHeldChunks <- VerificationScheduler(35),
        asyncHistoricalRecoveryTargets <- VerificationScheduler(36),
+       asyncControlServiceState <- VerificationScheduler(37),
        asyncRecoveryPhase <- VerificationRecovery(1),
        asyncRecoveryNode <- VerificationRecovery(2),
        asyncRecoveryGeneration <- VerificationRecovery(3),
@@ -1277,8 +1279,8 @@ IndexedAsyncStateShape ==
        /\ DOMAIN indexedAsyncState[initialContext] = 1..3
        /\ Len(indexedAsyncState[initialContext][1]) = 46
        /\ DOMAIN indexedAsyncState[initialContext][1] = 1..46
-       /\ Len(indexedAsyncState[initialContext][2]) = 36
-       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..36
+       /\ Len(indexedAsyncState[initialContext][2]) = 37
+       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..37
        /\ Len(indexedAsyncState[initialContext][3]) = 5
        /\ DOMAIN indexedAsyncState[initialContext][3] = 1..5
 

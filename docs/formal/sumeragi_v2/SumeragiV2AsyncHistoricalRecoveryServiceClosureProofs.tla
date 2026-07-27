@@ -30,11 +30,11 @@ At a fixed clock value the lexicographic prefix precharges:
   3. stale empty I/O gates which can become active without a clock step; and
   4. the exact active blocker class.
 
-The final component is the already-proved
-`IngressBoundaryDependencyOrdering`: lane-head shadows, ingress capacity,
-timeout-byte and shared-completion owners, transport service position,
-reset-aware runner reach, auxiliary/capacity work, and exact candidate/Serve
-ownership.
+The final component refines the already-proved ingress dependency spine with
+count-first candidate and Serve occurrence tails: lane-head shadows, ingress
+capacity, timeout-byte and shared-completion owners, transport service
+position, reset-aware runner reach, auxiliary/capacity work, and exact
+candidate/Serve ownership.
 
 Only structural facts are proved here.  In particular, this module does not
 turn well-foundedness into temporal convergence by assuming an unproved
@@ -260,9 +260,23 @@ HistoricalDiscoveryCandidateDebtBottom == <<2, 0>>
 
 HistoricalDiscoveryServeDebtBottom == <<5, 0>>
 
+HistoricalDiscoveryOccurrenceDebtCarrier ==
+  Nat \X OwnedServiceRankCarrier
+
+HistoricalDiscoveryOccurrenceDebtOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), OwnedServiceRankOrdering,
+    Nat, OwnedServiceRankCarrier)
+
+HistoricalDiscoveryCandidateOccurrenceBottom ==
+  <<0, HistoricalDiscoveryCandidateDebtBottom>>
+
+HistoricalDiscoveryServeOccurrenceBottom ==
+  <<0, HistoricalDiscoveryServeDebtBottom>>
+
 HistoricalDiscoveryCandidateServeBottom ==
-  <<HistoricalDiscoveryCandidateDebtBottom,
-    HistoricalDiscoveryServeDebtBottom>>
+  <<HistoricalDiscoveryCandidateOccurrenceBottom,
+    HistoricalDiscoveryServeOccurrenceBottom>>
 
 HistoricalDiscoveryIngressStage4Bottom ==
   <<HistoricalDiscoveryStage4Bottom,
@@ -290,10 +304,173 @@ HistoricalDiscoveryIngressCapacityBottom ==
 HistoricalDiscoveryIngressCounterRank(counter) ==
   <<counter, HistoricalDiscoveryIngressCapacityBottom>>
 
+(***************************************************************************
+Historical packet dependency product.
+
+The generic ingress product carries one plain candidate minimum and one plain
+Serve minimum.  That shape is sufficient for a retained owner whose position
+falls, but it is not monotone when the selected minimum is removed: the next
+minimum may be larger.  Historical clock closure needs removal itself to be
+progress, so both independent tails are refined with their exact occurrence
+counts.  Every earlier capacity/selector/runner component stays in the same
+order and therefore still dominates later producer handoffs.
+***************************************************************************)
+
+HistoricalDiscoveryCandidateServeTailCarrier ==
+  HistoricalDiscoveryOccurrenceDebtCarrier
+    \X HistoricalDiscoveryOccurrenceDebtCarrier
+
+HistoricalDiscoveryCandidateServeTailOrdering ==
+  LexPairOrdering(
+    HistoricalDiscoveryOccurrenceDebtOrdering,
+    HistoricalDiscoveryOccurrenceDebtOrdering,
+    HistoricalDiscoveryOccurrenceDebtCarrier,
+    HistoricalDiscoveryOccurrenceDebtCarrier)
+
+HistoricalDiscoveryStage4TailCarrier ==
+  Stage4CapacityCarrier
+    \X HistoricalDiscoveryCandidateServeTailCarrier
+
+HistoricalDiscoveryStage4TailOrdering ==
+  LexPairOrdering(
+    Stage4CapacityOrdering,
+    HistoricalDiscoveryCandidateServeTailOrdering,
+    Stage4CapacityCarrier,
+    HistoricalDiscoveryCandidateServeTailCarrier)
+
+HistoricalDiscoveryReadyTailCarrier ==
+  ReadyRunAuxCarrier \X HistoricalDiscoveryStage4TailCarrier
+
+HistoricalDiscoveryReadyTailOrdering ==
+  LexPairOrdering(
+    ReadyRunAuxOrdering,
+    HistoricalDiscoveryStage4TailOrdering,
+    ReadyRunAuxCarrier,
+    HistoricalDiscoveryStage4TailCarrier)
+
+HistoricalDiscoveryResetTailCarrier ==
+  Nat \X HistoricalDiscoveryReadyTailCarrier
+
+HistoricalDiscoveryResetTailOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), HistoricalDiscoveryReadyTailOrdering,
+    Nat, HistoricalDiscoveryReadyTailCarrier)
+
+HistoricalDiscoveryTransportTailCarrier ==
+  Nat \X HistoricalDiscoveryResetTailCarrier
+
+HistoricalDiscoveryTransportTailOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), HistoricalDiscoveryResetTailOrdering,
+    Nat, HistoricalDiscoveryResetTailCarrier)
+
+HistoricalDiscoveryCompletionTailCarrier ==
+  Nat \X HistoricalDiscoveryTransportTailCarrier
+
+HistoricalDiscoveryCompletionTailOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), HistoricalDiscoveryTransportTailOrdering,
+    Nat, HistoricalDiscoveryTransportTailCarrier)
+
+HistoricalDiscoveryTimeoutTailCarrier ==
+  Nat \X HistoricalDiscoveryCompletionTailCarrier
+
+HistoricalDiscoveryTimeoutTailOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), HistoricalDiscoveryCompletionTailOrdering,
+    Nat, HistoricalDiscoveryCompletionTailCarrier)
+
+HistoricalDiscoveryCapacityTailCarrier ==
+  Nat \X HistoricalDiscoveryTimeoutTailCarrier
+
+HistoricalDiscoveryCapacityTailOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), HistoricalDiscoveryTimeoutTailOrdering,
+    Nat, HistoricalDiscoveryTimeoutTailCarrier)
+
+HistoricalDiscoveryPacketDependencyCarrier ==
+  Nat \X HistoricalDiscoveryCapacityTailCarrier
+
+HistoricalDiscoveryPacketDependencyOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), HistoricalDiscoveryCapacityTailOrdering,
+    Nat, HistoricalDiscoveryCapacityTailCarrier)
+
+THEOREM HistoricalDiscoveryOccurrenceDebtOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    HistoricalDiscoveryOccurrenceDebtOrdering,
+    HistoricalDiscoveryOccurrenceDebtCarrier)
+BY NatLessThanWellFounded,
+   OwnedServiceRankOrderingWellFounded,
+   WFLexPairOrdering
+   DEF HistoricalDiscoveryOccurrenceDebtOrdering,
+       HistoricalDiscoveryOccurrenceDebtCarrier
+
+THEOREM HistoricalDiscoveryPacketDependencyOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    HistoricalDiscoveryPacketDependencyOrdering,
+    HistoricalDiscoveryPacketDependencyCarrier)
+PROOF
+  <1>1. IsWellFoundedOn(
+           HistoricalDiscoveryCandidateServeTailOrdering,
+           HistoricalDiscoveryCandidateServeTailCarrier)
+    BY HistoricalDiscoveryOccurrenceDebtOrderingIsWellFounded,
+       WFLexPairOrdering
+       DEF HistoricalDiscoveryCandidateServeTailOrdering,
+           HistoricalDiscoveryCandidateServeTailCarrier
+  <1>2. IsWellFoundedOn(
+           HistoricalDiscoveryStage4TailOrdering,
+           HistoricalDiscoveryStage4TailCarrier)
+    BY Stage4CapacityOrderingIsWellFounded, <1>1,
+       WFLexPairOrdering
+       DEF HistoricalDiscoveryStage4TailOrdering,
+           HistoricalDiscoveryStage4TailCarrier
+  <1>3. IsWellFoundedOn(
+           HistoricalDiscoveryReadyTailOrdering,
+           HistoricalDiscoveryReadyTailCarrier)
+    BY ReadyRunAuxOrderingIsWellFounded, <1>2,
+       WFLexPairOrdering
+       DEF HistoricalDiscoveryReadyTailOrdering,
+           HistoricalDiscoveryReadyTailCarrier
+  <1>4. IsWellFoundedOn(
+           HistoricalDiscoveryResetTailOrdering,
+           HistoricalDiscoveryResetTailCarrier)
+    BY NatLessThanWellFounded, <1>3, WFLexPairOrdering
+       DEF HistoricalDiscoveryResetTailOrdering,
+           HistoricalDiscoveryResetTailCarrier
+  <1>5. IsWellFoundedOn(
+           HistoricalDiscoveryTransportTailOrdering,
+           HistoricalDiscoveryTransportTailCarrier)
+    BY NatLessThanWellFounded, <1>4, WFLexPairOrdering
+       DEF HistoricalDiscoveryTransportTailOrdering,
+           HistoricalDiscoveryTransportTailCarrier
+  <1>6. IsWellFoundedOn(
+           HistoricalDiscoveryCompletionTailOrdering,
+           HistoricalDiscoveryCompletionTailCarrier)
+    BY NatLessThanWellFounded, <1>5, WFLexPairOrdering
+       DEF HistoricalDiscoveryCompletionTailOrdering,
+           HistoricalDiscoveryCompletionTailCarrier
+  <1>7. IsWellFoundedOn(
+           HistoricalDiscoveryTimeoutTailOrdering,
+           HistoricalDiscoveryTimeoutTailCarrier)
+    BY NatLessThanWellFounded, <1>6, WFLexPairOrdering
+       DEF HistoricalDiscoveryTimeoutTailOrdering,
+           HistoricalDiscoveryTimeoutTailCarrier
+  <1>8. IsWellFoundedOn(
+           HistoricalDiscoveryCapacityTailOrdering,
+           HistoricalDiscoveryCapacityTailCarrier)
+    BY NatLessThanWellFounded, <1>7, WFLexPairOrdering
+       DEF HistoricalDiscoveryCapacityTailOrdering,
+           HistoricalDiscoveryCapacityTailCarrier
+  <1> QED
+    BY NatLessThanWellFounded, <1>8, WFLexPairOrdering
+       DEF HistoricalDiscoveryPacketDependencyOrdering,
+           HistoricalDiscoveryPacketDependencyCarrier
+
 THEOREM HistoricalDiscoveryIngressCounterRankInCarrier ==
   \A counter \in Nat:
     HistoricalDiscoveryIngressCounterRank(counter)
-      \in IngressBoundaryDependencyCarrier
+      \in HistoricalDiscoveryPacketDependencyCarrier
 BY Isa
    DEF HistoricalDiscoveryIngressCounterRank,
        HistoricalDiscoveryIngressCapacityBottom,
@@ -304,6 +481,8 @@ BY Isa
        HistoricalDiscoveryIngressReadyBottom,
        HistoricalDiscoveryIngressStage4Bottom,
        HistoricalDiscoveryCandidateServeBottom,
+       HistoricalDiscoveryCandidateOccurrenceBottom,
+       HistoricalDiscoveryServeOccurrenceBottom,
        HistoricalDiscoveryCandidateDebtBottom,
        HistoricalDiscoveryServeDebtBottom,
        HistoricalDiscoveryStage4Bottom,
@@ -311,15 +490,16 @@ BY Isa
        HistoricalDiscoveryReadyDeferredBottom,
        HistoricalDiscoveryReadyTimeoutBottom,
        HistoricalDiscoveryReadyInnerBottom,
-       IngressBoundaryDependencyCarrier,
-       IngressCapacityTailCarrier,
-       IngressTimeoutTailCarrier,
-       IngressCompletionTailCarrier,
-       IngressTransportTailCarrier,
-       IngressResetTailCarrier,
-       IngressReadyTailCarrier,
-       IngressStage4TailCarrier,
-       IngressCandidateServeTailCarrier,
+       HistoricalDiscoveryPacketDependencyCarrier,
+       HistoricalDiscoveryCapacityTailCarrier,
+       HistoricalDiscoveryTimeoutTailCarrier,
+       HistoricalDiscoveryCompletionTailCarrier,
+       HistoricalDiscoveryTransportTailCarrier,
+       HistoricalDiscoveryResetTailCarrier,
+       HistoricalDiscoveryReadyTailCarrier,
+       HistoricalDiscoveryStage4TailCarrier,
+       HistoricalDiscoveryCandidateServeTailCarrier,
+       HistoricalDiscoveryOccurrenceDebtCarrier,
        Stage4CapacityCarrier, ReadyRunAuxCarrier,
        ReadyRunDeferredCarrier, ReadyRunTimeoutCarrier,
        ReadyRunInnerCarrier, OwnedServiceRankCarrier
@@ -332,23 +512,24 @@ The prefix order is:
   latent timed owner, due packet occurrence, dormant stale I/O gate,
   active blocker class, exact ingress dependency.
 
-Class 3 is an overdue packet, class 2 a due runner, class 1 a due active I/O
-worker, and class 0 the tick.  A higher class is earlier work, so the ordinary
-natural less-than relation places a retired class below an earlier class when
-the preceding components are equal.
+Class 3 is a due runner, class 2 a due active I/O worker, class 1 an overdue
+packet, and class 0 the tick.  This is the concrete producer order: runner
+service may expose I/O, and I/O service may publish a response packet, so both
+handoffs move to a lower class.  Packet admission lowers the earlier due-set
+cardinality before any successor blocker is considered.
 ***************************************************************************)
 
 HistoricalDiscoveryBlockerStageCarrier == 0..3
 
 HistoricalDiscoveryBlockerStageTailCarrier ==
   HistoricalDiscoveryBlockerStageCarrier
-    \X IngressBoundaryDependencyCarrier
+    \X HistoricalDiscoveryPacketDependencyCarrier
 
 HistoricalDiscoveryBlockerStageTailOrdering ==
   LexPairOrdering(
-    OpToRel(<, Nat), IngressBoundaryDependencyOrdering,
+    OpToRel(<, Nat), HistoricalDiscoveryPacketDependencyOrdering,
     HistoricalDiscoveryBlockerStageCarrier,
-    IngressBoundaryDependencyCarrier)
+    HistoricalDiscoveryPacketDependencyCarrier)
 
 HistoricalDiscoveryDormantTailCarrier ==
   Nat \X HistoricalDiscoveryBlockerStageTailCarrier
@@ -381,6 +562,83 @@ HistoricalDiscoveryFixedClockRank(
       <<HistoricalDiscoveryDormantIoDebt(clockValue),
         <<stage, dependencyRank>>>>>>>>
 
+HistoricalDiscoveryFixedClockLexStep(
+    clockValue, oldStage, oldDependency,
+    nextStage, nextDependency) ==
+  \/ HistoricalDiscoveryLatentOwnerDebt'
+       < HistoricalDiscoveryLatentOwnerDebt
+  \/ /\ HistoricalDiscoveryLatentOwnerDebt'
+          = HistoricalDiscoveryLatentOwnerDebt
+     /\ HistoricalDiscoveryDuePacketDebt(clockValue)'
+          < HistoricalDiscoveryDuePacketDebt(clockValue)
+  \/ /\ HistoricalDiscoveryLatentOwnerDebt'
+          = HistoricalDiscoveryLatentOwnerDebt
+     /\ HistoricalDiscoveryDuePacketDebt(clockValue)'
+          = HistoricalDiscoveryDuePacketDebt(clockValue)
+     /\ HistoricalDiscoveryDormantIoDebt(clockValue)'
+          < HistoricalDiscoveryDormantIoDebt(clockValue)
+  \/ /\ HistoricalDiscoveryLatentOwnerDebt'
+          = HistoricalDiscoveryLatentOwnerDebt
+     /\ HistoricalDiscoveryDuePacketDebt(clockValue)'
+          = HistoricalDiscoveryDuePacketDebt(clockValue)
+     /\ HistoricalDiscoveryDormantIoDebt(clockValue)'
+          = HistoricalDiscoveryDormantIoDebt(clockValue)
+     /\ nextStage < oldStage
+  \/ /\ HistoricalDiscoveryLatentOwnerDebt'
+          = HistoricalDiscoveryLatentOwnerDebt
+     /\ HistoricalDiscoveryDuePacketDebt(clockValue)'
+          = HistoricalDiscoveryDuePacketDebt(clockValue)
+     /\ HistoricalDiscoveryDormantIoDebt(clockValue)'
+          = HistoricalDiscoveryDormantIoDebt(clockValue)
+     /\ nextStage = oldStage
+     /\ <<nextDependency, oldDependency>>
+          \in HistoricalDiscoveryPacketDependencyOrdering
+
+THEOREM HistoricalDiscoveryFixedClockRankShapeInCarrier ==
+  \A clockValue \in Nat,
+     stage \in HistoricalDiscoveryBlockerStageCarrier,
+     dependency \in HistoricalDiscoveryPacketDependencyCarrier:
+    /\ HistoricalDiscoveryLatentOwnerDebt \in Nat
+    /\ HistoricalDiscoveryDuePacketDebt(clockValue) \in Nat
+    /\ HistoricalDiscoveryDormantIoDebt(clockValue) \in Nat
+    => HistoricalDiscoveryFixedClockRank(
+         clockValue, stage, dependency)
+         \in HistoricalDiscoveryFixedClockBlockerCarrier
+BY Isa
+   DEF HistoricalDiscoveryFixedClockRank,
+       HistoricalDiscoveryFixedClockBlockerCarrier,
+       HistoricalDiscoveryDuePacketTailCarrier,
+       HistoricalDiscoveryDormantTailCarrier,
+       HistoricalDiscoveryBlockerStageTailCarrier
+
+THEOREM HistoricalDiscoveryFixedClockLexStepStrictlyDescends ==
+  \A clockValue \in Nat,
+     oldStage, nextStage \in HistoricalDiscoveryBlockerStageCarrier,
+     oldDependency, nextDependency
+       \in HistoricalDiscoveryPacketDependencyCarrier:
+    /\ HistoricalDiscoveryLatentOwnerDebt \in Nat
+    /\ HistoricalDiscoveryLatentOwnerDebt' \in Nat
+    /\ HistoricalDiscoveryDuePacketDebt(clockValue) \in Nat
+    /\ HistoricalDiscoveryDuePacketDebt(clockValue)' \in Nat
+    /\ HistoricalDiscoveryDormantIoDebt(clockValue) \in Nat
+    /\ HistoricalDiscoveryDormantIoDebt(clockValue)' \in Nat
+    /\ HistoricalDiscoveryFixedClockLexStep(
+         clockValue, oldStage, oldDependency,
+         nextStage, nextDependency)
+    => <<HistoricalDiscoveryFixedClockRank(
+            clockValue, nextStage, nextDependency)',
+          HistoricalDiscoveryFixedClockRank(
+            clockValue, oldStage, oldDependency)>>
+         \in HistoricalDiscoveryFixedClockBlockerOrdering
+BY Isa
+   DEF HistoricalDiscoveryFixedClockLexStep,
+       HistoricalDiscoveryFixedClockRank,
+       HistoricalDiscoveryFixedClockBlockerOrdering,
+       HistoricalDiscoveryDuePacketTailOrdering,
+       HistoricalDiscoveryDormantTailOrdering,
+       HistoricalDiscoveryBlockerStageTailOrdering,
+       LexPairOrdering, OpToRel
+
 THEOREM HistoricalDiscoveryFixedClockBlockerOrderingIsWellFounded ==
   IsWellFoundedOn(
     HistoricalDiscoveryFixedClockBlockerOrdering,
@@ -390,7 +648,7 @@ PROOF
            HistoricalDiscoveryBlockerStageTailOrdering,
            HistoricalDiscoveryBlockerStageTailCarrier)
     BY NatLessThanWellFounded, IsWellFoundedOnSubset,
-       IngressBoundaryDependencyOrderingIsWellFounded,
+       HistoricalDiscoveryPacketDependencyOrderingIsWellFounded,
        WFLexPairOrdering, Isa
        DEF HistoricalDiscoveryBlockerStageTailOrdering,
            HistoricalDiscoveryBlockerStageTailCarrier,
@@ -479,6 +737,18 @@ HistoricalDiscoveryPacketServeDebtRank(packet) ==
      THEN HistoricalDiscoveryServeDebtBottom
      ELSE HistoricalDiscoveryOwnedRankMinimum(ranks)
 
+\* This is a distinct-logical-owner count.  Reachable `AsyncSpec` states use
+\* `AsyncProgressOwnershipInvariant` to rule out collapsed physical copies.
+HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(packet) ==
+  <<Cardinality(
+       HistoricalDiscoveryPacketCandidateOwners(packet)),
+    HistoricalDiscoveryPacketCandidateDebtRank(packet)>>
+
+HistoricalDiscoveryPacketServeOccurrenceDebtRank(packet) ==
+  <<Cardinality(
+       HistoricalDiscoveryPacketServeOwners(packet)),
+    HistoricalDiscoveryPacketServeDebtRank(packet)>>
+
 HistoricalDiscoveryPacketCandidateDebtWitness(packet) ==
   CHOOSE candidate
     \in HistoricalDiscoveryPacketCandidateOwners(packet):
@@ -503,10 +773,19 @@ HistoricalDiscoveryPacketServeDebtFairAction(packet) ==
 
 HistoricalDiscoveryPacketDependencyRank(packet) ==
   LET recipient == packet.item.envelope.recipient
-  IN IngressBoundaryDependencyRank(
-       packet, recipient,
-       HistoricalDiscoveryPacketCandidateDebtRank(packet),
-       HistoricalDiscoveryPacketServeDebtRank(packet))
+  IN <<OlderDueNonOverdueShadowDebt(packet),
+       <<FreshIngressCapacityOwnerDebt(packet.item),
+         <<TimeoutVoteByteOwnerDebt(packet.item),
+           <<TransportCompletionOwnerDebt(packet.item),
+             <<BoundedTransportServiceRank(
+                  recipient, packet.item.source),
+               <<ResetAwareIngressReachRank(recipient),
+                 <<ReadyRunAuxRank(recipient),
+                   <<Stage4CapacityRank(recipient),
+                     <<HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(
+                          packet),
+                       HistoricalDiscoveryPacketServeOccurrenceDebtRank(
+                         packet)>>>>>>>>>>>>>>>>>>
 
 HistoricalDiscoverySelectedOverduePacket ==
   CHOOSE packet \in OverdueResponsivePackets: TRUE
@@ -517,18 +796,18 @@ HistoricalDiscoverySelectedPacketDependencyRank ==
 
 HistoricalDiscoveryPacketBlockerRank(clockValue) ==
   HistoricalDiscoveryFixedClockRank(
-    clockValue, 3,
+    clockValue, 1,
     HistoricalDiscoverySelectedPacketDependencyRank)
 
 HistoricalDiscoveryNodeBlockerRank(clockValue) ==
   HistoricalDiscoveryFixedClockRank(
-    clockValue, 2,
+    clockValue, 3,
     HistoricalDiscoveryIngressCounterRank(
       HistoricalDiscoveryNodeBlockerDebt(clockValue)))
 
 HistoricalDiscoveryIoBlockerRank(clockValue) ==
   HistoricalDiscoveryFixedClockRank(
-    clockValue, 1,
+    clockValue, 2,
     HistoricalDiscoveryIngressCounterRank(
       HistoricalDiscoveryActiveIoBlockerDebt(clockValue)))
 
@@ -537,14 +816,53 @@ HistoricalDiscoveryTickRank(clockValue) ==
     clockValue, 0,
     HistoricalDiscoveryIngressCounterRank(0))
 
-HistoricalDiscoveryConcreteFixedClockRank(clockValue) ==
+HistoricalDiscoveryConcreteBlockerStage(clockValue) ==
   IF OverdueResponsivePackets # {}
-  THEN HistoricalDiscoveryPacketBlockerRank(clockValue)
+  THEN 1
   ELSE IF HistoricalDiscoveryNodeBlockersAt(clockValue) # {}
-       THEN HistoricalDiscoveryNodeBlockerRank(clockValue)
+       THEN 3
        ELSE IF HistoricalDiscoveryActiveIoBlockersAt(clockValue) # {}
-            THEN HistoricalDiscoveryIoBlockerRank(clockValue)
-            ELSE HistoricalDiscoveryTickRank(clockValue)
+            THEN 2
+            ELSE 0
+
+HistoricalDiscoveryConcreteDependencyRank(clockValue) ==
+  IF OverdueResponsivePackets # {}
+  THEN HistoricalDiscoverySelectedPacketDependencyRank
+  ELSE IF HistoricalDiscoveryNodeBlockersAt(clockValue) # {}
+       THEN HistoricalDiscoveryIngressCounterRank(
+              HistoricalDiscoveryNodeBlockerDebt(clockValue))
+       ELSE IF HistoricalDiscoveryActiveIoBlockersAt(clockValue) # {}
+            THEN HistoricalDiscoveryIngressCounterRank(
+                   HistoricalDiscoveryActiveIoBlockerDebt(clockValue))
+            ELSE HistoricalDiscoveryIngressCounterRank(0)
+
+HistoricalDiscoveryConcreteFixedClockRank(clockValue) ==
+  HistoricalDiscoveryFixedClockRank(
+    clockValue,
+    HistoricalDiscoveryConcreteBlockerStage(clockValue),
+    HistoricalDiscoveryConcreteDependencyRank(clockValue))
+
+THEOREM HistoricalDiscoveryConcreteRankMatchesNamedBranches ==
+  \A clockValue \in Nat:
+    HistoricalDiscoveryConcreteFixedClockRank(clockValue)
+      = IF OverdueResponsivePackets # {}
+        THEN HistoricalDiscoveryPacketBlockerRank(clockValue)
+        ELSE IF HistoricalDiscoveryNodeBlockersAt(clockValue) # {}
+             THEN HistoricalDiscoveryNodeBlockerRank(clockValue)
+             ELSE IF
+                    HistoricalDiscoveryActiveIoBlockersAt(clockValue)
+                      # {}
+                  THEN HistoricalDiscoveryIoBlockerRank(clockValue)
+                  ELSE HistoricalDiscoveryTickRank(clockValue)
+BY Isa
+   DEF HistoricalDiscoveryConcreteFixedClockRank,
+       HistoricalDiscoveryConcreteBlockerStage,
+       HistoricalDiscoveryConcreteDependencyRank,
+       HistoricalDiscoveryPacketBlockerRank,
+       HistoricalDiscoveryNodeBlockerRank,
+       HistoricalDiscoveryIoBlockerRank,
+       HistoricalDiscoveryTickRank,
+       HistoricalDiscoverySelectedPacketDependencyRank
 
 HistoricalDiscoveryFixedClockBlockedAtRank(
     node, clockValue, rank) ==
@@ -707,36 +1025,6 @@ exact owner removal with no replacement lowers the first natural component,
 regardless of how the remaining minimum changes.  This is a plain
 lexicographic product of two already-proved well-founded orders.
 ***************************************************************************)
-
-HistoricalDiscoveryOccurrenceDebtCarrier ==
-  Nat \X OwnedServiceRankCarrier
-
-HistoricalDiscoveryOccurrenceDebtOrdering ==
-  LexPairOrdering(
-    OpToRel(<, Nat), OwnedServiceRankOrdering,
-    Nat, OwnedServiceRankCarrier)
-
-\* This is a distinct-logical-owner count.  Reachable `AsyncSpec` states use
-\* `AsyncProgressOwnershipInvariant` to rule out collapsed physical copies.
-HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(packet) ==
-  <<Cardinality(
-       HistoricalDiscoveryPacketCandidateOwners(packet)),
-    HistoricalDiscoveryPacketCandidateDebtRank(packet)>>
-
-HistoricalDiscoveryPacketServeOccurrenceDebtRank(packet) ==
-  <<Cardinality(
-       HistoricalDiscoveryPacketServeOwners(packet)),
-    HistoricalDiscoveryPacketServeDebtRank(packet)>>
-
-THEOREM HistoricalDiscoveryOccurrenceDebtOrderingIsWellFounded ==
-  IsWellFoundedOn(
-    HistoricalDiscoveryOccurrenceDebtOrdering,
-    HistoricalDiscoveryOccurrenceDebtCarrier)
-BY NatLessThanWellFounded,
-   OwnedServiceRankOrderingWellFounded,
-   WFLexPairOrdering
-   DEF HistoricalDiscoveryOccurrenceDebtOrdering,
-       HistoricalDiscoveryOccurrenceDebtCarrier
 
 THEOREM StrongTypeHasFiniteHistoricalDiscoveryRankOwners ==
   AsyncStrongTypeInvariant
@@ -976,45 +1264,64 @@ THEOREM HistoricalDiscoveryPacketDependencyRankInCarrier ==
       => LET recipient == packet.item.envelope.recipient
          IN /\ recipient \in ValidatorIds
             /\ HistoricalDiscoveryPacketDependencyRank(packet)
-                 \in IngressBoundaryDependencyCarrier
-BY HistoricalDiscoveryPacketDebtRanksInCarrier,
-   IngressBoundaryDependencyRankInCarrier, Isa
+                 \in HistoricalDiscoveryPacketDependencyCarrier
+BY AsyncStrongTypeProjectsAsyncType,
+   StrongTypeHasFiniteOlderNonOverdueShadows,
+   IngressGateOwnerDebtsAreFiniteNaturals,
+   BoundedTransportServiceRankIsNatural,
+   ResetAwareIngressReachRankIsNatural,
+   ReadyRunAuxRankInCarrier,
+   Stage4CapacityRankInCarrier,
+   HistoricalDiscoveryPacketOccurrenceDebtRanksInCarrier, Isa
    DEF HistoricalDiscoveryPacketDependencyRank,
+       HistoricalDiscoveryPacketDependencyCarrier,
+       HistoricalDiscoveryCapacityTailCarrier,
+       HistoricalDiscoveryTimeoutTailCarrier,
+       HistoricalDiscoveryCompletionTailCarrier,
+       HistoricalDiscoveryTransportTailCarrier,
+       HistoricalDiscoveryResetTailCarrier,
+       HistoricalDiscoveryReadyTailCarrier,
+       HistoricalDiscoveryStage4TailCarrier,
+       HistoricalDiscoveryCandidateServeTailCarrier,
        OverdueResponsivePackets,
        AsyncStrongTypeInvariant,
        AsyncTransportTypeInvariant,
        AsyncPacketContentTypeInvariant,
        AsyncPacketTyped, AsyncItemTyped
 
-THEOREM HistoricalDiscoveryConcreteFixedClockRankInCarrier ==
+THEOREM HistoricalDiscoveryConcreteBlockerCoordinatesInCarrier ==
   \A node \in Responsive, clockValue \in Nat:
     HistoricalDiscoveryFixedClockPending(node, clockValue)
-      => HistoricalDiscoveryConcreteFixedClockRank(clockValue)
-           \in HistoricalDiscoveryFixedClockBlockerCarrier
+      => /\ HistoricalDiscoveryConcreteBlockerStage(clockValue)
+              \in HistoricalDiscoveryBlockerStageCarrier
+         /\ HistoricalDiscoveryConcreteDependencyRank(clockValue)
+              \in HistoricalDiscoveryPacketDependencyCarrier
 BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
    HistoricalDiscoveryPacketDependencyRankInCarrier,
    HistoricalDiscoveryIngressCounterRankInCarrier,
    FS_CardinalityType, Isa
    DEF HistoricalDiscoveryFixedClockPending,
-       HistoricalDiscoveryConcreteFixedClockRank,
-       HistoricalDiscoveryPacketBlockerRank,
-       HistoricalDiscoveryNodeBlockerRank,
-       HistoricalDiscoveryIoBlockerRank,
-       HistoricalDiscoveryTickRank,
-       HistoricalDiscoveryFixedClockRank,
+       HistoricalDiscoveryConcreteBlockerStage,
+       HistoricalDiscoveryConcreteDependencyRank,
        HistoricalDiscoverySelectedOverduePacket,
        HistoricalDiscoverySelectedPacketDependencyRank,
-       HistoricalDiscoveryPacketDependencyRank,
-       HistoricalDiscoveryFixedClockBlockerCarrier,
-       HistoricalDiscoveryDuePacketTailCarrier,
-       HistoricalDiscoveryDormantTailCarrier,
-       HistoricalDiscoveryBlockerStageTailCarrier,
-       HistoricalDiscoveryBlockerStageCarrier,
+       HistoricalDiscoveryNodeBlockerDebt,
+       HistoricalDiscoveryActiveIoBlockerDebt,
+       HistoricalDiscoveryBlockerStageCarrier
+
+THEOREM HistoricalDiscoveryConcreteFixedClockRankInCarrier ==
+  \A node \in Responsive, clockValue \in Nat:
+    HistoricalDiscoveryFixedClockPending(node, clockValue)
+      => HistoricalDiscoveryConcreteFixedClockRank(clockValue)
+           \in HistoricalDiscoveryFixedClockBlockerCarrier
+BY HistoricalDiscoveryConcreteBlockerCoordinatesInCarrier,
+   StrongTypeHasFiniteHistoricalDiscoveryCohorts,
+   HistoricalDiscoveryFixedClockRankShapeInCarrier, Isa
+   DEF HistoricalDiscoveryFixedClockPending,
+       HistoricalDiscoveryConcreteFixedClockRank,
        HistoricalDiscoveryLatentOwnerDebt,
        HistoricalDiscoveryDuePacketDebt,
-       HistoricalDiscoveryDormantIoDebt,
-       HistoricalDiscoveryNodeBlockerDebt,
-       HistoricalDiscoveryActiveIoBlockerDebt
+       HistoricalDiscoveryDormantIoDebt
 
 THEOREM HistoricalDiscoveryFixedClockPendingHasFiniteRank ==
   \A node \in Responsive, clockValue \in Nat:
@@ -1024,6 +1331,29 @@ THEOREM HistoricalDiscoveryFixedClockPendingHasFiniteRank ==
              node, clockValue, rank)
 BY HistoricalDiscoveryConcreteFixedClockRankInCarrier
    DEF HistoricalDiscoveryFixedClockBlockedAtRank
+
+THEOREM HistoricalDiscoveryConcreteLexCertificateStrictlyDescends ==
+  \A node \in Responsive, clockValue \in Nat:
+    /\ HistoricalDiscoveryFixedClockPending(node, clockValue)
+    /\ HistoricalDiscoveryFixedClockPending(node, clockValue)'
+    /\ HistoricalDiscoveryFixedClockLexStep(
+         clockValue,
+         HistoricalDiscoveryConcreteBlockerStage(clockValue),
+         HistoricalDiscoveryConcreteDependencyRank(clockValue),
+         HistoricalDiscoveryConcreteBlockerStage(clockValue)',
+         HistoricalDiscoveryConcreteDependencyRank(clockValue)')
+    => <<HistoricalDiscoveryConcreteFixedClockRank(clockValue)',
+          HistoricalDiscoveryConcreteFixedClockRank(clockValue)>>
+         \in HistoricalDiscoveryFixedClockBlockerOrdering
+BY HistoricalDiscoveryConcreteBlockerCoordinatesInCarrier,
+   HistoricalDiscoveryFixedClockRankShapeInCarrier,
+   HistoricalDiscoveryFixedClockLexStepStrictlyDescends,
+   StrongTypeHasFiniteHistoricalDiscoveryCohorts, Isa
+   DEF HistoricalDiscoveryFixedClockPending,
+       HistoricalDiscoveryConcreteFixedClockRank,
+       HistoricalDiscoveryLatentOwnerDebt,
+       HistoricalDiscoveryDuePacketDebt,
+       HistoricalDiscoveryDormantIoDebt
 
 (***************************************************************************
 Exact remaining action-local proof debt.

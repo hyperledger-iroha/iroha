@@ -616,6 +616,7 @@ pub mod network_topology;
 pub(crate) mod output_guard;
 pub(crate) mod penalties;
 pub(crate) mod safety_wal;
+pub(crate) mod serviced_candidate_store;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
@@ -633,7 +634,8 @@ pub use v2_context::{
     signed_genesis_voting_peers, staged_genesis_nexus_amx_context_hash,
 };
 pub use v2_core::{
-    ProductionTwoStageRelayRetryTraceProjection,
+    CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,
+    check_production_two_stage_relay_retry_transition,
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
 };
 pub(crate) mod v2_effects;
@@ -916,6 +918,11 @@ struct FairV2IngressState {
     lanes: BTreeMap<FairV2IngressSource, FairV2IngressLane>,
     /// Canonical semantic request identity mapped to its first owning source lane.
     pending_wire_owners: BTreeMap<FairV2IngressWireKey, FairV2IngressSource>,
+    /// Last immutable occurrence ordinal assigned by this ingress instance.
+    ///
+    /// This deliberately survives roster reconfiguration so rollover never
+    /// reuses a process-local occurrence position.
+    last_admission_ordinal: u64,
     ready: VecDeque<FairV2IngressSource>,
     len: usize,
     bytes: usize,
@@ -927,6 +934,8 @@ struct FairV2IngressState {
     required_control_frame_bytes: usize,
     required_block_sync_frame_bytes: usize,
     required_outbound_high_frame_bytes: usize,
+    requires_certified_serve_gate: bool,
+    certified_serve_gate: Option<v2_worker::CertifiedServeIngressGate>,
     open: bool,
 }
 
@@ -945,6 +954,8 @@ struct FairV2IngressLane {
 struct FairV2IngressEntry {
     inbound: InboundBlockMessage,
     enqueued_at: Instant,
+    admission_ordinal: u64,
+    certified_serve_reservation: Option<v2_worker::CertifiedServeIngressReservation>,
     class: FairV2IngressClass,
     wire_key: Option<FairV2IngressWireKey>,
     encoded_bytes: Arc<[u8]>,
@@ -1074,6 +1085,13 @@ impl FairV2IngressMessageKind {
                 | Self::V2CommitCertificateResponse
         )
     }
+}
+
+fn fair_v2_ingress_is_certified_body_request(inbound: &InboundBlockMessage) -> bool {
+    matches!(
+        FairV2IngressMessageKind::classify(inbound.message()),
+        Some(FairV2IngressMessageKind::V2CertifiedBodyRequest)
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2163,6 +2181,7 @@ pub(crate) struct FairV2IngressCapacityError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FairV2IngressCapacityKind {
     Messages,
+    CertifiedServeGate,
     Bytes,
     TimeoutVoteBytes,
     OrdinaryBytes,
@@ -2676,6 +2695,11 @@ enum FairV2IngressPushDisposition {
 /// semantic origins relayed by one hop share that hop's finite owners. A
 /// distinct response through the same validator retries after fair service
 /// releases that validator hop's sole completion owner.
+/// Every newly queued occurrence receives one immutable local admission
+/// ordinal; coalesced retransmissions retain their existing owner's ordinal.
+/// While a certified-body request is queued, its earliest ordinal is a global
+/// cutoff: preexisting occurrences and that request remain fairly selectable,
+/// but later traffic cannot acquire service ahead of it.
 ///
 /// Non-empty lanes are serviced in round-robin order, so a source may use
 /// otherwise idle capacity but cannot starve an honest validator's progress.
@@ -2789,6 +2813,7 @@ impl FairV2Ingress {
                 roster: BTreeSet::new(),
                 lanes,
                 pending_wire_owners: BTreeMap::new(),
+                last_admission_ordinal: 0,
                 ready: VecDeque::new(),
                 len: 0,
                 bytes: 0,
@@ -2800,6 +2825,8 @@ impl FairV2Ingress {
                 required_control_frame_bytes: 0,
                 required_block_sync_frame_bytes: 0,
                 required_outbound_high_frame_bytes: 0,
+                requires_certified_serve_gate: false,
+                certified_serve_gate: None,
                 open: false,
             }),
         }
@@ -2845,6 +2872,36 @@ impl FairV2Ingress {
                 })
                 .collect::<BTreeMap<_, _>>();
             debug_assert_eq!(state.pending_wire_owners, indexed_owners);
+            let admission_ordinals = state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter().map(|entry| entry.admission_ordinal))
+                .collect::<BTreeSet<_>>();
+            debug_assert_eq!(admission_ordinals.len(), state.len);
+            debug_assert!(
+                admission_ordinals
+                    .last()
+                    .is_none_or(|ordinal| *ordinal <= state.last_admission_ordinal)
+            );
+            let certified_entries = state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter())
+                .filter(|entry| fair_v2_ingress_is_certified_body_request(&entry.inbound))
+                .collect::<Vec<_>>();
+            if let Some(gate) = state.certified_serve_gate.as_ref() {
+                debug_assert!(certified_entries.iter().all(|entry| {
+                    let BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                        ..
+                    }) = entry.inbound.message()
+                    else {
+                        unreachable!("certified ingress filter returns only requests");
+                    };
+                    gate.requires_reservation(request)
+                        == entry.certified_serve_reservation.is_some()
+                }));
+            }
 
             for (source, lane) in &state.lanes {
                 debug_assert!(lane.bytes <= self.source_byte_capacity);
@@ -3113,6 +3170,8 @@ impl FairV2Ingress {
         state.roster = roster;
         state.lanes = lanes;
         state.pending_wire_owners.clear();
+        // Keep `last_admission_ordinal`: queued ownership is reset at rollover,
+        // but occurrence order remains monotone for the lifetime of this ingress.
         state.ready.clear();
         state.len = 0;
         state.bytes = 0;
@@ -3227,9 +3286,89 @@ impl FairV2Ingress {
         Ok(())
     }
 
+    /// Require one per-height Serve gate before production admission opens.
+    fn require_certified_serve_gate(&self) {
+        let mut state = self.state.lock();
+        assert!(
+            !state.open,
+            "Serve-gate policy changes only while ingress is closed"
+        );
+        assert_eq!(
+            state.len, 0,
+            "Serve-gate policy precedes all ingress ownership"
+        );
+        state.requires_certified_serve_gate = true;
+    }
+
+    /// Bind the current height's internal Serve owner before opening ingress.
+    pub(crate) fn bind_certified_serve_gate(
+        &self,
+        gate: v2_worker::CertifiedServeIngressGate,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock();
+        if state.open || state.len != 0 {
+            return Err("certified Serve gate can bind only to an empty closed ingress".to_owned());
+        }
+        if state.certified_serve_gate.is_some() {
+            return Err("certified Serve gate is already bound".to_owned());
+        }
+        state.certified_serve_gate = Some(gate);
+        Ok(())
+    }
+
+    /// Retire all closed-height occurrences, then detach their exact Serve gate.
+    pub(crate) fn unbind_certified_serve_gate(
+        &self,
+        gate: &v2_worker::CertifiedServeIngressGate,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock();
+        if state.open {
+            return Err("certified Serve gate cannot unbind from open ingress".to_owned());
+        }
+        let Some(bound) = state.certified_serve_gate.as_ref() else {
+            return Ok(());
+        };
+        if !bound.ptr_eq(gate) {
+            return Err("certified Serve gate changed per-height I/O ownership".to_owned());
+        }
+
+        // Every queued carrier belongs to the closed height. Replacing the
+        // lanes drops each RAII ticket while the ingress lock is held; ticket
+        // rollback takes only the I/O lock, and no I/O path calls back here.
+        let mut lanes = BTreeMap::new();
+        for peer in &state.roster {
+            lanes.insert(
+                FairV2IngressSource::Validator(peer.clone()),
+                FairV2IngressLane::default(),
+            );
+        }
+        lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+        state.lanes = lanes;
+        state.pending_wire_owners.clear();
+        state.ready.clear();
+        state.len = 0;
+        state.bytes = 0;
+        state.nonempty_since = None;
+        state.last_service_attempt_at = None;
+        let detached = state
+            .certified_serve_gate
+            .take()
+            .expect("validated certified Serve gate remains bound");
+        debug_assert!(detached.ptr_eq(gate));
+        self.debug_assert_consistent(&state);
+        Ok(())
+    }
+
     /// Open admission for the already-configured immutable height.
     pub(crate) fn open(&self) -> Result<(), FairV2IngressCapacityError> {
         let mut state = self.state.lock();
+        if state.requires_certified_serve_gate && state.certified_serve_gate.is_none() {
+            return Err(FairV2IngressCapacityError {
+                configured: 0,
+                required: 1,
+                kind: FairV2IngressCapacityKind::CertifiedServeGate,
+            });
+        }
         let Some(required) = fair_v2_ingress_required_capacity(
             state.roster.len(),
             self.authenticated_non_validator_source_capacity,
@@ -3791,7 +3930,61 @@ impl FairV2Ingress {
         if !occurrence.validate_exact() {
             return Err(FairV2IngressPushError::Rejected(inbound));
         }
+        let Some(admission_ordinal) = state.last_admission_ordinal.checked_add(1) else {
+            state.open = false;
+            return Err(FairV2IngressPushError::Closed(inbound));
+        };
+        let certified_request = match inbound.message() {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                ..
+            }) => Some(request.clone()),
+            _ => None,
+        };
+        let certified_serve_reservation = if let Some(request) = certified_request.as_ref() {
+            if inbound.sender() != Some(&request.requester) {
+                return Err(FairV2IngressPushError::Rejected(inbound));
+            }
+            let gate = if let Some(gate) = state.certified_serve_gate.clone() {
+                Some(gate)
+            } else {
+                if state.requires_certified_serve_gate {
+                    state.open = false;
+                    return Err(FairV2IngressPushError::Closed(inbound));
+                }
+                None
+            };
+            if let Some(gate) = gate {
+                let Some(authenticated_via) = inbound.via().cloned() else {
+                    return Err(FairV2IngressPushError::Rejected(inbound));
+                };
+                let requester_is_roster = state.roster.contains(&request.requester);
+                match gate.reserve(
+                    request,
+                    &authenticated_via,
+                    requester_is_roster,
+                    admission_ordinal,
+                ) {
+                    Ok(reservation) => reservation,
+                    Err(v2_worker::CertifiedServeIngressReserveError::Busy) => {
+                        return Err(FairV2IngressPushError::Full(inbound));
+                    }
+                    Err(v2_worker::CertifiedServeIngressReserveError::Rejected) => {
+                        return Err(FairV2IngressPushError::Rejected(inbound));
+                    }
+                    Err(v2_worker::CertifiedServeIngressReserveError::Closed) => {
+                        state.open = false;
+                        return Err(FairV2IngressPushError::Closed(inbound));
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(occurrence));
+        state.last_admission_ordinal = admission_ordinal;
         let queue_was_empty = state.len == 0;
         if let Some(key) = &wire_key {
             assert!(
@@ -3836,6 +4029,8 @@ impl FairV2Ingress {
         lane.entries.push_back(FairV2IngressEntry {
             inbound,
             enqueued_at,
+            admission_ordinal,
+            certified_serve_reservation,
             class,
             wire_key,
             encoded_bytes: encoded,
@@ -3864,10 +4059,12 @@ impl FairV2Ingress {
     /// Earlier blocked entries remain in place, and the source still consumes
     /// only one round-robin turn. This lets a proposal, certificate, body
     /// response, or payload chunk bypass an auxiliary request waiting for I/O
-    /// capacity without dropping or duplicating that request. Once the blocked
-    /// entry becomes admissible, the head-first search selects it before later
-    /// entries. When every entry is rejected, one complete source rotation
-    /// restores the original source order and total length.
+    /// capacity without dropping or duplicating that request. If a
+    /// certified-body request is queued, entries newer than the earliest such
+    /// request are excluded before the downstream predicate runs. Once the
+    /// blocked entry becomes admissible, the head-first search selects it
+    /// before later entries. When every entry is rejected, one complete source
+    /// rotation restores the original source order and total length.
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -3887,6 +4084,13 @@ impl FairV2Ingress {
             // delay; queue age alone does not establish scheduler starvation.
             state.last_service_attempt_at = Some(service_attempt_at);
         }
+        let certified_body_request_cutoff = state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .filter(|entry| fair_v2_ingress_is_certified_body_request(&entry.inbound))
+            .map(|entry| entry.admission_ordinal)
+            .min();
         let ready_sources = state.ready.len();
         for _ in 0..ready_sources {
             let source = state
@@ -3894,9 +4098,11 @@ impl FairV2Ingress {
                 .pop_front()
                 .expect("snapshotted ready source must remain queued");
             let admitted_index = state.lanes.get(&source).and_then(|lane| {
-                lane.entries
-                    .iter()
-                    .position(|entry| predicate(&entry.inbound))
+                lane.entries.iter().position(|entry| {
+                    certified_body_request_cutoff
+                        .is_none_or(|cutoff| entry.admission_ordinal <= cutoff)
+                        && predicate(&entry.inbound)
+                })
             });
             let Some(admitted_index) = admitted_index else {
                 state.ready.push_back(source);
@@ -4579,6 +4785,7 @@ impl SumeragiStartArgs {
                 Some(authenticated_non_validator_source_capacity),
             ),
         );
+        block.require_certified_serve_gate();
         let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(lane_relay_channel_cap);
         let (wake_tx, wake_rx) = mpsc::sync_channel(WORKER_WAKE_CHANNEL_CAP);
         let queue_wake = Arc::clone(&queue);
@@ -4710,7 +4917,8 @@ mod authoritative_runtime_gate_tests {
 
     use super::{
         BlockMessage, CryptoHash, FairV2IngressClass, InboundBlockMessage, LaneRelayMessage,
-        test_sumeragi_handle, test_sumeragi_handle_with_source_geometry,
+        fair_v2_ingress_is_certified_body_request, test_sumeragi_handle,
+        test_sumeragi_handle_with_source_geometry,
     };
 
     fn v2_message_with_bytes(index: u32, byte_len: usize) -> BlockMessage {
@@ -7135,6 +7343,30 @@ mod authoritative_runtime_gate_tests {
     }
 
     #[test]
+    fn fair_v2_ingress_required_serve_gate_precedes_open() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let ingress = super::FairV2Ingress::new(6, 2 * 1024, 1024, 0, 0);
+        ingress
+            .configure_roster([validator])
+            .expect("validator and anonymous ownership partitions fit");
+        ingress.require_certified_serve_gate();
+
+        let error = ingress
+            .open()
+            .expect_err("production admission cannot open before its Serve gate binds");
+        assert_eq!(
+            error.kind,
+            super::FairV2IngressCapacityKind::CertifiedServeGate
+        );
+        assert_eq!(error.configured(), 0);
+        assert_eq!(error.required(), 1);
+        assert!(
+            !ingress.state.lock().open,
+            "failed open leaves admission closed"
+        );
+    }
+
+    #[test]
     fn fair_v2_ingress_reserves_timeout_vote_bytes_behind_auxiliary_pressure() {
         let validator = validator_peers(1).pop().expect("validator fixture");
         let auxiliary = v2_auxiliary_prepare(0);
@@ -8249,6 +8481,262 @@ mod authoritative_runtime_gate_tests {
         assert_eq!(retained.sender(), Some(&first_source));
         assert_eq!(vote_height(&retained), Some(1));
         assert_eq!(ingress.len(), 0);
+    }
+
+    #[test]
+    fn fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(10);
+        let validators = validator_peers(2);
+        let first_ready_source = validators[0].clone();
+        let target_source = validators[1].clone();
+        ingress.close();
+        ingress
+            .configure_roster(validators)
+            .expect("two validators, their protected owners, and anonymous fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(
+            handle.try_incoming_block_message_from(
+                first_ready_source.clone(),
+                v2_auxiliary_prepare(0),
+            )
+        );
+        assert!(handle.try_incoming_block_message_from(
+            target_source.clone(),
+            v2_certified_body_request(&target_source),
+        ));
+        assert!(handle.try_incoming_block_message_from(
+            first_ready_source.clone(),
+            v2_certified_body_request(&first_ready_source),
+        ));
+
+        let target = ingress
+            .try_recv_if(fair_v2_ingress_is_certified_body_request)
+            .expect("the exact request passes the blocked first-ready source");
+        assert_eq!(target.sender(), Some(&target_source));
+
+        let later_request = ingress
+            .try_recv_if(fair_v2_ingress_is_certified_body_request)
+            .expect("the later Serve request becomes eligible after the target drains");
+        assert_eq!(later_request.sender(), Some(&first_ready_source));
+
+        let predecessor = ingress
+            .try_recv_if(|_| true)
+            .expect("the blocked preexisting entry remains queued");
+        assert_eq!(predecessor.sender(), Some(&first_ready_source));
+        assert_eq!(vote_height(&predecessor), Some(1));
+        assert_eq!(ingress.len(), 0);
+    }
+
+    #[test]
+    fn fair_v2_ingress_certified_request_cutoff_blocks_later_churn() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(26);
+        let validators = validator_peers(5);
+        let target_source = validators[0].clone();
+        let control_source = validators[1].clone();
+        let completion_source = validators[2].clone();
+        let priority_source = validators[3].clone();
+        let causal_source = validators[4].clone();
+        ingress.close();
+        ingress
+            .configure_roster(validators)
+            .expect("five validators, their protected owners, and anonymous fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(handle.try_incoming_block_message_from(
+            target_source.clone(),
+            v2_certified_body_request(&target_source),
+        ));
+        assert!(handle.try_incoming_block_message_from(
+            control_source.clone(),
+            v2_vote(wire::GlobalPhase::Commit),
+        ));
+        assert!(handle.try_incoming_block_message_from(
+            completion_source.clone(),
+            v2_certified_body_response(7, 0, 64),
+        ));
+        assert!(
+            handle.try_incoming_block_message_from(priority_source.clone(), v2_timeout_vote(),)
+        );
+        assert!(
+            handle
+                .try_incoming_block_message_from(causal_source.clone(), v2_auxiliary_prepare(11),)
+        );
+
+        assert!(
+            ingress
+                .try_recv_if(|inbound| !fair_v2_ingress_is_certified_body_request(inbound))
+                .is_none(),
+            "later control, completion, priority, and causal work cannot pass the target"
+        );
+
+        let target = ingress
+            .try_recv_if(fair_v2_ingress_is_certified_body_request)
+            .expect("the cutoff target remains selectable");
+        assert_eq!(target.sender(), Some(&target_source));
+
+        let control = ingress
+            .try_recv_if(|_| true)
+            .expect("later control proceeds after the target drains");
+        assert_eq!(control.sender(), Some(&control_source));
+        assert_eq!(
+            vote_phase(&control),
+            Some(wire::GlobalPhase::Commit),
+            "the first released occurrence is consensus control"
+        );
+
+        let completion = ingress
+            .try_recv_if(|_| true)
+            .expect("later completion proceeds after the target drains");
+        assert_eq!(completion.sender(), Some(&completion_source));
+        assert!(matches!(
+            completion.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_),
+                ..
+            })
+        ));
+
+        let priority = ingress
+            .try_recv_if(|_| true)
+            .expect("later priority work proceeds after the target drains");
+        assert_eq!(priority.sender(), Some(&priority_source));
+        assert!(matches!(
+            priority.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                ..
+            })
+        ));
+
+        let causal = ingress
+            .try_recv_if(|_| true)
+            .expect("later causal work proceeds after the target drains");
+        assert_eq!(causal.sender(), Some(&causal_source));
+        assert_eq!(vote_phase(&causal), Some(wire::GlobalPhase::Prepare));
+        assert_eq!(vote_height(&causal), Some(12));
+        assert_eq!(ingress.len(), 0);
+    }
+
+    #[test]
+    fn fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let ingress = super::FairV2Ingress::new(
+            8,
+            64 * 1024 * 1024,
+            32 * 1024 * 1024,
+            super::TIMEOUT_VOTE_RESERVE_BYTES,
+            iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get()
+                + super::BODY_ENVELOPE_HEADROOM_BYTES,
+        );
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator and anonymous protected owners fit");
+        ingress.open().expect("open configured roster");
+        let request = v2_certified_body_request(&validator);
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                request.clone(),
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let first_ordinal = {
+            let state = ingress.state.lock();
+            assert_eq!(state.last_admission_ordinal, 1);
+            state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter())
+                .next()
+                .expect("the request owns one queued occurrence")
+                .admission_ordinal
+        };
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(request, Some(validator.clone()))),
+            Ok(super::FairV2IngressPushDisposition::Coalesced)
+        ));
+        {
+            let state = ingress.state.lock();
+            assert_eq!(state.last_admission_ordinal, first_ordinal);
+            assert_eq!(state.len, 1);
+            assert_eq!(
+                state
+                    .lanes
+                    .values()
+                    .flat_map(|lane| lane.entries.iter())
+                    .next()
+                    .expect("coalescing retains the original occurrence")
+                    .admission_ordinal,
+                first_ordinal
+            );
+        }
+
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("rollover reinstalls the validator and anonymous lanes");
+        {
+            let state = ingress.state.lock();
+            assert_eq!(state.len, 0, "rollover clears prior queued ownership");
+            assert_eq!(
+                state.last_admission_ordinal, first_ordinal,
+                "rollover retains the process-local ordinal high-watermark"
+            );
+        }
+        ingress.open().expect("open the rolled-over roster");
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                v2_auxiliary_prepare(8),
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        let rollover_ordinal = {
+            let state = ingress.state.lock();
+            let ordinal = state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter())
+                .next()
+                .expect("the post-rollover occurrence is queued")
+                .admission_ordinal;
+            assert_eq!(
+                ordinal,
+                first_ordinal
+                    .checked_add(1)
+                    .expect("the first test ordinal has a successor"),
+                "the first post-rollover occurrence cannot reuse an old ordinal"
+            );
+            ordinal
+        };
+
+        ingress.state.lock().last_admission_ordinal = u64::MAX;
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                v2_auxiliary_prepare(9),
+                Some(validator),
+            )),
+            Err(super::FairV2IngressPushError::Closed(_))
+        ));
+        let state = ingress.state.lock();
+        assert!(!state.open, "ordinal exhaustion fails admission closed");
+        assert_eq!(
+            state.len, 1,
+            "the retained post-rollover occurrence is not disturbed"
+        );
+        assert_eq!(
+            state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter())
+                .next()
+                .expect("the retained post-rollover occurrence remains queued")
+                .admission_ordinal,
+            rollover_ordinal
+        );
     }
 
     #[test]

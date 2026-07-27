@@ -128,11 +128,11 @@ pub mod isi {
             soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
         },
         validation_fee::{
-            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
-            ValidationFeeGovernanceWindowV1, ValidationFeeParliamentAuthorizationV1,
-            ValidationFeePayoutLifecycleReferenceV1, ValidationFeePlainElectorateRulesV1,
-            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicyV1, VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
+            VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeeFinalizationEvidenceV1,
+            ValidationFeeGovernanceVotingModeV1, ValidationFeeGovernanceWindowV1,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
+            ValidationFeePlainElectorateRulesV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
         },
         zk::{
             BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
@@ -5561,8 +5561,7 @@ pub mod isi {
         };
         if !eligible {
             return Err(InstructionExecutionError::InvariantViolation(
-                "citizen registration height is outside the proposal-bound eligibility rule"
-                    .into(),
+                "citizen registration height is outside the proposal-bound eligibility rule".into(),
             ));
         }
         let eligible_count = state_transaction
@@ -5966,19 +5965,15 @@ pub mod isi {
         ) -> Result<(), Error> {
             ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
             let (conviction_step_blocks, max_conviction) =
-                validation_fee_proposal_for_referendum(
-                    &self.referendum_id,
-                    state_transaction,
-                )
-                .and_then(|proposal| {
-                    validation_fee_plain_electorate_rules(&proposal.kind).map(|rules| {
-                        (rules.conviction_step_blocks, rules.max_conviction)
+                validation_fee_proposal_for_referendum(&self.referendum_id, state_transaction)
+                    .and_then(|proposal| {
+                        validation_fee_plain_electorate_rules(&proposal.kind)
+                            .map(|rules| (rules.conviction_step_blocks, rules.max_conviction))
                     })
-                })
-                .unwrap_or((
-                    state_transaction.gov.conviction_step_blocks,
-                    state_transaction.gov.max_conviction,
-                ));
+                    .unwrap_or((
+                        state_transaction.gov.conviction_step_blocks,
+                        state_transaction.gov.max_conviction,
+                    ));
             // Validate all economic arithmetic before opening the referendum,
             // sweeping locks, moving the bond, or emitting acceptance events.
             let weight = plain_ballot_weight(
