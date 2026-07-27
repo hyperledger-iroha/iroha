@@ -14,6 +14,10 @@ use iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
+    BOOTLE_LANTERN_APPLICATION_MODULUS_V1 as BOOTLE_LANTERN_MODEL_APPLICATION_MODULUS_V1,
+    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 as BOOTLE_LANTERN_MODEL_ATTRIBUTE_COUNT_V1,
+    BOOTLE_LANTERN_RING_DEGREE_V1 as BOOTLE_LANTERN_MODEL_RING_DEGREE_V1,
+    BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
     IrohaJindoPolynomialCommitmentStatementV1, IrohaZkAmsStatementV1, JindoActivationLimitsV1,
     ORCHARD_MAX_ACTIONS_V1 as ORCHARD_MODEL_MAX_ACTIONS_V1, OrchardActivationLimitsV1,
     OrchardHalo2ActionsStatementV1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
@@ -66,6 +70,21 @@ use crate::privacy_engines::{
             PGC_PAYMENT_PROOF_VERSION_V1, PGC_PAYMENT_SUITE_V1,
         },
     },
+    bootle_lantern::{
+        BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1,
+        codec::{
+            PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1, PROOF_MAGIC_V1, PROOF_VERSION_V1,
+        },
+        params::{
+            APPLICATION_MODULUS_V1 as BOOTLE_LANTERN_APPLICATION_MODULUS_V1,
+            APPLICATION_RELATION_QUOTIENT_BOUND_V1, APPLICATION_RING_DEGREE_V1,
+            APPLICATION_ROWS_V1, APPLICATION_WITNESS_POLYNOMIALS_V1, CHALLENGE_ETA_V1,
+            CHALLENGE_SET_BITS_V1, PROOF_MODULUS_V1 as BOOTLE_LANTERN_PROOF_MODULUS_V1,
+            RANDOMNESS_NORM_SQUARED_BOUND_V1, RESPONSE_NORM_SQUARED_BOUND_V1,
+            SIGNATURE_NORM_SQUARED_BOUND_V1, SOURCE_PROFILE_V1,
+        },
+        transcript::{PUBLIC_PARAMETER_SEED_DOMAIN_V1, public_parameter_seed_v1},
+    },
     jindo::{
         JINDO_MAX_BATCH_SIZE_V1, JINDO_NATIVE_PROOF_BYTES_V1, JINDO_PARAMETER_MANIFEST_V1,
         JINDO_SOURCE_PROFILE_V1, JINDO_SUITE_V1, jindo_crs_digest_v1,
@@ -110,6 +129,15 @@ const ANONYMOUS_PGC_BOOTSTRAP_PROOF_WIRE_LABEL_V1: &[u8] =
     b"norito:anonymous-pgc-bootstrap:strict-exact:v1";
 const ANONYMOUS_PGC_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:clean-room:eprint-2025-884:sections-3-4-6:linear-legality-and-bounded-bootstrap:v1";
+const BOOTLE_LANTERN_PROTOCOL_LABEL_V1: &[u8] = b"iroha-bootle-lantern-anoncred-v1";
+const BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1: &[u8] =
+    b"blns-lantern-lnp22-ring64-p12289-q1125899906843221-v1";
+const BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1: &[u8] =
+    b"ILN1:fixed-70344-byte:51-bit-residues:strict-exact:v1";
+const BOOTLE_LANTERN_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
+    b"iroha-native-rust:clean-room:blns-eprint-2023-560:lazer-10eafeca:lantern-lnp22:v1";
+const BOOTLE_LANTERN_RELATION_SCHEMA_V1: &[u8] = b"trusted-policy:B[8x8x64]mod12289|required-disclosures:u8|allowed-values[8][<=32x8]|statement:issuer+policy+epoch+record-digest+issuer-parameter+ordered-disclosures|relation:8x48-ring64-linear|norms:randomness+signature";
+const BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1: &[u8] = b"challenge-binding:parameter-digest+genesis-hash+statement-digest+issuer-policy-record-digest+transaction-intent-digest|relation-digest+matrix-seed+public-parameter-seed|framing:u32-be";
 const JINDO_PROTOCOL_LABEL_V1: &[u8] = b"iroha-jindo-polynomial-commitment-v0";
 const JINDO_PARAMETER_SET_LABEL_V1: &[u8] = b"jindo-univariate-batch4-degree256-transparent-v1";
 const JINDO_PROOF_WIRE_LABEL_V1: &[u8] = b"IJP1:fixed-rns-le:30-outer:66-inner:strict-exact:v1";
@@ -298,6 +326,7 @@ pub fn compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => compiled_verange_profile_v1(),
         PrivacyProtocolIdV1::IrohaZkAmsV1 => compiled_zk_ams_profile_v1(),
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => compiled_jindo_profile_v1(),
+        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => compiled_bootle_lantern_profile_v1(),
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => compiled_vega_profile_v1(),
         PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => compiled_orchard_profile_v1(),
         // TODO(privacy-native-engines): remove each fail-closed branch only
@@ -308,7 +337,6 @@ pub fn compiled_privacy_profile_v1(
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         }
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
-        | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
         | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
         | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
         | PrivacyProtocolIdV1::PqMaspStarkV0 => {
@@ -999,6 +1027,150 @@ fn compiled_anonymous_pgc_profile_v1()
                 max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
             },
         ),
+    })
+}
+
+fn compiled_bootle_lantern_profile_v1()
+-> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
+    if !BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1 {
+        return Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id });
+    }
+    if APPLICATION_RING_DEGREE_V1 != BOOTLE_LANTERN_MODEL_RING_DEGREE_V1
+        || BOOTLE_LANTERN_APPLICATION_MODULUS_V1 != BOOTLE_LANTERN_MODEL_APPLICATION_MODULUS_V1
+        || BOOTLE_LANTERN_MODEL_ATTRIBUTE_COUNT_V1 != 8
+        || APPLICATION_ROWS_V1 != 8
+        || APPLICATION_WITNESS_POLYNOMIALS_V1 != 48
+    {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+
+    let proof_bytes = u64::try_from(BOOTLE_LANTERN_PROOF_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    if proof_bytes > u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1) {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+    let proof_bytes = proof_bytes.to_be_bytes();
+    let proof_version = [PROOF_VERSION_V1];
+    let ring_degree = u64::try_from(APPLICATION_RING_DEGREE_V1)
+        .expect("fixed Bootle/Lantern ring degree fits u64")
+        .to_be_bytes();
+    let application_modulus = BOOTLE_LANTERN_APPLICATION_MODULUS_V1.to_be_bytes();
+    let proof_modulus = BOOTLE_LANTERN_PROOF_MODULUS_V1.to_be_bytes();
+    let relation_rows = u64::try_from(APPLICATION_ROWS_V1)
+        .expect("fixed Bootle/Lantern row count fits u64")
+        .to_be_bytes();
+    let relation_columns = u64::try_from(APPLICATION_WITNESS_POLYNOMIALS_V1)
+        .expect("fixed Bootle/Lantern column count fits u64")
+        .to_be_bytes();
+    let quotient_bound = APPLICATION_RELATION_QUOTIENT_BOUND_V1.to_be_bytes();
+    let randomness_norm_bound = RANDOMNESS_NORM_SQUARED_BOUND_V1.to_be_bytes();
+    let signature_norm_bound = SIGNATURE_NORM_SQUARED_BOUND_V1.to_be_bytes();
+    let response_norm_bound = RESPONSE_NORM_SQUARED_BOUND_V1.to_be_bytes();
+    let challenge_set_bits = CHALLENGE_SET_BITS_V1.to_be_bytes();
+    let challenge_eta = CHALLENGE_ETA_V1.to_be_bytes();
+    let public_parameter_seed = public_parameter_seed_v1();
+    let global_proof_cap = TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1.to_be_bytes();
+
+    let parameter_id = digest_fields_v1(
+        PARAMETER_ID_DOMAIN_V1,
+        &[
+            BOOTLE_LANTERN_PROTOCOL_LABEL_V1,
+            BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
+            SOURCE_PROFILE_V1,
+            PUBLIC_PARAMETER_SEED_DOMAIN_V1,
+            &public_parameter_seed,
+        ],
+    );
+    let parameter_digest = digest_fields_v1(
+        PARAMETER_DIGEST_DOMAIN_V1,
+        &[
+            BOOTLE_LANTERN_PROTOCOL_LABEL_V1,
+            BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
+            SOURCE_PROFILE_V1,
+            PUBLIC_PARAMETER_SEED_DOMAIN_V1,
+            &public_parameter_seed,
+            &ring_degree,
+            &application_modulus,
+            &proof_modulus,
+            &relation_rows,
+            &relation_columns,
+            &quotient_bound,
+            &randomness_norm_bound,
+            &signature_norm_bound,
+            &response_norm_bound,
+            &challenge_set_bits,
+            &challenge_eta,
+        ],
+    );
+    let statement_schema_digest =
+        canonical_schema_digest_v1::<IrohaBootleLanternAnoncredStatementV1>().map_err(
+            |source| CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
+                protocol_id,
+                source,
+            },
+        )?;
+    let issuer_policy_schema_digest = canonical_schema_digest_v1::<BootleLanternIssuerPolicyV1>()
+        .map_err(|source| {
+        CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
+            protocol_id,
+            source,
+        }
+    })?;
+    let verifier_digest = digest_fields_v1(
+        VERIFIER_DIGEST_DOMAIN_V1,
+        &[
+            BOOTLE_LANTERN_PROTOCOL_LABEL_V1,
+            BOOTLE_LANTERN_IMPLEMENTATION_PROVENANCE_V1,
+            BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
+            SOURCE_PROFILE_V1,
+            BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1,
+            &PROOF_MAGIC_V1,
+            &proof_version,
+            &proof_bytes,
+            PUBLIC_PARAMETER_SEED_DOMAIN_V1,
+            &public_parameter_seed,
+            BOOTLE_LANTERN_RELATION_SCHEMA_V1,
+            BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
+            &issuer_policy_schema_digest,
+            &statement_schema_digest,
+            &global_proof_cap,
+        ],
+    );
+    let engine_manifest_digest = digest_fields_v1(
+        ENGINE_MANIFEST_DIGEST_DOMAIN_V1,
+        &[
+            BOOTLE_LANTERN_PROTOCOL_LABEL_V1,
+            BOOTLE_LANTERN_IMPLEMENTATION_PROVENANCE_V1,
+            b"proof-system:lantern-lnp22-module-linear-norm",
+            b"engine:native-lantern-lnp22",
+            BOOTLE_LANTERN_PARAMETER_SET_LABEL_V1,
+            SOURCE_PROFILE_V1,
+            BOOTLE_LANTERN_PROOF_WIRE_LABEL_V1,
+            BOOTLE_LANTERN_RELATION_SCHEMA_V1,
+            BOOTLE_LANTERN_TRANSCRIPT_SCHEMA_V1,
+            PUBLIC_PARAMETER_SEED_DOMAIN_V1,
+            &public_parameter_seed,
+            &parameter_id,
+            &parameter_digest,
+            &verifier_digest,
+            &issuer_policy_schema_digest,
+            &statement_schema_digest,
+            &proof_bytes,
+            &global_proof_cap,
+        ],
+    );
+
+    Ok(CompiledPrivacyProfileV1 {
+        protocol_id,
+        proof_system_id: PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm,
+        engine_id: PrivacyEngineIdV1::NativeLanternLnp22,
+        parameter_id: PrivacyParameterIdV1::new(parameter_id),
+        parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
+        verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
+        statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
+        engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
+        protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaBootleLanternAnoncredV1,
     })
 }
 

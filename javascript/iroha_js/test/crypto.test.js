@@ -183,6 +183,8 @@ test("a present native file with a bad checksum never falls back", () => {
         entries: {
           [`${process.platform}-${process.arch}`]: {
             sha256: "0".repeat(64),
+            build_execution_policy: "trusted-local-cargo-v1",
+            build_provenance_version: 3,
             source_git_revision: "a".repeat(40),
             source_tree_clean: true,
             source_tree_sha256: "b".repeat(64),

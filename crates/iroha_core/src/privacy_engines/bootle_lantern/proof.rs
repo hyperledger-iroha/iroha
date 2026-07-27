@@ -205,7 +205,7 @@ fn prove_attempt(
     matrices: &InternalMatricesV1,
     randomness: &mut ProofRandomnessV1,
 ) -> Result<Option<BootleLanternPresentationProofV1>, PresentationProofErrorV1> {
-    let mut s2 = sample_ternary_vector::<TBOX_M2_V1>(randomness, b"s2");
+    let mut s2 = sample_ternary_vector::<TBOX_M2_V1>(randomness, b"s2")?;
     let (t_a1, mut t_a2) = commit_short_witness(matrices, short.polynomials(), &s2.polynomials)?;
     let mut messages = SecretPolynomialVectorV1::<TBOX_LEXT_V1>::zero();
 
@@ -885,12 +885,14 @@ fn require_schwartz_commitment_shape(
 fn sample_ternary_vector<const N: usize>(
     randomness: &mut ProofRandomnessV1,
     domain: &[u8],
-) -> SecretPolynomialVectorV1<N> {
+) -> Result<SecretPolynomialVectorV1<N>, PresentationProofErrorV1> {
     let mut output = SecretPolynomialVectorV1::zero();
     for polynomial in &mut output.polynomials {
-        *polynomial = randomness.ternary_polynomial(domain);
+        *polynomial = randomness
+            .ternary_polynomial(domain)
+            .map_err(PresentationProofErrorV1::Sampling)?;
     }
-    output
+    Ok(output)
 }
 
 fn sample_gaussian_vector<const N: usize>(
@@ -1101,8 +1103,8 @@ pub enum PresentationProofErrorV1 {
 mod tests {
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
-        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
         IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
         PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
         PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
@@ -1250,8 +1252,9 @@ mod tests {
             issuer_id: PrivacyIssuerIdV1::new(raw(11)),
             policy_id: PrivacyPolicyIdV1::new(raw(12)),
             epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new(raw(13)),
-            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(14)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
             issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
             required_disclosure_bitmap: 0b0000_0010,
             allowed_values: (0..8)
@@ -1265,6 +1268,9 @@ mod tests {
                 .collect(),
             record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
         };
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("issuer parameter digest");
         policy.record_digest = policy.computed_record_digest().expect("policy digest");
         policy.validate().expect("valid issuer policy");
         policy
@@ -1311,6 +1317,7 @@ mod tests {
         let transcript = PresentationTranscriptV1::new(
             PresentationChallengeBindingV1 {
                 parameter_digest: [0x31; 32],
+                genesis_hash: [0x32; 32],
                 statement_digest: [0x41; 32],
                 issuer_policy_record_digest: [0x42; 32],
                 transaction_intent_digest: [0x43; 32],
@@ -1455,6 +1462,10 @@ mod tests {
         for changed_binding in [
             PresentationChallengeBindingV1 {
                 statement_digest: [0x51; 32],
+                ..fixture.transcript.binding()
+            },
+            PresentationChallengeBindingV1 {
+                genesis_hash: [0x54; 32],
                 ..fixture.transcript.binding()
             },
             PresentationChallengeBindingV1 {

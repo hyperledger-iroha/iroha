@@ -12,29 +12,28 @@ use iroha_data_model::{
     AssetDefinitionId,
     account::AccountId,
     privacy::{
-        ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, IrohaZkX509StarkP256StatementV1,
-        ORCHARD_MAX_ACTIONS_V1, PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
-        PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
-        PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyActivationValidationError, PrivacyConsensusLimitsV1,
-        PrivacyConsensusPolicyV1, PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-        PrivacyNullifierV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1,
-        PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
-        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyPoolNamespaceV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-        PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
-        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyTrustAnchorNamespaceV1, PrivacyTrustAnchorPolicyNamespaceV1,
-        PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
-        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
-        PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
-        PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
-        PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
-        PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
+        ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1,
+        BootleLanternIssuerPolicyV1, IrohaZkX509StarkP256StatementV1, ORCHARD_MAX_ACTIONS_V1,
+        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
+        PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
+        PrivacyActivationValidationError, PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1,
+        PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+        PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
+        PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTrustAnchorNamespaceV1,
+        PrivacyTrustAnchorPolicyNamespaceV1, PrivacyZkAcePolicyRecordDigestV1,
+        PrivacyZkAcePolicyRecordV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+        PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
+        PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
         ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
         ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
         ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
         validate_zk_x509_certificate_policy_revocation_v1,
-        validate_zk_x509_certificate_policy_rotation_v1,
+        validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_crl_rotation_v1,
         validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
     },
 };
@@ -1146,6 +1145,92 @@ pub(crate) fn load_privacy_zk_ace_policy_v1(
     Ok(policy.clone())
 }
 
+/// Validate and count all current authoritative Bootle/Lantern issuer policies.
+///
+/// The global bound is enforced before lookup so proof preflight cannot be
+/// forced to accept adversarially oversized restored governance state.
+pub(crate) fn privacy_bootle_lantern_issuer_policy_count_v1(
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<usize, String> {
+    let mut policy_count = 0usize;
+    for (candidate, state_record) in
+        commitments.range(PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy_range())
+    {
+        candidate
+            .validate()
+            .map_err(|error| format!("invalid Bootle/Lantern issuer-policy key: {error}"))?;
+        let PrivacyCommitmentKeyV1::BootleLanternIssuerPolicy {
+            issuer_id,
+            policy_id,
+        } = *candidate
+        else {
+            return Err(
+                "Bootle/Lantern issuer-policy range crossed a typed key boundary".to_owned(),
+            );
+        };
+        policy_count = policy_count
+            .checked_add(1)
+            .ok_or_else(|| "Bootle/Lantern issuer-policy count overflow".to_owned())?;
+        if policy_count > BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1 {
+            return Err(format!(
+                "Bootle/Lantern issuer-policy count exceeds {}",
+                BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1
+            ));
+        }
+        let PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+            policy,
+            admitted_at_height,
+        } = state_record
+        else {
+            return Err(format!(
+                "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} has wrong-role provenance"
+            ));
+        };
+        if *admitted_at_height == 0 {
+            return Err(format!(
+                "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} has zero admission height"
+            ));
+        }
+        policy.validate().map_err(|error| {
+            format!("Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is invalid: {error}")
+        })?;
+        if policy.issuer_id != issuer_id || policy.policy_id != policy_id {
+            return Err(format!(
+                "Bootle/Lantern issuer-policy key {issuer_id:?}/{policy_id:?} does not match its record"
+            ));
+        }
+    }
+    Ok(policy_count)
+}
+
+/// Load and validate one current authoritative Bootle/Lantern issuer policy.
+pub(crate) fn load_privacy_bootle_lantern_issuer_policy_v1(
+    issuer_id: PrivacyIssuerIdV1,
+    policy_id: PrivacyPolicyIdV1,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<BootleLanternIssuerPolicyV1, String> {
+    let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(issuer_id, policy_id)
+        .map_err(|error| format!("invalid Bootle/Lantern issuer-policy lookup key: {error}"))?;
+    let state_record = commitments.get(&key).ok_or_else(|| {
+        format!("Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is not registered")
+    })?;
+    state_record.validate().map_err(|error| {
+        format!("Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is invalid: {error}")
+    })?;
+    let PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance { policy, .. } = state_record
+    else {
+        return Err(format!(
+            "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} has wrong-role provenance"
+        ));
+    };
+    if policy.issuer_id != issuer_id || policy.policy_id != policy_id {
+        return Err(format!(
+            "Bootle/Lantern issuer-policy key {issuer_id:?}/{policy_id:?} does not match its record"
+        ));
+    }
+    Ok(policy.clone())
+}
+
 #[derive(Default)]
 struct PrivacyZkX509GovernanceIndexV1 {
     trust_anchors: BTreeMap<PrivacyIssuerIdV1, Vec<PrivacyZkX509TrustAnchorRecordV1>>,
@@ -1957,6 +2042,36 @@ fn validate_current_zk_x509_crl_root_binding_v1(
     Ok(())
 }
 
+fn validate_current_or_terminal_zk_x509_crl_root_binding_v1(
+    head: PrivacyRootHeadRecordV1,
+    crl_record: PrivacyZkX509CrlRecordV1,
+) -> Result<(), String> {
+    if crl_record.lifecycle == PrivacyZkX509RecordLifecycleV1::Active {
+        return validate_current_zk_x509_crl_root_binding_v1(head, crl_record);
+    }
+    let PrivacyRootProvenanceV1::ZkX509CrlGovernance {
+        crl_record: last_active,
+        ..
+    } = head.provenance()
+    else {
+        return Err("terminal X.509 CRL lineage has non-CRL root provenance".to_owned());
+    };
+    if last_active.lifecycle != PrivacyZkX509RecordLifecycleV1::Active
+        || crl_record.previous_record_digest != Some(last_active.record_digest)
+        || crl_record.trust_anchor_id != last_active.trust_anchor_id
+        || crl_record.certificate_policy_id != last_active.certificate_policy_id
+        || crl_record.revoked_serials_root != last_active.revoked_serials_root
+        || crl_record.root_epoch != last_active.root_epoch
+        || head.root() != crl_record.revoked_serials_root
+        || head.epoch() != crl_record.root_epoch
+    {
+        return Err(
+            "terminal X.509 CRL record does not preserve the last active root head".to_owned(),
+        );
+    }
+    Ok(())
+}
+
 /// Validate the single trust-anchor-wide CA history against its active record.
 pub(crate) fn validate_privacy_zk_x509_trust_anchor_root_state_v1(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
@@ -2549,6 +2664,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         }
     }
     let zk_x509_index = load_privacy_zk_x509_governance_index_v1(commitments)?;
+    privacy_bootle_lantern_issuer_policy_count_v1(commitments)?;
 
     let mut history_by_scope = BTreeMap::<
         (PrivacyNamespaceV1, PrivacyRootRoleV1),
@@ -2678,6 +2794,96 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     ));
                 }
             }
+            match role {
+                PrivacyRootRoleV1::CertificateAuthorityMembership => {
+                    let trust_anchor_id = zk_x509_ca_namespace_component_v1(*namespace)?;
+                    let lineage = zk_x509_index
+                        .trust_anchors
+                        .get(&trust_anchor_id)
+                        .ok_or_else(|| {
+                            format!(
+                                "X.509 CA-root history {namespace:?} has no trust-anchor lineage"
+                            )
+                        })?;
+                    let records = history
+                        .iter()
+                        .map(|(_, provenance)| {
+                            let PrivacyRootProvenanceV1::ZkX509CaGovernance {
+                                trust_anchor_record,
+                                ..
+                            } = provenance
+                            else {
+                                return Err(
+                                    "X.509 CA-root history has wrong-role provenance".to_owned()
+                                );
+                            };
+                            if !lineage.contains(trust_anchor_record) {
+                                return Err(
+                                    "X.509 CA-root provenance embeds an unregistered trust-anchor revision"
+                                        .to_owned(),
+                                );
+                            }
+                            Ok(*trust_anchor_record)
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    if head.retention_anchor().is_none() {
+                        records[0].validate_initial().map_err(|error| {
+                            format!("invalid X.509 CA-root history origin: {error}")
+                        })?;
+                    }
+                    for adjacent in records.windows(2) {
+                        validate_zk_x509_trust_anchor_rotation_v1(&adjacent[0], &adjacent[1])
+                            .map_err(|error| {
+                                format!("invalid X.509 CA-root history transition: {error}")
+                            })?;
+                    }
+                }
+                PrivacyRootRoleV1::CertificateRevocationNonmembership => {
+                    let (trust_anchor_id, policy_id) =
+                        zk_x509_policy_namespace_components_v1(*namespace)?;
+                    if !zk_x509_index
+                        .current_crls
+                        .contains_key(&(trust_anchor_id, policy_id))
+                    {
+                        return Err(format!(
+                            "X.509 CRL-root history {namespace:?} has no current signed-CRL record"
+                        ));
+                    }
+                    let records = history
+                        .iter()
+                        .map(|(_, provenance)| {
+                            let PrivacyRootProvenanceV1::ZkX509CrlGovernance { crl_record, .. } =
+                                provenance
+                            else {
+                                return Err(
+                                    "X.509 CRL-root history has wrong-role provenance".to_owned()
+                                );
+                            };
+                            Ok(*crl_record)
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    if head.retention_anchor().is_none() {
+                        records[0].validate_initial().map_err(|error| {
+                            format!("invalid X.509 CRL-root history origin: {error}")
+                        })?;
+                    }
+                    for adjacent in records.windows(2) {
+                        validate_zk_x509_crl_rotation_v1(&adjacent[0], &adjacent[1]).map_err(
+                            |error| format!("invalid X.509 CRL-root history transition: {error}"),
+                        )?;
+                    }
+                }
+                PrivacyRootRoleV1::PgcAccountState
+                | PrivacyRootRoleV1::AccountRegistry
+                | PrivacyRootRoleV1::Revocation
+                | PrivacyRootRoleV1::NoteCommitmentAnchor
+                | PrivacyRootRoleV1::OutputSet
+                | PrivacyRootRoleV1::ProgramState => {
+                    return Err(format!(
+                        "X.509 root history {namespace:?} uses incompatible role {role:?}"
+                    ));
+                }
+            }
         } else {
             if head.retention_anchor().is_some() {
                 return Err(format!(
@@ -2760,6 +2966,34 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             ));
         }
     }
+    let x509_retained_root_count = policy.admission_retained_root_count();
+    let x509_retained_root_count_usize = usize::try_from(x509_retained_root_count)
+        .map_err(|_| "X.509 retained-root count cannot be represented".to_owned())?;
+    for lineage in zk_x509_index.trust_anchors.values() {
+        let last_active = lineage
+            .iter()
+            .rev()
+            .find(|record| record.lifecycle == PrivacyZkX509RecordLifecycleV1::Active)
+            .copied()
+            .expect("validated X.509 trust-anchor lineage begins active");
+        validate_privacy_zk_x509_trust_anchor_root_state_v1(
+            last_active,
+            x509_retained_root_count,
+            roots,
+            root_heads,
+        )?;
+    }
+    for ((trust_anchor_id, policy_id), crl_record) in &zk_x509_index.current_crls {
+        let namespace = privacy_zk_x509_policy_namespace_v1(*trust_anchor_id, *policy_id)?;
+        let head = validate_zk_x509_root_history_v1(
+            namespace,
+            PrivacyRootRoleV1::CertificateRevocationNonmembership,
+            x509_retained_root_count_usize,
+            roots,
+            root_heads,
+        )?;
+        validate_current_or_terminal_zk_x509_crl_root_binding_v1(head, *crl_record)?;
+    }
     let mut zk_ace_policy_ids = BTreeSet::new();
     for (key, record) in commitments.iter() {
         match key {
@@ -2779,6 +3013,24 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     return Err(format!(
                         "ZK-ACE policy count exceeds {}",
                         PRIVACY_ZK_ACE_MAX_POLICIES_V1
+                    ));
+                }
+            }
+            PrivacyCommitmentKeyV1::BootleLanternIssuerPolicy {
+                issuer_id,
+                policy_id,
+            } => {
+                let PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+                    policy, ..
+                } = record
+                else {
+                    return Err(format!(
+                        "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} has wrong-role provenance"
+                    ));
+                };
+                if policy.issuer_id != *issuer_id || policy.policy_id != *policy_id {
+                    return Err(format!(
+                        "Bootle/Lantern issuer-policy key {issuer_id:?}/{policy_id:?} does not match its record"
                     ));
                 }
             }
@@ -2824,6 +3076,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                         } if observed == bootstrap_digest
                     ),
                     PrivacyCommitmentKeyV1::ZkAcePolicy { .. }
+                    | PrivacyCommitmentKeyV1::BootleLanternIssuerPolicy { .. }
                     | PrivacyCommitmentKeyV1::OrchardPoolState { .. }
                     | PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
                     | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. }
@@ -3837,6 +4090,13 @@ pub enum PrivacyCommitmentKeyV1 {
         /// Stable policy lookup key.
         policy_id: PrivacyPolicyIdV1,
     },
+    /// Current authoritative Bootle/Lantern issuer policy.
+    BootleLanternIssuerPolicy {
+        /// Stable credential issuer identity.
+        issuer_id: PrivacyIssuerIdV1,
+        /// Stable policy identity within the issuer namespace.
+        policy_id: PrivacyPolicyIdV1,
+    },
     /// Complete authoritative compact state of one Orchard pool.
     OrchardPoolState {
         /// Governed Orchard pool namespace.
@@ -3897,6 +4157,44 @@ impl PrivacyCommitmentKeyV1 {
         Ok(Self::ZkAcePolicy { policy_id })
     }
 
+    /// Construct the singleton current-policy key for one Bootle/Lantern lineage.
+    pub fn bootle_lantern_issuer_policy(
+        issuer_id: PrivacyIssuerIdV1,
+        policy_id: PrivacyPolicyIdV1,
+    ) -> Result<Self, &'static str> {
+        if issuer_id.is_zero() {
+            return Err("Bootle/Lantern issuer id must be non-zero");
+        }
+        if policy_id.is_zero() {
+            return Err("Bootle/Lantern policy id must be non-zero");
+        }
+        Ok(Self::BootleLanternIssuerPolicy {
+            issuer_id,
+            policy_id,
+        })
+    }
+
+    /// Return the Bootle/Lantern issuer and policy identity, if present.
+    #[must_use]
+    pub const fn bootle_lantern_issuer_policy_identity(
+        self,
+    ) -> Option<(PrivacyIssuerIdV1, PrivacyPolicyIdV1)> {
+        match self {
+            Self::BootleLanternIssuerPolicy {
+                issuer_id,
+                policy_id,
+            } => Some((issuer_id, policy_id)),
+            Self::ZkAcePolicy { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::ZkX509TrustAnchorRevision { .. }
+            | Self::ZkX509CertificatePolicyRevision { .. }
+            | Self::ZkX509CrlCurrent { .. }
+            | Self::ZkAmsIssuerPolicyRecord { .. }
+            | Self::ZkAmsPhc { .. }
+            | Self::ZkAmsSeedKey { .. } => None,
+        }
+    }
+
     /// Construct the singleton compact-state key for one Orchard pool.
     pub(crate) fn orchard_pool_state(namespace: PrivacyNamespaceV1) -> Result<Self, &'static str> {
         validate_orchard_namespace(namespace)?;
@@ -3931,12 +4229,25 @@ impl PrivacyCommitmentKeyV1 {
         }
     }
 
+    /// Ordered bounds covering exactly the current Bootle/Lantern policy table.
+    #[must_use]
+    pub fn bootle_lantern_issuer_policy_range() -> core::ops::RangeInclusive<Self> {
+        Self::BootleLanternIssuerPolicy {
+            issuer_id: PrivacyIssuerIdV1::new([0; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0; 32]),
+        }..=Self::BootleLanternIssuerPolicy {
+            issuer_id: PrivacyIssuerIdV1::new([u8::MAX; 32]),
+            policy_id: PrivacyPolicyIdV1::new([u8::MAX; 32]),
+        }
+    }
+
     /// Return the Orchard pool namespace, if this is a compact-state key.
     #[must_use]
     pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
             Self::OrchardPoolState { namespace } => Some(namespace),
             Self::ZkAcePolicy { .. }
+            | Self::BootleLanternIssuerPolicy { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
             | Self::ZkX509CrlCurrent { .. }
@@ -4121,6 +4432,7 @@ impl PrivacyCommitmentKeyV1 {
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
             Self::ZkAcePolicy { .. }
+            | Self::BootleLanternIssuerPolicy { .. }
             | Self::OrchardPoolState { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
@@ -4136,6 +4448,9 @@ impl PrivacyCommitmentKeyV1 {
     pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         match self {
             Self::ZkAcePolicy { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::BootleLanternIssuerPolicy { .. } => {
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+            }
             Self::OrchardPoolState { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
@@ -4153,6 +4468,7 @@ impl PrivacyCommitmentKeyV1 {
     ) -> Option<PrivacyZkAmsIssuerPolicyRecordDigestV1> {
         match self {
             Self::ZkAcePolicy { .. }
+            | Self::BootleLanternIssuerPolicy { .. }
             | Self::OrchardPoolState { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. }
@@ -4203,6 +4519,10 @@ impl PrivacyCommitmentKeyV1 {
     fn validate(self) -> Result<(), &'static str> {
         match self {
             Self::ZkAcePolicy { policy_id } => Self::zk_ace_policy(policy_id).map(|_| ()),
+            Self::BootleLanternIssuerPolicy {
+                issuer_id,
+                policy_id,
+            } => Self::bootle_lantern_issuer_policy(issuer_id, policy_id).map(|_| ()),
             Self::OrchardPoolState { namespace } => Self::orchard_pool_state(namespace).map(|_| ()),
             Self::ZkX509TrustAnchorRevision {
                 trust_anchor_id,
@@ -5190,13 +5510,20 @@ impl PrivacyRootHeadRecordV1 {
 /// governance can never manufacture a synthetic statement digest, and a proof
 /// path cannot impersonate the registry bootstrap.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
-#[norito(tag = "origin", content = "record")]
+#[norito(tag = "origin", content = "record", deny_unknown_fields)]
 pub enum PrivacyStateItemRecordV1 {
     /// Complete authoritative ZK-ACE policy installed or replaced by governance.
     ZkAcePolicyGovernance {
         /// Canonical self-digested policy state.
         policy: PrivacyZkAcePolicyRecordV1,
         /// Block height at which governance installed this revision.
+        admitted_at_height: u64,
+    },
+    /// Current authoritative Bootle/Lantern issuer policy installed by governance.
+    BootleLanternIssuerPolicyGovernance {
+        /// Canonical self-authenticating issuer policy.
+        policy: BootleLanternIssuerPolicyV1,
+        /// Block height at which governance installed this current revision.
         admitted_at_height: u64,
     },
     /// Immutable X.509 trust-anchor revision installed by typed governance.
@@ -5282,6 +5609,23 @@ impl PrivacyStateItemRecordV1 {
             return Err("privacy state admission height must be non-zero");
         }
         Ok(Self::ZkAcePolicyGovernance {
+            policy,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct the authoritative value for one governed Bootle/Lantern policy.
+    pub fn bootle_lantern_issuer_policy_governance(
+        policy: BootleLanternIssuerPolicyV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        policy
+            .validate()
+            .map_err(|_| "Bootle/Lantern issuer-policy record is invalid")?;
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::BootleLanternIssuerPolicyGovernance {
             policy,
             admitted_at_height,
         })
@@ -5451,6 +5795,11 @@ impl PrivacyStateItemRecordV1 {
                 policy,
                 admitted_at_height,
             } => Self::zk_ace_policy_governance(policy.clone(), *admitted_at_height).map(|_| ()),
+            Self::BootleLanternIssuerPolicyGovernance {
+                policy,
+                admitted_at_height,
+            } => Self::bootle_lantern_issuer_policy_governance(policy.clone(), *admitted_at_height)
+                .map(|_| ()),
             Self::ZkX509TrustAnchorGovernance {
                 record,
                 admitted_at_height,
@@ -5515,6 +5864,7 @@ impl PrivacyStateItemRecordV1 {
     pub const fn zk_ams_bootstrap_digest(&self) -> Option<PrivacyZkAmsRegistryBootstrapDigestV1> {
         match self {
             Self::ZkAcePolicyGovernance { .. }
+            | Self::BootleLanternIssuerPolicyGovernance { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
             | Self::ZkX509CrlGovernance { .. }
@@ -5535,12 +5885,30 @@ impl PrivacyStateItemRecordV1 {
     pub const fn zk_ace_policy(&self) -> Option<&PrivacyZkAcePolicyRecordV1> {
         match self {
             Self::ZkAcePolicyGovernance { policy, .. } => Some(policy),
-            Self::ZkAceVerifiedAuthorization { .. }
+            Self::BootleLanternIssuerPolicyGovernance { .. }
+            | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
             | Self::OrchardVerifiedNullifier { .. }
+            | Self::ZkAmsGovernance { .. }
+            | Self::ZkAmsVerifiedProof { .. } => None,
+        }
+    }
+
+    /// Borrow the authoritative Bootle/Lantern issuer policy carried by this record.
+    #[must_use]
+    pub const fn bootle_lantern_issuer_policy(&self) -> Option<&BootleLanternIssuerPolicyV1> {
+        match self {
+            Self::BootleLanternIssuerPolicyGovernance { policy, .. } => Some(policy),
+            Self::ZkAcePolicyGovernance { .. }
+            | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::ZkX509CrlGovernance { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::OrchardVerifiedNullifier { .. }
+            | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
@@ -5552,6 +5920,7 @@ impl PrivacyStateItemRecordV1 {
         match self {
             Self::OrchardPoolState { state } => Some(state),
             Self::ZkAcePolicyGovernance { .. }
+            | Self::BootleLanternIssuerPolicyGovernance { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
             | Self::ZkX509CrlGovernance { .. }
@@ -5568,6 +5937,7 @@ impl PrivacyStateItemRecordV1 {
         match self {
             Self::ZkX509TrustAnchorGovernance { record, .. } => Some(record),
             Self::ZkAcePolicyGovernance { .. }
+            | Self::BootleLanternIssuerPolicyGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
@@ -5586,6 +5956,7 @@ impl PrivacyStateItemRecordV1 {
         match self {
             Self::ZkX509CertificatePolicyGovernance { record, .. } => Some(record),
             Self::ZkAcePolicyGovernance { .. }
+            | Self::BootleLanternIssuerPolicyGovernance { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
             | Self::ZkX509CrlGovernance { .. }
             | Self::OrchardPoolState { .. }
@@ -5602,6 +5973,7 @@ impl PrivacyStateItemRecordV1 {
         match self {
             Self::ZkX509CrlGovernance { record, .. } => Some(record),
             Self::ZkAcePolicyGovernance { .. }
+            | Self::BootleLanternIssuerPolicyGovernance { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
             | Self::OrchardPoolState { .. }
@@ -5780,6 +6152,41 @@ pub(crate) struct PrivacyRootRetentionReductionPlanV1 {
     pub(crate) removal_keys: Vec<PrivacyRootKeyV1>,
 }
 
+/// Protocols whose complete typed root histories support anchored prefix pruning.
+///
+/// Keep this closed list shared by policy prevalidation and block-start
+/// application so a newly prunable history cannot be admitted without also
+/// being reduced at the exact effective height.
+pub(crate) const PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1: [PrivacyProtocolIdV1; 4] = [
+    PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+    PrivacyProtocolIdV1::IrohaZkAmsV1,
+    PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+    PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+];
+
+const fn privacy_root_history_supports_retention_anchor_v1(
+    protocol_id: PrivacyProtocolIdV1,
+    role: PrivacyRootRoleV1,
+) -> bool {
+    matches!(
+        (protocol_id, role),
+        (
+            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRootRoleV1::PgcAccountState
+        ) | (
+            PrivacyProtocolIdV1::IrohaZkAmsV1,
+            PrivacyRootRoleV1::AccountRegistry
+        ) | (
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyRootRoleV1::NoteCommitmentAnchor
+        ) | (
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyRootRoleV1::CertificateAuthorityMembership
+                | PrivacyRootRoleV1::CertificateRevocationNonmembership
+        )
+    )
+}
+
 /// Plan exact per-history anchors and oldest roots for a retention decrease.
 ///
 /// Histories remain independent by `(namespace, role)`. The function is
@@ -5840,10 +6247,11 @@ pub(crate) fn plan_privacy_root_retention_reduction_v1(
 
 /// Validate that every unanchored history already satisfies a future retention cap.
 ///
-/// PGC account-state, ZK-AMS registry, and Orchard note-commitment histories
-/// carry typed parent links plus an exact pruned-prefix anchor and can therefore
-/// be reduced atomically at the scheduled height. Every other history must
-/// already fit the future cap; governance cannot silently orphan it.
+/// PGC account-state, ZK-AMS registry, Orchard note-commitment, and typed X.509
+/// CA/CRL histories carry exact provenance plus a pruned-prefix anchor and can
+/// therefore be reduced atomically at the scheduled height. Every other
+/// history must already fit the future cap; governance cannot silently orphan
+/// it.
 pub(crate) fn validate_unanchored_privacy_root_retention_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     retained_root_count: u32,
@@ -5857,18 +6265,9 @@ pub(crate) fn validate_unanchored_privacy_root_retention_v1(
     for (key, _) in roots.iter() {
         key.validate()
             .map_err(|error| format!("invalid privacy root key: {error}"))?;
-        if matches!(
-            (key.namespace().protocol_id(), key.role()),
-            (
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-                PrivacyRootRoleV1::PgcAccountState
-            ) | (
-                PrivacyProtocolIdV1::IrohaZkAmsV1,
-                PrivacyRootRoleV1::AccountRegistry
-            ) | (
-                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-                PrivacyRootRoleV1::NoteCommitmentAnchor
-            )
+        if privacy_root_history_supports_retention_anchor_v1(
+            key.namespace().protocol_id(),
+            key.role(),
         ) {
             continue;
         }
@@ -5950,19 +6349,25 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::privacy::{
-        PrivacyActiveLifecycleV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
+        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
+        BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
+        BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPublicMatrixV1,
+        BootleLanternPolynomialV1, PrivacyActiveLifecycleV1, PrivacyAttributeDigestV1,
+        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCertificateKeyDigestV1,
         PrivacyChallengeV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
         PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyIssuerRegistryPolicyNamespaceV1,
         PrivacyNamespaceScopeV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
         PrivacyParameterNamespaceV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
         PrivacyPoolNamespaceV1, PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
         PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-        PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorPolicyNamespaceV1,
-        PrivacyVerifierDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
+        PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
+        PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
+        PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
         PrivacyX509TrustStoreDigestV1, PrivacyZkAcePolicyLifecycleV1,
         PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsRegistryIdV1, PrivacyZkX509CrlRecordDigestV1,
-        PrivacyZkX509DisclosedAttributeV1,
+        PrivacyZkAmsRegistryIdV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
+        PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
+        PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     };
     use iroha_data_model::{
         ChainId, account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name,
@@ -6005,6 +6410,73 @@ mod tests {
             PrivacyZkAcePolicyLifecycleV1::Active,
         )
         .expect("canonical ZK-ACE policy")
+    }
+
+    fn bootle_lantern_issuer_policy(
+        issuer_byte: u8,
+        policy_byte: u8,
+        epoch: u64,
+        lifecycle: BootleLanternIssuerPolicyLifecycleV1,
+    ) -> BootleLanternIssuerPolicyV1 {
+        let matrix_entry_count =
+            BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1 * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1;
+        let mut issuer_public_matrix = BootleLanternIssuerPublicMatrixV1 {
+            entries: vec![
+                BootleLanternPolynomialV1 {
+                    coefficients: vec![0; BOOTLE_LANTERN_RING_DEGREE_V1],
+                };
+                matrix_entry_count
+            ],
+        };
+        issuer_public_matrix.entries[0].coefficients[0] = 1;
+        let mut policy = BootleLanternIssuerPolicyV1 {
+            issuer_id: PrivacyIssuerIdV1::new(nonzero(issuer_byte)),
+            policy_id: PrivacyPolicyIdV1::new(nonzero(policy_byte)),
+            epoch,
+            lifecycle,
+            issuer_parameter_id: PrivacyParameterIdV1::new(nonzero(0xB3)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
+            issuer_public_matrix,
+            required_disclosure_bitmap: 0,
+            allowed_values: vec![
+                BootleLanternAllowedAttributeValuesV1 { values: Vec::new() };
+                BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1
+            ],
+            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+        };
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("canonical Bootle/Lantern issuer matrix encoding");
+        policy.record_digest = policy
+            .computed_record_digest()
+            .expect("canonical Bootle/Lantern policy encoding");
+        policy
+            .validate()
+            .expect("canonical Bootle/Lantern issuer policy");
+        policy
+    }
+
+    fn validate_persisted_commitments(
+        commitments: &Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    ) -> Result<(), String> {
+        let activations =
+            Storage::<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>::new();
+        let pgc_accounts = Storage::<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>::new();
+        let pgc_pool_invariants =
+            Storage::<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>::new();
+        let nullifiers = Storage::<PrivacyNullifierKeyV1, PrivacyStateItemRecordV1>::new();
+        let roots = Storage::<PrivacyRootKeyV1, PrivacyRootProvenanceV1>::new();
+        let root_heads = Storage::<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>::new();
+        validate_privacy_persisted_state_v1(
+            &PrivacyConsensusPolicyV1::taira_default(),
+            &activations.view(),
+            &pgc_accounts.view(),
+            &pgc_pool_invariants.view(),
+            &nullifiers.view(),
+            &commitments.view(),
+            &roots.view(),
+            &root_heads.view(),
+        )
     }
 
     fn pgc_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
@@ -6055,9 +6527,23 @@ mod tests {
         )
     }
 
+    fn x509_ca_namespace() -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
+                trust_anchor_id: PrivacyIssuerIdV1::new(nonzero(41)),
+            }),
+        )
+    }
+
     fn x509_root_key(role: PrivacyRootRoleV1, epoch: u64, root_byte: u8) -> PrivacyRootKeyV1 {
+        let namespace = match role {
+            PrivacyRootRoleV1::CertificateAuthorityMembership => x509_ca_namespace(),
+            PrivacyRootRoleV1::CertificateRevocationNonmembership => x509_namespace(),
+            _ => panic!("X.509 root fixture requires a closed X.509 role"),
+        };
         PrivacyRootKeyV1::new(
-            x509_namespace(),
+            namespace,
             role,
             epoch,
             PrivacyRootV1::new(nonzero(root_byte)),
@@ -6079,9 +6565,13 @@ mod tests {
         previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
         lifecycle: PrivacyZkX509RecordLifecycleV1,
     ) -> PrivacyZkX509TrustAnchorRecordV1 {
+        let ca_membership_root_epoch = match lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active => epoch,
+            PrivacyZkX509RecordLifecycleV1::Revoked => epoch.saturating_sub(1),
+        };
         PrivacyZkX509TrustAnchorRecordV1::new(
             trust_anchor_id,
-            epoch,
+            ca_membership_root_epoch,
             PrivacyX509TrustStoreDigestV1::new(nonzero(trust_store_byte)),
             PrivacyRootV1::new(nonzero(trust_store_byte.wrapping_add(1))),
             epoch,
@@ -6122,6 +6612,36 @@ mod tests {
         .expect("canonical X.509 certificate-policy record")
     }
 
+    fn x509_crl_record(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        policy_id: PrivacyPolicyIdV1,
+        epoch: u64,
+        crl_number: u64,
+        root_byte: u8,
+        previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509CrlRecordV1 {
+        let root_epoch = match lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active => epoch,
+            PrivacyZkX509RecordLifecycleV1::Revoked => epoch.saturating_sub(1),
+        };
+        PrivacyZkX509CrlRecordV1::new(
+            trust_anchor_id,
+            policy_id,
+            epoch,
+            crl_number,
+            PrivacyX509CrlDerDigestV1::new(indexed_nonzero(0xC1, epoch)),
+            PrivacyX509CrlIssuerSpkiDigestV1::new(nonzero(0xC2)),
+            1_749_999_900 + epoch,
+            1_750_000_600 + epoch,
+            PrivacyRootV1::new(nonzero(root_byte)),
+            root_epoch,
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 signed-CRL record")
+    }
+
     fn insert_x509_trust_anchor(
         commitments: &mut Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
         record: PrivacyZkX509TrustAnchorRecordV1,
@@ -6157,10 +6677,25 @@ mod tests {
         commitments.insert(key, value);
     }
 
+    fn insert_x509_crl(
+        commitments: &mut Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+        record: PrivacyZkX509CrlRecordV1,
+        admitted_at_height: u64,
+    ) {
+        let key = PrivacyCommitmentKeyV1::zk_x509_crl_current(
+            record.trust_anchor_id,
+            record.certificate_policy_id,
+        )
+        .expect("current signed-CRL key");
+        let value = PrivacyStateItemRecordV1::zk_x509_crl_governance(record, admitted_at_height)
+            .expect("signed-CRL state record");
+        commitments.insert(key, value);
+    }
+
     fn x509_root_provenance(
         key: PrivacyRootKeyV1,
         trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
-        certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
+        crl_record: PrivacyZkX509CrlRecordV1,
         admitted_at_height: u64,
     ) -> PrivacyRootProvenanceV1 {
         let publication = PrivacyRootPublicationV1 {
@@ -6169,19 +6704,31 @@ mod tests {
             epoch: key.epoch(),
             root: key.root(),
         };
-        PrivacyRootProvenanceV1::zk_x509_governance(
-            publication.digest().expect("root publication digest"),
-            publication.namespace,
-            publication.role,
-            publication.epoch,
-            publication.root,
-            trust_anchor.record_digest,
-            trust_anchor.record_epoch,
-            certificate_policy.record_digest,
-            certificate_policy.record_epoch,
-            admitted_at_height,
-        )
-        .expect("X.509 root provenance")
+        match publication.role {
+            PrivacyRootRoleV1::CertificateAuthorityMembership => {
+                PrivacyRootProvenanceV1::zk_x509_ca_governance(
+                    publication.digest().expect("root publication digest"),
+                    publication.namespace,
+                    publication.epoch,
+                    publication.root,
+                    trust_anchor,
+                    admitted_at_height,
+                )
+                .expect("X.509 CA-root provenance")
+            }
+            PrivacyRootRoleV1::CertificateRevocationNonmembership => {
+                PrivacyRootProvenanceV1::zk_x509_crl_governance(
+                    publication.digest().expect("root publication digest"),
+                    publication.namespace,
+                    publication.epoch,
+                    publication.root,
+                    crl_record,
+                    admitted_at_height,
+                )
+                .expect("X.509 CRL-root provenance")
+            }
+            _ => panic!("X.509 root fixture requires a closed X.509 role"),
+        }
     }
 
     fn root_provenance() -> PrivacyRootProvenanceV1 {
@@ -8354,6 +8901,16 @@ mod tests {
                 PrivacyRootRoleV1::NoteCommitmentAnchor,
                 "Orchard",
             ),
+            (
+                x509_ca_namespace(),
+                PrivacyRootRoleV1::CertificateAuthorityMembership,
+                "X.509 CA",
+            ),
+            (
+                x509_namespace(),
+                PrivacyRootRoleV1::CertificateRevocationNonmembership,
+                "X.509 CRL",
+            ),
         ] {
             let mut roots = Storage::new();
             for epoch in 1..=3 {
@@ -8412,6 +8969,279 @@ mod tests {
         )
         .expect_err("an unregistered protocol cannot own persisted state");
         assert!(error.contains("unregistered protocol"), "{error}");
+    }
+
+    #[test]
+    fn bootle_lantern_policy_key_is_exact_role_separated_and_canonical() {
+        let issuer_id = PrivacyIssuerIdV1::new(nonzero(0xB1));
+        let policy_id = PrivacyPolicyIdV1::new(nonzero(0xB2));
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(issuer_id, policy_id)
+            .expect("nonzero Bootle/Lantern key");
+
+        assert_eq!(
+            key.protocol_id(),
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+        );
+        assert_eq!(
+            key.bootle_lantern_issuer_policy_identity(),
+            Some((issuer_id, policy_id))
+        );
+        assert_eq!(key.zk_ams_namespace(), None);
+        assert!(
+            PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+                PrivacyIssuerIdV1::new([0; 32]),
+                policy_id,
+            )
+            .is_err()
+        );
+        assert!(
+            PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+                issuer_id,
+                PrivacyPolicyIdV1::new([0; 32]),
+            )
+            .is_err()
+        );
+
+        let mut encoded_json = String::new();
+        key.encode_json_key(&mut encoded_json);
+        let encoded =
+            norito::json::from_json::<String>(&encoded_json).expect("canonical key string");
+        assert_eq!(
+            PrivacyCommitmentKeyV1::decode_json_key(&encoded).expect("canonical key roundtrip"),
+            key
+        );
+        assert!(
+            PrivacyCommitmentKeyV1::decode_json_key(&encoded.to_ascii_lowercase()).is_err(),
+            "lowercase storage-key hex must reject"
+        );
+        assert!(PrivacyCommitmentKeyV1::decode_json_key(&format!(" {encoded}")).is_err());
+        assert!(PrivacyCommitmentKeyV1::decode_json_key(&format!("{encoded} ")).is_err());
+        assert!(PrivacyCommitmentKeyV1::decode_json_key(&encoded[..encoded.len() - 1]).is_err());
+        let mut trailing = hex::decode(&encoded).expect("canonical key hex");
+        trailing.push(0);
+        assert!(
+            PrivacyCommitmentKeyV1::decode_json_key(&hex::encode_upper(trailing)).is_err(),
+            "trailing Norito bytes must reject"
+        );
+    }
+
+    #[test]
+    fn bootle_lantern_policy_loader_and_restore_reject_cross_role_and_corruption() {
+        let policy = bootle_lantern_issuer_policy(
+            0xB1,
+            0xB2,
+            1,
+            BootleLanternIssuerPolicyLifecycleV1::Active,
+        );
+        let issuer_id = policy.issuer_id;
+        let policy_id = policy.policy_id;
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(issuer_id, policy_id)
+            .expect("Bootle/Lantern key");
+        let record =
+            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(policy.clone(), 7)
+                .expect("Bootle/Lantern governance record");
+
+        let mut commitments = Storage::new();
+        assert!(
+            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &commitments.view())
+                .expect_err("missing policy must reject")
+                .contains("not registered")
+        );
+        commitments.insert(key, record.clone());
+        assert_eq!(
+            privacy_bootle_lantern_issuer_policy_count_v1(&commitments.view())
+                .expect("bounded policy count"),
+            1
+        );
+        assert_eq!(
+            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &commitments.view())
+                .expect("load canonical policy"),
+            policy
+        );
+        assert_eq!(record.bootle_lantern_issuer_policy(), Some(&policy));
+        assert!(
+            validate_persisted_commitments(&commitments)
+                .expect_err("Bootle/Lantern state requires executable protocol activation")
+                .contains("unregistered protocol")
+        );
+
+        let mut wrong_role = Storage::new();
+        wrong_role.insert(
+            key,
+            PrivacyStateItemRecordV1::zk_ace_policy_governance(
+                zk_ace_policy_record(zk_ace_policy_id(1)),
+                7,
+            )
+            .expect("valid cross-role record"),
+        );
+        assert!(
+            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &wrong_role.view())
+                .expect_err("cross-role record must reject")
+                .contains("wrong-role")
+        );
+        let mismatched_policy = bootle_lantern_issuer_policy(
+            0xB4,
+            0xB2,
+            1,
+            BootleLanternIssuerPolicyLifecycleV1::Active,
+        );
+        let mut mismatched = Storage::new();
+        mismatched.insert(
+            key,
+            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(mismatched_policy, 7)
+                .expect("intrinsically valid mismatched policy"),
+        );
+        assert!(
+            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &mismatched.view())
+                .expect_err("key/record identity mismatch must reject")
+                .contains("does not match")
+        );
+
+        let mut corrupted_policy = policy.clone();
+        corrupted_policy.record_digest =
+            PrivacyBootleLanternIssuerPolicyDigestV1::new(nonzero(0xB5));
+        let mut corrupted = Storage::new();
+        corrupted.insert(
+            key,
+            PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+                policy: corrupted_policy,
+                admitted_at_height: 7,
+            },
+        );
+        let error =
+            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &corrupted.view())
+                .expect_err("record digest corruption must reject");
+        assert!(error.contains("is invalid"), "unexpected error: {error}");
+
+        let mut wrong_parameter_digest = policy.clone();
+        wrong_parameter_digest.issuer_parameter_digest =
+            PrivacyParameterDigestV1::new(nonzero(0xB6));
+        wrong_parameter_digest.record_digest =
+            PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        wrong_parameter_digest.record_digest = wrong_parameter_digest
+            .computed_record_digest()
+            .expect("recompute outer record digest");
+        let mut corrupted_parameter = Storage::new();
+        corrupted_parameter.insert(
+            key,
+            PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+                policy: wrong_parameter_digest,
+                admitted_at_height: 7,
+            },
+        );
+        let error = load_privacy_bootle_lantern_issuer_policy_v1(
+            issuer_id,
+            policy_id,
+            &corrupted_parameter.view(),
+        )
+        .expect_err("issuer-parameter digest substitution must reject");
+        assert!(error.contains("is invalid"), "unexpected error: {error}");
+
+        let mut zero_height = Storage::new();
+        zero_height.insert(
+            key,
+            PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance {
+                policy,
+                admitted_at_height: 0,
+            },
+        );
+        assert!(
+            load_privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id, &zero_height.view())
+                .expect_err("zero admission height must reject")
+                .contains("admission height must be non-zero")
+        );
+    }
+
+    #[test]
+    fn bootle_lantern_terminal_lifecycle_is_durable_but_unknown_json_state_rejects() {
+        let revoked = bootle_lantern_issuer_policy(
+            0xB1,
+            0xB2,
+            2,
+            BootleLanternIssuerPolicyLifecycleV1::Revoked,
+        );
+        let record = PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(revoked, 8)
+            .expect("terminal policy is valid durable state");
+        record
+            .validate()
+            .expect("terminal policy record remains structurally valid");
+
+        let encoded = norito::json::to_json(&record).expect("encode policy state record");
+        let invalid_lifecycle = encoded.replacen("\"revoked\"", "\"reactivated\"", 1);
+        assert_ne!(invalid_lifecycle, encoded, "fixture contains lifecycle tag");
+        assert!(
+            norito::json::from_json::<PrivacyStateItemRecordV1>(&invalid_lifecycle).is_err(),
+            "unknown lifecycle encodings must reject without aliases"
+        );
+
+        let unknown_record_field = encoded.replacen(
+            "\"admitted_at_height\":8",
+            "\"admitted_at_height\":8,\"legacy\":true",
+            1,
+        );
+        assert_ne!(
+            unknown_record_field, encoded,
+            "fixture contains the record content"
+        );
+        assert!(
+            norito::json::from_json::<PrivacyStateItemRecordV1>(&unknown_record_field).is_err(),
+            "unknown durable record fields must reject in the first release"
+        );
+    }
+
+    #[test]
+    fn bootle_lantern_policy_count_accepts_cap_and_rejects_cap_plus_one() {
+        let issuer_id = PrivacyIssuerIdV1::new(nonzero(0xB1));
+        let template = bootle_lantern_issuer_policy(
+            0xB1,
+            0xB2,
+            1,
+            BootleLanternIssuerPolicyLifecycleV1::Active,
+        );
+        let mut commitments = Storage::new();
+        for index in 1..=BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1 {
+            let index = u64::try_from(index).expect("policy cap fits u64");
+            let policy_id = PrivacyPolicyIdV1::new(indexed_nonzero(0xB7, index));
+            let mut policy = template.clone();
+            policy.policy_id = policy_id;
+            policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+            policy.record_digest = policy
+                .computed_record_digest()
+                .expect("canonical policy digest");
+            commitments.insert(
+                PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(issuer_id, policy_id)
+                    .expect("bounded policy key"),
+                PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(policy, 7)
+                    .expect("bounded policy record"),
+            );
+        }
+        assert_eq!(
+            privacy_bootle_lantern_issuer_policy_count_v1(&commitments.view())
+                .expect("exact global policy cap"),
+            BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1
+        );
+
+        let over_index =
+            u64::try_from(BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1).expect("policy cap fits u64") + 1;
+        let over_policy_id = PrivacyPolicyIdV1::new(indexed_nonzero(0xB7, over_index));
+        let mut over_policy = template;
+        over_policy.policy_id = over_policy_id;
+        over_policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        over_policy.record_digest = over_policy
+            .computed_record_digest()
+            .expect("canonical over-cap policy digest");
+        commitments.insert(
+            PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(issuer_id, over_policy_id)
+                .expect("over-cap policy key"),
+            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(over_policy, 7)
+                .expect("over-cap policy record"),
+        );
+        let error = privacy_bootle_lantern_issuer_policy_count_v1(&commitments.view())
+            .expect_err("global policy cap plus one must reject");
+        assert!(
+            error.contains("issuer-policy count exceeds 4096"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -9104,22 +9934,30 @@ mod tests {
             None,
             PrivacyZkX509RecordLifecycleV1::Active,
         );
+        let crl_origin = x509_crl_record(
+            trust_anchor_id,
+            policy_id,
+            1,
+            1,
+            84,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
         let mut commitments = Storage::new();
         insert_x509_trust_anchor(&mut commitments, anchor_origin, 10);
         insert_x509_certificate_policy(&mut commitments, policy_origin.clone(), 11);
+        insert_x509_crl(&mut commitments, crl_origin, 12);
         let mut roots = Storage::new();
         let mut root_heads = Storage::new();
         for (role, root_byte) in [
-            (PrivacyRootRoleV1::CertificateAuthorityMembership, 83),
+            (PrivacyRootRoleV1::CertificateAuthorityMembership, 82),
             (PrivacyRootRoleV1::CertificateRevocationNonmembership, 84),
         ] {
-            let key =
-                PrivacyRootKeyV1::new(namespace, role, 1, PrivacyRootV1::new(nonzero(root_byte)))
-                    .expect("X.509 root key");
-            let provenance = x509_root_provenance(key, anchor_origin, &policy_origin, 12);
+            let key = x509_root_key(role, 1, root_byte);
+            let provenance = x509_root_provenance(key, anchor_origin, crl_origin, 12);
             roots.insert(key, provenance);
             root_heads.insert(
-                PrivacyRootHeadKeyV1::new(namespace, role).expect("root-head key"),
+                PrivacyRootHeadKeyV1::new(key.namespace(), role).expect("root-head key"),
                 PrivacyRootHeadRecordV1::new(1, key.root(), provenance, None).expect("root head"),
             );
         }
@@ -9153,8 +9991,8 @@ mod tests {
             trust_anchor_record_epoch: anchor_origin.record_epoch,
             certificate_policy_record_digest: policy_origin.record_digest,
             certificate_policy_record_epoch: policy_origin.record_epoch,
-            crl_record_digest: PrivacyZkX509CrlRecordDigestV1::new(nonzero(98)),
-            crl_record_epoch: 1,
+            crl_record_digest: crl_origin.record_digest,
+            crl_record_epoch: crl_origin.record_epoch,
             subject_public_key_digest: PrivacyCertificateKeyDigestV1::new(nonzero(97)),
             ca_membership_root: snapshot.ca_membership_root(),
             ca_membership_root_epoch: snapshot.ca_membership_root_epoch(),
@@ -9191,6 +10029,16 @@ mod tests {
             &limits,
         )
         .expect("exact authoritative statement");
+        assert!(
+            validate_privacy_zk_x509_statement_state_v1(
+                &statement,
+                &snapshot,
+                statement.validation_unix_seconds * 1_000 + 1_000,
+                &limits,
+            )
+            .expect_err("caller-selected validation time must reject")
+            .contains("block timestamp")
+        );
 
         let assert_statement_rejected =
             |label: &str, mutate: fn(&mut IrohaZkX509StarkP256StatementV1)| {
@@ -9266,6 +10114,68 @@ mod tests {
             PrivacyZkX509RecordLifecycleV1::Active,
         );
         insert_x509_trust_anchor(&mut commitments, anchor_rotation, 13);
+        assert!(
+            validate_privacy_persisted_state_v1(
+                &PrivacyConsensusPolicyV1::taira_default(),
+                &activations.view(),
+                &pgc_accounts.view(),
+                &pgc_pool_invariants.view(),
+                &nullifiers.view(),
+                &commitments.view(),
+                &roots.view(),
+                &root_heads.view(),
+            )
+            .expect_err("record/root updates must be atomic")
+            .contains("stale")
+        );
+        let ca_key = x509_root_key(PrivacyRootRoleV1::CertificateAuthorityMembership, 2, 86);
+        let ca_provenance = x509_root_provenance(ca_key, anchor_rotation, crl_origin, 14);
+        roots.insert(ca_key, ca_provenance);
+        root_heads.insert(
+            PrivacyRootHeadKeyV1::new(
+                ca_key.namespace(),
+                PrivacyRootRoleV1::CertificateAuthorityMembership,
+            )
+            .expect("CA root-head key"),
+            PrivacyRootHeadRecordV1::new(2, ca_key.root(), ca_provenance, None)
+                .expect("CA successor head"),
+        );
+        let crl_rotation = x509_crl_record(
+            trust_anchor_id,
+            policy_id,
+            2,
+            2,
+            87,
+            Some(crl_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_crl(&mut commitments, crl_rotation, 14);
+        assert!(
+            validate_privacy_persisted_state_v1(
+                &PrivacyConsensusPolicyV1::taira_default(),
+                &activations.view(),
+                &pgc_accounts.view(),
+                &pgc_pool_invariants.view(),
+                &nullifiers.view(),
+                &commitments.view(),
+                &roots.view(),
+                &root_heads.view(),
+            )
+            .expect_err("CRL record/root updates must be atomic")
+            .contains("stale")
+        );
+        let crl_key = x509_root_key(PrivacyRootRoleV1::CertificateRevocationNonmembership, 2, 87);
+        let crl_provenance = x509_root_provenance(crl_key, anchor_rotation, crl_rotation, 14);
+        roots.insert(crl_key, crl_provenance);
+        root_heads.insert(
+            PrivacyRootHeadKeyV1::new(
+                crl_key.namespace(),
+                PrivacyRootRoleV1::CertificateRevocationNonmembership,
+            )
+            .expect("CRL root-head key"),
+            PrivacyRootHeadRecordV1::new(2, crl_key.root(), crl_provenance, None)
+                .expect("CRL successor head"),
+        );
         validate_privacy_persisted_state_v1(
             &PrivacyConsensusPolicyV1::taira_default(),
             &activations.view(),
@@ -9276,35 +10186,7 @@ mod tests {
             &roots.view(),
             &root_heads.view(),
         )
-        .expect("record rotation may precede root refresh");
-        assert!(
-            load_privacy_zk_x509_authoritative_state_v1(
-                trust_anchor_id,
-                policy_id,
-                8,
-                &commitments.view(),
-                &roots.view(),
-                &root_heads.view(),
-            )
-            .expect_err("old root bindings are stale after rotation")
-            .contains("stale")
-        );
-
-        for (role, root_byte) in [
-            (PrivacyRootRoleV1::CertificateAuthorityMembership, 86),
-            (PrivacyRootRoleV1::CertificateRevocationNonmembership, 87),
-        ] {
-            let key =
-                PrivacyRootKeyV1::new(namespace, role, 2, PrivacyRootV1::new(nonzero(root_byte)))
-                    .expect("successor X.509 root key");
-            let provenance = x509_root_provenance(key, anchor_rotation, &policy_origin, 14);
-            roots.insert(key, provenance);
-            root_heads.insert(
-                PrivacyRootHeadKeyV1::new(namespace, role).expect("root-head key"),
-                PrivacyRootHeadRecordV1::new(2, key.root(), provenance, None)
-                    .expect("successor root head"),
-            );
-        }
+        .expect("atomic X.509 record/root rotations restore valid state");
         load_privacy_zk_x509_authoritative_state_v1(
             trust_anchor_id,
             policy_id,
@@ -9315,19 +10197,14 @@ mod tests {
         )
         .expect("both refreshed roots restore authoritative state");
 
-        let ca_head_key =
-            PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::CertificateAuthorityMembership)
-                .expect("CA head key");
-        let ca_key = PrivacyRootKeyV1::new(
-            namespace,
+        let ca_head_key = PrivacyRootHeadKeyV1::new(
+            ca_key.namespace(),
             PrivacyRootRoleV1::CertificateAuthorityMembership,
-            2,
-            PrivacyRootV1::new(nonzero(86)),
         )
-        .expect("CA root key");
+        .expect("CA head key");
         let generic = PrivacyRootProvenanceV1::governance(
             PrivacyRootPublicationV1 {
-                namespace,
+                namespace: ca_key.namespace(),
                 role: ca_key.role(),
                 epoch: ca_key.epoch(),
                 root: ca_key.root(),

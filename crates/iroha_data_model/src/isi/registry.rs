@@ -305,12 +305,18 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkAcePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RotatePrivacyZkAcePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RevokePrivacyZkAcePolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RotatePrivacyBootleLanternIssuerPolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RevokePrivacyBootleLanternIssuerPolicyV1>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>,
     InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509TrustAnchorV1>,
     InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509TrustAnchorV1>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509CertificatePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509CertificatePolicyV1>,
     InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkX509CrlV1>,
+    InstructionRegistry::register_slice::<privacy::RotatePrivacyZkX509CrlV1>,
+    InstructionRegistry::register_slice::<privacy::RevokePrivacyZkX509CrlV1>,
     InstructionRegistry::register_slice::<privacy::SubmitPrivacyProofV1>,
     InstructionRegistry::register_slice::<kaigi::CreateKaigi>,
     InstructionRegistry::register_slice::<kaigi::JoinKaigi>,
@@ -471,6 +477,18 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkAcePolicyV1>(
         privacy::RevokePrivacyZkAcePolicyV1::WIRE_ID,
     );
+    registry = registry
+        .register_with_id_slice::<privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>(
+            privacy::RegisterPrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        );
+    registry = registry
+        .register_with_id_slice::<privacy::RotatePrivacyBootleLanternIssuerPolicyV1>(
+            privacy::RotatePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        );
+    registry = registry
+        .register_with_id_slice::<privacy::RevokePrivacyBootleLanternIssuerPolicyV1>(
+            privacy::RevokePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        );
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkX509TrustAnchorV1>(
         privacy::RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
     );
@@ -489,6 +507,15 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     );
     registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509CertificatePolicyV1>(
         privacy::RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyZkX509CrlV1>(
+        privacy::RegisterPrivacyZkX509CrlV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RotatePrivacyZkX509CrlV1>(
+        privacy::RotatePrivacyZkX509CrlV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::RevokePrivacyZkX509CrlV1>(
+        privacy::RevokePrivacyZkX509CrlV1::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
         privacy::SubmitPrivacyProofV1::WIRE_ID,
@@ -1009,6 +1036,86 @@ mod tests {
                 panic!("wire id collision: {wire_id} registered for {previous} and {name}");
             }
         }
+    }
+
+    #[test]
+    fn bootle_lantern_governance_instructions_have_unique_canonical_registrations() {
+        let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
+        let registry = default();
+        let mut wire_ids = std::collections::BTreeSet::new();
+
+        macro_rules! assert_bootle_registration {
+            ($instruction:ty) => {{
+                let type_name = std::any::type_name::<$instruction>();
+                let wire_id = <$instruction>::WIRE_ID;
+
+                assert!(
+                    static_registry.contains(type_name),
+                    "{type_name} must be present in the built-in registrar list"
+                );
+                assert_eq!(
+                    registry.wire_id(type_name),
+                    Some(wire_id),
+                    "{type_name} must resolve to its canonical wire id"
+                );
+                assert!(
+                    registry.contains(wire_id),
+                    "{wire_id} must be a canonical registry lookup key"
+                );
+                assert!(
+                    wire_ids.insert(wire_id),
+                    "duplicate Bootle/Lantern governance wire id: {wire_id}"
+                );
+            }};
+        }
+
+        assert_bootle_registration!(privacy::RegisterPrivacyBootleLanternIssuerPolicyV1);
+        assert_bootle_registration!(privacy::RotatePrivacyBootleLanternIssuerPolicyV1);
+        assert_bootle_registration!(privacy::RevokePrivacyBootleLanternIssuerPolicyV1);
+    }
+
+    #[test]
+    fn x509_governance_instructions_have_unique_canonical_registrations() {
+        let static_registry = apply_registrars(ALL_REGISTRARS.iter().copied());
+        let registry = default();
+        let mut wire_ids = std::collections::BTreeSet::new();
+
+        macro_rules! assert_x509_registration {
+            ($instruction:ty) => {{
+                let type_name = std::any::type_name::<$instruction>();
+                let wire_id = <$instruction>::WIRE_ID;
+
+                assert!(
+                    static_registry.contains(type_name),
+                    "{type_name} must be present in the built-in registrar list"
+                );
+                assert_eq!(
+                    registry.wire_id(type_name),
+                    Some(wire_id),
+                    "{type_name} must resolve to its canonical wire id"
+                );
+                assert!(
+                    registry.contains(wire_id),
+                    "{wire_id} must be a canonical registry lookup key"
+                );
+                assert!(
+                    wire_ids.insert(wire_id),
+                    "duplicate X.509 governance wire id: {wire_id}"
+                );
+            }};
+        }
+
+        assert_x509_registration!(privacy::RegisterPrivacyZkX509TrustAnchorV1);
+        assert_x509_registration!(privacy::RotatePrivacyZkX509TrustAnchorV1);
+        assert_x509_registration!(privacy::RevokePrivacyZkX509TrustAnchorV1);
+        assert_x509_registration!(privacy::RegisterPrivacyZkX509CertificatePolicyV1);
+        assert_x509_registration!(privacy::RotatePrivacyZkX509CertificatePolicyV1);
+        assert_x509_registration!(privacy::RevokePrivacyZkX509CertificatePolicyV1);
+        assert_x509_registration!(privacy::RegisterPrivacyZkX509CrlV1);
+        assert_x509_registration!(privacy::RotatePrivacyZkX509CrlV1);
+        assert_x509_registration!(privacy::RevokePrivacyZkX509CrlV1);
+
+        assert_eq!(wire_ids.len(), 9);
     }
 
     #[test]

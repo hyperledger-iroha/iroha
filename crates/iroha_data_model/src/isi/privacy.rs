@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::privacy::{
+    BootleLanternIssuerPolicyV1, PrivacyBootleLanternIssuerPolicyDigestV1,
     PrivacyConsensusLimitsV1, PrivacyOrchardPoolBootstrapV1, PrivacyPgcAccountBootstrapV1,
     PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1,
     PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
@@ -329,6 +330,100 @@ impl RevokePrivacyZkAcePolicyV1 {
     pub fn new(
         expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
         successor: PrivacyZkAcePolicyRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
+    /// Register one canonical authoritative Bootle/Lantern issuer-policy lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RegisterPrivacyBootleLanternIssuerPolicyV1 {
+        /// Complete active origin policy, including its canonical self-digest.
+        pub policy: BootleLanternIssuerPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for RegisterPrivacyBootleLanternIssuerPolicyV1 {}
+
+impl RegisterPrivacyBootleLanternIssuerPolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.register_bootle_lantern_issuer_policy.v1";
+
+    /// Construct an authoritative issuer-policy registration.
+    #[must_use]
+    pub fn new(policy: BootleLanternIssuerPolicyV1) -> Self {
+        Self { policy }
+    }
+}
+
+isi! {
+    /// Rotate one active Bootle/Lantern issuer-policy lineage by exactly one epoch.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RotatePrivacyBootleLanternIssuerPolicyV1 {
+        /// Exact self-digest of the active policy being replaced.
+        pub expected_current_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
+        /// Complete active successor policy.
+        pub successor: BootleLanternIssuerPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for RotatePrivacyBootleLanternIssuerPolicyV1 {}
+
+impl RotatePrivacyBootleLanternIssuerPolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.rotate_bootle_lantern_issuer_policy.v1";
+
+    /// Construct an exact issuer-policy compare-and-swap rotation.
+    #[must_use]
+    pub fn new(
+        expected_current_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
+        successor: BootleLanternIssuerPolicyV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
+    /// Irreversibly revoke one active Bootle/Lantern issuer-policy lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RevokePrivacyBootleLanternIssuerPolicyV1 {
+        /// Exact self-digest of the active policy being revoked.
+        pub expected_current_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
+        /// Complete terminal successor policy.
+        pub successor: BootleLanternIssuerPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for RevokePrivacyBootleLanternIssuerPolicyV1 {}
+
+impl RevokePrivacyBootleLanternIssuerPolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.revoke_bootle_lantern_issuer_policy.v1";
+
+    /// Construct an exact irreversible issuer-policy revocation.
+    #[must_use]
+    pub fn new(
+        expected_current_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
+        successor: BootleLanternIssuerPolicyV1,
     ) -> Self {
         Self {
             expected_current_record_digest,
@@ -714,6 +809,17 @@ impl_privacy_decode_from_slice!(RevokePrivacyZkAcePolicyV1 {
     expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
     successor: PrivacyZkAcePolicyRecordV1,
 });
+impl_privacy_decode_from_slice!(RegisterPrivacyBootleLanternIssuerPolicyV1 {
+    policy: BootleLanternIssuerPolicyV1,
+});
+impl_privacy_decode_from_slice!(RotatePrivacyBootleLanternIssuerPolicyV1 {
+    expected_current_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
+    successor: BootleLanternIssuerPolicyV1,
+});
+impl_privacy_decode_from_slice!(RevokePrivacyBootleLanternIssuerPolicyV1 {
+    expected_current_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
+    successor: BootleLanternIssuerPolicyV1,
+});
 impl_privacy_decode_from_slice!(RegisterPrivacyZkX509TrustAnchorV1 {
     record: PrivacyZkX509TrustAnchorRecordV1,
 });
@@ -765,19 +871,55 @@ mod tests {
         domain::DomainId,
         name::Name,
         privacy::{
+            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
+            BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
+            BootleLanternAttributeValueV1, BootleLanternIssuerPolicyLifecycleV1,
+            BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
             IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IrohaJindoPolynomialCommitmentStatementV1,
             JindoActivationLimitsV1, PrivacyActiveLifecycleV1, PrivacyAssuranceV1,
-            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyJindoFieldElementV1,
-            PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-            PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
-            PrivacyPgcAccountV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
+            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCommitmentV1,
+            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
+            PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1,
+            PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1,
+            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPolicyDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
             PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
             PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
             PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-            PrivacyVerifierDigestV1,
+            PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
+            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
+            PrivacyZkX509RecordLifecycleV1,
         },
     };
+
+    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 24] = [
+        RegisterPrivacyProtocolActivationV1::WIRE_ID,
+        SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
+        SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
+        TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
+        PublishPrivacyRootV1::WIRE_ID,
+        BootstrapPrivacyOrchardPoolV1::WIRE_ID,
+        BootstrapPrivacyPgcAccountsV1::WIRE_ID,
+        BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
+        RegisterPrivacyZkAcePolicyV1::WIRE_ID,
+        RotatePrivacyZkAcePolicyV1::WIRE_ID,
+        RevokePrivacyZkAcePolicyV1::WIRE_ID,
+        RegisterPrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        RotatePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        RevokePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
+        RotatePrivacyZkX509TrustAnchorV1::WIRE_ID,
+        RevokePrivacyZkX509TrustAnchorV1::WIRE_ID,
+        RegisterPrivacyZkX509CertificatePolicyV1::WIRE_ID,
+        RotatePrivacyZkX509CertificatePolicyV1::WIRE_ID,
+        RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID,
+        RegisterPrivacyZkX509CrlV1::WIRE_ID,
+        RotatePrivacyZkX509CrlV1::WIRE_ID,
+        RevokePrivacyZkX509CrlV1::WIRE_ID,
+        SubmitPrivacyProofV1::WIRE_ID,
+    ];
 
     fn digest(byte: u8) -> [u8; 32] {
         [byte; 32]
@@ -913,7 +1055,436 @@ mod tests {
         }
     }
 
-    fn assert_slice_roundtrip<T>(value: T)
+    fn zk_ams_bootstrap() -> PrivacyZkAmsRegistryBootstrapV1 {
+        let bootstrap = PrivacyZkAmsRegistryBootstrapV1 {
+            issuer_id: PrivacyIssuerIdV1::new(digest(30)),
+            registry_id: PrivacyZkAmsRegistryIdV1::new(digest(31)),
+            policy_id: PrivacyPolicyIdV1::new(digest(32)),
+            issuer_public_key: p256_point(2, 33),
+            policy_digest: PrivacyPolicyDigestV1::new(digest(34)),
+            initial_registry_root: PrivacyRootV1::new(digest(35)),
+            initial_registry_epoch: 1,
+        };
+        bootstrap
+            .validate()
+            .expect("canonical ZK-AMS registry bootstrap");
+        bootstrap
+    }
+
+    fn zk_ace_policy(
+        epoch: u64,
+        identity_seed: u8,
+        lifecycle: PrivacyZkAcePolicyLifecycleV1,
+    ) -> PrivacyZkAcePolicyRecordV1 {
+        let mut source_allowlist = vec![account(40), account(41), account(42)];
+        source_allowlist.sort_unstable();
+        PrivacyZkAcePolicyRecordV1::new(
+            PrivacyPolicyIdV1::new(digest(43)),
+            PrivacyCommitmentV1::new(digest(identity_seed)),
+            PrivacyPolicyDigestV1::new(digest(44)),
+            epoch,
+            AssetDefinitionId::new(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("zkace").expect("asset name"),
+            ),
+            source_allowlist,
+            lifecycle,
+        )
+        .expect("canonical ZK-ACE policy record")
+    }
+
+    fn bootle_lantern_policy() -> BootleLanternIssuerPolicyV1 {
+        let entries = (0..BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
+            * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1)
+            .map(|entry| BootleLanternPolynomialV1 {
+                coefficients: (0..BOOTLE_LANTERN_RING_DEGREE_V1)
+                    .map(|coefficient| {
+                        u16::try_from((entry * 67 + coefficient + 1) % 12_288)
+                            .expect("test residue fits u16")
+                    })
+                    .collect(),
+            })
+            .collect();
+        let allowed_values = (0..BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1)
+            .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                values: if index == 1 {
+                    vec![
+                        BootleLanternAttributeValueV1::new([1; 8]),
+                        BootleLanternAttributeValueV1::new([2; 8]),
+                    ]
+                } else {
+                    Vec::new()
+                },
+            })
+            .collect();
+        let mut policy = BootleLanternIssuerPolicyV1 {
+            issuer_id: PrivacyIssuerIdV1::new(digest(171)),
+            policy_id: PrivacyPolicyIdV1::new(digest(172)),
+            epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
+            issuer_parameter_id: PrivacyParameterIdV1::new(digest(173)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
+            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
+            required_disclosure_bitmap: 0b0001_0010,
+            allowed_values,
+            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+        };
+        redigest_bootle_lantern_policy(&mut policy);
+        policy
+            .validate_initial()
+            .expect("canonical initial Bootle/Lantern issuer policy");
+        policy
+    }
+
+    fn redigest_bootle_lantern_policy(policy: &mut BootleLanternIssuerPolicyV1) {
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("canonical Bootle/Lantern issuer-parameter digest");
+        policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        policy.record_digest = policy
+            .computed_record_digest()
+            .expect("canonical Bootle/Lantern issuer-policy digest");
+    }
+
+    fn rotated_bootle_lantern_policy(
+        current: &BootleLanternIssuerPolicyV1,
+    ) -> BootleLanternIssuerPolicyV1 {
+        let mut successor = current.clone();
+        successor.epoch += 1;
+        successor.issuer_public_matrix.entries[0].coefficients[0] += 1;
+        redigest_bootle_lantern_policy(&mut successor);
+        successor
+            .validate_rotation_successor(current)
+            .expect("canonical Bootle/Lantern issuer-policy rotation");
+        successor
+    }
+
+    fn revoked_bootle_lantern_policy(
+        current: &BootleLanternIssuerPolicyV1,
+    ) -> BootleLanternIssuerPolicyV1 {
+        let mut successor = current.clone();
+        successor.epoch += 1;
+        successor.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest_bootle_lantern_policy(&mut successor);
+        successor
+            .validate_revocation_successor(current)
+            .expect("canonical Bootle/Lantern issuer-policy revocation");
+        successor
+    }
+
+    fn zk_x509_trust_anchor(
+        epoch: u64,
+        trust_store_seed: u8,
+        ca_root_seed: u8,
+        ca_root_epoch: u64,
+        previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509TrustAnchorRecordV1 {
+        PrivacyZkX509TrustAnchorRecordV1::new(
+            PrivacyIssuerIdV1::new(digest(50)),
+            epoch,
+            PrivacyX509TrustStoreDigestV1::new(digest(trust_store_seed)),
+            PrivacyRootV1::new(digest(ca_root_seed)),
+            ca_root_epoch,
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 trust-anchor record")
+    }
+
+    fn revoked_zk_x509_trust_anchor(
+        current: PrivacyZkX509TrustAnchorRecordV1,
+    ) -> PrivacyZkX509TrustAnchorRecordV1 {
+        PrivacyZkX509TrustAnchorRecordV1::new(
+            current.trust_anchor_id,
+            current.record_epoch + 1,
+            current.trust_store_digest,
+            current.ca_membership_root,
+            current.ca_membership_root_epoch,
+            Some(current.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        )
+        .expect("canonical terminal X.509 trust-anchor record")
+    }
+
+    fn zk_x509_certificate_policy(
+        epoch: u64,
+        policy_seed: u8,
+        previous_record_digest: Option<PrivacyZkX509CertificatePolicyRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509CertificatePolicyRecordV1 {
+        PrivacyZkX509CertificatePolicyRecordV1::new(
+            PrivacyIssuerIdV1::new(digest(50)),
+            PrivacyPolicyIdV1::new(digest(51)),
+            epoch,
+            PrivacyPolicyDigestV1::new(digest(policy_seed)),
+            PrivacyX509KeyUsageV1 {
+                digital_signature: true,
+                content_commitment: false,
+                key_encipherment: false,
+                key_agreement: false,
+            },
+            vec![
+                PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+            ],
+            vec![0, 1, 3],
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 certificate-policy record")
+    }
+
+    fn revoked_zk_x509_certificate_policy(
+        current: &PrivacyZkX509CertificatePolicyRecordV1,
+    ) -> PrivacyZkX509CertificatePolicyRecordV1 {
+        PrivacyZkX509CertificatePolicyRecordV1::new(
+            current.trust_anchor_id,
+            current.policy_id,
+            current.record_epoch + 1,
+            current.policy_digest,
+            current.required_key_usage,
+            current.required_extended_key_usages.clone(),
+            current.required_disclosed_attribute_indices.clone(),
+            Some(current.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        )
+        .expect("canonical terminal X.509 certificate-policy record")
+    }
+
+    fn zk_x509_crl(
+        epoch: u64,
+        crl_number: u64,
+        crl_der_seed: u8,
+        this_update_unix_seconds: u64,
+        revoked_root_seed: u8,
+        previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+    ) -> PrivacyZkX509CrlRecordV1 {
+        PrivacyZkX509CrlRecordV1::new(
+            PrivacyIssuerIdV1::new(digest(50)),
+            PrivacyPolicyIdV1::new(digest(51)),
+            epoch,
+            crl_number,
+            PrivacyX509CrlDerDigestV1::new(digest(crl_der_seed)),
+            PrivacyX509CrlIssuerSpkiDigestV1::new(digest(52)),
+            this_update_unix_seconds,
+            this_update_unix_seconds + 300,
+            PrivacyRootV1::new(digest(revoked_root_seed)),
+            epoch,
+            previous_record_digest,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("canonical active X.509 signed-CRL record")
+    }
+
+    fn revoked_zk_x509_crl(current: PrivacyZkX509CrlRecordV1) -> PrivacyZkX509CrlRecordV1 {
+        PrivacyZkX509CrlRecordV1::new(
+            current.trust_anchor_id,
+            current.certificate_policy_id,
+            current.record_epoch + 1,
+            current.crl_number,
+            current.crl_der_digest,
+            current.issuer_spki_digest,
+            current.this_update_unix_seconds,
+            current.next_update_unix_seconds,
+            current.revoked_serials_root,
+            current.root_epoch,
+            Some(current.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        )
+        .expect("canonical terminal X.509 signed-CRL record")
+    }
+
+    macro_rules! for_each_privacy_isi_fixture {
+        ($check:ident) => {
+            $check!(
+                RegisterPrivacyProtocolActivationV1::WIRE_ID,
+                RegisterPrivacyProtocolActivationV1::new(activation())
+            );
+            $check!(SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID, {
+                let mut next_limits = PrivacyConsensusLimitsV1::taira_default();
+                next_limits.max_actions_per_block = 1;
+                SchedulePrivacyConsensusPolicyTighteningV1::new(700, next_limits)
+            });
+            $check!(SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID, {
+                let activation = activation();
+                let mut next_limits = activation.protocol_limits;
+                let PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+                    ref mut limits,
+                ) = next_limits
+                else {
+                    unreachable!("Jindo fixture")
+                };
+                limits.max_polynomial_count -= 1;
+                SchedulePrivacyProtocolLimitsTighteningV1::new(
+                    activation.protocol_id,
+                    700,
+                    next_limits,
+                )
+            });
+            $check!(
+                TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
+                TransitionPrivacyProtocolLifecycleV1::new(
+                    PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                    PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+                        proposed_at_height: 100,
+                        activated_at_height: 400,
+                        state_since_height: 400,
+                    }),
+                )
+            );
+            $check!(
+                PublishPrivacyRootV1::WIRE_ID,
+                PublishPrivacyRootV1::new(publication())
+            );
+            $check!(
+                BootstrapPrivacyOrchardPoolV1::WIRE_ID,
+                BootstrapPrivacyOrchardPoolV1::new(orchard_bootstrap())
+            );
+            $check!(
+                BootstrapPrivacyPgcAccountsV1::WIRE_ID,
+                BootstrapPrivacyPgcAccountsV1::new(
+                    pgc_bootstrap(),
+                    PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5, 0x5A, 1]),
+                )
+            );
+            $check!(
+                BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
+                BootstrapPrivacyZkAmsRegistryV1::new(zk_ams_bootstrap())
+            );
+            $check!(
+                RegisterPrivacyZkAcePolicyV1::WIRE_ID,
+                RegisterPrivacyZkAcePolicyV1::new(zk_ace_policy(
+                    1,
+                    45,
+                    PrivacyZkAcePolicyLifecycleV1::Active,
+                ))
+            );
+            $check!(RotatePrivacyZkAcePolicyV1::WIRE_ID, {
+                let current = zk_ace_policy(1, 45, PrivacyZkAcePolicyLifecycleV1::Active);
+                let successor = zk_ace_policy(2, 46, PrivacyZkAcePolicyLifecycleV1::Active);
+                RotatePrivacyZkAcePolicyV1::new(current.record_digest, successor)
+            });
+            $check!(RevokePrivacyZkAcePolicyV1::WIRE_ID, {
+                let current = zk_ace_policy(1, 45, PrivacyZkAcePolicyLifecycleV1::Active);
+                let successor = zk_ace_policy(2, 45, PrivacyZkAcePolicyLifecycleV1::Revoked);
+                RevokePrivacyZkAcePolicyV1::new(current.record_digest, successor)
+            });
+            $check!(
+                RegisterPrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+                RegisterPrivacyBootleLanternIssuerPolicyV1::new(bootle_lantern_policy())
+            );
+            $check!(RotatePrivacyBootleLanternIssuerPolicyV1::WIRE_ID, {
+                let current = bootle_lantern_policy();
+                let successor = rotated_bootle_lantern_policy(&current);
+                RotatePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, successor)
+            });
+            $check!(RevokePrivacyBootleLanternIssuerPolicyV1::WIRE_ID, {
+                let current = bootle_lantern_policy();
+                let successor = revoked_bootle_lantern_policy(&current);
+                RevokePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, successor)
+            });
+            $check!(
+                RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
+                RegisterPrivacyZkX509TrustAnchorV1::new(zk_x509_trust_anchor(
+                    1,
+                    53,
+                    54,
+                    1,
+                    None,
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                ))
+            );
+            $check!(RotatePrivacyZkX509TrustAnchorV1::WIRE_ID, {
+                let current = zk_x509_trust_anchor(
+                    1,
+                    53,
+                    54,
+                    1,
+                    None,
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                );
+                let successor = zk_x509_trust_anchor(
+                    2,
+                    55,
+                    56,
+                    2,
+                    Some(current.record_digest),
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                );
+                RotatePrivacyZkX509TrustAnchorV1::new(current.record_digest, successor)
+            });
+            $check!(RevokePrivacyZkX509TrustAnchorV1::WIRE_ID, {
+                let current = zk_x509_trust_anchor(
+                    1,
+                    53,
+                    54,
+                    1,
+                    None,
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                );
+                let successor = revoked_zk_x509_trust_anchor(current);
+                RevokePrivacyZkX509TrustAnchorV1::new(
+                    successor
+                        .previous_record_digest
+                        .expect("terminal record has predecessor"),
+                    successor,
+                )
+            });
+            $check!(
+                RegisterPrivacyZkX509CertificatePolicyV1::WIRE_ID,
+                RegisterPrivacyZkX509CertificatePolicyV1::new(zk_x509_certificate_policy(
+                    1,
+                    57,
+                    None,
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                ),)
+            );
+            $check!(RotatePrivacyZkX509CertificatePolicyV1::WIRE_ID, {
+                let current =
+                    zk_x509_certificate_policy(1, 57, None, PrivacyZkX509RecordLifecycleV1::Active);
+                let successor = zk_x509_certificate_policy(
+                    2,
+                    58,
+                    Some(current.record_digest),
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                );
+                RotatePrivacyZkX509CertificatePolicyV1::new(current.record_digest, successor)
+            });
+            $check!(RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID, {
+                let current =
+                    zk_x509_certificate_policy(1, 57, None, PrivacyZkX509RecordLifecycleV1::Active);
+                let successor = revoked_zk_x509_certificate_policy(&current);
+                RevokePrivacyZkX509CertificatePolicyV1::new(current.record_digest, successor)
+            });
+            $check!(
+                RegisterPrivacyZkX509CrlV1::WIRE_ID,
+                RegisterPrivacyZkX509CrlV1::new(zk_x509_crl(1, 1, 59, 1_750_000_000, 60, None,))
+            );
+            $check!(RotatePrivacyZkX509CrlV1::WIRE_ID, {
+                let current = zk_x509_crl(1, 1, 59, 1_750_000_000, 60, None);
+                let successor =
+                    zk_x509_crl(2, 2, 61, 1_750_000_060, 62, Some(current.record_digest));
+                RotatePrivacyZkX509CrlV1::new(current.record_digest, successor)
+            });
+            $check!(RevokePrivacyZkX509CrlV1::WIRE_ID, {
+                let current = zk_x509_crl(1, 1, 59, 1_750_000_000, 60, None);
+                let successor = revoked_zk_x509_crl(current);
+                RevokePrivacyZkX509CrlV1::new(
+                    successor
+                        .previous_record_digest
+                        .expect("terminal record has predecessor"),
+                    successor,
+                )
+            });
+            $check!(
+                SubmitPrivacyProofV1::WIRE_ID,
+                SubmitPrivacyProofV1::new(envelope())
+            );
+        };
+    }
+
+    fn assert_slice_roundtrip<T>(wire_id: &str, value: T)
     where
         T: Clone
             + core::fmt::Debug
@@ -924,130 +1495,126 @@ mod tests {
         let bytes = value.encode();
         let (decoded, used) = T::decode_from_slice(&bytes).expect("decode");
         assert_eq!(used, bytes.len());
-        assert_eq!(decoded, value);
+        assert_eq!(decoded, value, "{wire_id} direct slice roundtrip");
+    }
+
+    fn assert_slice_rejects_malformed<T>(wire_id: &str, value: T)
+    where
+        T: norito::codec::Encode + for<'a> DecodeFromSlice<'a>,
+    {
+        let bytes = value.encode();
+        for truncated_len in 0..bytes.len() {
+            assert!(
+                T::decode_from_slice(&bytes[..truncated_len]).is_err(),
+                "{wire_id} accepted a {truncated_len}-byte truncation of {} bytes",
+                bytes.len()
+            );
+        }
+
+        for suffix in [
+            &[0x00][..],
+            &[0xA5][..],
+            &[0xFF, 0x00, 0xFF][..],
+            &[0x00; 8][..],
+        ] {
+            let mut trailing = bytes.clone();
+            trailing.extend_from_slice(suffix);
+            assert!(
+                T::decode_from_slice(&trailing).is_err(),
+                "{wire_id} accepted {} trailing byte(s)",
+                suffix.len()
+            );
+        }
     }
 
     #[test]
     fn privacy_isis_roundtrip_through_direct_slice_decoders() {
-        assert_slice_roundtrip(RegisterPrivacyProtocolActivationV1::new(activation()));
-        let mut next_consensus_limits = PrivacyConsensusLimitsV1::taira_default();
-        next_consensus_limits.max_actions_per_block = 1;
-        assert_slice_roundtrip(SchedulePrivacyConsensusPolicyTighteningV1::new(
-            700,
-            next_consensus_limits,
-        ));
-        let activation = activation();
-        let mut next_protocol_limits = activation.protocol_limits;
-        let PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(ref mut limits) =
-            next_protocol_limits
-        else {
-            unreachable!("Jindo fixture")
-        };
-        limits.max_polynomial_count -= 1;
-        assert_slice_roundtrip(SchedulePrivacyProtocolLimitsTighteningV1::new(
-            activation.protocol_id,
-            700,
-            next_protocol_limits,
-        ));
-        assert_slice_roundtrip(TransitionPrivacyProtocolLifecycleV1::new(
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
-            PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
-                proposed_at_height: 100,
-                activated_at_height: 400,
-                state_since_height: 400,
-            }),
-        ));
-        assert_slice_roundtrip(PublishPrivacyRootV1::new(publication()));
-        assert_slice_roundtrip(BootstrapPrivacyOrchardPoolV1::new(orchard_bootstrap()));
-        assert_slice_roundtrip(BootstrapPrivacyPgcAccountsV1::new(
-            pgc_bootstrap(),
-            PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5, 0x5A, 1]),
-        ));
-        assert_slice_roundtrip(SubmitPrivacyProofV1::new(envelope()));
+        let mut fixture_count = 0_usize;
+        macro_rules! check {
+            ($wire_id:expr, $value:expr) => {{
+                fixture_count += 1;
+                assert_slice_roundtrip($wire_id, $value);
+            }};
+        }
+        for_each_privacy_isi_fixture!(check);
+        assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
     }
 
     #[test]
     fn privacy_isi_decoders_reject_trailing_and_truncated_payloads() {
-        let mut trailing = RegisterPrivacyProtocolActivationV1::new(activation()).encode();
-        trailing.push(0xA5);
-        assert!(matches!(
-            RegisterPrivacyProtocolActivationV1::decode_from_slice(&trailing),
-            Err(norito::core::Error::LengthMismatch)
-        ));
-
-        let orchard = BootstrapPrivacyOrchardPoolV1::new(orchard_bootstrap()).encode();
-        for truncated_len in [0, 1, orchard.len() / 2, orchard.len() - 1] {
-            assert!(
-                BootstrapPrivacyOrchardPoolV1::decode_from_slice(&orchard[..truncated_len])
-                    .is_err(),
-                "Orchard bootstrap truncation at {truncated_len} bytes must fail closed"
-            );
+        let mut fixture_count = 0_usize;
+        macro_rules! check {
+            ($wire_id:expr, $value:expr) => {{
+                fixture_count += 1;
+                assert_slice_rejects_malformed($wire_id, $value);
+            }};
         }
-        let mut trailing_orchard = orchard;
-        trailing_orchard.push(0xC3);
-        assert!(
-            BootstrapPrivacyOrchardPoolV1::decode_from_slice(&trailing_orchard).is_err(),
-            "Orchard bootstrap trailing bytes must fail closed"
-        );
+        for_each_privacy_isi_fixture!(check);
+        assert_eq!(fixture_count, PRIVACY_ISI_WIRE_IDS_V1.len());
 
-        let submit = SubmitPrivacyProofV1::new(envelope()).encode();
-        for truncated_len in [0, 1, submit.len() / 2, submit.len() - 1] {
-            assert!(
-                SubmitPrivacyProofV1::decode_from_slice(&submit[..truncated_len]).is_err(),
-                "truncation at {truncated_len} bytes must fail closed"
-            );
-        }
-
-        let bootstrap = BootstrapPrivacyPgcAccountsV1::new(
-            pgc_bootstrap(),
-            PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5, 0x5A, 1]),
-        )
-        .encode();
-        for truncated_len in [0, 1, bootstrap.len() / 2, bootstrap.len() - 1] {
-            assert!(
-                BootstrapPrivacyPgcAccountsV1::decode_from_slice(&bootstrap[..truncated_len])
-                    .is_err(),
-                "bootstrap truncation at {truncated_len} bytes must fail closed"
-            );
-        }
-        let mut trailing_bootstrap = bootstrap;
-        trailing_bootstrap.push(0x5A);
-        assert!(
-            BootstrapPrivacyPgcAccountsV1::decode_from_slice(&trailing_bootstrap).is_err(),
-            "bootstrap trailing bytes must fail closed"
-        );
         assert!(
             BootstrapPrivacyPgcAccountsV1::decode_from_slice(&pgc_bootstrap().encode()).is_err(),
             "the unreleased proofless bootstrap layout has no legacy decoder"
         );
     }
 
+    #[cfg(feature = "json")]
+    #[test]
+    fn bootle_lantern_governance_isi_json_is_closed() {
+        macro_rules! assert_closed_json {
+            ($instruction_type:ty, $instruction:expr) => {{
+                let instruction: $instruction_type = $instruction;
+                let canonical = norito::json::to_json(&instruction)
+                    .expect("canonical Bootle/Lantern governance instruction JSON encodes");
+                assert_eq!(
+                    norito::json::from_json::<$instruction_type>(&canonical)
+                        .expect("canonical Bootle/Lantern governance instruction JSON decodes"),
+                    instruction
+                );
+
+                let hostile = canonical.replacen('{', "{\"adversarial_extension\":null,", 1);
+                assert_ne!(hostile, canonical);
+                assert!(
+                    norito::json::from_json::<$instruction_type>(&hostile).is_err(),
+                    "Bootle/Lantern governance instruction JSON must reject unknown fields"
+                );
+            }};
+        }
+
+        let current = bootle_lantern_policy();
+        assert_closed_json!(
+            RegisterPrivacyBootleLanternIssuerPolicyV1,
+            RegisterPrivacyBootleLanternIssuerPolicyV1::new(current.clone())
+        );
+        assert_closed_json!(
+            RotatePrivacyBootleLanternIssuerPolicyV1,
+            RotatePrivacyBootleLanternIssuerPolicyV1::new(
+                current.record_digest,
+                rotated_bootle_lantern_policy(&current),
+            )
+        );
+        assert_closed_json!(
+            RevokePrivacyBootleLanternIssuerPolicyV1,
+            RevokePrivacyBootleLanternIssuerPolicyV1::new(
+                current.record_digest,
+                revoked_bootle_lantern_policy(&current),
+            )
+        );
+    }
+
     #[test]
     fn stable_wire_ids_have_no_retired_compatibility_names() {
-        for wire_id in [
-            RegisterPrivacyProtocolActivationV1::WIRE_ID,
-            SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
-            SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
-            TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
-            PublishPrivacyRootV1::WIRE_ID,
-            BootstrapPrivacyOrchardPoolV1::WIRE_ID,
-            BootstrapPrivacyPgcAccountsV1::WIRE_ID,
-            BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
-            RegisterPrivacyZkAcePolicyV1::WIRE_ID,
-            RotatePrivacyZkAcePolicyV1::WIRE_ID,
-            RevokePrivacyZkAcePolicyV1::WIRE_ID,
-            RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
-            RotatePrivacyZkX509TrustAnchorV1::WIRE_ID,
-            RevokePrivacyZkX509TrustAnchorV1::WIRE_ID,
-            RegisterPrivacyZkX509CertificatePolicyV1::WIRE_ID,
-            RotatePrivacyZkX509CertificatePolicyV1::WIRE_ID,
-            RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID,
-            RegisterPrivacyZkX509CrlV1::WIRE_ID,
-            RotatePrivacyZkX509CrlV1::WIRE_ID,
-            RevokePrivacyZkX509CrlV1::WIRE_ID,
-            SubmitPrivacyProofV1::WIRE_ID,
-        ] {
+        assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 24);
+        let mut sorted_wire_ids = PRIVACY_ISI_WIRE_IDS_V1;
+        sorted_wire_ids.sort_unstable();
+        assert!(
+            sorted_wire_ids.windows(2).all(|pair| pair[0] != pair[1]),
+            "all 24 canonical first-release privacy ISIs must have unique wire IDs"
+        );
+
+        for wire_id in PRIVACY_ISI_WIRE_IDS_V1 {
             assert!(wire_id.starts_with("iroha.privacy."));
+            assert!(wire_id.ends_with(".v1"));
             assert!(!wire_id.contains("zkAt"));
             assert!(!wire_id.contains("silent"));
             assert!(!wire_id.contains("penumbra"));

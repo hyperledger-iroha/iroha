@@ -11128,11 +11128,7 @@ impl<'state> StateBlock<'state> {
             )
         });
         let mut plans = Vec::new();
-        for protocol_id in [
-            iroha_data_model::privacy::PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaZkAmsV1,
-            iroha_data_model::privacy::PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-        ] {
+        for protocol_id in crate::privacy_state::PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1 {
             plans.extend(
                 crate::privacy_state::plan_privacy_root_retention_reduction_v1(
                     &self.world.privacy_roots,

@@ -32,6 +32,9 @@ pub const PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1: &[u8] =
 /// Domain separator for canonical Bootle/Lantern issuer-policy record digests.
 pub const BOOTLE_LANTERN_ISSUER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:bootle-lantern:issuer-policy:v1";
+/// Domain separator for the exact Bootle/Lantern issuer verification matrix.
+pub const BOOTLE_LANTERN_ISSUER_PARAMETER_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:bootle-lantern:issuer-parameter:v1";
 /// Domain separator for canonical ZK-AMS Personhood Credential hashes.
 pub const ZK_AMS_PHC_HASH_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:phc:v1";
 /// Domain separator for canonical ZK-AMS issuer-policy records.
@@ -4149,6 +4152,8 @@ pub const BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1: usize = 8;
 pub const BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1: u32 = 8;
 /// Maximum governed allowed public values for one required attribute.
 pub const BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1: u32 = 32;
+/// Maximum authoritative Bootle/Lantern issuer-policy lineages in committed state.
+pub const BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1: usize = 4_096;
 /// Maximum decoded ISO 18013-5 MSO payload bytes admitted by Vega.
 ///
 /// This is the 1,920-byte mDL profile evaluated in Figure 9 of the Vega paper.
@@ -4231,6 +4236,7 @@ pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = 255;
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyStatementContextV1 {
     /// Exact chain identifier.
     pub chain_id: ChainId,
@@ -6775,6 +6781,7 @@ impl BootleLanternAttributeValueV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternPolynomialV1 {
     /// Exactly 64 canonical coefficients, each strictly below 12,289.
     pub coefficients: Vec<u16>,
@@ -6786,6 +6793,7 @@ pub struct BootleLanternPolynomialV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternIssuerPublicMatrixV1 {
     /// Exactly 64 polynomials in row-major 8-by-8 order.
     pub entries: Vec<BootleLanternPolynomialV1>,
@@ -6797,9 +6805,26 @@ pub struct BootleLanternIssuerPublicMatrixV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternAllowedAttributeValuesV1 {
     /// Strictly increasing values; empty means any disclosed value is allowed.
     pub values: Vec<BootleLanternAttributeValueV1>,
+}
+
+/// Forward-only lifecycle of one authoritative Bootle/Lantern issuer policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "state", content = "value"))]
+pub enum BootleLanternIssuerPolicyLifecycleV1 {
+    /// Presentations selecting the exact current record may be admitted.
+    #[cfg_attr(feature = "json", norito(rename = "active"))]
+    Active,
+    /// Terminal state; the lineage cannot be rotated or reactivated.
+    #[cfg_attr(feature = "json", norito(rename = "revoked"))]
+    Revoked,
 }
 
 /// Committed issuer key and selective-disclosure policy trusted by verification.
@@ -6811,6 +6836,7 @@ pub struct BootleLanternAllowedAttributeValuesV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternIssuerPolicyV1 {
     /// Credential issuer governed by this record.
     pub issuer_id: PrivacyIssuerIdV1,
@@ -6818,6 +6844,8 @@ pub struct BootleLanternIssuerPolicyV1 {
     pub policy_id: PrivacyPolicyIdV1,
     /// Monotonically increasing policy/key epoch.
     pub epoch: u64,
+    /// Forward-only active or terminal-revoked lifecycle.
+    pub lifecycle: BootleLanternIssuerPolicyLifecycleV1,
     /// Exact issuer parameter artifact identity.
     pub issuer_parameter_id: PrivacyParameterIdV1,
     /// Digest of the exact issuer parameter artifact.
@@ -6833,6 +6861,29 @@ pub struct BootleLanternIssuerPolicyV1 {
 }
 
 impl BootleLanternIssuerPolicyV1 {
+    /// Compute the exact digest of the issuer verification matrix selected by
+    /// `issuer_parameter_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if canonical encoding of the matrix
+    /// unexpectedly fails.
+    pub fn computed_issuer_parameter_digest(
+        &self,
+    ) -> Result<PrivacyParameterDigestV1, norito::Error> {
+        let encoded = norito::to_bytes(&self.issuer_public_matrix)?;
+        let mut hasher = Sha256::new();
+        hasher.update(BOOTLE_LANTERN_ISSUER_PARAMETER_DIGEST_DOMAIN_V1);
+        hasher.update(self.issuer_parameter_id.as_bytes());
+        hasher.update(
+            u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        Ok(PrivacyParameterDigestV1::new(hasher.finalize().into()))
+    }
+
     /// Compute the canonical record digest with `record_digest` normalized to zero.
     ///
     /// # Errors
@@ -6940,6 +6991,13 @@ impl BootleLanternIssuerPolicyV1 {
         if matrix_is_zero {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix);
         }
+        let expected_issuer_parameter_digest =
+            self.computed_issuer_parameter_digest().map_err(|_| {
+                BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterEncodingFailure
+            })?;
+        if self.issuer_parameter_digest != expected_issuer_parameter_digest {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterDigestMismatch);
+        }
 
         if self.allowed_values.len() != BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1 {
             return Err(
@@ -7010,6 +7068,9 @@ impl BootleLanternIssuerPolicyV1 {
                 },
             );
         }
+        if self.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::InitialPolicyMustBeActive);
+        }
         Ok(())
     }
 
@@ -7025,17 +7086,25 @@ impl BootleLanternIssuerPolicyV1 {
     ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
         previous.validate()?;
         self.validate()?;
+        if previous.lifecycle == BootleLanternIssuerPolicyLifecycleV1::Revoked {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyAlreadyRevoked);
+        }
         if self.issuer_id != previous.issuer_id {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerIdChanged);
         }
         if self.policy_id != previous.policy_id {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyIdChanged);
         }
-        if self.epoch <= previous.epoch {
+        let expected_epoch = previous
+            .epoch
+            .checked_add(1)
+            .ok_or(BootleLanternIssuerPolicyValidationErrorV1::PolicyEpochOverflow)?;
+        if self.epoch != expected_epoch {
             return Err(
-                BootleLanternIssuerPolicyValidationErrorV1::NonIncreasingEpoch {
+                BootleLanternIssuerPolicyValidationErrorV1::NonConsecutiveEpoch {
                     previous: previous.epoch,
                     next: self.epoch,
+                    expected: expected_epoch,
                 },
             );
         }
@@ -7044,8 +7113,51 @@ impl BootleLanternIssuerPolicyV1 {
             && self.issuer_public_matrix == previous.issuer_public_matrix
             && self.required_disclosure_bitmap == previous.required_disclosure_bitmap
             && self.allowed_values == previous.allowed_values
+            && self.lifecycle == previous.lifecycle
         {
             return Err(BootleLanternIssuerPolicyValidationErrorV1::UnchangedRotation);
+        }
+        Ok(())
+    }
+
+    /// Validate an active-to-active exact successor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first generic successor failure or rejects a successor that
+    /// does not remain active.
+    pub fn validate_rotation_successor(
+        &self,
+        previous: &Self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        self.validate_successor(previous)?;
+        if self.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::RotationMustRemainActive);
+        }
+        Ok(())
+    }
+
+    /// Validate an active-to-terminal-revoked exact successor.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first generic successor failure or rejects a successor that
+    /// is not terminal-revoked.
+    pub fn validate_revocation_successor(
+        &self,
+        previous: &Self,
+    ) -> Result<(), BootleLanternIssuerPolicyValidationErrorV1> {
+        self.validate_successor(previous)?;
+        if self.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Revoked {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::RevocationMustBeRevoked);
+        }
+        if self.issuer_parameter_id != previous.issuer_parameter_id
+            || self.issuer_parameter_digest != previous.issuer_parameter_digest
+            || self.issuer_public_matrix != previous.issuer_public_matrix
+            || self.required_disclosure_bitmap != previous.required_disclosure_bitmap
+            || self.allowed_values != previous.allowed_values
+        {
+            return Err(BootleLanternIssuerPolicyValidationErrorV1::RevocationMustPreservePolicy);
         }
         Ok(())
     }
@@ -7112,6 +7224,12 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
     /// Issuer matrix is the all-zero sentinel.
     #[error("Bootle/Lantern issuer matrix must not be all zero")]
     AllZeroIssuerMatrix,
+    /// Canonical encoding of the issuer verification matrix failed.
+    #[error("Bootle/Lantern issuer parameter encoding failed")]
+    IssuerParameterEncodingFailure,
+    /// The declared issuer parameter digest does not authenticate the matrix.
+    #[error("Bootle/Lantern issuer parameter digest does not match the verification matrix")]
+    IssuerParameterDigestMismatch,
     /// An allowed-value vector length overflowed its canonical count.
     #[error("Bootle/Lantern allowed-value count overflow")]
     AllowedValueCountOverflow,
@@ -7163,23 +7281,45 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
         /// Rejected initial epoch.
         epoch: u64,
     },
+    /// A newly registered lineage was not active.
+    #[error("Bootle/Lantern initial issuer policy must be active")]
+    InitialPolicyMustBeActive,
+    /// A terminal-revoked lineage was used as a successor parent.
+    #[error("Bootle/Lantern issuer policy is already terminal-revoked")]
+    PolicyAlreadyRevoked,
+    /// The current epoch cannot be advanced.
+    #[error("Bootle/Lantern issuer-policy epoch overflow")]
+    PolicyEpochOverflow,
     /// A rotation changed the issuer namespace.
     #[error("Bootle/Lantern issuer-policy rotation must not change issuer id")]
     IssuerIdChanged,
     /// A rotation changed the policy namespace.
     #[error("Bootle/Lantern issuer-policy rotation must not change policy id")]
     PolicyIdChanged,
-    /// A replacement epoch did not strictly increase.
-    #[error("Bootle/Lantern issuer-policy epoch must increase: previous {previous}, next {next}")]
-    NonIncreasingEpoch {
+    /// A replacement epoch was not exactly the next epoch.
+    #[error(
+        "Bootle/Lantern issuer-policy epoch must advance exactly once: previous {previous}, next {next}, expected {expected}"
+    )]
+    NonConsecutiveEpoch {
         /// Current committed epoch.
         previous: u64,
         /// Proposed successor epoch.
         next: u64,
+        /// Only accepted successor epoch.
+        expected: u64,
     },
     /// A replacement changed only epoch and digest.
     #[error("Bootle/Lantern issuer-policy rotation must change key, parameters, or policy rules")]
     UnchangedRotation,
+    /// A rotation attempted to revoke the lineage.
+    #[error("Bootle/Lantern issuer-policy rotation successor must remain active")]
+    RotationMustRemainActive,
+    /// A revocation failed to enter the terminal state.
+    #[error("Bootle/Lantern issuer-policy revocation successor must be revoked")]
+    RevocationMustBeRevoked,
+    /// A revocation attempted to rotate key material or disclosure rules.
+    #[error("Bootle/Lantern issuer-policy revocation must preserve key material and policy rules")]
+    RevocationMustPreservePolicy,
 }
 
 /// One canonical Bootle/Lantern selective-disclosure entry.
@@ -7188,6 +7328,7 @@ pub enum BootleLanternIssuerPolicyValidationErrorV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct BootleLanternDisclosedAttributeV1 {
     /// Zero-based index in the fixed eight-attribute credential.
     pub index: u8,
@@ -7201,6 +7342,7 @@ pub struct BootleLanternDisclosedAttributeV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct IrohaBootleLanternAnoncredStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -7485,7 +7627,10 @@ pub struct PqMaspStarkStatementV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "protocol", content = "statement"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "statement", deny_unknown_fields)
+)]
 pub enum PrivacyStatementV1 {
     /// ZK-ACE post-quantum authorization statement.
     ZkAcePqAuthorizationV0(ZkAcePqAuthorizationStatementV1),
@@ -8926,7 +9071,10 @@ impl IrohaZkAmsProofV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(feature = "json", norito(tag = "protocol", content = "proof"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "protocol", content = "proof", deny_unknown_fields)
+)]
 pub enum PrivacyProofV1 {
     /// ZK-ACE post-quantum authorization proof.
     ZkAcePqAuthorizationV0(PrivacyProofBytesV1),
@@ -9690,6 +9838,7 @@ pub enum PrivacyProofValidationError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyProofEnvelopeV1 {
     /// Exact protocol identity.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -10361,8 +10510,9 @@ mod tests {
             issuer_id: PrivacyIssuerIdV1::new(raw(171)),
             policy_id: PrivacyPolicyIdV1::new(raw(172)),
             epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new(raw(173)),
-            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(174)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
             issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
             required_disclosure_bitmap: 0b0001_0010,
             allowed_values,
@@ -10373,6 +10523,9 @@ mod tests {
     }
 
     fn redigest_bootle_lantern_policy(record: &mut BootleLanternIssuerPolicyV1) {
+        record.issuer_parameter_digest = record
+            .computed_issuer_parameter_digest()
+            .expect("test issuer-parameter digest");
         record.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
         record.record_digest = record
             .computed_record_digest()
@@ -11607,6 +11760,61 @@ mod tests {
         assert_eq!(
             value.validate(&limits),
             Err(PrivacyStatementValidationError::ZeroTransactionIntentDigest)
+        );
+    }
+
+    #[test]
+    fn privacy_context_statement_proof_and_envelope_json_are_closed() {
+        let context = context();
+        let context_json = norito::json::to_json(&context).expect("encode privacy context JSON");
+        let context_prefix = context_json
+            .strip_suffix('}')
+            .expect("privacy context JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyStatementContextV1>(&format!(
+                "{context_prefix},\"legacy_context\":true}}"
+            ))
+            .is_err()
+        );
+
+        let envelope = envelope(statement_for(
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        ));
+        let envelope_json = norito::json::to_json(&envelope).expect("encode privacy envelope JSON");
+        let decoded: PrivacyProofEnvelopeV1 =
+            norito::json::from_json(&envelope_json).expect("decode canonical envelope JSON");
+        assert_eq!(decoded, envelope);
+        let envelope_prefix = envelope_json
+            .strip_suffix('}')
+            .expect("privacy envelope JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyProofEnvelopeV1>(&format!(
+                "{envelope_prefix},\"legacy_envelope\":true}}"
+            ))
+            .is_err()
+        );
+
+        let statement_json =
+            norito::json::to_json(&envelope.statement).expect("encode typed statement JSON");
+        let statement_prefix = statement_json
+            .strip_suffix('}')
+            .expect("typed statement JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyStatementV1>(&format!(
+                "{statement_prefix},\"legacy_statement\":true}}"
+            ))
+            .is_err()
+        );
+
+        let proof_json = norito::json::to_json(&envelope.proof).expect("encode typed proof JSON");
+        let proof_prefix = proof_json
+            .strip_suffix('}')
+            .expect("typed proof JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyProofV1>(&format!(
+                "{proof_prefix},\"legacy_proof\":true}}"
+            ))
+            .is_err()
         );
     }
 
@@ -14322,7 +14530,7 @@ mod tests {
     }
 
     #[test]
-    fn bootle_lantern_issuer_policy_is_canonical_bounded_and_rotates_monotonically() {
+    fn bootle_lantern_issuer_policy_is_canonical_bounded_and_forward_only() {
         let record = bootle_lantern_policy();
         record.validate_initial().expect("canonical initial record");
         assert_eq!(
@@ -14335,6 +14543,18 @@ mod tests {
         let decoded: BootleLanternIssuerPolicyV1 =
             norito::decode_from_bytes(&encoded).expect("decode policy");
         assert_eq!(decoded, record);
+        let json = norito::json::to_json(&record).expect("encode policy JSON");
+        let decoded_json: BootleLanternIssuerPolicyV1 =
+            norito::json::from_json(&json).expect("decode policy JSON");
+        assert_eq!(decoded_json, record);
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("policy JSON is a top-level object");
+        let unknown_field = format!("{object_prefix},\"legacy_policy_alias\":true}}");
+        assert!(
+            norito::json::from_json::<BootleLanternIssuerPolicyV1>(&unknown_field).is_err(),
+            "unknown JSON fields must not create an alternate first-release policy encoding"
+        );
 
         let mut invalid = record.clone();
         invalid.issuer_public_matrix.entries.pop();
@@ -14380,6 +14600,12 @@ mod tests {
         assert_eq!(
             invalid.validate(),
             Err(BootleLanternIssuerPolicyValidationErrorV1::AllZeroIssuerMatrix)
+        );
+        invalid = record.clone();
+        invalid.issuer_parameter_digest.0[0] ^= 1;
+        assert_eq!(
+            invalid.validate(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::IssuerParameterDigestMismatch)
         );
         invalid = record.clone();
         invalid.allowed_values.pop();
@@ -14455,15 +14681,16 @@ mod tests {
             .validate_successor(&record)
             .expect("strict policy rotation");
 
-        let mut non_increasing = successor.clone();
-        non_increasing.epoch = record.epoch;
-        redigest_bootle_lantern_policy(&mut non_increasing);
+        let mut non_consecutive = successor.clone();
+        non_consecutive.epoch = 3;
+        redigest_bootle_lantern_policy(&mut non_consecutive);
         assert!(matches!(
-            non_increasing.validate_successor(&record),
+            non_consecutive.validate_successor(&record),
             Err(
-                BootleLanternIssuerPolicyValidationErrorV1::NonIncreasingEpoch {
+                BootleLanternIssuerPolicyValidationErrorV1::NonConsecutiveEpoch {
                     previous: 1,
-                    next: 1
+                    next: 3,
+                    expected: 2
                 }
             )
         ));
@@ -14474,12 +14701,38 @@ mod tests {
             unchanged.validate_successor(&record),
             Err(BootleLanternIssuerPolicyValidationErrorV1::UnchangedRotation)
         );
-        let mut wrong_initial_epoch = record;
+        let mut revoked = record.clone();
+        revoked.epoch = 2;
+        revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest_bootle_lantern_policy(&mut revoked);
+        revoked
+            .validate_revocation_successor(&record)
+            .expect("exact terminal revocation");
+        let mut revocation_with_rotation = revoked.clone();
+        revocation_with_rotation.required_disclosure_bitmap ^= 1;
+        redigest_bootle_lantern_policy(&mut revocation_with_rotation);
+        assert_eq!(
+            revocation_with_rotation.validate_revocation_successor(&record),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::RevocationMustPreservePolicy)
+        );
+        assert_eq!(
+            revoked.validate_successor(&revoked),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::PolicyAlreadyRevoked)
+        );
+
+        let mut wrong_initial_epoch = record.clone();
         wrong_initial_epoch.epoch = 2;
         redigest_bootle_lantern_policy(&mut wrong_initial_epoch);
         assert_eq!(
             wrong_initial_epoch.validate_initial(),
             Err(BootleLanternIssuerPolicyValidationErrorV1::InvalidInitialEpoch { epoch: 2 })
+        );
+        let mut revoked_initial = record;
+        revoked_initial.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest_bootle_lantern_policy(&mut revoked_initial);
+        assert_eq!(
+            revoked_initial.validate_initial(),
+            Err(BootleLanternIssuerPolicyValidationErrorV1::InitialPolicyMustBeActive)
         );
     }
 

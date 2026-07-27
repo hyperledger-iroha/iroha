@@ -47,6 +47,7 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
+import { parsePrivacyCapabilitySnapshotV1 } from "./privacyCapabilities.js";
 import {
   buildCanonicalRequestHeaders,
   requireCanonicalAuthAccount,
@@ -133,6 +134,7 @@ const IVM_PROVE_JOB_CONTROL_JSON_MAX_BYTES = 16 * 1024;
 const IVM_PROVE_JOB_STATUS_JSON_MAX_BYTES = 32 * 1024 * 1024;
 const IVM_PROOF_MAX_BYTES = 8 * 1024 * 1024;
 const NODE_CAPABILITIES_JSON_MAX_BYTES = 1024 * 1024;
+const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
 const SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES = 1024 * 1024;
@@ -6199,6 +6201,29 @@ export class ToriiClient {
       { signal },
     );
     return normalizeNodeCapabilitiesResponse(payload);
+  }
+
+  /**
+   * Fetch and fail-closed validate the authoritative committed privacy
+   * capability snapshot (`GET /v1/privacy/capabilities`).
+   *
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<Readonly<Record<string, unknown>>>}
+   */
+  async getPrivacyCapabilitiesV1(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getPrivacyCapabilitiesV1");
+    const response = await this._request("GET", "/v1/privacy/capabilities", {
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+    });
+    await this._expectStatus(response, [200], { signal });
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
+      "privacy capabilities response",
+      { signal },
+    );
+    return parsePrivacyCapabilitySnapshotV1(payload);
   }
 
   /**

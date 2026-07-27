@@ -120,15 +120,21 @@ impl ProofRandomnessV1 {
         if byte[0] & 1 == 0 { 1 } else { -1 }
     }
 
-    /// Draw one unbiased ternary coefficient.
-    pub fn ternary(&mut self, domain: &[u8]) -> i64 {
-        loop {
+    /// Draw one unbiased ternary coefficient within the fixed work budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SamplingErrorV1::UniformSamplingExhausted`] if every bounded
+    /// proposal is the sole rejected byte value.
+    pub fn ternary(&mut self, domain: &[u8]) -> Result<i64, SamplingErrorV1> {
+        for _ in 0..MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1 {
             let mut byte = [0_u8; 1];
             self.fill_bytes(domain, &mut byte);
             if byte[0] < 255 {
-                return i64::from(byte[0] % 3) - 1;
+                return Ok(i64::from(byte[0] % 3) - 1);
             }
         }
+        Err(SamplingErrorV1::UniformSamplingExhausted)
     }
 
     /// Draw one uniform proof-ring polynomial.
@@ -144,12 +150,15 @@ impl ProofRandomnessV1 {
     }
 
     /// Draw one polynomial with independent ternary coefficients.
-    pub fn ternary_polynomial(&mut self, domain: &[u8]) -> ProofPolynomialV1 {
+    pub fn ternary_polynomial(
+        &mut self,
+        domain: &[u8],
+    ) -> Result<ProofPolynomialV1, SamplingErrorV1> {
         let mut coefficients = [0_i64; APPLICATION_RING_DEGREE_V1];
         for coefficient in &mut coefficients {
-            *coefficient = self.ternary(domain);
+            *coefficient = self.ternary(domain)?;
         }
-        ProofPolynomialV1::from_centered_coefficients(coefficients)
+        Ok(ProofPolynomialV1::from_centered_coefficients(coefficients))
     }
 
     /// Draw one centered discrete-Gaussian polynomial with standard deviation
@@ -469,7 +478,9 @@ mod tests {
                         .expect("positive")
             }));
         }
-        let ternary = randomness.ternary_polynomial(b"ternary-test");
+        let ternary = randomness
+            .ternary_polynomial(b"ternary-test")
+            .expect("bounded ternary polynomial");
         assert!(
             (0..APPLICATION_RING_DEGREE_V1)
                 .all(|index| (-1..=1).contains(&ternary.centered_coefficient(index)))
