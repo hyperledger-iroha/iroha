@@ -54375,7 +54375,7 @@ mod validation_fee_torii_ingress_tests {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
-        smartcontracts::ivm::cache::IvmCache,
+        smartcontracts::{Execute, ivm::cache::IvmCache},
         state::{State, World},
     };
     use iroha_crypto::{Algorithm, KeyPair, blake2::Blake2b512};
@@ -54392,17 +54392,22 @@ mod validation_fee_torii_ingress_tests {
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
             VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
             VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-            ValidationFeeChargingMode, ValidationFeeFinalizationEvidenceV1,
-            ValidationFeeGovernanceVotingModeV1, ValidationFeeGovernanceWindowV1,
-            ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
+            VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
+            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
+            ValidationFeeGovernanceWindowV1, ValidationFeeMultisigMarkerV1,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
             ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateMemberV1,
             ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
             ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicyV1,
+            ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
+            ValidationFeeTreasuryPayoutRecipientV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
-    use iroha_primitives::{json::Json, numeric::Quantity};
+    use iroha_primitives::{
+        json::Json,
+        numeric::{NumericSpec, Quantity},
+    };
     use sha2::Digest as _;
 
     use super::*;
@@ -54449,6 +54454,113 @@ mod validation_fee_torii_ingress_tests {
         )
     }
 
+    fn xor_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("fees", "paynet").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        )
+    }
+
+    fn payout_contract_address(
+        user: &AccountId,
+    ) -> iroha_data_model::smart_contract::ContractAddress {
+        iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            user,
+            42,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("validation-fee payout contract address")
+    }
+
+    fn payout_contract_artifact() -> (
+        Vec<u8>,
+        iroha_data_model::smart_contract::manifest::ContractManifest,
+    ) {
+        let metadata = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1,
+            abi_version: 1,
+        };
+        let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
+            name: "autonomous_validation_fee_tick".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: Some("CanInvokeContractEntrypoint".to_owned()),
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: None,
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        };
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "ValidationFeePayout".to_owned(),
+            compiler_fingerprint: "validation-fee-torii-ingress-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: entrypoint.name.clone(),
+                kind: entrypoint.kind,
+                params: entrypoint.params.clone(),
+                argument_schema: entrypoint.argument_schema.clone(),
+                return_type: entrypoint.return_type.clone(),
+                return_schema: entrypoint.return_schema.clone(),
+                permission: entrypoint.permission.clone(),
+                read_keys: entrypoint.read_keys.clone(),
+                write_keys: entrypoint.write_keys.clone(),
+                access_hints_complete: entrypoint.access_hints_complete,
+                access_hints_skipped: entrypoint.access_hints_skipped.clone(),
+                triggers: entrypoint.triggers.clone(),
+                entry_pc: 0,
+            }],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        let mut artifact = metadata.encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let verified =
+            ivm::verify_contract_artifact(&artifact).expect("valid payout contract artifact");
+        (artifact, verified.manifest)
+    }
+
+    fn payout_binding(
+        user: &AccountId,
+        fee_asset: &AssetDefinitionId,
+    ) -> ValidationFeeTreasuryPayoutBindingV1 {
+        let contract_address = payout_contract_address(user);
+        let (contract_artifact, _) = payout_contract_artifact();
+        ValidationFeeTreasuryPayoutBindingV1 {
+            treasury_account_id: contract_address.subject_id(),
+            contract_address,
+            code_hash: <[u8; 32]>::from(sha2::Sha256::digest(contract_artifact)),
+            entrypoint: "autonomous_validation_fee_tick"
+                .parse()
+                .expect("payout entrypoint"),
+            sbd_asset_id: fee_asset.clone(),
+            xor_asset_id: xor_asset_definition_id(),
+            pool_vault_account_id: account(20, "derive validation-fee pool vault").0,
+            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+            min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
+            max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
+            recipients: (21..=24)
+                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
+                    account_id: account(seed, "derive validation-fee payout recipient").0,
+                    share: iroha_data_model::validation_fee::validation_fee_payout_recipient_share(
+                    ),
+                })
+                .collect(),
+        }
+    }
+
     fn test_world(
         user: &AccountId,
         recipient: &AccountId,
@@ -54457,19 +54569,33 @@ mod validation_fee_torii_ingress_tests {
     ) -> World {
         let domain_id = DomainId::try_new("fees", "paynet").expect("domain id");
         let domain = Domain::new(domain_id).build(user);
-        let asset_definition = AssetDefinition::numeric(fee_asset.clone()).build(user);
+        let asset_definition = AssetDefinition::new(
+            fee_asset.clone(),
+            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        )
+        .build(user);
+        let xor_asset_definition = AssetDefinition::new(
+            xor_asset_definition_id(),
+            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        )
+        .build(user);
         let user_asset = Asset::new(
             AssetId::new(fee_asset.clone(), user.clone()),
             Quantity::from(100_u32),
         );
+        let mut accounts = vec![
+            Account::new(user.clone()).build(user),
+            Account::new(recipient.clone()).build(user),
+            Account::new(treasury.clone()).build(user),
+            Account::new(account(20, "derive validation-fee pool vault").0).build(user),
+        ];
+        accounts.extend((21..=24).map(|seed| {
+            Account::new(account(seed, "derive validation-fee payout recipient").0).build(user)
+        }));
         World::with_assets(
             [domain],
-            [
-                Account::new(user.clone()).build(user),
-                Account::new(recipient.clone()).build(user),
-                Account::new(treasury.clone()).build(user),
-            ],
-            [asset_definition],
+            accounts,
+            [asset_definition, xor_asset_definition],
             [user_asset],
             [],
         )
@@ -54485,7 +54611,7 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
         let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
-        let (treasury, _) = account(3, "derive validation-fee Torii treasury key");
+        let treasury = payout_contract_address(&user).subject_id();
         let fee_asset = fee_asset_definition_id();
         let state = State::new_for_testing(
             test_world(&user, &recipient, &treasury, &fee_asset),
@@ -54512,7 +54638,7 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (user, user_key_pair) = account(1, "derive validation-fee Torii user key");
         let (recipient, _) = account(2, "derive validation-fee Torii recipient key");
-        let (treasury, _) = account(3, "derive validation-fee Torii treasury key");
+        let treasury = payout_contract_address(&user).subject_id();
         let fee_asset = fee_asset_definition_id();
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(test_world(
             &user, &recipient, &treasury, &fee_asset,
@@ -54555,10 +54681,13 @@ mod validation_fee_torii_ingress_tests {
 
     fn validation_fee_policy(
         state: &Arc<State>,
+        user: &AccountId,
         fee_asset: AssetDefinitionId,
         treasury: AccountId,
         genesis_hash: [u8; 32],
     ) -> ValidationFeePolicyV1 {
+        let payout_binding = payout_binding(user, &fee_asset);
+        assert_eq!(treasury, payout_binding.treasury_account_id);
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             chain_id: state.chain_id.clone(),
@@ -54572,8 +54701,8 @@ mod validation_fee_torii_ingress_tests {
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: TEST_POLICY_EFFECTIVE_HEIGHT,
             expires_after_height: TEST_POLICY_EFFECTIVE_HEIGHT.checked_add(100),
-            exemption_classes: Vec::new(),
-            treasury_payout_binding: None,
+            exemption_classes: vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()],
+            treasury_payout_binding: Some(payout_binding),
         }
     }
 
@@ -54588,12 +54717,13 @@ mod validation_fee_torii_ingress_tests {
     fn install_validation_fee_policy(
         state: &Arc<State>,
         authority: &AccountId,
+        authority_key_pair: &KeyPair,
         policy: ValidationFeePolicyV1,
     ) {
         use iroha_data_model::{
             governance::types::{
                 GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
-                ProposalKind, ValidationFeePolicyProposal,
+                ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
             },
             isi::governance::VotingMode,
         };
@@ -54635,6 +54765,8 @@ mod validation_fee_torii_ingress_tests {
         roster_root.copy_from_slice(&roster_digest[..32]);
         let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
             voting_asset_id: policy.ds_asset_id.clone(),
+            bond_escrow_account: state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: state.gov.slash_receiver_account.clone(),
             ballot_amount: 150_u64.into(),
             ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
             citizenship_amount: 10_000_u64.into(),
@@ -54647,60 +54779,85 @@ mod validation_fee_torii_ingress_tests {
             eligibility_rule:
                 ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
         };
+        let payout_binding = policy
+            .treasury_payout_binding
+            .clone()
+            .expect("enabled validation-fee fixture policy carries a payout binding");
+        let lifecycle_kind =
+            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                payout_binding: payout_binding.clone(),
+                plain_electorate_rules: plain_electorate_rules.clone(),
+            });
+        let lifecycle_id = lifecycle_kind.fingerprint();
         let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
             policy: policy.clone(),
-            payout_lifecycle_proposal_id: None,
+            payout_lifecycle_proposal_id: Some(lifecycle_id),
             plain_electorate_rules: plain_electorate_rules.clone(),
         });
         let proposal_id = kind.fingerprint();
         let approval_gate_height = TEST_REFERENDUM_START_HEIGHT - 1;
-        let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
-            proposal_id,
-            authority.clone(),
-            TEST_REFERENDUM_START_HEIGHT,
-            approval_gate_height,
-            vec![ValidationFeePlainElectorateMemberV1 {
-                account_id: authority.clone(),
-                bonded_height: approval_gate_height,
-                bonded_amount: plain_electorate_rules.citizenship_amount.clone(),
-            }],
-        )
-        .expect("canonical validation-fee Torii PLAIN electorate snapshot");
-        assert_eq!(
-            electorate.context_error(proposal_id, authority, &plain_electorate_rules),
-            None
-        );
-        let authorization = ValidationFeeParliamentAuthorizationV1 {
-            proposal_id,
-            proposal_fingerprint: proposal_id,
-            proposal_time_roster_root: roster_root,
-            plain_electorate_snapshot_root: electorate.roster_root,
-            plain_electorate_snapshot_member_count: electorate.member_count,
-            plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
-            plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
-            referendum_window: ValidationFeeGovernanceWindowV1 {
-                lower: TEST_REFERENDUM_START_HEIGHT,
-                upper: TEST_REFERENDUM_END_HEIGHT,
-            },
-            finalization: ValidationFeeFinalizationEvidenceV1 {
-                referendum_id: proposal_id,
-                finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
-                mode: ValidationFeeGovernanceVotingModeV1::Plain,
-                approve: 1,
-                reject: 0,
-                abstain: 0,
-                min_turnout: 1,
-                approval_threshold_numerator: 1,
-                approval_threshold_denominator: 2,
-                approved: true,
-            },
-            enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
+        let electorate_for = |id| {
+            let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+                id,
+                authority.clone(),
+                TEST_REFERENDUM_START_HEIGHT,
+                approval_gate_height,
+                vec![ValidationFeePlainElectorateMemberV1 {
+                    account_id: authority.clone(),
+                    bonded_height: approval_gate_height,
+                    bonded_amount: plain_electorate_rules.citizenship_amount.clone(),
+                }],
+            )
+            .expect("canonical validation-fee Torii PLAIN electorate snapshot");
+            assert_eq!(
+                electorate.context_error(id, authority, &plain_electorate_rules),
+                None
+            );
+            electorate
         };
+        let authorization_for = |id, electorate: &ValidationFeePlainElectorateSnapshotV1| {
+            ValidationFeeParliamentAuthorizationV1 {
+                proposal_id: id,
+                proposal_fingerprint: id,
+                proposal_time_roster_root: roster_root,
+                plain_electorate_snapshot_root: electorate.roster_root,
+                plain_electorate_snapshot_member_count: electorate.member_count,
+                plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
+                plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
+                referendum_window: ValidationFeeGovernanceWindowV1 {
+                    lower: TEST_REFERENDUM_START_HEIGHT,
+                    upper: TEST_REFERENDUM_END_HEIGHT,
+                },
+                finalization: ValidationFeeFinalizationEvidenceV1 {
+                    referendum_id: id,
+                    finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
+                    mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                    approve: 1,
+                    reject: 0,
+                    abstain: 0,
+                    min_turnout: 1,
+                    approval_threshold_numerator: 1,
+                    approval_threshold_denominator: 2,
+                    approved: true,
+                },
+                enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
+            }
+        };
+        let lifecycle_electorate = electorate_for(lifecycle_id);
+        let lifecycle_authorization = authorization_for(lifecycle_id, &lifecycle_electorate);
+        let electorate = electorate_for(proposal_id);
+        let authorization = authorization_for(proposal_id, &electorate);
         let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
             policy,
-            plain_electorate_rules,
-            authorization,
-            None,
+            plain_electorate_rules.clone(),
+            authorization.clone(),
+            Some(ValidationFeePayoutLifecycleReferenceV1 {
+                lifecycle_seal: payout_binding
+                    .lifecycle_seal()
+                    .expect("derive payout lifecycle seal"),
+                parliament_authorization: lifecycle_authorization.clone(),
+                plain_electorate_rules: plain_electorate_rules.clone(),
+            }),
         )
         .expect("validation-fee registry entry");
         let registry = ValidationFeePolicyRegistryV1 {
@@ -54711,65 +54868,106 @@ mod validation_fee_torii_ingress_tests {
             1_700_000_001_000,
         ));
         let mut stx = block.transaction();
-        stx.world.governance_proposals_mut().insert(
-            proposal_id,
-            iroha_core::state::GovernanceProposalRecord {
-                proposer: authority.clone(),
-                kind,
-                created_height: TEST_REFERENDUM_START_HEIGHT,
-                status: iroha_core::state::GovernanceProposalStatus::Enacted,
-                pipeline: iroha_core::state::GovernancePipeline::default(),
-                parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
-                    selection_epoch: 1,
-                    beacon: [0x55; 32],
-                    roster_root,
-                    bodies,
-                }),
-                finalization_evidence: Some(GovernanceFinalizationEvidence {
-                    proposal_id,
-                    referendum_id: proposal_id,
-                    finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
-                    mode: VotingMode::Plain,
-                    approve: 1,
-                    reject: 0,
-                    abstain: 0,
-                    min_turnout: 1,
-                    approval_threshold_numerator: 1,
-                    approval_threshold_denominator: 2,
-                    approved: true,
-                }),
-                enacted_at_height: Some(TEST_POLICY_ENACTMENT_HEIGHT),
-            },
-        );
-        let referendum_id = hex::encode(proposal_id);
-        stx.world.governance_referenda_mut().insert(
-            referendum_id.clone(),
-            iroha_core::state::GovernanceReferendumRecord {
-                h_start: TEST_REFERENDUM_START_HEIGHT,
-                h_end: TEST_REFERENDUM_END_HEIGHT,
-                status: iroha_core::state::GovernanceReferendumStatus::Closed,
-                mode: iroha_core::state::GovernanceReferendumMode::Plain,
-            },
-        );
-        let mut approvals = iroha_core::state::GovernanceStageApprovals::default();
-        for body in [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
+        let register_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        Grant::account_permission(register_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant payout-contract registration authority");
+        let (contract_artifact, contract_manifest) = payout_contract_artifact();
+        let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
+            authority,
+            contract_artifact,
+            &mut stx,
+        )
+        .expect("register payout-contract bytes");
+        iroha_core::smartcontracts::code::register_manifest(
+            authority,
+            contract_manifest.signed(authority_key_pair),
+            &mut stx,
+        )
+        .expect("register signed payout-contract manifest");
+        iroha_core::smartcontracts::code::activate_instance(
+            authority,
+            payout_binding.contract_address,
+            registered_code_hash,
+            &mut stx,
+        )
+        .expect("activate payout-contract subject");
+
+        for (id, exact_kind, exact_authorization, exact_electorate) in [
+            (
+                lifecycle_id,
+                lifecycle_kind,
+                lifecycle_authorization,
+                lifecycle_electorate,
+            ),
+            (proposal_id, kind, authorization, electorate),
         ] {
-            approvals
-                .ensure_stage(body, 1, 1, 10_000)
-                .record(authority.clone());
+            stx.world.governance_proposals_mut().insert(
+                id,
+                iroha_core::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind: exact_kind,
+                    created_height: TEST_REFERENDUM_START_HEIGHT,
+                    status: iroha_core::state::GovernanceProposalStatus::Enacted,
+                    pipeline: iroha_core::state::GovernancePipeline::default(),
+                    parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
+                        selection_epoch: 1,
+                        beacon: [0x55; 32],
+                        roster_root,
+                        bodies: bodies.clone(),
+                    }),
+                    finalization_evidence: Some(GovernanceFinalizationEvidence {
+                        proposal_id: id,
+                        referendum_id: id,
+                        finalized_at_height: exact_authorization.finalization.finalized_at_height,
+                        mode: VotingMode::Plain,
+                        approve: exact_authorization.finalization.approve,
+                        reject: exact_authorization.finalization.reject,
+                        abstain: exact_authorization.finalization.abstain,
+                        min_turnout: exact_authorization.finalization.min_turnout,
+                        approval_threshold_numerator: exact_authorization
+                            .finalization
+                            .approval_threshold_numerator,
+                        approval_threshold_denominator: exact_authorization
+                            .finalization
+                            .approval_threshold_denominator,
+                        approved: exact_authorization.finalization.approved,
+                    }),
+                    enacted_at_height: Some(TEST_POLICY_ENACTMENT_HEIGHT),
+                },
+            );
+            let referendum_id = hex::encode(id);
+            stx.world.governance_referenda_mut().insert(
+                referendum_id.clone(),
+                iroha_core::state::GovernanceReferendumRecord {
+                    h_start: TEST_REFERENDUM_START_HEIGHT,
+                    h_end: TEST_REFERENDUM_END_HEIGHT,
+                    status: iroha_core::state::GovernanceReferendumStatus::Closed,
+                    mode: iroha_core::state::GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut approvals = iroha_core::state::GovernanceStageApprovals::default();
+            for body in [
+                ParliamentBody::RulesCommittee,
+                ParliamentBody::AgendaCouncil,
+                ParliamentBody::InterestPanel,
+                ParliamentBody::ReviewPanel,
+                ParliamentBody::PolicyJury,
+                ParliamentBody::OversightCommittee,
+                ParliamentBody::FmaCommittee,
+            ] {
+                approvals
+                    .ensure_stage(body, 1, 1, 10_000)
+                    .record(authority.clone());
+            }
+            approvals.approval_gate_height = Some(approval_gate_height);
+            approvals.validation_fee_plain_electorate_snapshot = Some(exact_electorate);
+            stx.world
+                .governance_stage_approvals_mut()
+                .insert(referendum_id, approvals);
         }
-        approvals.approval_gate_height = Some(approval_gate_height);
-        approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
-        stx.world
-            .governance_stage_approvals_mut()
-            .insert(referendum_id, approvals);
         stx.world
             .parameters_mut_for_testing()
             .get_mut()
@@ -54847,7 +55045,7 @@ mod validation_fee_torii_ingress_tests {
     async fn submit_via_public_transaction_handler(
         app: crate::SharedAppState,
         transaction: SignedTransaction,
-    ) -> axum::http::StatusCode {
+    ) -> axum::response::Response {
         use axum::{extract::State as AxumState, response::IntoResponse};
 
         crate::handler_post_transaction(
@@ -54857,9 +55055,7 @@ mod validation_fee_torii_ingress_tests {
             crate::utils::extractors::JsonOrNoritoVersioned(transaction),
         )
         .await
-        .expect("public transaction handler should accept a statelessly valid transaction")
         .into_response()
-        .status()
     }
 
     async fn submit_via_public_transaction_batch_handler(
@@ -54943,8 +55139,9 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
-        install_validation_fee_policy(&state, &user, policy.clone());
+        let policy =
+            validation_fee_policy(&state, &user, fee_asset.clone(), treasury, genesis_hash);
+        install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
 
         let missing_fee_queue = queue();
         let missing_fee_tx = signed_transfer(
@@ -55005,9 +55202,14 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let policy =
-            validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
-        install_validation_fee_policy(&state, &user, policy.clone());
+        let policy = validation_fee_policy(
+            &state,
+            &user,
+            fee_asset.clone(),
+            treasury.clone(),
+            genesis_hash,
+        );
+        install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
         let (multisig, _) = account(4, "derive validation-fee multisig account");
 
         let proposal = || {
@@ -55130,41 +55332,17 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (app, user, user_key_pair, recipient, treasury, fee_asset) = test_app_state();
         let genesis_hash = commit_empty_genesis_like_block(&app.state);
-        let policy = validation_fee_policy(&app.state, fee_asset.clone(), treasury, genesis_hash);
-        install_validation_fee_policy(&app.state, &user, policy.clone());
+        let policy =
+            validation_fee_policy(&app.state, &user, fee_asset.clone(), treasury, genesis_hash);
+        install_validation_fee_policy(&app.state, &user, &user_key_pair, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
 
     #[tokio::test]
-    async fn public_transaction_handler_raw_fee_asset_transfer_reaches_validator_fee_admission() {
-        let (missing_fee_app, user, user_key_pair, recipient, policy) =
-            test_app_with_active_policy();
-        let missing_fee_tx = signed_transfer(
-            &missing_fee_app.state,
-            &user,
-            &user_key_pair,
-            &recipient,
-            &validation_fee_policy_asset(&policy),
-            &policy,
-            false,
-        );
-        let missing_fee_status =
-            submit_via_public_transaction_handler(Arc::clone(&missing_fee_app), missing_fee_tx)
-                .await;
-        assert_eq!(missing_fee_status, axum::http::StatusCode::ACCEPTED);
-        let missing_fee_error = validate_single_queued_transaction_in_block(
-            &missing_fee_app.state,
-            &missing_fee_app.queue,
-            TEST_ACTIVE_VALIDATION_HEIGHT,
-        );
-        assert!(
-            missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
-            "unexpected missing-fee rejection: {missing_fee_error}"
-        );
-
-        let (exact_fee_app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
-        let exact_fee_tx = signed_transfer(
-            &exact_fee_app.state,
+    async fn public_transaction_handler_fails_closed_without_synced_transport() {
+        let (app, user, user_key_pair, recipient, policy) = test_app_with_active_policy();
+        let transaction = signed_transfer(
+            &app.state,
             &user,
             &user_key_pair,
             &recipient,
@@ -55172,15 +55350,27 @@ mod validation_fee_torii_ingress_tests {
             &policy,
             true,
         );
-        let exact_fee_status =
-            submit_via_public_transaction_handler(Arc::clone(&exact_fee_app), exact_fee_tx).await;
-        assert_eq!(exact_fee_status, axum::http::StatusCode::ACCEPTED);
-        let exact_fee_result = validate_single_queued_transaction_in_block(
-            &exact_fee_app.state,
-            &exact_fee_app.queue,
-            TEST_ACTIVE_VALIDATION_HEIGHT,
+        let response = submit_via_public_transaction_handler(Arc::clone(&app), transaction).await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
-        assert_eq!(exact_fee_result, "ok");
+        assert_eq!(
+            app.queue.active_len(),
+            0,
+            "a transaction without durable globally synchronized admission must not enter the queue"
+        );
+        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        let expected_reject_code = "route_unavailable";
+        #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+        let expected_reject_code = "queue_plan_synced_transport_unavailable";
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_reject_code)
+        );
     }
 
     #[tokio::test]

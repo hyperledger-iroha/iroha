@@ -1167,6 +1167,9 @@ fn decode_zk_ace_authorized_transfer_archive(
         })
 }
 
+const RETIRED_ZK_ACE_INSTRUCTION_ERROR: &str = "legacy ZK-ACE identity and transfer instructions \
+    are retired and non-executable; use the iroha.privacy ZK-ACE policy and proof instructions";
+
 #[pyfunction]
 #[pyo3(name = "zk_ace_authorized_transfer_digest_check")]
 fn zk_ace_authorized_transfer_digest_check_py(
@@ -11853,7 +11856,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_ace_instruction_classmethods_serialize_payloads() {
+    fn zk_ace_instruction_classmethods_reject_retired_instructions() {
         ensure_python();
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
@@ -11883,7 +11886,7 @@ mod tests {
                 .append(source.clone())
                 .expect("allowed account append");
 
-            let register = Instruction::register_zk_ace_identity_commitment(
+            let register_error = match Instruction::register_zk_ace_identity_commitment(
                 &instruction_type,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
                 identity.as_any(),
@@ -11892,28 +11895,13 @@ mod tests {
                 Some(verifier.as_any()),
                 None,
                 None,
-            )
-            .expect("register ZK-ACE identity builds");
-            let decoded = json::from_str::<InstructionBox>(&register.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let register = instruction_ref
-                .as_any()
-                .downcast_ref::<RegisterZkAceIdentityCommitment>()
-                .expect("expected RegisterZkAceIdentityCommitment");
-            assert_eq!(register.identity_commitment, [0x11; 32]);
-            assert_eq!(register.policy_hash, [0x22; 32]);
-            assert_eq!(
-                register.action_class,
-                ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
-            );
-            assert_eq!(register.domain_tag, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG);
-            assert_eq!(
-                register.verifier_key.backend.to_string(),
-                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-            );
+            ) {
+                Ok(_) => panic!("retired ZK-ACE identity registration must fail closed"),
+                Err(err) => err.to_string(),
+            };
+            assert!(register_error.contains("retired and non-executable"));
 
-            let rotate = Instruction::rotate_zk_ace_identity_commitment(
+            let rotate_error = match Instruction::rotate_zk_ace_identity_commitment(
                 &instruction_type,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
                 identity.as_any(),
@@ -11923,36 +11911,24 @@ mod tests {
                 Some(verifier.as_any()),
                 None,
                 None,
-            )
-            .expect("rotate ZK-ACE identity builds");
-            let decoded = json::from_str::<InstructionBox>(&rotate.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let rotate = instruction_ref
-                .as_any()
-                .downcast_ref::<RotateZkAceIdentityCommitment>()
-                .expect("expected RotateZkAceIdentityCommitment");
-            assert_eq!(rotate.old_identity_commitment, [0x11; 32]);
-            assert_eq!(rotate.new_identity_commitment, [0x12; 32]);
+            ) {
+                Ok(_) => panic!("retired ZK-ACE identity rotation must fail closed"),
+                Err(err) => err.to_string(),
+            };
+            assert!(rotate_error.contains("retired and non-executable"));
 
-            let revoke = Instruction::revoke_zk_ace_identity_commitment(
+            let revoke_error = match Instruction::revoke_zk_ace_identity_commitment(
                 &instruction_type,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
                 identity.as_any(),
                 Some(reason.as_any()),
-            )
-            .expect("revoke ZK-ACE identity builds");
-            let decoded = json::from_str::<InstructionBox>(&revoke.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let revoke = instruction_ref
-                .as_any()
-                .downcast_ref::<RevokeZkAceIdentityCommitment>()
-                .expect("expected RevokeZkAceIdentityCommitment");
-            assert_eq!(revoke.identity_commitment, [0x11; 32]);
-            assert_eq!(revoke.reason_hash, Some([0x55; 32]));
+            ) {
+                Ok(_) => panic!("retired ZK-ACE identity revocation must fail closed"),
+                Err(err) => err.to_string(),
+            };
+            assert!(revoke_error.contains("retired and non-executable"));
 
-            let transfer = Instruction::zk_ace_authorized_transfer(
+            let transfer_error = match Instruction::zk_ace_authorized_transfer(
                 &instruction_type,
                 &source,
                 &destination,
@@ -11966,27 +11942,11 @@ mod tests {
                 replay.as_any(),
                 policy.as_any(),
                 proof.as_any(),
-            )
-            .expect("ZK-ACE transfer builds");
-            let decoded = json::from_str::<InstructionBox>(&transfer.to_json().expect("json"))
-                .expect("instruction json decodes");
-            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
-            let transfer = instruction_ref
-                .as_any()
-                .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
-                .expect("expected SubmitZkAceAuthorizedTransfer");
-            assert_eq!(
-                transfer.amount,
-                Quantity::from_str("7").expect("quantity parses")
-            );
-            assert_eq!(transfer.identity_commitment, [0x11; 32]);
-            assert_eq!(transfer.tx_digest, [0x33; 32]);
-            assert_eq!(transfer.replay_nullifier, [0x44; 32]);
-            assert_eq!(transfer.policy_hash, [0x22; 32]);
-            assert_eq!(
-                transfer.proof.backend.to_string(),
-                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-            );
+            ) {
+                Ok(_) => panic!("retired ZK-ACE authorized transfer must fail closed"),
+                Err(err) => err.to_string(),
+            };
+            assert!(transfer_error.contains("retired and non-executable"));
         });
     }
 
@@ -12827,7 +12787,10 @@ mod tests {
                 .expect("chunk_receipts key")
                 .expect("chunk_receipts missing");
             let receipts = receipts_obj.cast::<PyList>().expect("chunk_receipts list");
-            assert_eq!(receipts.len(), plan.chunk_fetch_specs().len());
+            assert_eq!(
+                receipts.len(),
+                plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+            );
             assert!(receipts.iter().all(|entry| {
                 entry
                     .cast::<PyDict>()
@@ -13016,7 +12979,10 @@ mod tests {
                 .expect("chunk_receipts")
                 .expect("chunk_receipts missing");
             let receipts = receipts_obj.cast::<PyList>().expect("chunk_receipts list");
-            assert_eq!(receipts.len(), plan.chunk_fetch_specs().len());
+            assert_eq!(
+                receipts.len(),
+                plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+            );
             assert!(receipts.iter().all(|entry| {
                 entry
                     .cast::<PyDict>()
@@ -13048,7 +13014,7 @@ mod tests {
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
             sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
-        let chunk_count = plan.chunk_fetch_specs().len() as u64;
+        let chunk_count = plan.try_chunk_fetch_specs().expect("valid CAR plan").len() as u64;
 
         let providers = vec![
             PyLocalProviderSpec {
@@ -15136,7 +15102,7 @@ impl Instruction {
                 "invalid asset definition id `{asset_definition_id}`: {err}"
             ))
         })?;
-        let instruction = RegisterZkAceIdentityCommitment::new(
+        let _instruction = RegisterZkAceIdentityCommitment::new(
             asset,
             py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
             py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
@@ -15145,7 +15111,7 @@ impl Instruction {
             parse_zk_ace_domain_tag(domain_tag, "domain_tag")?,
             parse_optional_zk_ace_verifying_key_id_py(verifier_key, "verifier_key")?,
         );
-        Ok(Instruction::new(instruction.into()))
+        Err(PyValueError::new_err(RETIRED_ZK_ACE_INSTRUCTION_ERROR))
     }
 
     #[classmethod]
@@ -15176,7 +15142,7 @@ impl Instruction {
                 "new_identity_commitment must differ from old_identity_commitment",
             ));
         }
-        let instruction = RotateZkAceIdentityCommitment::new(
+        let _instruction = RotateZkAceIdentityCommitment::new(
             asset,
             old_identity_commitment,
             new_identity_commitment,
@@ -15186,7 +15152,7 @@ impl Instruction {
             parse_zk_ace_domain_tag(domain_tag, "domain_tag")?,
             parse_optional_zk_ace_verifying_key_id_py(verifier_key, "verifier_key")?,
         );
-        Ok(Instruction::new(instruction.into()))
+        Err(PyValueError::new_err(RETIRED_ZK_ACE_INSTRUCTION_ERROR))
     }
 
     #[classmethod]
@@ -15202,12 +15168,12 @@ impl Instruction {
                 "invalid asset definition id `{asset_definition_id}`: {err}"
             ))
         })?;
-        let instruction = RevokeZkAceIdentityCommitment::new(
+        let _instruction = RevokeZkAceIdentityCommitment::new(
             asset,
             py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
             parse_optional_fixed_array_py::<32>(reason_hash, "reason_hash")?,
         );
-        Ok(Instruction::new(instruction.into()))
+        Err(PyValueError::new_err(RETIRED_ZK_ACE_INSTRUCTION_ERROR))
     }
 
     #[classmethod]
@@ -15397,7 +15363,7 @@ impl Instruction {
         })?;
         let proof =
             ensure_zk_ace_proof_attachment(parse_zk_proof_attachment(proof, "proof")?, "proof")?;
-        let instruction = SubmitZkAceAuthorizedTransfer::new(
+        let _instruction = SubmitZkAceAuthorizedTransfer::new(
             from,
             to,
             asset,
@@ -15411,7 +15377,7 @@ impl Instruction {
             py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
             proof,
         );
-        Ok(Instruction::new(instruction.into()))
+        Err(PyValueError::new_err(RETIRED_ZK_ACE_INSTRUCTION_ERROR))
     }
 
     #[classmethod]

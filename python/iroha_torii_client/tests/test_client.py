@@ -25,6 +25,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     ContractOperationReceipt,
     ExplorerAccountQr,
     GovernanceContractResponse,
+    GovernanceLockCustody,
     GovernanceLockRecord,
     KagemushaRedeemRequestV4,
     KagemushaTopUpRequestV4,
@@ -3135,6 +3136,12 @@ def _governance_locks_payload(amount: Any) -> Dict[str, Any]:
                 "expiry_height": 10,
                 "direction": 1,
                 "duration_blocks": 5,
+                "custody": {
+                    "escrowed": True,
+                    "asset_definition_id": "xor#wonderland",
+                    "bond_escrow_account": CANONICAL_OWNER,
+                    "slash_receiver_account": CANONICAL_OWNER,
+                },
             }
         },
     }
@@ -3154,6 +3161,63 @@ def test_get_governance_locks_returns_typed_lossless_quantity() -> None:
     assert isinstance(record, GovernanceLockRecord)
     assert record.amount == CANONICAL_LARGE_FRACTION
     assert record.slashed == "0.25"
+    assert record.custody is not None
+    assert isinstance(record.custody, GovernanceLockCustody)
+    assert record.custody.escrowed is True
+    assert record.custody.asset_definition_id == "xor#wonderland"
+
+
+def test_get_governance_locks_accepts_explicit_null_custody() -> None:
+    payload = _governance_locks_payload("1")
+    payload["locks"][CANONICAL_OWNER]["custody"] = None
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    result = ToriiClient("http://node.test", session=session).get_governance_locks(
+        "ref-1"
+    )
+
+    record = result.locks[CANONICAL_OWNER] if result.locks is not None else None
+    assert isinstance(record, GovernanceLockRecord)
+    assert record.custody is None
+
+
+def test_get_governance_locks_requires_strict_nullable_custody() -> None:
+    missing = _governance_locks_payload("1")
+    del missing["locks"][CANONICAL_OWNER]["custody"]
+    session = RecordingSession()
+    session.queue(StubResponse(payload=missing))
+    with pytest.raises(RuntimeError, match="custody"):
+        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+
+    extra = _governance_locks_payload("1")
+    extra["locks"][CANONICAL_OWNER]["custody"]["legacy"] = True
+    session = RecordingSession()
+    session.queue(StubResponse(payload=extra))
+    with pytest.raises(RuntimeError, match="exactly"):
+        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+
+    incomplete = _governance_locks_payload("1")
+    del incomplete["locks"][CANONICAL_OWNER]["custody"]["bond_escrow_account"]
+    session = RecordingSession()
+    session.queue(StubResponse(payload=incomplete))
+    with pytest.raises(RuntimeError, match="exactly"):
+        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+
+    wrong = _governance_locks_payload("1")
+    wrong["locks"][CANONICAL_OWNER]["custody"]["escrowed"] = 1
+    session = RecordingSession()
+    session.queue(StubResponse(payload=wrong))
+    with pytest.raises(RuntimeError, match="escrowed"):
+        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
+
+    padded = _governance_locks_payload("1")
+    padded["locks"][CANONICAL_OWNER]["custody"]["asset_definition_id"] = (
+        "xor#wonderland "
+    )
+    session = RecordingSession()
+    session.queue(StubResponse(payload=padded))
+    with pytest.raises(RuntimeError, match="whitespace"):
+        ToriiClient("http://node.test", session=session).get_governance_locks("ref-1")
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,7 @@
 
 use std::str::FromStr as _;
 
-use iroha_crypto::PublicKey;
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -35,6 +35,12 @@ fn parity_account_id() -> AccountId {
     AccountId::new(public_key)
 }
 
+fn fixture_account_id(seed: u8) -> AccountId {
+    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+        .expect("derive deterministic fixture account");
+    AccountId::new(key_pair.public_key().clone())
+}
+
 #[test]
 fn typed_validation_fee_registry_fails_closed_without_governance() {
     let proposal_id = [0x12; 32];
@@ -63,6 +69,8 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
             DomainId::try_new("governance", "validation").expect("governance domain id"),
             Name::from_str("vote").expect("voting asset name"),
         ),
+        bond_escrow_account: fixture_account_id(1),
+        slash_receiver_account: fixture_account_id(2),
         ballot_amount: 150_u64.into(),
         ballot_duration_blocks: REFERENDUM_DURATION_BLOCKS,
         citizenship_amount: 10_000_u64.into(),

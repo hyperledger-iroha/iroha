@@ -140,8 +140,7 @@ pub(crate) enum ZkX509CertificateExtensionV1 {
 }
 
 /// Complete certificate extension allow-list in DER OID order.
-pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1:
-    [ZkX509CertificateExtensionV1; 5] = [
+pub(crate) const ZK_X509_ALLOWED_CERTIFICATE_EXTENSIONS_V1: [ZkX509CertificateExtensionV1; 5] = [
     ZkX509CertificateExtensionV1::AuthorityKeyIdentifier,
     ZkX509CertificateExtensionV1::SubjectKeyIdentifier,
     ZkX509CertificateExtensionV1::KeyUsage,

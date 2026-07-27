@@ -391,6 +391,17 @@ fn integer_sqrt_u128(n: u128) -> u128 {
     x0
 }
 
+fn validation_fee_lock_custody(
+    rules: &ValidationFeePlainElectorateRulesV1,
+) -> iroha_core::state::GovernanceLockCustody {
+    iroha_core::state::GovernanceLockCustody {
+        escrowed: true,
+        asset_definition_id: rules.voting_asset_id.clone(),
+        bond_escrow_account: rules.bond_escrow_account.clone(),
+        slash_receiver_account: rules.slash_receiver_account.clone(),
+    }
+}
+
 fn live_plain_tally(
     locks: Option<&iroha_core::state::GovernanceLocksForReferendum>,
     referendum_end: u64,
@@ -406,10 +417,13 @@ fn live_plain_tally(
     let electorate = electorate.ok_or_else(|| {
         inconsistent("validation-fee citizen locks exist without a frozen PLAIN electorate")
     })?;
+    let expected_custody = validation_fee_lock_custody(rules);
     for (owner, record) in &locks.locks {
         if &record.owner != owner
             || record.amount != rules.ballot_amount
+            || !record.slashed.is_zero()
             || record.duration_blocks != rules.ballot_duration_blocks
+            || record.custody.as_ref() != Some(&expected_custody)
             || !electorate.contains(owner)
         {
             return Err(inconsistent(
@@ -1232,6 +1246,7 @@ mod tests {
             expiry_height: referendum_end,
             direction: 0,
             duration_blocks: rules.ballot_duration_blocks,
+            custody: Some(validation_fee_lock_custody(&rules)),
         };
         let locks = iroha_core::state::GovernanceLocksForReferendum {
             locks: BTreeMap::from([(member.clone(), lock.clone())]),
@@ -1265,6 +1280,26 @@ mod tests {
             )
             .is_err(),
             "a lock outside the frozen electorate must fail closed"
+        );
+
+        let slashed_locks = iroha_core::state::GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(
+                member.clone(),
+                iroha_core::state::GovernanceLockRecord {
+                    slashed: 1_u64.into(),
+                    ..lock.clone()
+                },
+            )]),
+        };
+        assert!(
+            live_plain_tally(
+                Some(&slashed_locks),
+                referendum_end,
+                &rules,
+                Some(&electorate)
+            )
+            .is_err(),
+            "a validation-fee lock with an outstanding slash must fail closed"
         );
 
         let expired_locks = iroha_core::state::GovernanceLocksForReferendum {

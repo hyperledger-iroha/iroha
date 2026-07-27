@@ -146,11 +146,12 @@ a node advertising any other data-model version before submission.
 ### Validation-fee PLAIN governance
 
 - `ValidationFeePlainElectorateRulesV1` is part of each native proposal
-  fingerprint. It fixes the voting asset, ballot amount and duration,
-  citizenship amount, member cap, conviction parameters, turnout and approval
-  threshold, and the closed proposal-operator eligibility rule. The
-  first-release cap is 256 members; Taira retains an exact 3,600-block
-  inclusive referendum window and permits PLAIN finalization only.
+  fingerprint. It fixes the voting asset, bond-escrow account, slash-receiver
+  account, ballot amount and duration, citizenship amount, member cap,
+  conviction parameters, turnout and approval threshold, and the closed
+  proposal-operator eligibility rule. The first-release cap is 256 members;
+  Taira retains an exact 150-XOR bond, 3,600-block inclusive referendum window,
+  and PLAIN-only finalization.
 - `ValidationFeePlainElectorateSnapshotV1` freezes the electorate at the
   referendum's `h_start` boundary after the seven-body approval gate. Its
   canonical, duplicate-free members retain account id, uninterrupted
@@ -165,6 +166,13 @@ a node advertising any other data-model version before submission.
   height. Registry validation requires these anchors and thresholds to match
   the retained rules, and requires
   `effective_from_height = enacted_at_height + 120,960` exactly.
+- Every new validation-fee lock retains the proposal-bound asset, escrow, and
+  slash receiver. Lock, release, slash, and restitution move the exact numeric
+  balance atomically through those retained identities; missing or mismatched
+  custody evidence, or a failed release, retains the lock and fails closed.
+  Referenced accounts, asset definitions, and their containing domains cannot
+  be unregistered while an active lock or a proposed/approved validation-fee
+  proposal still depends on them.
 
 ## Blocks
 

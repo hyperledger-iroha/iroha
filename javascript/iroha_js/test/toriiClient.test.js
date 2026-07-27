@@ -13849,6 +13849,12 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
   assert.equal(firstLock.amount, "18446744073709551616.25");
   assert.equal(firstLock.slashed, "0.25");
   assert.equal(firstLock.duration_blocks, 5);
+  assert.deepEqual(firstLock.custody, {
+    escrowed: true,
+    asset_definition_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+    bond_escrow_account: "bond-escrow-account",
+    slash_receiver_account: "slash-receiver-account",
+  });
 
   const missingClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
@@ -13861,6 +13867,65 @@ test("getGovernanceLocksTyped parses lock records and synthesizes not-found resu
     locks: {},
     referendum_id: "ref-2",
   });
+});
+
+test("getGovernanceLocksTyped accepts null legacy custody and rejects malformed custody", async () => {
+  const parseCustody = async (mutate) => {
+    const fixture = cloneFixture(toriiFixtures.governance.locks);
+    const [lock] = Object.values(fixture.locks);
+    mutate(lock);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: fixture,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    return client.getGovernanceLocksTyped("ref-1");
+  };
+
+  const legacy = await parseCustody((lock) => {
+    lock.custody = null;
+  });
+  assert.equal(Object.values(legacy.locks)[0].custody, null);
+
+  for (const fixture of [
+    {
+      label: "missing custody",
+      mutate(lock) {
+        delete lock.custody;
+      },
+      error: /custody must be an object/u,
+    },
+    {
+      label: "missing custody field",
+      mutate(lock) {
+        delete lock.custody.bond_escrow_account;
+      },
+      error: /custody must contain exactly/u,
+    },
+    {
+      label: "extra custody field",
+      mutate(lock) {
+        lock.custody.asset_id = lock.custody.asset_definition_id;
+      },
+      error: /custody must contain exactly/u,
+    },
+    {
+      label: "wrong custody field type",
+      mutate(lock) {
+        lock.custody.escrowed = "true";
+      },
+      error: /custody\.escrowed must be a boolean/u,
+    },
+  ]) {
+    await assert.rejects(
+      () => parseCustody(fixture.mutate),
+      fixture.error,
+      fixture.label,
+    );
+  }
 });
 
 test("getGovernanceLocksTyped rejects noncanonical and numeric JSON quantities", async () => {

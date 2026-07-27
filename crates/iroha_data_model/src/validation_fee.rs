@@ -441,6 +441,10 @@ pub enum ValidationFeePlainElectorateEligibilityRuleV1 {
 pub struct ValidationFeePlainElectorateRulesV1 {
     /// Asset definition whose locked balance supplies PLAIN ballot weight.
     pub voting_asset_id: AssetDefinitionId,
+    /// Proposal-bound escrow account that holds every PLAIN ballot lock.
+    pub bond_escrow_account: AccountId,
+    /// Proposal-bound account that receives any governance lock slash.
+    pub slash_receiver_account: AccountId,
     /// Exact amount locked by every eligible ballot.
     pub ballot_amount: Quantity,
     /// Exact inclusive ballot duration in blocks.
@@ -698,6 +702,14 @@ impl ValidationFeePlainElectorateSnapshotV1 {
         {
             return Some(
                 "validation-fee PLAIN electorate member is below the proposal-bound citizenship amount",
+            );
+        }
+        if self.members.iter().any(|member| {
+            member.account_id == rules.bond_escrow_account
+                || member.account_id == rules.slash_receiver_account
+        }) {
+            return Some(
+                "validation-fee PLAIN custody accounts cannot belong to the voting electorate",
             );
         }
         None
@@ -1942,6 +1954,8 @@ mod parliament_tests {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
                 .parse()
                 .expect("voting asset id"),
+            bond_escrow_account: account(90),
+            slash_receiver_account: account(91),
             ballot_amount: 150_u64.into(),
             ballot_duration_blocks: 3_600,
             citizenship_amount: 10_000_u64.into(),
@@ -2059,14 +2073,18 @@ mod parliament_tests {
         let json = norito::json::to_json(&rules).expect("serialize PLAIN electorate rules");
         assert_eq!(
             json,
-            concat!(
-                r#"{"voting_asset_id":"5dHF5UNffENuEg9mhjYwY1jcZ1K5","#,
-                r#""ballot_amount":"150","ballot_duration_blocks":"3600","#,
-                r#""citizenship_amount":"10000","max_members":"256","#,
-                r#""conviction_step_blocks":"100","max_conviction":"6","#,
-                r#""min_turnout":"1","approval_threshold_numerator":"1","#,
-                r#""approval_threshold_denominator":"2","#,
-                r#""eligibility_rule":{"rule":"proposal_operator_at_or_before_gate_others_after_gate","value":null}}"#
+            format!(
+                concat!(
+                    r#"{{"voting_asset_id":"5dHF5UNffENuEg9mhjYwY1jcZ1K5","#,
+                    r#""bond_escrow_account":"{}","slash_receiver_account":"{}","#,
+                    r#""ballot_amount":"150","ballot_duration_blocks":"3600","#,
+                    r#""citizenship_amount":"10000","max_members":"256","#,
+                    r#""conviction_step_blocks":"100","max_conviction":"6","#,
+                    r#""min_turnout":"1","approval_threshold_numerator":"1","#,
+                    r#""approval_threshold_denominator":"2","#,
+                    r#""eligibility_rule":{{"rule":"proposal_operator_at_or_before_gate_others_after_gate","value":null}}}}"#
+                ),
+                rules.bond_escrow_account, rules.slash_receiver_account,
             )
         );
         let decoded_json: ValidationFeePlainElectorateRulesV1 =
@@ -2183,6 +2201,19 @@ mod parliament_tests {
         assert!(snapshot.contains(&proposal_operator));
         assert!(snapshot.contains(&other_citizen));
         assert!(!snapshot.contains(&account(9)));
+
+        let mut self_custody_rules = plain_electorate_rules();
+        self_custody_rules.bond_escrow_account = proposal_operator.clone();
+        assert_eq!(
+            snapshot.context_error(proposal_id, &proposal_operator, &self_custody_rules),
+            Some("validation-fee PLAIN custody accounts cannot belong to the voting electorate")
+        );
+        let mut slash_receiver_rules = plain_electorate_rules();
+        slash_receiver_rules.slash_receiver_account = other_citizen.clone();
+        assert_eq!(
+            snapshot.context_error(proposal_id, &proposal_operator, &slash_receiver_rules),
+            Some("validation-fee PLAIN custody accounts cannot belong to the voting electorate")
+        );
 
         let mut reordered = snapshot.clone();
         reordered.members.reverse();

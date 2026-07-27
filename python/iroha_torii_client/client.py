@@ -626,6 +626,7 @@ __all__ = [
     "CouncilCurrentStatus",
     "CouncilAuditMetadata",
     "GovernanceProposalStatus",
+    "GovernanceLockCustody",
     "GovernanceLockRecord",
     "GovernanceLocksOverview",
     "GovernanceReferendumStatus",
@@ -6032,6 +6033,61 @@ class GovernanceProposalStatus:
 
 
 @dataclass(frozen=True)
+class GovernanceLockCustody:
+    """Immutable asset custody retained with a governance lock."""
+
+    escrowed: bool
+    asset_definition_id: str
+    bond_escrow_account: str
+    slash_receiver_account: str
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> "GovernanceLockCustody":
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"{context} must be a JSON object or null")
+        expected_fields = {
+            "escrowed",
+            "asset_definition_id",
+            "bond_escrow_account",
+            "slash_receiver_account",
+        }
+        if set(payload) != expected_fields:
+            raise RuntimeError(
+                f"{context} must contain exactly `escrowed`, `asset_definition_id`, "
+                "`bond_escrow_account`, and `slash_receiver_account`"
+            )
+        escrowed = payload["escrowed"]
+        if not isinstance(escrowed, bool):
+            raise RuntimeError(f"{context}.escrowed must be a boolean")
+
+        identifiers: Dict[str, str] = {}
+        for field in (
+            "asset_definition_id",
+            "bond_escrow_account",
+            "slash_receiver_account",
+        ):
+            value = payload[field]
+            if not isinstance(value, str) or not value:
+                raise RuntimeError(f"{context}.{field} must be a non-empty string")
+            if value.strip() != value:
+                raise RuntimeError(
+                    f"{context}.{field} must not contain surrounding whitespace"
+                )
+            identifiers[field] = value
+        return cls(
+            escrowed=escrowed,
+            asset_definition_id=identifiers["asset_definition_id"],
+            bond_escrow_account=identifiers["bond_escrow_account"],
+            slash_receiver_account=identifiers["slash_receiver_account"],
+        )
+
+
+@dataclass(frozen=True)
 class GovernanceLockRecord:
     """Strict governance lock record returned by Torii."""
 
@@ -6041,6 +6097,7 @@ class GovernanceLockRecord:
     expiry_height: int
     direction: int
     duration_blocks: int
+    custody: Optional[GovernanceLockCustody]
 
     @classmethod
     def from_payload(
@@ -6063,6 +6120,18 @@ class GovernanceLockRecord:
                 raise RuntimeError(f"{context}.{field} exceeds its protocol bound")
             return value
 
+        if "custody" not in payload:
+            raise RuntimeError(f"{context}.custody must be present as an object or null")
+        custody_payload = payload["custody"]
+        custody = (
+            None
+            if custody_payload is None
+            else GovernanceLockCustody.from_payload(
+                custody_payload,
+                context=f"{context}.custody",
+            )
+        )
+
         return cls(
             owner=owner,
             amount=_canonical_quantity(payload.get("amount"), f"{context}.amount"),
@@ -6073,6 +6142,7 @@ class GovernanceLockRecord:
             expiry_height=unsigned("expiry_height"),
             direction=unsigned("direction", maximum=0xFF),
             duration_blocks=unsigned("duration_blocks"),
+            custody=custody,
         )
 
 

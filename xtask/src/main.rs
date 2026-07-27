@@ -10046,14 +10046,14 @@ struct SignatureEnvelope {
     signature_hex: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SignerAllowlist {
     version: u32,
     allow: Vec<AllowedSigner>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AllowedSigner {
     algorithm: String,
@@ -10951,7 +10951,6 @@ fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Err
             "failed to parse signature envelope {}: {err}",
             path.display()
         )
-        .into()
     })?;
     validate_signature_envelope_fields(&envelope)?;
     Ok(envelope)

@@ -14517,14 +14517,21 @@ fn validation_fee_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "voting_asset_id", "ballot_amount", "ballot_duration_blocks",
-                "citizenship_amount", "max_members", "conviction_step_blocks",
-                "max_conviction", "min_turnout", "approval_threshold_numerator",
+                "voting_asset_id", "bond_escrow_account", "slash_receiver_account",
+                "ballot_amount", "ballot_duration_blocks", "citizenship_amount",
+                "max_members", "conviction_step_blocks", "max_conviction",
+                "min_turnout", "approval_threshold_numerator",
                 "approval_threshold_denominator", "eligibility_rule"
             ],
             "additionalProperties": false,
             "properties": {
                 "voting_asset_id": { "type": "string", "minLength": 1 },
+                "bond_escrow_account": {
+                    "type": "string", "minLength": 1, "maxLength": 4096
+                },
+                "slash_receiver_account": {
+                    "type": "string", "minLength": 1, "maxLength": 4096
+                },
                 "ballot_amount": {
                     "type": "string", "pattern": "^[1-9][0-9]*$"
                 },
@@ -28119,6 +28126,36 @@ mod tests {
     #[test]
     fn validation_fee_openapi_exposes_complete_frozen_plain_electorate() {
         let schemas = openapi_schemas();
+        let rules = schemas
+            .get("ValidationFeePlainElectorateRulesV1")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate rules schema");
+        let required_rules = rules
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("validation-fee frozen electorate required rules");
+        let rule_properties = rules
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("validation-fee frozen electorate rule properties");
+        for custody_field in ["bond_escrow_account", "slash_receiver_account"] {
+            assert!(
+                required_rules
+                    .iter()
+                    .any(|field| field.as_str() == Some(custody_field)),
+                "{custody_field} must be required by the frozen electorate contract"
+            );
+            assert_eq!(
+                rule_properties
+                    .get(custody_field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("type"))
+                    .and_then(Value::as_str),
+                Some("string"),
+                "{custody_field} must be exposed as a canonical account-id string"
+            );
+        }
+
         let record = schemas
             .get("ValidationFeeProposalRecordV1")
             .and_then(Value::as_object)

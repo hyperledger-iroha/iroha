@@ -9011,6 +9011,21 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
     }
 }
 
+/// Immutable asset-custody identities retained with a governance lock.
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct GovernanceLockCustody {
+    /// Whether the lock amount was actually transferred into escrow.
+    pub escrowed: bool,
+    /// Asset definition whose balance is held by the lock.
+    pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
+    /// Escrow account holding the locked balance.
+    pub bond_escrow_account: iroha_data_model::account::AccountId,
+    /// Account receiving any slashed balance.
+    pub slash_receiver_account: iroha_data_model::account::AccountId,
+}
+
 /// Lock record for governance voting (plain mode)
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct GovernanceLockRecord {
@@ -9029,6 +9044,13 @@ pub struct GovernanceLockRecord {
     /// Duration in blocks that this lock was requested for (used for conviction).
     #[norito(default)]
     pub duration_blocks: u64,
+    /// Immutable custody identities used for lock, slash, restitution, and release.
+    ///
+    /// Legacy records decode as `None` and continue to use the active governance
+    /// configuration. New records always retain `Some`.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub custody: Option<GovernanceLockCustody>,
 }
 
 /// Locks for a single referendum keyed by voter account id
@@ -9279,6 +9301,9 @@ fn build_validation_fee_plain_electorate_snapshot<'a>(
         if account_id != &record.owner {
             return Err("validation-fee citizen storage key differs from its canonical owner");
         }
+        if account_id == &rules.bond_escrow_account || account_id == &rules.slash_receiver_account {
+            continue;
+        }
         if record.amount < rules.citizenship_amount {
             continue;
         }
@@ -9333,6 +9358,8 @@ mod validation_fee_plain_electorate_snapshot_tests {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
                 .parse()
                 .expect("voting asset id"),
+            bond_escrow_account: account(90),
+            slash_receiver_account: account(91),
             ballot_amount: 150_u64.into(),
             ballot_duration_blocks: 3_600,
             citizenship_amount: 10_000_u64.into(),
@@ -9466,6 +9493,37 @@ mod validation_fee_plain_electorate_snapshot_tests {
             ),
             Err("validation-fee citizen storage key differs from its canonical owner")
         );
+
+        for custody_account in [account(90), account(91)] {
+            let operator_citizen = CitizenshipRecord::new(
+                proposal_operator.clone(),
+                10_000_u64.into(),
+                approval_gate_height,
+            );
+            let custody_citizen = CitizenshipRecord::new(
+                custody_account.clone(),
+                10_000_u64.into(),
+                approval_gate_height + 1,
+            );
+            let citizens = [
+                (proposal_operator.clone(), operator_citizen),
+                (custody_account.clone(), custody_citizen),
+            ];
+            let snapshot = build_validation_fee_plain_electorate_snapshot(
+                proposal_id,
+                &proposal_operator,
+                captured_at_height,
+                approval_gate_height,
+                &rules(256),
+                citizens
+                    .iter()
+                    .map(|(account_id, record)| (account_id, record)),
+            );
+            let snapshot = snapshot.expect("custody accounts must be excluded from the electorate");
+            assert_eq!(snapshot.member_count, 1);
+            assert!(snapshot.contains(&proposal_operator));
+            assert!(!snapshot.contains(&custody_account));
+        }
     }
 }
 
@@ -28848,34 +28906,99 @@ impl State {
                 .iter()
                 .map(|(rid, _)| rid.clone())
                 .collect();
-            let mut swept_in_block = false;
+            let mut sweep_attempted = false;
+            let mut sweep_failed = false;
             for rid in lock_ids {
+                let mut validation_fee_proposal_key_mismatch = false;
+                let validation_fee_custody = (rid.len() == 64
+                    && rid
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+                .then(|| hex::decode(&rid).ok())
+                .flatten()
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                .and_then(|proposal_id| {
+                    let proposal = wtx.governance_proposals.get(&proposal_id)?;
+                    let rules = validation_fee_plain_electorate_rules(&proposal.kind)?;
+                    if proposal.kind.fingerprint() != proposal_id {
+                        validation_fee_proposal_key_mismatch = true;
+                        return None;
+                    }
+                    Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: rules.voting_asset_id.clone(),
+                        bond_escrow_account: rules.bond_escrow_account.clone(),
+                        slash_receiver_account: rules.slash_receiver_account.clone(),
+                    })
+                });
                 if let Some(mut locks) = wtx.governance_locks.get(&rid).cloned() {
                     // Collect owners to remove
                     let mut to_remove: Vec<iroha_data_model::account::AccountId> = Vec::new();
                     for (owner, rec) in &locks.locks {
                         if rec.expiry_height < now_h {
-                            if !sb.gov.min_bond_amount.is_zero() {
-                                let def_id = sb.gov.voting_asset_id.clone();
+                            sweep_attempted = true;
+                            if validation_fee_proposal_key_mismatch {
+                                warn!(
+                                    %rid,
+                                    owner = %owner,
+                                    "retaining validation-fee governance lock whose proposal storage key differs from its exact typed fingerprint"
+                                );
+                                sweep_failed = true;
+                                continue;
+                            }
+                            let custody = match (&rec.custody, &validation_fee_custody) {
+                                (Some(actual), Some(expected)) if actual != expected => {
+                                    warn!(
+                                        %rid,
+                                        owner = %owner,
+                                        "retaining validation-fee governance lock with mismatched immutable custody"
+                                    );
+                                    sweep_failed = true;
+                                    continue;
+                                }
+                                (None, Some(_)) => {
+                                    warn!(
+                                        %rid,
+                                        owner = %owner,
+                                        "retaining validation-fee governance lock without immutable custody"
+                                    );
+                                    sweep_failed = true;
+                                    continue;
+                                }
+                                (Some(custody), _) => custody.clone(),
+                                (None, None) => GovernanceLockCustody {
+                                    escrowed: !sb.gov.min_bond_amount.is_zero(),
+                                    asset_definition_id: sb.gov.voting_asset_id.clone(),
+                                    bond_escrow_account: sb.gov.bond_escrow_account.clone(),
+                                    slash_receiver_account: sb.gov.slash_receiver_account.clone(),
+                                },
+                            };
+                            let release = if custody.escrowed && !rec.amount.is_zero() {
                                 let owner_asset_id = iroha_data_model::asset::AssetId::new(
-                                    def_id.clone(),
+                                    custody.asset_definition_id.clone(),
                                     owner.clone(),
                                 );
                                 let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-                                    def_id,
-                                    sb.gov.bond_escrow_account.clone(),
+                                    custody.asset_definition_id,
+                                    custody.bond_escrow_account,
                                 );
-                                let amount = rec.amount.clone();
-                                if let Err(err) =
-                                    wtx.withdraw_numeric_asset(&escrow_asset_id, &amount)
-                                {
-                                    warn!(%rid, owner=%owner, error=%err, "failed to withdraw governance bond from escrow");
-                                }
-                                if let Err(err) =
-                                    wtx.deposit_numeric_asset(&owner_asset_id, &amount)
-                                {
-                                    warn!(%rid, owner=%owner, error=%err, "failed to return governance bond to voter");
-                                }
+                                wtx.transfer_numeric_asset_exact(
+                                    &escrow_asset_id,
+                                    &owner_asset_id,
+                                    &rec.amount,
+                                )
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(err) = release {
+                                warn!(
+                                    %rid,
+                                    owner = %owner,
+                                    error = %err,
+                                    "retaining governance lock after atomic escrow release failed"
+                                );
+                                sweep_failed = true;
+                                continue;
                             }
                             // Emit unlock event
                             wtx.emit_events(Some(
@@ -28895,11 +29018,10 @@ impl State {
                             locks.locks.remove(&owner);
                         }
                         wtx.governance_locks.insert(rid.clone(), locks);
-                        swept_in_block = true;
                     }
                 }
             }
-            if swept_in_block {
+            if sweep_attempted && !sweep_failed {
                 *wtx.governance_last_unlock_sweep_height.get_mut() = now_h;
             }
             update_governance_pipeline_slas(&mut wtx, now_h, &sb.gov);
@@ -65084,6 +65206,15 @@ pub(crate) mod deserialize {
             field: "world.privacy_state".to_owned(),
             message,
         })?;
+        crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
+            &privacy_commitments.view(),
+            &accounts.view(),
+            &asset_definitions.view(),
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "world.privacy_state".to_owned(),
+            message,
+        })?;
         let proofs = take_optional_default(&mut map, "proofs")?;
         let proof_tags = take_optional_default(&mut map, "proof_tags")?;
         let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
@@ -68053,6 +68184,147 @@ seiyaku SequentialNfts {
             LiveQueryStore::start_test(),
         );
         (state, definition_id, asset_id)
+    }
+
+    fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
+        use iroha_data_model::privacy::{
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyActiveLifecycleV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+        };
+
+        let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let owner = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let reserve_account = BOB_ID.clone();
+        let reserve = Account::new(reserve_account.clone()).build(&ALICE_ID);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let definition = AssetDefinition::new(asset_definition_id.clone(), NumericSpec::integer())
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+        let mut world = World::with_assets([domain], [owner, reserve], [definition], [], []);
+
+        let namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xA1; 32]),
+            }),
+        );
+        let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new([0xA2; 32]);
+        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
+            bootstrap_digest,
+            asset_definition_id.clone(),
+            reserve_account.clone(),
+        )
+        .expect("canonical Orchard pool state");
+        let root = pool_state.root();
+        let provenance = crate::privacy_state::PrivacyRootProvenanceV1::orchard_pool_bootstrap(
+            bootstrap_digest,
+            1,
+        )
+        .expect("canonical Orchard bootstrap provenance");
+        let root_key = crate::privacy_state::PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+            root,
+        )
+        .expect("canonical Orchard bootstrap root key");
+        let head_key = crate::privacy_state::PrivacyRootHeadKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+        )
+        .expect("canonical Orchard root-head key");
+        let state_key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
+            .expect("canonical Orchard pool-state key");
+        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        )
+        .expect("compiled Orchard profile");
+        world.privacy_activations.insert(
+            crate::privacy_state::PrivacyActivationKeyV1::new(
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            ),
+            profile.activation_record(PrivacyProtocolLifecycleV1::Active(
+                PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1,
+                    activated_at_height: 2,
+                    state_since_height: 2,
+                },
+            )),
+        );
+        world.privacy_commitments.insert(
+            state_key,
+            crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
+                .expect("canonical Orchard pool-state record"),
+        );
+        world.privacy_roots.insert(root_key, provenance);
+        world.privacy_root_heads.insert(
+            head_key,
+            crate::privacy_state::PrivacyRootHeadRecordV1::new(
+                PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+                root,
+                provenance,
+                None,
+            )
+            .expect("canonical Orchard root head"),
+        );
+        (
+            State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            ),
+            reserve_account,
+            asset_definition_id,
+        )
+    }
+
+    #[test]
+    fn state_snapshot_rejects_dangling_orchard_public_dependencies() {
+        let (valid_state, _, _) = snapshot_state_with_orchard_pool();
+        let valid_value =
+            norito::json::to_value(&valid_state).expect("serialize valid Orchard snapshot");
+        deserialize_state_snapshot_value(valid_value)
+            .expect("complete Orchard public dependencies restore");
+
+        let (missing_reserve, reserve_account, _) = snapshot_state_with_orchard_pool();
+        let mut accounts = missing_reserve.world.accounts.block();
+        assert!(accounts.remove(reserve_account.clone()).is_some());
+        accounts.commit();
+        let value =
+            norito::json::to_value(&missing_reserve).expect("serialize missing-reserve snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .expect_err("missing Orchard reserve account must fail closed");
+        let error = error.to_string();
+        assert!(error.contains("world.privacy_state"), "{error}");
+        assert!(
+            error.contains("references missing reserve account"),
+            "{error}"
+        );
+        assert!(error.contains(&reserve_account.to_string()), "{error}");
+
+        let (missing_definition, _, asset_definition_id) = snapshot_state_with_orchard_pool();
+        let mut asset_definitions = missing_definition.world.asset_definitions.block();
+        assert!(
+            asset_definitions
+                .remove(asset_definition_id.clone())
+                .is_some()
+        );
+        asset_definitions.commit();
+        let value = norito::json::to_value(&missing_definition)
+            .expect("serialize missing-definition snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .expect_err("missing Orchard asset definition must fail closed");
+        let error = error.to_string();
+        assert!(error.contains("world.privacy_state"), "{error}");
+        assert!(
+            error.contains("references missing asset definition"),
+            "{error}"
+        );
+        assert!(error.contains(&asset_definition_id.to_string()), "{error}");
     }
 
     #[test]
@@ -117907,6 +118179,73 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn governance_lock_record_legacy_wire_and_json_default_custody_to_none() {
+        use norito::codec::DecodeAll as _;
+
+        #[derive(Encode)]
+        struct LegacyGovernanceLockRecord {
+            owner: AccountId,
+            amount: Quantity,
+            slashed: Quantity,
+            expiry_height: u64,
+            direction: u8,
+            duration_blocks: u64,
+        }
+
+        let owner = (*ALICE_ID).clone();
+        let legacy = LegacyGovernanceLockRecord {
+            owner: owner.clone(),
+            amount: Quantity::from(150_u32),
+            slashed: Quantity::from(5_u32),
+            expiry_height: 100,
+            direction: 1,
+            duration_blocks: 3_600,
+        };
+        let encoded = legacy.encode();
+        let mut bytes = encoded.as_slice();
+        let decoded = GovernanceLockRecord::decode_all(&mut bytes)
+            .expect("legacy governance lock record must decode");
+        assert!(bytes.is_empty());
+        assert_eq!(decoded.owner, owner);
+        assert_eq!(decoded.amount, Quantity::from(150_u32));
+        assert_eq!(decoded.slashed, Quantity::from(5_u32));
+        assert_eq!(decoded.custody, None);
+
+        #[cfg(feature = "json")]
+        {
+            let current = GovernanceLockRecord {
+                owner,
+                amount: Quantity::from(150_u32),
+                slashed: Quantity::zero(),
+                expiry_height: 100,
+                direction: 1,
+                duration_blocks: 3_600,
+                custody: Some(GovernanceLockCustody {
+                    escrowed: true,
+                    asset_definition_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+                        .parse()
+                        .expect("asset definition id"),
+                    bond_escrow_account: (*BOB_ID).clone(),
+                    slash_receiver_account: (*BOB_ID).clone(),
+                }),
+            };
+            let mut value =
+                norito::json::to_value(&current).expect("serialize governance lock JSON");
+            assert!(
+                value
+                    .as_object_mut()
+                    .expect("governance lock JSON object")
+                    .remove("custody")
+                    .is_some(),
+                "current governance lock JSON must include custody"
+            );
+            let decoded: GovernanceLockRecord =
+                norito::json::from_value(value).expect("legacy governance lock JSON must decode");
+            assert_eq!(decoded.custody, None);
+        }
+    }
+
+    #[test]
     fn block_sweeps_expired_governance_locks_and_records_height() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -117927,6 +118266,12 @@ seiyaku SequentialNfts {
                     expiry_height: 5,
                     direction: 0,
                     duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: false,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
                 },
             );
             world_block
@@ -117952,6 +118297,293 @@ seiyaku SequentialNfts {
         assert!(
             locks_after.locks.is_empty(),
             "expired locks must be removed during sweep"
+        );
+    }
+
+    #[test]
+    fn block_retains_expired_governance_lock_when_atomic_release_fails() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let referendum_id = "release-must-remain-atomic".to_owned();
+        let voter = (*ALICE_ID).clone();
+        let custody = GovernanceLockCustody {
+            escrowed: true,
+            asset_definition_id: state.gov.voting_asset_id.clone(),
+            bond_escrow_account: state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: state.gov.slash_receiver_account.clone(),
+        };
+
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                voter.clone(),
+                GovernanceLockRecord {
+                    owner: voter.clone(),
+                    amount: 42_u64.into(),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(custody),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        let locks_after = block
+            .world
+            .governance_locks
+            .get(&referendum_id)
+            .expect("failed release must retain the referendum entry");
+        assert!(
+            locks_after.locks.contains_key(&voter),
+            "failed release must retain the exact lock"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 1,
+            "a failed release must not advance the successful sweep marker"
+        );
+    }
+
+    #[test]
+    fn block_releases_expired_governance_lock_through_stored_custody_after_config_change() {
+        let domain_id = DomainId::try_new("governance", "custody").expect("domain id");
+        let old_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "old_vote".parse().expect("asset name"));
+        let live_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "live_vote".parse().expect("asset name"));
+        let old_escrow = (*BOB_ID).clone();
+        let live_escrow = AccountId::new(checked_keypair().public_key().clone());
+        let voter = (*ALICE_ID).clone();
+        let old_escrow_asset_id = AssetId::new(old_definition_id.clone(), old_escrow.clone());
+        let voter_asset_id = AssetId::new(old_definition_id.clone(), voter.clone());
+        let live_escrow_asset_id = AssetId::new(live_definition_id.clone(), live_escrow.clone());
+        let world = World::with_assets(
+            [Domain::new(domain_id).build(&voter)],
+            [
+                Account::new(voter.clone()).build(&voter),
+                Account::new(old_escrow.clone()).build(&voter),
+                Account::new(live_escrow.clone()).build(&voter),
+            ],
+            [
+                AssetDefinition::numeric(old_definition_id.clone())
+                    .with_name("old_vote".to_owned())
+                    .build(&voter),
+                AssetDefinition::numeric(live_definition_id.clone())
+                    .with_name("live_vote".to_owned())
+                    .build(&voter),
+            ],
+            [
+                Asset::new(old_escrow_asset_id.clone(), Quantity::from(42_u32)),
+                Asset::new(live_escrow_asset_id.clone(), Quantity::from(7_u32)),
+            ],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query);
+        let mut live_governance = state.gov.clone();
+        live_governance.voting_asset_id = live_definition_id;
+        live_governance.bond_escrow_account = live_escrow.clone();
+        state.set_gov(live_governance);
+
+        let referendum_id = "stored-custody-release".to_owned();
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                voter.clone(),
+                GovernanceLockRecord {
+                    owner: voter.clone(),
+                    amount: Quantity::from(42_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: old_definition_id,
+                        bond_escrow_account: old_escrow,
+                        slash_receiver_account: live_escrow,
+                    }),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        assert!(
+            block.world.assets.get(&old_escrow_asset_id).is_none(),
+            "stored escrow must be debited and its zero balance removed"
+        );
+        assert_eq!(
+            block
+                .world
+                .assets
+                .get(&voter_asset_id)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(42_u32)),
+            "stored custody asset must return to the lock owner"
+        );
+        assert_eq!(
+            block
+                .world
+                .assets
+                .get(&live_escrow_asset_id)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(7_u32)),
+            "changed live governance custody must remain untouched"
+        );
+        assert!(
+            block
+                .world
+                .governance_locks
+                .get(&referendum_id)
+                .is_some_and(|locks| locks.locks.is_empty()),
+            "successfully released lock must be removed"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 10,
+            "fully successful stored-custody release must advance the sweep marker"
+        );
+    }
+
+    #[test]
+    fn block_removes_expired_fully_slashed_governance_lock_without_source_asset() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let referendum_id = "fully-slashed-release".to_owned();
+        let voter = (*ALICE_ID).clone();
+
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                voter.clone(),
+                GovernanceLockRecord {
+                    owner: voter.clone(),
+                    amount: Quantity::zero(),
+                    slashed: Quantity::from(150_u32),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        assert!(
+            block
+                .world
+                .governance_locks
+                .get(&referendum_id)
+                .is_some_and(|locks| locks.locks.is_empty()),
+            "a fully slashed zero-balance lock must not require a missing escrow asset"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 10,
+            "successful zero-balance cleanup must advance the sweep marker"
+        );
+    }
+
+    #[test]
+    fn block_does_not_advance_sweep_marker_after_partial_release_failure() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let referendum_id = "partial-release-failure".to_owned();
+        let released_voter = (*ALICE_ID).clone();
+        let retained_voter = (*BOB_ID).clone();
+
+        {
+            let mut world_block = state.world.block();
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                released_voter.clone(),
+                GovernanceLockRecord {
+                    owner: released_voter.clone(),
+                    amount: Quantity::from(1_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: false,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
+                },
+            );
+            locks.locks.insert(
+                retained_voter.clone(),
+                GovernanceLockRecord {
+                    owner: retained_voter.clone(),
+                    amount: Quantity::from(1_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 5,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody: Some(GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: state.gov.voting_asset_id.clone(),
+                        bond_escrow_account: state.gov.bond_escrow_account.clone(),
+                        slash_receiver_account: state.gov.slash_receiver_account.clone(),
+                    }),
+                },
+            );
+            world_block
+                .governance_locks
+                .insert(referendum_id.clone(), locks);
+            *world_block.governance_last_unlock_sweep_height.get_mut() = 1;
+            world_block.commit();
+        }
+
+        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let block = state.block(header);
+        let locks_after = block
+            .world
+            .governance_locks
+            .get(&referendum_id)
+            .expect("referendum lock container remains");
+        assert!(
+            !locks_after.locks.contains_key(&released_voter),
+            "successful release in a partial sweep must still be applied"
+        );
+        assert!(
+            locks_after.locks.contains_key(&retained_voter),
+            "failed release in a partial sweep must remain retryable"
+        );
+        assert_eq!(
+            *block.world.governance_last_unlock_sweep_height, 1,
+            "an incomplete sweep must not advance the successful sweep marker"
         );
     }
 

@@ -3974,6 +3974,8 @@ mod tests {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
                 .parse()
                 .expect("voting asset id"),
+            bond_escrow_account: account(251),
+            slash_receiver_account: account(252),
             ballot_amount: 150_u64.into(),
             ballot_duration_blocks: 3_600,
             citizenship_amount: 10_000_u64.into(),
@@ -5343,6 +5345,52 @@ mod tests {
                 .expect("future initial policy is valid")
                 .is_none(),
             "the mandatory 120,960-block activation delay must not halt pre-activation writes"
+        );
+    }
+
+    #[test]
+    fn active_policy_lookup_rejects_the_exact_expiry_height() {
+        use iroha_data_model::block::BlockHeader;
+
+        let deployer_key = key_pair(55);
+        let deployer = AccountId::new(deployer_key.public_key().clone());
+        let state = crate::state::State::new_with_chain_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+        );
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push_for_tests(block_hash([7; 32]));
+            hashes.commit_for_tests();
+        }
+
+        let expiry_height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(expiry_height).expect("expiry height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let policy =
+            install_active_bound_validation_fee_policy(&mut state_tx, &deployer, &deployer_key);
+        assert_eq!(policy.expires_after_height, Some(expiry_height));
+
+        let error = active_policy(&state_tx)
+            .expect_err("the exclusive expiry height must reject fee admission");
+        assert!(
+            matches!(
+                error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(ref message))
+                    if message.contains("expired at height")
+                        && message.contains(&expiry_height.to_string())
+            ),
+            "unexpected expired-policy rejection: {error:?}",
         );
     }
 

@@ -19,10 +19,11 @@ use iroha_data_model::{
         PrivacyConsensusPolicyV1, PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
         PrivacyNullifierV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1,
         PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
-        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyRootManagementV1, PrivacyRootPublicationDigestV1,
-        PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
-        PrivacyStatementV1, PrivacyTrustAnchorPolicyNamespaceV1, PrivacyZkAcePolicyRecordDigestV1,
+        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
+        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTrustAnchorPolicyNamespaceV1, PrivacyZkAcePolicyRecordDigestV1,
         PrivacyZkAcePolicyRecordV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
         PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
         PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
@@ -2859,6 +2860,104 @@ impl PrivacyOrchardPoolStateV1 {
     }
 }
 
+/// Public ledger objects that one governed Orchard pool must retain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyOrchardPoolReferenceV1 {
+    namespace: PrivacyNamespaceV1,
+    asset_definition_id: AssetDefinitionId,
+    reserve_account: AccountId,
+}
+
+impl PrivacyOrchardPoolReferenceV1 {
+    /// Return the exact governed Orchard pool namespace.
+    #[must_use]
+    pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
+        self.namespace
+    }
+
+    /// Borrow the backing public asset definition.
+    #[must_use]
+    pub(crate) const fn asset_definition_id(&self) -> &AssetDefinitionId {
+        &self.asset_definition_id
+    }
+
+    /// Borrow the public account that custodies pool reserves.
+    #[must_use]
+    pub(crate) const fn reserve_account(&self) -> &AccountId {
+        &self.reserve_account
+    }
+}
+
+/// Load every governed Orchard pool's exact public ledger dependencies.
+///
+/// The key range covers only singleton Orchard pool-state rows, so destructive
+/// ledger operations remain proportional to the number of governed pools
+/// rather than the potentially much larger privacy commitment table.
+///
+/// # Errors
+///
+/// Rejects malformed keys, invalid records, and wrong-role provenance.
+pub(crate) fn load_privacy_orchard_pool_references_v1(
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<Vec<PrivacyOrchardPoolReferenceV1>, String> {
+    let mut references = Vec::new();
+    for (key, record) in commitments.range(PrivacyCommitmentKeyV1::orchard_pool_state_range()) {
+        key.validate()
+            .map_err(|error| format!("invalid Orchard pool-state key: {error}"))?;
+        record
+            .validate()
+            .map_err(|error| format!("invalid Orchard pool-state record: {error}"))?;
+        let namespace = key.orchard_namespace().ok_or_else(|| {
+            "Orchard pool-state key range returned a differently typed key".to_owned()
+        })?;
+        let state = record
+            .orchard_pool_state_ref()
+            .ok_or_else(|| format!("Orchard pool state {namespace:?} has wrong-role provenance"))?;
+        references.push(PrivacyOrchardPoolReferenceV1 {
+            namespace,
+            asset_definition_id: state.asset_definition_id().clone(),
+            reserve_account: state.reserve_account().clone(),
+        });
+    }
+    Ok(references)
+}
+
+/// Reject a restored world with dangling Orchard public-ledger dependencies.
+///
+/// # Errors
+///
+/// Rejects malformed Orchard state or a missing reserve account or asset
+/// definition.
+pub(crate) fn validate_privacy_orchard_public_dependencies_v1<
+    AccountValue: mv::Value,
+    AssetDefinitionValue: mv::Value,
+>(
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    accounts: &impl StorageReadOnly<AccountId, AccountValue>,
+    asset_definitions: &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionValue>,
+) -> Result<(), String> {
+    for reference in load_privacy_orchard_pool_references_v1(commitments)? {
+        if accounts.get(reference.reserve_account()).is_none() {
+            return Err(format!(
+                "Orchard pool {:?} references missing reserve account {}",
+                reference.namespace(),
+                reference.reserve_account()
+            ));
+        }
+        if asset_definitions
+            .get(reference.asset_definition_id())
+            .is_none()
+        {
+            return Err(format!(
+                "Orchard pool {:?} references missing asset definition {}",
+                reference.namespace(),
+                reference.asset_definition_id()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Fully validated, transaction-local view of one governed Orchard pool.
 ///
 /// The snapshot joins the singleton compact frontier to the exact retained
@@ -3459,6 +3558,24 @@ impl PrivacyCommitmentKeyV1 {
     pub(crate) fn orchard_pool_state(namespace: PrivacyNamespaceV1) -> Result<Self, &'static str> {
         validate_orchard_namespace(namespace)?;
         Ok(Self::OrchardPoolState { namespace })
+    }
+
+    /// Ordered bounds covering exactly the complete Orchard pool-state table.
+    #[must_use]
+    pub(crate) fn orchard_pool_state_range() -> core::ops::RangeInclusive<Self> {
+        let namespace = |pool_id| {
+            PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: PrivacyPoolIdV1::new(pool_id),
+                }),
+            )
+        };
+        Self::OrchardPoolState {
+            namespace: namespace([0; 32]),
+        }..=Self::OrchardPoolState {
+            namespace: namespace([u8::MAX; 32]),
+        }
     }
 
     /// Ordered bounds covering exactly the complete ZK-ACE policy table.
@@ -6212,6 +6329,51 @@ mod tests {
         fixture
             .validate()
             .expect("restored Orchard state preserves every invariant");
+    }
+
+    #[test]
+    fn orchard_public_dependencies_are_typed_bounded_and_fail_closed() {
+        let fixture = orchard_persisted_fixture();
+        let state = fixture.state();
+        let references = load_privacy_orchard_pool_references_v1(&fixture.commitments.view())
+            .expect("canonical Orchard public dependencies");
+        assert_eq!(
+            references,
+            vec![PrivacyOrchardPoolReferenceV1 {
+                namespace: fixture.namespace,
+                asset_definition_id: state.asset_definition_id().clone(),
+                reserve_account: state.reserve_account().clone(),
+            }]
+        );
+
+        let mut accounts = Storage::<AccountId, ()>::new();
+        let mut asset_definitions = Storage::<AssetDefinitionId, ()>::new();
+        accounts.insert(state.reserve_account().clone(), ());
+        asset_definitions.insert(state.asset_definition_id().clone(), ());
+        validate_privacy_orchard_public_dependencies_v1(
+            &fixture.commitments.view(),
+            &accounts.view(),
+            &asset_definitions.view(),
+        )
+        .expect("both exact public dependencies exist");
+
+        let error = validate_privacy_orchard_public_dependencies_v1(
+            &fixture.commitments.view(),
+            &Storage::<AccountId, ()>::new().view(),
+            &asset_definitions.view(),
+        )
+        .expect_err("missing reserve account must reject restored state");
+        assert!(error.contains("references missing reserve account"));
+        assert!(error.contains(&state.reserve_account().to_string()));
+
+        let error = validate_privacy_orchard_public_dependencies_v1(
+            &fixture.commitments.view(),
+            &accounts.view(),
+            &Storage::<AssetDefinitionId, ()>::new().view(),
+        )
+        .expect_err("missing asset definition must reject restored state");
+        assert!(error.contains("references missing asset definition"));
+        assert!(error.contains(&state.asset_definition_id().to_string()));
     }
 
     #[test]

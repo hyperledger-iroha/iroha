@@ -2173,15 +2173,26 @@ pub mod isi {
         Ok(tally)
     }
 
-    fn voting_asset_ids(
+    fn governance_lock_custody(
         gov: &iroha_config::parameters::actual::Governance,
-        owner: &AccountId,
-    ) -> (AssetId, AssetId) {
-        let def_id = gov.voting_asset_id.clone();
-        (
-            AssetId::new(def_id.clone(), owner.clone()),
-            AssetId::new(def_id, gov.bond_escrow_account.clone()),
-        )
+    ) -> crate::state::GovernanceLockCustody {
+        crate::state::GovernanceLockCustody {
+            escrowed: !gov.min_bond_amount.is_zero(),
+            asset_definition_id: gov.voting_asset_id.clone(),
+            bond_escrow_account: gov.bond_escrow_account.clone(),
+            slash_receiver_account: gov.slash_receiver_account.clone(),
+        }
+    }
+
+    fn validation_fee_lock_custody(
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> crate::state::GovernanceLockCustody {
+        crate::state::GovernanceLockCustody {
+            escrowed: true,
+            asset_definition_id: rules.voting_asset_id.clone(),
+            bond_escrow_account: rules.bond_escrow_account.clone(),
+            slash_receiver_account: rules.slash_receiver_account.clone(),
+        }
     }
 
     fn citizenship_asset_ids(
@@ -2544,15 +2555,32 @@ pub mod isi {
     fn lock_voting_bond(
         ballot_amount: &Quantity,
         previous_amount: Option<&Quantity>,
+        minimum_bond: &Quantity,
+        custody: &crate::state::GovernanceLockCustody,
         authority: &AccountId,
         referendum_id: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let min_bond = &state_transaction.gov.min_bond_amount;
-        if min_bond.is_zero() {
+        if minimum_bond.is_zero() {
+            if custody.escrowed {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance lock custody claims escrow for a zero-minimum ballot".into(),
+                ));
+            }
             return Ok(());
         }
-        if ballot_amount < min_bond {
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock custody omits escrow for a bonded ballot".into(),
+            ));
+        }
+        if authority == &custody.bond_escrow_account || authority == &custody.slash_receiver_account
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance custody accounts cannot cast bonded ballots".into(),
+            ));
+        }
+        if ballot_amount < minimum_bond {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -2571,15 +2599,18 @@ pub mod isi {
         if delta.is_zero() {
             return Ok(());
         }
-        let (owner_asset_id, escrow_asset_id) = voting_asset_ids(&state_transaction.gov, authority);
+        let owner_asset_id = AssetId::new(custody.asset_definition_id.clone(), authority.clone());
+        let escrow_asset_id = AssetId::new(
+            custody.asset_definition_id.clone(),
+            custody.bond_escrow_account.clone(),
+        );
         let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(delta.as_numeric(), spec)?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&owner_asset_id, &delta)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset_id, &delta)?;
+        state_transaction.world.transfer_numeric_asset_exact(
+            &owner_asset_id,
+            &escrow_asset_id,
+            &delta,
+        )?;
         Ok(())
     }
 
@@ -2710,12 +2741,17 @@ pub mod isi {
         rec: &mut crate::state::GovernanceLockRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let def_id = state_transaction.gov.voting_asset_id.clone();
-        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id.clone(),
-            state_transaction.gov.bond_escrow_account.clone(),
-        );
-        let receiver_account = state_transaction.gov.slash_receiver_account.clone();
+        let custody =
+            retained_governance_lock_custody(request.referendum_id, rec, state_transaction)?;
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock has no escrowed balance to slash".into(),
+            ));
+        }
+        let def_id = custody.asset_definition_id.clone();
+        let escrow_asset_id =
+            iroha_data_model::asset::AssetId::new(def_id.clone(), custody.bond_escrow_account);
+        let receiver_account = custody.slash_receiver_account;
         let receiver_asset_id =
             iroha_data_model::asset::AssetId::new(def_id, receiver_account.clone());
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
@@ -2723,42 +2759,47 @@ pub mod isi {
             request.amount.as_numeric(),
             spec,
         )?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&escrow_asset_id, &request.amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&receiver_asset_id, &request.amount)?;
-        rec.amount = rec
+        let next_amount = rec
             .amount
             .try_sub(&request.amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
-        rec.slashed = rec
+        let next_slashed = rec
             .slashed
             .try_add(&request.amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
-        locks.locks.insert(request.owner.clone(), rec.clone());
-        state_transaction
-            .world
-            .governance_locks
-            .insert(request.referendum_id.to_owned(), locks.clone());
-
         let mut ledger = state_transaction
             .world
             .governance_slashes
             .get(request.referendum_id)
             .cloned()
             .unwrap_or_default();
-        let entry = ledger
-            .slashes
-            .entry(request.owner.clone())
-            .or_insert_with(crate::state::GovernanceSlashEntry::default);
-        entry.total_slashed = entry
-            .total_slashed
-            .try_add(&request.amount)
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        entry.last_reason = request.reason;
-        entry.last_height = state_transaction._curr_block.height().get();
+        {
+            let entry = ledger
+                .slashes
+                .entry(request.owner.clone())
+                .or_insert_with(crate::state::GovernanceSlashEntry::default);
+            entry.total_slashed = entry
+                .total_slashed
+                .try_add(&request.amount)
+                .map_err(|_| Error::from(MathError::Overflow))?;
+            entry.last_reason = request.reason;
+            entry.last_height = state_transaction._curr_block.height().get();
+        }
+
+        // No fallible lock or ledger arithmetic may remain after custody moves.
+        state_transaction.world.transfer_numeric_asset_exact(
+            &escrow_asset_id,
+            &receiver_asset_id,
+            &request.amount,
+        )?;
+        rec.amount = next_amount;
+        rec.slashed = next_slashed;
+        locks.locks.insert(request.owner.clone(), rec.clone());
+        state_transaction
+            .world
+            .governance_locks
+            .insert(request.referendum_id.to_owned(), locks.clone());
+
         state_transaction
             .world
             .governance_slashes
@@ -2823,35 +2864,31 @@ pub mod isi {
                 ),
             ));
         }
-        rec.amount = rec
+        let custody = retained_governance_lock_custody(referendum_id, &rec, state_transaction)?;
+        let next_amount = rec
             .amount
             .try_add(&amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
-        rec.slashed = rec
+        let next_slashed = rec
             .slashed
             .try_sub(&amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
 
-        let def_id = state_transaction.gov.voting_asset_id.clone();
-        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id.clone(),
-            state_transaction.gov.bond_escrow_account.clone(),
-        );
-        let receiver_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id,
-            state_transaction.gov.slash_receiver_account.clone(),
-        );
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock has no escrowed balance to restitute".into(),
+            ));
+        }
+        let def_id = custody.asset_definition_id.clone();
+        let escrow_asset_id =
+            iroha_data_model::asset::AssetId::new(def_id.clone(), custody.bond_escrow_account);
+        let receiver_asset_id =
+            iroha_data_model::asset::AssetId::new(def_id, custody.slash_receiver_account);
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
             amount.as_numeric(),
             spec,
         )?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&receiver_asset_id, &amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset_id, &amount)?;
         let mut ledger = state_transaction
             .world
             .governance_slashes
@@ -2878,6 +2915,15 @@ pub mod isi {
             .map_err(|_| Error::from(MathError::Overflow))?;
         entry.last_reason = reason;
         entry.last_height = state_transaction._curr_block.height().get();
+
+        // No fallible lock or ledger validation may remain after custody moves.
+        state_transaction.world.transfer_numeric_asset_exact(
+            &receiver_asset_id,
+            &escrow_asset_id,
+            &amount,
+        )?;
+        rec.amount = next_amount;
+        rec.slashed = next_slashed;
         locks.locks.insert(owner.clone(), rec);
         state_transaction
             .world
@@ -2903,6 +2949,36 @@ pub mod isi {
             .telemetry
             .record_governance_bond_event("lock_restituted");
         Ok(amount)
+    }
+
+    fn retained_governance_lock_custody(
+        referendum_id: &str,
+        rec: &crate::state::GovernanceLockRecord,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<crate::state::GovernanceLockCustody, Error> {
+        if let Some(proposal) =
+            validation_fee_proposal_for_referendum(referendum_id, state_transaction)?
+        {
+            let rules = validation_fee_plain_electorate_rules(&proposal.kind)
+                .expect("validation-fee proposal helper must retain PLAIN electorate rules");
+            let expected = validation_fee_lock_custody(rules);
+            return match rec.custody.as_ref() {
+                Some(actual) if actual == &expected => Ok(expected),
+                Some(_) => Err(InstructionExecutionError::InvariantViolation(
+                    "validation-fee governance lock custody differs from its immutable proposal rules"
+                        .into(),
+                )
+                .into()),
+                None => Err(InstructionExecutionError::InvariantViolation(
+                    "validation-fee governance lock is missing immutable proposal custody".into(),
+                )
+                .into()),
+            };
+        }
+        Ok(rec
+            .custody
+            .clone()
+            .unwrap_or_else(|| governance_lock_custody(&state_transaction.gov)))
     }
 
     fn ensure_manifest_signature(
@@ -4013,6 +4089,8 @@ pub mod isi {
         if !gov.plain_voting_enabled
             || rules.voting_asset_id != gov.voting_asset_id
             || rules.voting_asset_id != gov.citizenship_asset_id
+            || rules.bond_escrow_account != gov.bond_escrow_account
+            || rules.slash_receiver_account != gov.slash_receiver_account
             || rules.ballot_amount != gov.min_bond_amount
             || rules.ballot_duration_blocks != gov.window_span
             || rules.citizenship_amount != gov.citizenship_bond_amount
@@ -4028,17 +4106,6 @@ pub mod isi {
                     "validation-fee PLAIN electorate rules differ from active governance policy"
                         .into(),
                 ),
-            ));
-        }
-        let eligible_citizens = state_transaction
-            .world
-            .citizens
-            .iter()
-            .filter(|(_, record)| record.amount >= rules.citizenship_amount)
-            .count();
-        if u64::try_from(eligible_citizens).unwrap_or(u64::MAX) > rules.max_members {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee PLAIN electorate exceeds its immutable member cap".into(),
             ));
         }
         Ok(())
@@ -5385,6 +5452,21 @@ pub mod isi {
                         .cloned()
                         .unwrap_or_default();
                     if let Some(prev) = locks.locks.get(&owner) {
+                        if !prev.slashed.is_zero() {
+                            state_transaction.world.emit_events(Some(
+                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                        referendum_id: rid,
+                                        reason:
+                                            "re-vote requires prior restitution of the existing slash"
+                                                .into(),
+                                    },
+                                ),
+                            ));
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "re-vote requires prior restitution of the existing slash".into(),
+                            ));
+                        }
                         if amount < prev.amount || new_expiry < prev.expiry_height {
                             state_transaction.world.emit_events(Some(
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -5400,21 +5482,34 @@ pub mod isi {
                             ));
                         }
                     }
+                    let custody = locks
+                        .locks
+                        .get(&owner)
+                        .and_then(|record| record.custody.clone())
+                        .unwrap_or_else(|| governance_lock_custody(&state_transaction.gov));
+                    let minimum_bond = state_transaction.gov.min_bond_amount.clone();
                     lock_voting_bond(
                         &amount,
                         locks.locks.get(&owner).map(|rec| &rec.amount),
+                        &minimum_bond,
+                        &custody,
                         &owner,
                         &self.election_id,
                         state_transaction,
                     )?;
                     let existed = locks.locks.contains_key(&owner);
+                    let slashed = locks
+                        .locks
+                        .get(&owner)
+                        .map_or_else(Quantity::zero, |record| record.slashed.clone());
                     let rec = crate::state::GovernanceLockRecord {
                         owner: owner.clone(),
                         amount,
-                        slashed: Quantity::zero(),
+                        slashed,
                         expiry_height: new_expiry,
                         direction,
                         duration_blocks,
+                        custody: Some(custody),
                     };
                     locks.locks.insert(owner.clone(), rec.clone());
                     state_transaction
@@ -5473,26 +5568,39 @@ pub mod isi {
     fn validation_fee_proposal_for_referendum(
         referendum_id: &str,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Option<crate::state::GovernanceProposalRecord> {
+    ) -> Result<Option<crate::state::GovernanceProposalRecord>, Error> {
         if referendum_id.len() != 64
             || !referendum_id
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
-            return None;
+            return Ok(None);
         }
-        let bytes = hex::decode(referendum_id).ok()?;
-        let proposal_id: [u8; 32] = bytes.try_into().ok()?;
-        let proposal = state_transaction
+        let Some(bytes) = hex::decode(referendum_id).ok() else {
+            return Ok(None);
+        };
+        let Some(proposal_id) = <[u8; 32]>::try_from(bytes).ok() else {
+            return Ok(None);
+        };
+        let Some(proposal) = state_transaction
             .world
             .governance_proposals
-            .get(&proposal_id)?
-            .clone();
-        if validation_fee_plain_electorate_rules(&proposal.kind).is_some() {
-            Some(proposal)
-        } else {
-            None
+            .get(&proposal_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if validation_fee_plain_electorate_rules(&proposal.kind).is_none() {
+            return Ok(None);
         }
+        if proposal.kind.fingerprint() != proposal_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal storage key differs from its exact typed fingerprint"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(Some(proposal))
     }
 
     fn retained_validation_fee_plain_electorate_snapshot<'a>(
@@ -5531,7 +5639,7 @@ pub mod isi {
         authority: &AccountId,
         proposal: &crate::state::GovernanceProposalRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<ValidationFeePlainElectorateRulesV1, Error> {
         let rules = validation_fee_plain_electorate_rules(&proposal.kind).ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "validation-fee proposal is missing its PLAIN electorate rules".into(),
@@ -5600,14 +5708,14 @@ pub mod isi {
                 "validation-fee ballot owner is not in the frozen PLAIN electorate".into(),
             ));
         }
-        Ok(())
+        Ok(rules.clone())
     }
 
     fn ensure_plain_ballot_preconditions(
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<ValidationFeePlainElectorateRulesV1>, Error> {
         if ballot.owner != *authority {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -5622,14 +5730,15 @@ pub mod isi {
             ));
         }
         if let Some(proposal) =
-            validation_fee_proposal_for_referendum(&ballot.referendum_id, state_transaction)
+            validation_fee_proposal_for_referendum(&ballot.referendum_id, state_transaction)?
         {
             return ensure_validation_fee_plain_ballot_preconditions(
                 ballot,
                 authority,
                 &proposal,
                 state_transaction,
-            );
+            )
+            .map(Some);
         }
         ensure_citizen_for_ballot(authority, &ballot.referendum_id, state_transaction)?;
         if !state_transaction.gov.min_bond_amount.is_zero()
@@ -5674,22 +5783,7 @@ pub mod isi {
                 "lock duration shorter than minimum".into(),
             ));
         }
-        Ok(())
-    }
-
-    fn sweep_expired_plain_locks(
-        ballot: &gov::CastPlainBallot,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        let rid = ballot.referendum_id.clone();
-        let current_h = state_transaction._curr_block.height().get();
-        if let Some(mut existing) = state_transaction.world.governance_locks.get(&rid).cloned() {
-            existing.locks.retain(|_, v| v.expiry_height >= current_h);
-            state_transaction
-                .world
-                .governance_locks
-                .insert(rid, existing);
-        }
+        Ok(None)
     }
 
     fn ensure_plain_referendum_open(
@@ -5859,6 +5953,7 @@ pub mod isi {
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
         weight: u128,
+        validation_fee_rules: Option<&ValidationFeePlainElectorateRulesV1>,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let rid = ballot.referendum_id.clone();
@@ -5893,6 +5988,20 @@ pub mod isi {
                     "re-vote cannot change direction".into(),
                 ));
             }
+            if !prev.slashed.is_zero() {
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: rid.clone(),
+                            reason: "re-vote requires prior restitution of the existing slash"
+                                .into(),
+                        },
+                    ),
+                ));
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "re-vote requires prior restitution of the existing slash".into(),
+                ));
+            }
             if ballot.amount < prev.amount || new_expiry < prev.expiry_height {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -5907,25 +6016,54 @@ pub mod isi {
                 ));
             }
         }
+        let custody = locks
+            .locks
+            .get(authority)
+            .and_then(|record| record.custody.clone())
+            .unwrap_or_else(|| {
+                validation_fee_rules.map_or_else(
+                    || governance_lock_custody(&state_transaction.gov),
+                    validation_fee_lock_custody,
+                )
+            });
+        if let Some(rules) = validation_fee_rules
+            && custody != validation_fee_lock_custody(rules)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee governance lock custody differs from its immutable proposal rules"
+                    .into(),
+            ));
+        }
+        let minimum_bond = validation_fee_rules.map_or_else(
+            || state_transaction.gov.min_bond_amount.clone(),
+            |rules| rules.ballot_amount.clone(),
+        );
         lock_voting_bond(
             &ballot.amount,
             locks.locks.get(authority).map(|rec| &rec.amount),
+            &minimum_bond,
+            &custody,
             authority,
             &ballot.referendum_id,
             state_transaction,
         )?;
 
         let existed = locks.locks.contains_key(authority);
+        let slashed = locks
+            .locks
+            .get(authority)
+            .map_or_else(Quantity::zero, |record| record.slashed.clone());
         let expiry_height = locks.locks.get(authority).map_or(new_expiry, |prev| {
             core::cmp::max(prev.expiry_height, new_expiry)
         });
         let rec = crate::state::GovernanceLockRecord {
             owner: ballot.owner.clone(),
             amount: ballot.amount.clone(),
-            slashed: Quantity::zero(),
+            slashed,
             expiry_height,
             direction: ballot.direction,
             duration_blocks: ballot.duration_blocks,
+            custody: Some(custody),
         };
         locks.locks.insert(authority.clone(), rec.clone());
         state_transaction
@@ -5981,17 +6119,15 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
-            let (conviction_step_blocks, max_conviction) =
-                validation_fee_proposal_for_referendum(&self.referendum_id, state_transaction)
-                    .and_then(|proposal| {
-                        validation_fee_plain_electorate_rules(&proposal.kind)
-                            .map(|rules| (rules.conviction_step_blocks, rules.max_conviction))
-                    })
-                    .unwrap_or((
-                        state_transaction.gov.conviction_step_blocks,
-                        state_transaction.gov.max_conviction,
-                    ));
+            let validation_fee_rules =
+                ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
+            let (conviction_step_blocks, max_conviction) = validation_fee_rules
+                .as_ref()
+                .map(|rules| (rules.conviction_step_blocks, rules.max_conviction))
+                .unwrap_or((
+                    state_transaction.gov.conviction_step_blocks,
+                    state_transaction.gov.max_conviction,
+                ));
             // Validate all economic arithmetic before opening the referendum,
             // sweeping locks, moving the bond, or emitting acceptance events.
             let weight = plain_ballot_weight(
@@ -6000,10 +6136,15 @@ pub mod isi {
                 conviction_step_blocks,
                 max_conviction,
             )?;
-            sweep_expired_plain_locks(&self, state_transaction);
             let referendum = ensure_plain_referendum_open(&self, state_transaction)?;
             ensure_plain_ballot_lock_covers_window(&self, referendum, state_transaction)?;
-            apply_plain_ballot_lock(&self, authority, weight, state_transaction)?;
+            apply_plain_ballot_lock(
+                &self,
+                authority,
+                weight,
+                validation_fee_rules.as_ref(),
+                state_transaction,
+            )?;
             Ok(())
         }
     }
@@ -8809,7 +8950,10 @@ pub mod isi {
                             if let Some(rules) = validation_fee_rules.as_ref()
                                 && (&rec.owner != owner
                                     || rec.amount != rules.ballot_amount
+                                    || !rec.slashed.is_zero()
                                     || rec.duration_blocks != rules.ballot_duration_blocks
+                                    || rec.custody.as_ref()
+                                        != Some(&validation_fee_lock_custody(rules))
                                     || rec.direction > 2)
                             {
                                 return Err(InstructionExecutionError::InvariantViolation(
@@ -19540,6 +19684,134 @@ pub mod isi {
                 .asset_definitions_in_domain_iter(&domain_id)
                 .map(|ad| ad.id().clone())
                 .collect();
+            let orchard_pool_references =
+                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+                    &state_transaction.world.privacy_commitments,
+                )
+                .map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: persisted Orchard pool state is invalid: {message}"
+                        )
+                        .into(),
+                    )
+                })?;
+            if let Some(reference) = orchard_pool_references.iter().find(|reference| {
+                remove_asset_definitions.contains(reference.asset_definition_id())
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {} backs governed Orchard pool {:?}",
+                        reference.asset_definition_id(),
+                        reference.namespace()
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
+            for account_id in &relabeled_accounts {
+                if account_id == &state_transaction.gov.bond_escrow_account
+                    || account_id == &state_transaction.gov.slash_receiver_account
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account_id} is configured as active governance bond custody; update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((referendum_id, _)) = state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .find(|(_, locks)| {
+                        locks.locks.values().any(|record| {
+                            record.custody.as_ref().is_some_and(|custody| {
+                                custody.bond_escrow_account == *account_id
+                                    || custody.slash_receiver_account == *account_id
+                            })
+                        })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account_id} is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((proposal_id, _)) = state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .find(|(_, proposal)| {
+                        matches!(
+                            proposal.status,
+                            crate::state::GovernanceProposalStatus::Proposed
+                                | crate::state::GovernanceProposalStatus::Approved
+                        ) && validation_fee_plain_electorate_rules(&proposal.kind).is_some_and(
+                            |rules| {
+                                rules.bond_escrow_account == *account_id
+                                    || rules.slash_receiver_account == *account_id
+                            },
+                        )
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account_id} is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            for asset_definition_id in &remove_asset_definitions {
+                if let Some((referendum_id, _)) = state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .find(|(_, locks)| {
+                        locks.locks.values().any(|record| {
+                            record.custody.as_ref().is_some_and(|custody| {
+                                custody.asset_definition_id == *asset_definition_id
+                            })
+                        })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((proposal_id, _)) = state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .find(|(_, proposal)| {
+                        matches!(
+                            proposal.status,
+                            crate::state::GovernanceProposalStatus::Proposed
+                                | crate::state::GovernanceProposalStatus::Approved
+                        ) && validation_fee_plain_electorate_rules(&proposal.kind)
+                            .is_some_and(|rules| rules.voting_asset_id == *asset_definition_id)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
 
             remove_domain_associated_permissions(state_transaction, &domain_id);
 
@@ -27762,6 +28034,75 @@ seiyaku GovernanceLifecycle {
             assert!(
                 stx.world.asset_definitions.get(&voting_def).is_some(),
                 "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_immutable_governance_lock_custody_after_config_change() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId =
+                DomainId::try_new("custody", "history").expect("domain id parses");
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register custody domain");
+            let custody_definition =
+                AssetDefinitionId::new(domain_id.clone(), "locked".parse().unwrap());
+            Register::asset_definition({
+                let __asset_definition_id = custody_definition.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register retained custody asset definition");
+
+            let owner = (*BOB_ID).clone();
+            let mut locks = crate::state::GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                owner.clone(),
+                crate::state::GovernanceLockRecord {
+                    owner,
+                    amount: Quantity::from(150_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 10,
+                    direction: 0,
+                    duration_blocks: 3_600,
+                    custody: Some(crate::state::GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: custody_definition.clone(),
+                        bond_escrow_account: (*ALICE_ID).clone(),
+                        slash_receiver_account: (*ALICE_ID).clone(),
+                    }),
+                },
+            );
+            stx.world
+                .governance_locks
+                .insert("retained-domain-custody".to_owned(), locks);
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain holding immutable lock custody must remain registered");
+            assert!(
+                err.to_string()
+                    .contains("retained by immutable governance lock custody"),
+                "error should identify retained lock custody: {err}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "custody domain must remain after rejected unregister"
+            );
+            assert!(
+                stx.world
+                    .asset_definitions
+                    .get(&custody_definition)
+                    .is_some(),
+                "custody asset definition must remain after rejected unregister"
             );
         }
 

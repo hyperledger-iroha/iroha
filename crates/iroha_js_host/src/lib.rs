@@ -8230,6 +8230,8 @@ fn validation_fee_plain_electorate_rules_from_json_value(
 ) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
     const RULES_FIELDS: &[&str] = &[
         "voting_asset_id",
+        "bond_escrow_account",
+        "slash_receiver_account",
         "ballot_amount",
         "ballot_duration_blocks",
         "citizenship_amount",
@@ -21866,22 +21868,29 @@ seiyaku Privacy {
         let mut provider_id = [0u8; 32];
         provider_id
             .copy_from_slice(&hex::decode(provider_id_hex).expect("decode provider identifier"));
-        let token = StreamTokenV1::sign(
-            StreamTokenBodyV1 {
-                token_id: "01TESTTOKEN0000000000000000".to_string(),
-                manifest_cid: hex::decode(manifest_id_hex).expect("decode manifest id"),
-                provider_id,
-                profile_handle: profile.to_string(),
-                max_streams,
-                ttl_epoch: 9_999_999_999,
-                rate_limit_bytes: 8 * 1024 * 1024,
-                issued_at: 1_735_000_000,
-                requests_per_minute: 120,
-                token_pk_version: 1,
-            },
-            &ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]),
-        )
-        .expect("sign stream token");
+        let body = StreamTokenBodyV1 {
+            token_id: "01TESTTOKEN0000000000000000".to_string(),
+            manifest_cid: hex::decode(manifest_id_hex).expect("decode manifest id"),
+            provider_id,
+            profile_handle: profile.to_string(),
+            max_streams,
+            ttl_epoch: 9_999_999_999,
+            rate_limit_bytes: 8 * 1024 * 1024,
+            issued_at: 1_735_000_000,
+            requests_per_minute: 120,
+            token_pk_version: 1,
+        };
+        let signing_key = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("derive deterministic stream-token signing key");
+        let signing_payload = body
+            .signing_payload_bytes()
+            .expect("encode stream-token signing payload");
+        let signature = Signature::try_new(signing_key.private_key(), &signing_payload)
+            .expect("sign stream token");
+        let token = StreamTokenV1 {
+            body,
+            signature: signature.payload().to_vec(),
+        };
         let bytes = norito::to_bytes(&token).expect("encode stream token");
         BASE64.encode(bytes)
     }
@@ -23791,6 +23800,8 @@ seiyaku Privacy {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
                 .parse()
                 .expect("validation-fee voting asset"),
+            bond_escrow_account: validation_fee_account(8),
+            slash_receiver_account: validation_fee_account(9),
             ballot_amount: "150".parse().expect("validation-fee ballot amount"),
             ballot_duration_blocks: 3_600,
             citizenship_amount: "10000"
@@ -24050,7 +24061,7 @@ seiyaku Privacy {
         .expect("validation-fee policy fingerprint");
         assert_eq!(
             hex::encode(policy_fingerprint.as_ref()),
-            "dc8dd81d73e9f562e57b7cb6cacc9d3da84fa6663da7cffd96b7282c4b0f68b6"
+            "85ecc42a75d3e0da96349b75f0c1ccd1ffb6dff2334486b67edb39f7a86f6a90"
         );
 
         let payout_binding = validation_fee_payout_binding_fixture();
@@ -24061,7 +24072,7 @@ seiyaku Privacy {
         .expect("validation-fee payout lifecycle fingerprint");
         assert_eq!(
             hex::encode(payout_fingerprint.as_ref()),
-            "f6bf20196ea6985c4fbbfdb902a77079e12c78638f760b6611b6916b9ec3e27e"
+            "fa1e71c8bec0601d590038626c2a8d3a4b2350f5dd23f76b0a2dfdbbf9e5a84b"
         );
     }
 
@@ -24122,13 +24133,16 @@ seiyaku Privacy {
                 "voting_mode".to_owned(),
                 json::Value::String("Plain".to_owned()),
             );
-        let error = validation_fee_policy_proposal_fingerprint_v1(
+        let result = validation_fee_policy_proposal_fingerprint_v1(
             json::to_json(&validation_fee_policy_fixture(None))
                 .expect("validation-fee policy JSON"),
             None,
             json::to_json(&value).expect("legacy plain electorate rules JSON"),
-        )
-        .expect_err("unknown plain electorate rule fields must fail closed");
+        );
+        let error = match result {
+            Ok(_) => panic!("unknown plain electorate rule fields must fail closed"),
+            Err(error) => error,
+        };
         assert!(error.reason.contains("must contain exactly"));
     }
 
@@ -24136,12 +24150,15 @@ seiyaku Privacy {
     fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
         let mut payout_binding = validation_fee_payout_binding_fixture();
         payout_binding.code_hash = [0; 32];
-        let error = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+        let result = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
             json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
             json::to_json(&validation_fee_plain_electorate_rules_fixture())
                 .expect("plain electorate rules JSON"),
-        )
-        .expect_err("invalid payout binding must fail closed");
+        );
+        let error = match result {
+            Ok(_) => panic!("invalid payout binding must fail closed"),
+            Err(error) => error,
+        };
         assert!(error.reason.contains("code hash must be non-zero"));
     }
 
@@ -24589,10 +24606,10 @@ seiyaku Privacy {
         let wide = "340282366920938463463374607431768211456.25";
         for amount in ["1.25", wide] {
             let instruction = value_to_instruction(norito_json!({
-                "RegisterCitizen": {
+                "RegisterCitizen": norito_json!({
                     "owner": account_json_literal(&owner),
                     "amount": amount,
-                }
+                })
             }))
             .expect("canonical citizen-bond Quantity must deserialize");
             let register = instruction
@@ -24628,10 +24645,10 @@ seiyaku Privacy {
         ];
         for (case, amount) in invalid {
             let error = value_to_instruction(norito_json!({
-                "RegisterCitizen": {
+                "RegisterCitizen": norito_json!({
                     "owner": account_json_literal(&owner),
                     "amount": amount,
-                }
+                })
             }))
             .expect_err("invalid citizen-bond Quantity must be rejected");
             assert!(
@@ -26075,7 +26092,7 @@ seiyaku Privacy {
             json::Value::String("-1".to_owned()),
             json::Value::String("01".to_owned()),
             json::Value::String("1.0".to_owned()),
-            json::Value::Number(json::Number::from(1_u32)),
+            json::Value::Number(json::Number::from(1_u64)),
         ] {
             let mut payload = canonical_payload.clone();
             payload

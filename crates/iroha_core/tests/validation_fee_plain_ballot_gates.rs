@@ -21,7 +21,11 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::{Domain, DomainId},
     governance::types::{ParliamentBody, ProposalKind, ValidationFeePolicyProposal},
-    isi::governance::CastPlainBallot,
+    isi::{
+        Grant,
+        governance::{CastPlainBallot, SlashGovernanceLock},
+    },
+    permission::Permission,
     validation_fee::{
         VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
         VALIDATION_FEE_POLICY_SCHEMA_VERSION, ValidationFeeChargingMode,
@@ -30,6 +34,7 @@ use iroha_data_model::{
         ValidationFeePolicyV1,
     },
 };
+use iroha_executor_data_model::permission::governance::CanSlashGovernanceLock;
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use mv::storage::StorageReadOnly;
 
@@ -45,9 +50,15 @@ fn account(seed: u8) -> AccountId {
     AccountId::new(key_pair.public_key().clone())
 }
 
-fn plain_rules(voting_asset_id: AssetDefinitionId) -> ValidationFeePlainElectorateRulesV1 {
+fn plain_rules(
+    voting_asset_id: AssetDefinitionId,
+    bond_escrow_account: AccountId,
+    slash_receiver_account: AccountId,
+) -> ValidationFeePlainElectorateRulesV1 {
     ValidationFeePlainElectorateRulesV1 {
         voting_asset_id,
+        bond_escrow_account,
+        slash_receiver_account,
         ballot_amount: BALLOT_AMOUNT.into(),
         ballot_duration_blocks: BALLOT_DURATION,
         citizenship_amount: CITIZENSHIP_AMOUNT.into(),
@@ -100,6 +111,10 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     let domain_id = DomainId::try_new("validation_fee", "universal").expect("domain");
     let voting_asset_id =
         AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
+    let changed_live_voting_asset_id = AssetDefinitionId::new(
+        domain_id.clone(),
+        "changed_live_xor".parse().expect("asset name"),
+    );
 
     let accounts = [
         proposer.clone(),
@@ -137,11 +152,16 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     let query_handle = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(world, kura, query_handle);
 
-    let retained_rules = plain_rules(voting_asset_id.clone());
+    let retained_rules = plain_rules(
+        voting_asset_id.clone(),
+        bond_escrow.clone(),
+        parliament_signer.clone(),
+    );
     let mut proposal_time_governance = state.gov.clone();
     proposal_time_governance.voting_asset_id = voting_asset_id.clone();
     proposal_time_governance.citizenship_asset_id = voting_asset_id.clone();
     proposal_time_governance.bond_escrow_account = bond_escrow.clone();
+    proposal_time_governance.slash_receiver_account = parliament_signer.clone();
     proposal_time_governance.citizenship_escrow_account = bond_escrow.clone();
     proposal_time_governance.citizenship_bond_amount = retained_rules.citizenship_amount.clone();
     proposal_time_governance.min_bond_amount = retained_rules.ballot_amount.clone();
@@ -186,7 +206,10 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     let mut changed_live_governance = state.gov.clone();
     changed_live_governance.plain_voting_enabled = false;
     changed_live_governance.citizenship_bond_amount = 20_000_u64.into();
-    changed_live_governance.min_bond_amount = (BALLOT_AMOUNT - 1).into();
+    changed_live_governance.min_bond_amount = (BALLOT_AMOUNT + 1).into();
+    changed_live_governance.voting_asset_id = changed_live_voting_asset_id;
+    changed_live_governance.bond_escrow_account = parliament_signer.clone();
+    changed_live_governance.slash_receiver_account = other_at_gate.clone();
     changed_live_governance.window_span = 99;
     changed_live_governance.conviction_step_blocks = 99;
     changed_live_governance.max_conviction = 1;
@@ -349,6 +372,16 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         assert!(error.contains(expected), "unexpected rejection: {error}");
     }
 
+    // Mutable citizen changes after the boundary cannot expand or shrink the
+    // proposal-bound electorate.
+    state_transaction.world.citizens_mut().insert(
+        other_at_gate.clone(),
+        CitizenshipRecord::new(
+            other_at_gate.clone(),
+            retained_rules.citizenship_amount.clone(),
+            GATE_HEIGHT + 1,
+        ),
+    );
     let error = rejection_message(
         ballot(
             &referendum_id,
@@ -361,8 +394,8 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         &mut state_transaction,
     );
     assert!(
-        error.contains("registration height is outside"),
-        "an ordinary citizen at the gate must be ineligible: {error}"
+        error.contains("not in the frozen PLAIN electorate"),
+        "an ordinary citizen excluded at the gate must remain ineligible: {error}"
     );
 
     state_transaction.world.citizens_mut().insert(
@@ -373,23 +406,24 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
             GATE_HEIGHT + 1,
         ),
     );
-    let error = rejection_message(
-        ballot(&referendum_id, &proposer, BALLOT_AMOUNT, BALLOT_DURATION, 0),
-        &proposer,
-        &mut state_transaction,
-    );
     assert!(
-        error.contains("registration height is outside"),
-        "the proposal operator must not join after the gate: {error}"
+        state_transaction
+            .world
+            .citizens_mut()
+            .remove(late_abstain_voter.clone())
+            .is_some(),
+        "late abstain voter must exist in the mutable citizen roster"
     );
-    state_transaction.world.citizens_mut().insert(
-        proposer.clone(),
-        CitizenshipRecord::new(
-            proposer.clone(),
-            retained_rules.citizenship_amount.clone(),
-            GATE_HEIGHT,
-        ),
-    );
+    let retained_electorate = state_transaction
+        .world
+        .governance_stage_approvals()
+        .get(&referendum_id)
+        .and_then(|retained| retained.validation_fee_plain_electorate_snapshot.as_ref())
+        .expect("retained frozen PLAIN electorate");
+    assert_eq!(retained_electorate.roster_root, electorate_root);
+    assert!(retained_electorate.contains(&proposer));
+    assert!(retained_electorate.contains(&late_abstain_voter));
+    assert!(!retained_electorate.contains(&other_at_gate));
 
     for (owner, direction) in [
         (&proposer, 0),
@@ -432,7 +466,36 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
         assert_eq!(lock.amount, retained_rules.ballot_amount);
         assert_eq!(lock.duration_blocks, retained_rules.ballot_duration_blocks);
         assert_eq!(lock.direction, expected_direction);
+        let custody = lock
+            .custody
+            .as_ref()
+            .expect("validation-fee lock must retain immutable custody");
+        assert!(custody.escrowed);
+        assert_eq!(custody.asset_definition_id, voting_asset_id);
+        assert_eq!(custody.bond_escrow_account, bond_escrow);
+        assert_eq!(custody.slash_receiver_account, parliament_signer);
     }
+    for owner in [&proposer, &late_nay_voter, &late_abstain_voter] {
+        let voter_asset_id = AssetId::new(voting_asset_id.clone(), owner.clone());
+        let balance = state_transaction
+            .world
+            .asset(&voter_asset_id)
+            .expect("voter balance after immutable-custody lock");
+        assert_eq!(**balance, Quantity::from(500 - BALLOT_AMOUNT));
+    }
+    let escrow_asset_id = AssetId::new(voting_asset_id.clone(), bond_escrow.clone());
+    let escrow_balance = state_transaction
+        .world
+        .asset(&escrow_asset_id)
+        .expect("proposal-bound escrow balance");
+    assert_eq!(**escrow_balance, Quantity::from(3 * BALLOT_AMOUNT));
+    let changed_live_escrow_asset_id =
+        AssetId::new(voting_asset_id.clone(), parliament_signer.clone());
+    let changed_live_escrow_balance = state_transaction
+        .world
+        .asset(&changed_live_escrow_asset_id)
+        .expect("changed live escrow account balance");
+    assert_eq!(**changed_live_escrow_balance, Quantity::from(500_u64));
     assert_eq!(
         state_transaction
             .world
@@ -441,5 +504,75 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
             .expect("referendum")
             .status,
         GovernanceReferendumStatus::Open
+    );
+
+    let mut malformed_locks = state_transaction
+        .world
+        .governance_locks()
+        .get(&referendum_id)
+        .cloned()
+        .expect("accepted validation-fee locks");
+    malformed_locks
+        .locks
+        .get_mut(&proposer)
+        .expect("proposal operator lock")
+        .custody = None;
+    state_transaction
+        .world
+        .governance_locks_mut()
+        .insert(referendum_id.clone(), malformed_locks);
+    let permission: Permission = CanSlashGovernanceLock {
+        referendum_id: referendum_id.clone(),
+    }
+    .into();
+    Grant::account_permission(permission, proposer.clone())
+        .execute(&proposer, &mut state_transaction)
+        .expect("grant manual slash permission");
+    let escrow_before = state_transaction
+        .world
+        .asset(&AssetId::new(voting_asset_id.clone(), bond_escrow.clone()))
+        .expect("proposal-bound escrow")
+        .as_ref()
+        .clone();
+    let receiver_before = state_transaction
+        .world
+        .asset(&AssetId::new(
+            voting_asset_id.clone(),
+            parliament_signer.clone(),
+        ))
+        .expect("proposal-bound slash receiver")
+        .as_ref()
+        .clone();
+    let error = SlashGovernanceLock {
+        referendum_id: referendum_id.clone(),
+        owner: proposer.clone(),
+        amount: 1_u64.into(),
+        reason: "malformed retained custody".to_owned(),
+    }
+    .execute(&proposer, &mut state_transaction)
+    .expect_err("validation-fee slash must reject missing immutable custody");
+    assert!(
+        error
+            .to_string()
+            .contains("missing immutable proposal custody"),
+        "unexpected malformed-custody rejection: {error}"
+    );
+    assert_eq!(
+        state_transaction
+            .world
+            .asset(&AssetId::new(voting_asset_id.clone(), bond_escrow))
+            .expect("escrow remains after rejected slash")
+            .as_ref()
+            .clone(),
+        escrow_before
+    );
+    assert_eq!(
+        state_transaction
+            .world
+            .asset(&AssetId::new(voting_asset_id, parliament_signer))
+            .expect("slash receiver remains after rejected slash")
+            .as_ref()
+            .clone(),
+        receiver_before
     );
 }
