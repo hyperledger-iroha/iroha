@@ -236,9 +236,9 @@ final class IrohaPeerNfcV1Tests: XCTestCase {
 
     func testExactAidInstructionsAndUInt32Offsets() throws {
         let expectedAid = Data([
-            0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01,
+            0xF0, 0x49, 0x4C, 0x44, 0x53, 0x4E, 0x46, 0x43, 0x01,
         ])
-        let expectedAidHex = "F0504B45504B524E464301"
+        let expectedAidHex = "F0494C44534E464301"
         XCTAssertEqual(
             IrohaPeerNfcV1.applicationIdentifier,
             expectedAid

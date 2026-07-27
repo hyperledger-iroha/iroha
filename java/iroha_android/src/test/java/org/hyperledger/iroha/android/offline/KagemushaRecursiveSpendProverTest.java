@@ -1308,7 +1308,7 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaNfcProtocol.PayloadKind.RECEIVE_REQUEST, rawArchive, 220);
     assert apdus.size() > 3;
     assert hex(apdus.get(apdus.size() - 1)).equals("8022040000");
-    assert KagemushaNfcProtocol.AID_HEX.equals("F0504B45504B524E464301");
+    assert KagemushaNfcProtocol.AID_HEX.equals("F0494C44534E464301");
     assert KagemushaNfcProtocol.AID_HEX.equals(IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX);
     assert KagemushaPeerTransport.NFC_APPLICATION_IDENTIFIER_HEX
         .equals(IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX);

@@ -83,7 +83,7 @@ keys used by the rails you enable (replace only the human-readable strings):
 <string>Exchange an offline transfer over NFC.</string>
 <key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
 <array>
-    <string>F0504B45504B524E464301</string>
+    <string>F0494C44534E464301</string>
 </array>
 ```
 
@@ -108,7 +108,7 @@ device.
 <true/>
 <key>com.apple.developer.nfc.hce.iso7816.select-identifier-prefixes</key>
 <array>
-    <string>F0504B45504B524E464301</string>
+    <string>F0494C44534E464301</string>
 </array>
 ```
 
@@ -358,7 +358,7 @@ start with the zero bootstrap; it adopts the receiver's advertised nonzero
 request context before the `IPN1` certificate-bound P-256/HKDF/AES-GCM
 session. The adapter marks
 a BYTES send complete only after its terminal transfer update succeeds. NFC
-uses AID `F0504B45504B524E464301`, exact ISC1 sender checkpoints, 244-byte IPA1
+uses AID `F0494C44534E464301`, exact ISC1 sender checkpoints, 244-byte IPA1
 durable BEGIN records, IDA1 durable ACK records, min(local, peer) chunk
 negotiation, and GET_STATUS recovery after
 ambiguous RF loss. The complete reader runner applies a whole-exchange
@@ -432,7 +432,7 @@ byte whole-offer body ceiling (24,660 bytes with the IPM1 header). The
 independent ABI21 APIs remain
 `KagemushaQRStreamCodec`, `KagemushaNFCProtocol`, and
 `KagemushaNearbyExchange`, with distinct `PKK2*`/`PKKQ1`, the canonical
-`F0504B45504B524E464301` SDK NFC AID, and
+`F0494C44534E464301` SDK NFC AID, and
 Bonjour/Multipeer identifiers. They are never negotiated, reinterpreted, or
 used as fallback for Retail V1. Full QR, NFC, and native ABI21 archives up to
 32 MiB continue to use those rails; Kagemusha Nearby's JSON/text envelope has

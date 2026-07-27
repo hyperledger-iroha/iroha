@@ -22,7 +22,7 @@ import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcTwoTapReducerV1;
 
 /** Java-facing entry point to the default portable NFC V1 state machine. */
 public final class IrohaPeerNfcV1 {
-  public static final String APPLICATION_IDENTIFIER_HEX = "F0504B45504B524E464301";
+  public static final String APPLICATION_IDENTIFIER_HEX = "F0494C44534E464301";
   public static final int COMMAND_CLASS = 0x80;
   public static final int WIRE_VERSION = 1;
   public static final int SESSION_ID_BYTES = 16;

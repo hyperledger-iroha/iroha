@@ -70,7 +70,7 @@ final class KagemushaPeerTransportTests: XCTestCase {
         XCTAssertEqual(KagemushaPeerTransportContract.qrStreamTextPrefix, "PKKQ1.")
         XCTAssertEqual(
             KagemushaPeerTransportContract.nfcApplicationIdentifierHex,
-            "F0504B45504B524E464301"
+            "F0494C44534E464301"
         )
         XCTAssertEqual(KagemushaPeerTransportContract.nearbyServiceName, "pk-kagemusha")
         XCTAssertEqual(

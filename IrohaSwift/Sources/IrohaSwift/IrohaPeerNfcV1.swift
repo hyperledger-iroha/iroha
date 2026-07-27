@@ -6,10 +6,10 @@ import Foundation
 /// protocol. V1 has one application identifier, one command set, and no codec
 /// negotiation or legacy fallback.
 public enum IrohaPeerNfcV1 {
-    /// ISO/IEC 7816 application identifier `F0504B45504B524E464301`.
-    public static let applicationIdentifierHex = "F0504B45504B524E464301"
+    /// ISO/IEC 7816 application identifier `F0494C44534E464301`.
+    public static let applicationIdentifierHex = "F0494C44534E464301"
     public static let applicationIdentifier = decodeHex(applicationIdentifierHex)
-    public static let buildProfileMarker = "IrohaPeerNfcV1.AID.F0504B45504B524E464301"
+    public static let buildProfileMarker = "IrohaPeerNfcV1.AID.F0494C44534E464301"
     public static let commandClass: UInt8 = 0x80
     public static let wireVersion: UInt8 = 1
     public static let sessionIDBytes = 16

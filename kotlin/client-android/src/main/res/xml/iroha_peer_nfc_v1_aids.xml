@@ -3,6 +3,6 @@
     android:description="@string/iroha_peer_nfc_v1_service_description"
     android:requireDeviceUnlock="true">
     <aid-group android:category="other" android:description="@string/iroha_peer_nfc_v1_service_description">
-        <aid-filter android:name="F0504B45504B524E464301" />
+        <aid-filter android:name="F0494C44534E464301" />
     </aid-group>
 </host-apdu-service>

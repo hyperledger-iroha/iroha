@@ -63,7 +63,7 @@ Kotlin projects while preserving these exact coordinates in generated POMs.
 
 The first-release peer transport has one wire family only: IPM1 messages,
 IQR1/IRQR QR frames, authenticated IPN1 Nearby records, and the NFC application
-identifier `F0504B45504B524E464301`. The new `IrohaPeer*V1` APIs never fall
+identifier `F0494C44534E464301`. The new `IrohaPeer*V1` APIs never fall
 back to the older Kagemusha QR, Nearby service, or NFC APDU formats.
 
 Create the common envelope with `IrohaPeerWireMessageV1`. QR senders call
@@ -185,7 +185,7 @@ QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
 facades. Kagemusha retains its distinct `PKK2*`/`PKKQ1` text and Bonjour
 identifiers, while NFC uses the sole canonical AID
-`F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
+`F0494C44534E464301`. Nearby uses the authenticated binary `PKNB1`
 envelope and its own smaller bound. Those rails are never negotiated,
 reinterpreted, or used as fallback for Retail Offline Peer V1. The
 no-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`; the

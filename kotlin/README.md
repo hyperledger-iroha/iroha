@@ -171,7 +171,7 @@ QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
 `KagemushaNearbyEnvelopeCodec` rails. Kagemusha retains its distinct
 `PKK2*`/`PKKQ1` text and Bonjour identifiers, while NFC uses the sole canonical
-AID `F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
+AID `F0494C44534E464301`. Nearby uses the authenticated binary `PKNB1`
 envelope and its own smaller bound. Those rails are never negotiated,
 reinterpreted, or used as fallback for Retail Offline Peer V1. Only
 `IrohaPeer*V1` has no unauthenticated Nearby, raw-text, or alternate profile-2
