@@ -17,6 +17,16 @@ npm install
 npm run build:native
 ```
 
+The native build writes strict V3 provenance with the execution policy
+`trusted-local-cargo-v1`. It binds the exact source seal observed before and
+after one local Cargo invocation to the exact compiled bytes. Its private
+source snapshot is owner-read-only and isolates ordinary concurrent checkout
+changes, but the attestation deliberately trusts the invoking user, local
+peer processes, toolchain, build scripts, procedural macros, dependencies, and
+build environment. It is not a reproducible-build or hostile-executor proof.
+Release processes that require that stronger property must compare matching
+artifacts from independent controlled rebuilders.
+
 When upgrading a source checkout from a revision that tracked the checksum
 manifest but ignored the generated binary, Git can remove the manifest while
 leaving an old `native/iroha_js_host.node`. The publisher intentionally rejects

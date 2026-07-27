@@ -265,6 +265,21 @@ impl From<crate::isi::privacy::RevokePrivacyZkAcePolicyV1> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1> for InstructionBox {
     fn from(i: crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1) -> Self {
         InstructionBox(Box::new(i))
@@ -4231,15 +4246,16 @@ pub mod prelude {
         privacy::{
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
-            RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
-            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
-            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyZkAcePolicyV1,
+            RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
+            RegisterPrivacyZkAcePolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyZkAcePolicyV1,
             RevokePrivacyZkX509CertificatePolicyV1, RevokePrivacyZkX509CrlV1,
-            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyZkAcePolicyV1,
-            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
-            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyBootleLanternIssuerPolicyV1,
+            RotatePrivacyZkAcePolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
+            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
+            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
+            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,

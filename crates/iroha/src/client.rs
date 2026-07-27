@@ -50,6 +50,7 @@ use iroha_data_model::{
         AssetPermissionManifest, FeeSponsorProgramId, LaneLifecycleParameterV1, LaneLifecyclePlan,
         LaneLifecycleStatusV1, UniversalAccountId,
     },
+    privacy::PrivacyCapabilitySnapshotV1,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -138,6 +139,7 @@ use crate::{
 // (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
+const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -6841,6 +6843,10 @@ impl Client {
     }
 
     fn is_sccp_json_content_type(content_type: &str) -> bool {
+        Self::is_exact_json_content_type(content_type)
+    }
+
+    fn is_exact_json_content_type(content_type: &str) -> bool {
         content_type
             .split(';')
             .next()
@@ -20732,6 +20738,90 @@ impl Client {
         norito::json::from_slice(resp.body()).wrap_err("failed to decode node capabilities JSON")
     }
 
+    /// GET `/v1/privacy/capabilities`.
+    ///
+    /// Returns the authoritative committed privacy capability snapshot as
+    /// validated canonical JSON. Static SDK catalogs are not consulted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a failed request, non-OK status, non-JSON media
+    /// type, oversized response, unknown or malformed field, noncanonical
+    /// protocol ordering, or any invalid profile/activation binding.
+    pub fn get_privacy_capabilities_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/privacy/capabilities");
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get privacy capabilities: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_exact_json_content_type(content_type) {
+            return Err(eyre!(
+                "privacy capabilities response has invalid content type {content_type}"
+            ));
+        }
+        let snapshot: PrivacyCapabilitySnapshotV1 = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode typed privacy capabilities JSON")?;
+        snapshot
+            .validate()
+            .map_err(|error| eyre!("node returned invalid privacy capabilities: {error}"))?;
+        norito::json::to_value(&snapshot)
+            .wrap_err("failed to render validated privacy capabilities JSON")
+    }
+
+    /// GET `/v1/privacy/capabilities`.
+    ///
+    /// Returns the authoritative committed privacy capability snapshot as one
+    /// canonical typed Norito payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a failed request, non-OK status, non-Norito media
+    /// type, oversized response, noncanonical or malformed encoding, or any
+    /// invalid profile/activation binding.
+    pub fn get_privacy_capabilities(&self) -> Result<PrivacyCapabilitySnapshotV1> {
+        let url = join_torii_url(&self.torii_url, "v1/privacy/capabilities");
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get privacy capabilities: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(&resp);
+        if !Self::is_norito_content_type(content_type) {
+            return Err(eyre!(
+                "privacy capabilities response has invalid content type {content_type}"
+            ));
+        }
+        let snapshot: PrivacyCapabilitySnapshotV1 = norito::decode_from_bytes(resp.body())
+            .wrap_err("failed to decode privacy capabilities")?;
+        if !norito::to_bytes(&snapshot)
+            .is_ok_and(|canonical| canonical.as_slice() == resp.body().as_slice())
+        {
+            return Err(eyre!(
+                "privacy capabilities response is not one canonical Norito payload"
+            ));
+        }
+        snapshot
+            .validate()
+            .map_err(|error| eyre!("node returned invalid privacy capabilities: {error}"))?;
+        Ok(snapshot)
+    }
+
     /// GET `/v1/sccp/capabilities`.
     /// Returns the public SCCP capability snapshot as JSON.
     /// # Errors
@@ -24563,6 +24653,12 @@ mod tests {
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
         peer::PeerId,
+        privacy::{
+            PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
+            PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
+            PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusPolicyV1,
+            PrivacyProtocolIdV1,
+        },
         query::parameters::Pagination,
         sorafs::{
             moderation::{
@@ -33495,6 +33591,28 @@ mod tests {
         }
     }
 
+    fn sample_privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
+        let snapshot = PrivacyCapabilitySnapshotV1 {
+            version: PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+            committed_height: 42,
+            consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
+            protocols: PrivacyProtocolIdV1::ALL
+                .into_iter()
+                .map(|protocol_id| PrivacyCapabilityRowV1 {
+                    protocol_id,
+                    compiled_profile: PrivacyCompiledProfileResultV1::Unavailable(
+                        PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                    ),
+                    activation: None,
+                })
+                .collect(),
+        };
+        snapshot
+            .validate()
+            .expect("canonical privacy capability fixture");
+        snapshot
+    }
+
     fn sample_sccp_recent_messages() -> SccpRecentMessages {
         SccpRecentMessages {
             items: vec![SccpRecentMessage {
@@ -33593,6 +33711,154 @@ mod tests {
                 payload_hex: hex::encode(framed),
             }],
         }
+    }
+
+    #[test]
+    fn get_privacy_capabilities_decodes_one_canonical_typed_snapshot() {
+        let payload = sample_privacy_capabilities();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&payload).expect("encode privacy capabilities"))
+            .expect("response build");
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url()).get_privacy_capabilities()
+        })
+        .expect("typed privacy capabilities");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.url.path(), "/v1/privacy/capabilities");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES
+        );
+        assert_single_accept_header(&snapshot, APPLICATION_NORITO);
+    }
+
+    #[test]
+    fn get_privacy_capabilities_json_validates_before_returning() {
+        let payload = sample_privacy_capabilities();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&payload).expect("encode privacy capabilities JSON"),
+        );
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client_with_base_url(base_url()).get_privacy_capabilities_json()
+        })
+        .expect("validated privacy capabilities JSON");
+
+        assert_eq!(
+            decoded,
+            norito::json::to_value(&payload).expect("canonical privacy capability JSON value")
+        );
+        let snapshot = store.lock().expect("snapshot lock")[0].clone();
+        assert_eq!(snapshot.url.path(), "/v1/privacy/capabilities");
+        assert_eq!(
+            snapshot.max_response_bytes,
+            PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES
+        );
+        assert_single_accept_header(&snapshot, APPLICATION_JSON);
+    }
+
+    #[test]
+    fn privacy_capability_clients_reject_structural_and_transport_adversaries() {
+        let valid = sample_privacy_capabilities();
+        let invoke_json = |payload: &PrivacyCapabilitySnapshotV1| {
+            let response = json_response(
+                StatusCode::OK,
+                &norito::json::to_json(payload).expect("encode hostile privacy capabilities"),
+            );
+            with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_privacy_capabilities_json(),
+            )
+        };
+
+        let mut wrong_version = valid.clone();
+        wrong_version.version += 1;
+        let error = invoke_json(&wrong_version).expect_err("unknown snapshot version must reject");
+        assert!(
+            error.to_string().contains("invalid privacy capabilities"),
+            "{error}"
+        );
+
+        let mut reordered = valid.clone();
+        reordered.protocols.swap(0, 1);
+        let error = invoke_json(&reordered).expect_err("reordered protocol rows must reject");
+        assert!(
+            error.to_string().contains("invalid privacy capabilities"),
+            "{error}"
+        );
+
+        let mut omitted = valid.clone();
+        omitted.protocols.pop();
+        let error = invoke_json(&omitted).expect_err("omitted protocol row must reject");
+        assert!(
+            error.to_string().contains("invalid privacy capabilities"),
+            "{error}"
+        );
+
+        let mut unknown_field =
+            norito::json::to_value(&valid).expect("privacy capability JSON value");
+        unknown_field
+            .as_object_mut()
+            .expect("privacy capability object")
+            .insert("legacy_protocols".into(), JsonValue::from(true));
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&unknown_field).expect("hostile privacy capability JSON"),
+        );
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_privacy_capabilities_json(),
+        )
+        .expect_err("unknown top-level field must reject");
+        assert!(
+            error
+                .to_string()
+                .contains("decode typed privacy capabilities"),
+            "{error}"
+        );
+
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/problem+json")
+            .body(norito::json::to_vec(&valid).expect("privacy capability JSON"))
+            .expect("response build");
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_privacy_capabilities_json(),
+        )
+        .expect_err("JSON suffix media type must not weaken the exact endpoint contract");
+        assert!(
+            error.to_string().contains("invalid content type"),
+            "{error}"
+        );
+
+        let mut trailing = norito::to_bytes(&valid).expect("privacy capability Norito");
+        trailing.push(0xA5);
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(trailing)
+            .expect("response build");
+        let error = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_privacy_capabilities(),
+        )
+        .expect_err("trailing Norito bytes must reject");
+        assert!(
+            error.to_string().contains("decode privacy capabilities")
+                || error
+                    .to_string()
+                    .contains("not one canonical Norito payload"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -19,6 +19,12 @@ export {
 } from "./address.js";
 export { normalizeIdentifierInput } from "./normalizers.js";
 export {
+  PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+  PRIVACY_PROTOCOL_IDS_V1,
+  PrivacyCapabilitySnapshotError,
+  parsePrivacyCapabilitySnapshotV1,
+} from "./privacyCapabilities.js";
+export {
   KotodamaDecimal,
   KotodamaInt,
   KotodamaQuantity,

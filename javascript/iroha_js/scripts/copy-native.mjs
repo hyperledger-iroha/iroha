@@ -11,6 +11,7 @@ import {
   constants,
   copyFileSync,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -19,11 +20,12 @@ import {
   readSync,
   readdirSync,
   renameSync,
-  rmSync,
+  rmdirSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { verifyNativeBinding } from "../src/native.js";
@@ -50,11 +52,33 @@ const NATIVE_FILENAME = "iroha_js_host.node";
 const CHECKSUM_FILENAME = "iroha_js_host.checksums.json";
 const TRANSACTION_PREFIX = ".iroha-js-host-txn-";
 const CLEANUP_PREFIX = ".iroha-js-host-cleanup-";
+const CLEANUP_VERSION = 1;
+const CLEANUP_MARKER_SUFFIX = ".owner.json";
 const JOURNAL_VERSION = 1;
 const MAX_JOURNAL_BYTES = 16 * 1024;
+const MAX_CLEANUP_MARKER_BYTES = 128 * 1024;
+const MAX_CLEANUP_ENTRIES = 32;
 const MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024;
+const UUID_V4_SOURCE =
+  "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const UUID_V4_PATTERN = new RegExp(`^${UUID_V4_SOURCE}$`, "u");
+const TRANSACTION_DIRECTORY_PATTERN = new RegExp(
+  `^${TRANSACTION_PREFIX}(${UUID_V4_SOURCE})$`,
+  "u",
+);
+const CLEANUP_DIRECTORY_PATTERN = new RegExp(
+  `^${CLEANUP_PREFIX}v1-(${UUID_V4_SOURCE})-(${UUID_V4_SOURCE})$`,
+  "u",
+);
+const CLEANUP_MARKER_PATTERN = new RegExp(
+  `^(${CLEANUP_PREFIX}v1-(${UUID_V4_SOURCE})-(${UUID_V4_SOURCE}))\\.owner\\.json$`,
+  "u",
+);
 const JOURNAL_PATTERN = /^journal-(\d{6})\.json$/u;
-const JOURNAL_TEMP_PATTERN = /^\.journal-(\d{6})-[0-9a-f-]+\.tmp$/u;
+const JOURNAL_TEMP_PATTERN = new RegExp(
+  `^\\.journal-(\\d{6})-${UUID_V4_SOURCE}\\.tmp$`,
+  "u",
+);
 const NEXT_NATIVE_FILENAME = `${NATIVE_FILENAME}.next`;
 const NEXT_MANIFEST_FILENAME = `${CHECKSUM_FILENAME}.next`;
 const PREVIOUS_NATIVE_FILENAME = `${NATIVE_FILENAME}.previous`;
@@ -72,6 +96,14 @@ const JOURNAL_PHASES = Object.freeze([
   "committed",
 ]);
 const JOURNAL_PHASE_SET = new Set(JOURNAL_PHASES);
+const TRANSACTION_ARTIFACT_NAMES = new Set([
+  NEXT_NATIVE_FILENAME,
+  NEXT_MANIFEST_FILENAME,
+  PREVIOUS_NATIVE_FILENAME,
+  PREVIOUS_MANIFEST_FILENAME,
+  DISCARDED_NATIVE_FILENAME,
+  DISCARDED_MANIFEST_FILENAME,
+]);
 
 export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "noritoEncodeInstruction",
@@ -109,6 +141,132 @@ function syncFile(path) {
   const descriptor = openSync(path, constants.O_RDONLY);
   try {
     fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function directoryIdentity(metadata) {
+  return Object.freeze({
+    birthtimeNs: String(metadata.birthtimeNs),
+    dev: String(metadata.dev),
+    ino: String(metadata.ino),
+  });
+}
+
+function fileIdentity(metadata, sha256) {
+  return Object.freeze({
+    birthtimeNs: String(metadata.birthtimeNs),
+    dev: String(metadata.dev),
+    ino: String(metadata.ino),
+    mtimeNs: String(metadata.mtimeNs),
+    sha256,
+    size: String(metadata.size),
+  });
+}
+
+function sameDirectoryIdentity(left, right) {
+  return (
+    left?.birthtimeNs === right?.birthtimeNs &&
+    left?.dev === right?.dev &&
+    left?.ino === right?.ino
+  );
+}
+
+function sameFileIdentity(left, right) {
+  return (
+    sameDirectoryIdentity(left, right) &&
+    left?.mtimeNs === right?.mtimeNs &&
+    left?.sha256 === right?.sha256 &&
+    left?.size === right?.size
+  );
+}
+
+function sameFileMetadata(left, right) {
+  return (
+    left.birthtimeNs === right.birthtimeNs &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mtimeNs === right.mtimeNs &&
+    left.size === right.size
+  );
+}
+
+function snapshotDirectoryIdentity(path, label) {
+  const metadata = lstatSync(path, { bigint: true });
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+    throw new Error(`${label} must be a regular non-symbolic-link directory: ${path}`);
+  }
+  return directoryIdentity(metadata);
+}
+
+function openStableRegularFile(path, label) {
+  const before = lstatSync(path, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink()) {
+    throw new Error(`${label} must be a regular non-symbolic-link file: ${path}`);
+  }
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
+  const opened = fstatSync(descriptor, { bigint: true });
+  if (!opened.isFile() || !sameFileMetadata(before, opened)) {
+    closeSync(descriptor);
+    throw new Error(`${label} changed while it was being opened: ${path}`);
+  }
+  return { before, descriptor };
+}
+
+function snapshotRegularFileIdentity(path, label) {
+  const { before, descriptor } = openStableRegularFile(path, label);
+  const hash = createHash("sha256");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  try {
+    let bytesRead;
+    do {
+      bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+    } while (bytesRead > 0);
+    const after = fstatSync(descriptor, { bigint: true });
+    const atPath = lstatSync(path, { bigint: true });
+    if (
+      !sameFileMetadata(before, after) ||
+      !sameFileMetadata(after, atPath) ||
+      !atPath.isFile() ||
+      atPath.isSymbolicLink()
+    ) {
+      throw new Error(`${label} changed while it was being read: ${path}`);
+    }
+    return fileIdentity(after, hash.digest("hex"));
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readStableRegularFile(path, label, maxBytes) {
+  const { before, descriptor } = openStableRegularFile(path, label);
+  try {
+    if (before.size > BigInt(maxBytes)) {
+      throw new Error(`${label} exceeds ${maxBytes} bytes`);
+    }
+    const bytes = readFileSync(descriptor);
+    const after = fstatSync(descriptor, { bigint: true });
+    const atPath = lstatSync(path, { bigint: true });
+    if (
+      !sameFileMetadata(before, after) ||
+      !sameFileMetadata(after, atPath) ||
+      !atPath.isFile() ||
+      atPath.isSymbolicLink()
+    ) {
+      throw new Error(`${label} changed while it was being read: ${path}`);
+    }
+    return {
+      bytes,
+      identity: fileIdentity(
+        after,
+        createHash("sha256").update(bytes).digest("hex"),
+      ),
+    };
   } finally {
     closeSync(descriptor);
   }
@@ -341,10 +499,15 @@ function appendJournalPhase(transaction, phase, lock) {
   transaction.phase = phase;
 }
 
-function readTransaction(directory) {
+function readTransaction(directory, expectedTransactionId) {
   assertDirectory(directory, "Native publication transaction");
-  const transactionId = directory.slice(directory.lastIndexOf(TRANSACTION_PREFIX) + TRANSACTION_PREFIX.length);
-  if (!/^[0-9a-f-]{36}$/u.test(transactionId)) {
+  const transactionName = basename(directory);
+  const transactionMatch = TRANSACTION_DIRECTORY_PATTERN.exec(transactionName);
+  const transactionId = expectedTransactionId ?? transactionMatch?.[1];
+  if (
+    !UUID_V4_PATTERN.test(transactionId ?? "") ||
+    (expectedTransactionId === undefined && transactionMatch === null)
+  ) {
     throw new Error(`native publication transaction directory has an invalid id: ${directory}`);
   }
   const journalNames = readdirSync(directory)
@@ -431,31 +594,465 @@ function syncRename(source, destination, lock) {
   if (dirname(destination) !== dirname(source)) syncDirectory(dirname(destination));
 }
 
-function cleanupTransactionDirectory(transactionDirectory, destinationDirectory, lock) {
-  if (!existsSync(transactionDirectory)) return;
-  assertDistLockOwnership(lock);
-  const cleanup = join(
-    destinationDirectory,
-    `${CLEANUP_PREFIX}${process.pid}-${randomUUID()}`,
+function assertDecimalString(value, label) {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    throw new Error(`${label} must be a canonical unsigned decimal string`);
+  }
+}
+
+function validateCleanupDirectoryIdentity(value) {
+  assertExactKeys(
+    value,
+    ["birthtimeNs", "dev", "ino"],
+    "native publication cleanup directory identity",
   );
-  renameSync(transactionDirectory, cleanup);
-  syncDirectory(destinationDirectory);
+  assertDecimalString(value.birthtimeNs, "cleanup.directory.birthtimeNs");
+  assertDecimalString(value.dev, "cleanup.directory.dev");
+  assertDecimalString(value.ino, "cleanup.directory.ino");
+  return Object.freeze({ ...value });
+}
+
+function isKnownTransactionEntry(name) {
+  return (
+    TRANSACTION_ARTIFACT_NAMES.has(name) ||
+    JOURNAL_PATTERN.test(name) ||
+    JOURNAL_TEMP_PATTERN.test(name)
+  );
+}
+
+function validateCleanupEntry(value, index) {
+  assertExactKeys(
+    value,
+    ["birthtimeNs", "dev", "ino", "mtimeNs", "name", "sha256", "size"],
+    `native publication cleanup entry ${index}`,
+  );
+  if (typeof value.name !== "string" || !isKnownTransactionEntry(value.name)) {
+    throw new Error(`native publication cleanup marker has an unknown entry: ${value.name}`);
+  }
+  assertDecimalString(value.birthtimeNs, `cleanup.entries[${index}].birthtimeNs`);
+  assertDecimalString(value.dev, `cleanup.entries[${index}].dev`);
+  assertDecimalString(value.ino, `cleanup.entries[${index}].ino`);
+  assertDecimalString(value.mtimeNs, `cleanup.entries[${index}].mtimeNs`);
+  assertDecimalString(value.size, `cleanup.entries[${index}].size`);
+  assertSha256(value.sha256, `cleanup.entries[${index}].sha256`);
+  return Object.freeze({ ...value });
+}
+
+function validateCleanupMarker(value, expected) {
+  assertExactKeys(
+    value,
+    ["cleanupId", "directory", "entries", "transactionId", "version"],
+    "native publication cleanup marker",
+  );
+  if (value.version !== CLEANUP_VERSION) {
+    throw new Error(`unsupported native publication cleanup marker version: ${value.version}`);
+  }
+  if (
+    !UUID_V4_PATTERN.test(value.transactionId) ||
+    value.transactionId !== expected.transactionId
+  ) {
+    throw new Error(
+      "native publication cleanup marker transaction id does not match its artifact name",
+    );
+  }
+  if (!UUID_V4_PATTERN.test(value.cleanupId) || value.cleanupId !== expected.cleanupId) {
+    throw new Error(
+      "native publication cleanup marker cleanup id does not match its artifact name",
+    );
+  }
+  if (
+    !Array.isArray(value.entries) ||
+    value.entries.length > MAX_CLEANUP_ENTRIES
+  ) {
+    throw new Error(
+      `native publication cleanup marker must contain at most ${MAX_CLEANUP_ENTRIES} entries`,
+    );
+  }
+  const entries = value.entries.map(validateCleanupEntry);
+  const entryNames = entries.map(({ name }) => name);
+  const sortedNames = [...entryNames].sort();
+  if (
+    entryNames.some((name, index) => name !== sortedNames[index]) ||
+    new Set(entryNames).size !== entryNames.length
+  ) {
+    throw new Error(
+      "native publication cleanup marker entries must be unique and canonically ordered",
+    );
+  }
+  return Object.freeze({
+    cleanupId: value.cleanupId,
+    directory: validateCleanupDirectoryIdentity(value.directory),
+    entries: Object.freeze(entries),
+    transactionId: value.transactionId,
+    version: value.version,
+  });
+}
+
+function cleanupArtifactRecords(destinationDirectory) {
+  const records = new Map();
+  for (const name of readdirSync(destinationDirectory)) {
+    if (!name.startsWith(CLEANUP_PREFIX)) continue;
+    const directoryMatch = CLEANUP_DIRECTORY_PATTERN.exec(name);
+    const markerMatch = CLEANUP_MARKER_PATTERN.exec(name);
+    if (directoryMatch === null && markerMatch === null) {
+      throw new Error(
+        `native publication found an unowned cleanup-prefixed artifact: ${name}`,
+      );
+    }
+    const baseName = directoryMatch === null ? markerMatch[1] : name;
+    const transactionId =
+      directoryMatch === null ? markerMatch[2] : directoryMatch[1];
+    const cleanupId =
+      directoryMatch === null ? markerMatch[3] : directoryMatch[2];
+    const record = records.get(baseName) ?? {
+      baseName,
+      cleanupId,
+      directory: undefined,
+      markerPath: undefined,
+      transactionId,
+    };
+    if (
+      record.transactionId !== transactionId ||
+      record.cleanupId !== cleanupId
+    ) {
+      throw new Error(`native publication cleanup artifact identity is ambiguous: ${name}`);
+    }
+    if (directoryMatch === null) {
+      record.markerPath = join(destinationDirectory, name);
+    } else {
+      record.directory = join(destinationDirectory, name);
+    }
+    records.set(baseName, record);
+  }
+  return [...records.values()].sort((left, right) =>
+    left.baseName.localeCompare(right.baseName),
+  );
+}
+
+function readCleanupMarker(record) {
+  if (record.markerPath === undefined) {
+    throw new Error(
+      `native publication cleanup directory is missing its ownership marker: ${record.baseName}`,
+    );
+  }
+  const snapshot = readStableRegularFile(
+    record.markerPath,
+    "Native publication cleanup ownership marker",
+    MAX_CLEANUP_MARKER_BYTES,
+  );
+  let parsed;
+  try {
+    parsed = JSON.parse(snapshot.bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(
+      `native publication cleanup ownership marker is not valid JSON: ${record.markerPath}`,
+      { cause: error },
+    );
+  }
+  return {
+    identity: snapshot.identity,
+    marker: validateCleanupMarker(parsed, record),
+  };
+}
+
+function cleanupInventory(directory, transactionId) {
+  readTransaction(directory, transactionId);
+  const names = readdirSync(directory).sort();
+  if (names.length > MAX_CLEANUP_ENTRIES) {
+    throw new Error(
+      `native publication transaction exceeds the ${MAX_CLEANUP_ENTRIES}-entry cleanup limit`,
+    );
+  }
+  return names.map((name) => {
+    if (!isKnownTransactionEntry(name)) {
+      throw new Error(
+        `native publication transaction contains an unexpected artifact: ${name}`,
+      );
+    }
+    return Object.freeze({
+      name,
+      ...snapshotRegularFileIdentity(
+        join(directory, name),
+        "Native publication cleanup inventory entry",
+      ),
+    });
+  });
+}
+
+function markerEntryMap(marker) {
+  return new Map(marker.entries.map((entry) => [entry.name, entry]));
+}
+
+function assertOwnedCleanupDirectory(
+  directory,
+  marker,
+  { requireComplete = false, verifyAllEntries = true } = {},
+) {
+  const actualDirectory = snapshotDirectoryIdentity(
+    directory,
+    "Native publication cleanup directory",
+  );
+  if (!sameDirectoryIdentity(actualDirectory, marker.directory)) {
+    throw new Error(
+      "native publication cleanup directory no longer matches its ownership marker",
+    );
+  }
+  const expectedEntries = markerEntryMap(marker);
+  const names = readdirSync(directory).sort();
+  if (
+    requireComplete &&
+    (names.length !== marker.entries.length ||
+      names.some((name, index) => name !== marker.entries[index].name))
+  ) {
+    throw new Error(
+      "native publication cleanup directory does not match its complete marked inventory",
+    );
+  }
+  for (const name of names) {
+    const expected = expectedEntries.get(name);
+    if (expected === undefined || !isKnownTransactionEntry(name)) {
+      throw new Error(
+        `native publication cleanup directory contains an unowned direct child: ${name}`,
+      );
+    }
+    if (verifyAllEntries) {
+      const actual = snapshotRegularFileIdentity(
+        join(directory, name),
+        "Native publication cleanup direct child",
+      );
+      if (!sameFileIdentity(actual, expected)) {
+        throw new Error(
+          `native publication cleanup direct child changed after ownership was recorded: ${name}`,
+        );
+      }
+    }
+  }
+  const remainingJournals = names.filter((name) => JOURNAL_PATTERN.test(name));
+  if (remainingJournals.length > 0) {
+    readTransaction(directory, marker.transactionId);
+  }
+  return names;
+}
+
+function sameCleanupMarkerSnapshot(left, right) {
+  return (
+    sameFileIdentity(left.identity, right.identity) &&
+    JSON.stringify(left.marker) === JSON.stringify(right.marker)
+  );
+}
+
+function assertCleanupMarkerUnchanged(record, expected) {
+  const actual = readCleanupMarker(record);
+  if (!sameCleanupMarkerSnapshot(actual, expected)) {
+    throw new Error(
+      "native publication cleanup ownership marker changed during cleanup",
+    );
+  }
+  return actual;
+}
+
+function cleanupDeletionOrder(names) {
+  return [...names].sort((left, right) => {
+    const leftJournal = JOURNAL_PATTERN.exec(left);
+    const rightJournal = JOURNAL_PATTERN.exec(right);
+    if (leftJournal !== null && rightJournal !== null) {
+      return Number(rightJournal[1]) - Number(leftJournal[1]);
+    }
+    if (leftJournal !== null) return 1;
+    if (rightJournal !== null) return -1;
+    return left.localeCompare(right);
+  });
+}
+
+function removeOwnedCleanupDirectory(
+  record,
+  markerSnapshot,
+  destinationDirectory,
+  lock,
+  phaseHook,
+) {
+  const initialNames = assertOwnedCleanupDirectory(
+    record.directory,
+    markerSnapshot.marker,
+  );
+  const expectedEntries = markerEntryMap(markerSnapshot.marker);
+  for (const name of cleanupDeletionOrder(initialNames)) {
+    assertDistLockOwnership(lock);
+    assertCleanupMarkerUnchanged(record, markerSnapshot);
+    const remaining = assertOwnedCleanupDirectory(
+      record.directory,
+      markerSnapshot.marker,
+      { verifyAllEntries: false },
+    );
+    if (!remaining.includes(name)) continue;
+    const actual = snapshotRegularFileIdentity(
+      join(record.directory, name),
+      "Native publication cleanup direct child before unlink",
+    );
+    if (!sameFileIdentity(actual, expectedEntries.get(name))) {
+      throw new Error(
+        `native publication cleanup direct child was replaced before unlink: ${name}`,
+      );
+    }
+    assertDistLockOwnership(lock);
+    if (
+      !sameDirectoryIdentity(
+        snapshotDirectoryIdentity(
+          record.directory,
+          "Native publication cleanup directory before unlink",
+        ),
+        markerSnapshot.marker.directory,
+      )
+    ) {
+      throw new Error(
+        "native publication cleanup directory was replaced before unlink",
+      );
+    }
+    unlinkSync(join(record.directory, name));
+    syncDirectory(record.directory);
+    phaseHook?.("cleanup-entry-removed");
+  }
+  assertCleanupMarkerUnchanged(record, markerSnapshot);
+  assertOwnedCleanupDirectory(record.directory, markerSnapshot.marker, {
+    verifyAllEntries: false,
+  });
+  if (readdirSync(record.directory).length !== 0) {
+    throw new Error("native publication cleanup directory could not be emptied safely");
+  }
   assertDistLockOwnership(lock);
-  rmSync(cleanup, { recursive: true, force: true });
+  if (
+    !sameDirectoryIdentity(
+      snapshotDirectoryIdentity(
+        record.directory,
+        "Native publication cleanup directory before removal",
+      ),
+      markerSnapshot.marker.directory,
+    )
+  ) {
+    throw new Error("native publication cleanup directory was replaced before removal");
+  }
+  rmdirSync(record.directory);
+  syncDirectory(destinationDirectory);
+  phaseHook?.("cleanup-directory-removed");
+  assertCleanupMarkerUnchanged(record, markerSnapshot);
+  assertDistLockOwnership(lock);
+  unlinkSync(record.markerPath);
   syncDirectory(destinationDirectory);
 }
 
+function writeCleanupMarker(
+  transactionDirectory,
+  destinationDirectory,
+  transactionId,
+  lock,
+) {
+  const existingRecords = cleanupArtifactRecords(destinationDirectory);
+  if (!UUID_V4_PATTERN.test(transactionId)) {
+    throw new Error("native publication cleanup requires a canonical transaction id");
+  }
+  if (existingRecords.length !== 0) {
+    if (
+      existingRecords.length !== 1 ||
+      existingRecords[0].transactionId !== transactionId ||
+      existingRecords[0].markerPath === undefined ||
+      existingRecords[0].directory !== undefined
+    ) {
+      throw new Error(
+        "native publication cleanup artifacts must be recovered before creating another",
+      );
+    }
+    const record = existingRecords[0];
+    record.directory = join(destinationDirectory, record.baseName);
+    const markerSnapshot = readCleanupMarker(record);
+    assertOwnedCleanupDirectory(transactionDirectory, markerSnapshot.marker, {
+      requireComplete: true,
+    });
+    return { markerSnapshot, record };
+  }
+  const directory = snapshotDirectoryIdentity(
+    transactionDirectory,
+    "Native publication transaction before cleanup",
+  );
+  const entries = cleanupInventory(transactionDirectory, transactionId);
+  const cleanupId = randomUUID();
+  const baseName = `${CLEANUP_PREFIX}v1-${transactionId}-${cleanupId}`;
+  const record = {
+    baseName,
+    cleanupId,
+    directory: join(destinationDirectory, baseName),
+    markerPath: join(
+      destinationDirectory,
+      `${baseName}${CLEANUP_MARKER_SUFFIX}`,
+    ),
+    transactionId,
+  };
+  const marker = {
+    version: CLEANUP_VERSION,
+    transactionId,
+    cleanupId,
+    directory,
+    entries,
+  };
+  assertDistLockOwnership(lock);
+  writeFileSync(record.markerPath, `${JSON.stringify(marker, null, 2)}\n`, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  syncFile(record.markerPath);
+  syncDirectory(destinationDirectory);
+  const markerSnapshot = readCleanupMarker(record);
+  assertOwnedCleanupDirectory(transactionDirectory, markerSnapshot.marker, {
+    requireComplete: true,
+  });
+  return { markerSnapshot, record };
+}
+
+function cleanupTransactionDirectory(
+  transactionDirectory,
+  destinationDirectory,
+  lock,
+  phaseHook,
+) {
+  if (!existsSync(transactionDirectory)) return;
+  const transactionMatch = TRANSACTION_DIRECTORY_PATTERN.exec(
+    basename(transactionDirectory),
+  );
+  if (transactionMatch === null) {
+    throw new Error(
+      `native publication refuses to clean a non-transaction directory: ${transactionDirectory}`,
+    );
+  }
+  const { markerSnapshot, record } = writeCleanupMarker(
+    transactionDirectory,
+    destinationDirectory,
+    transactionMatch[1],
+    lock,
+  );
+  phaseHook?.("cleanup-marker-synced");
+  assertCleanupMarkerUnchanged(record, markerSnapshot);
+  assertOwnedCleanupDirectory(transactionDirectory, markerSnapshot.marker, {
+    requireComplete: true,
+  });
+  assertDistLockOwnership(lock);
+  renameSync(transactionDirectory, record.directory);
+  syncDirectory(destinationDirectory);
+  phaseHook?.("cleanup-renamed");
+  removeOwnedCleanupDirectory(
+    record,
+    markerSnapshot,
+    destinationDirectory,
+    lock,
+    phaseHook,
+  );
+}
+
 function assertTransactionEntries(transaction) {
-  const allowed = new Set([
-    NEXT_NATIVE_FILENAME,
-    NEXT_MANIFEST_FILENAME,
-    PREVIOUS_NATIVE_FILENAME,
-    PREVIOUS_MANIFEST_FILENAME,
-    DISCARDED_NATIVE_FILENAME,
-    DISCARDED_MANIFEST_FILENAME,
-  ]);
   for (const name of readdirSync(transaction.directory)) {
-    if (JOURNAL_PATTERN.test(name) || JOURNAL_TEMP_PATTERN.test(name) || allowed.has(name)) {
+    if (
+      JOURNAL_PATTERN.test(name) ||
+      JOURNAL_TEMP_PATTERN.test(name) ||
+      TRANSACTION_ARTIFACT_NAMES.has(name)
+    ) {
       const path = join(transaction.directory, name);
       if (
         name === NEXT_MANIFEST_FILENAME ||
@@ -561,12 +1158,28 @@ function recoverTransaction({
   const dest = join(destinationDirectory, NATIVE_FILENAME);
   const checksumManifestPath = join(destinationDirectory, CHECKSUM_FILENAME);
   const paths = verifyTransactionArtifacts(transaction);
-  const nativeKind = classifyFile(
+  let nativeKind = classifyFile(
     dest,
     transaction.previous?.nativeSha256,
     transaction.next.nativeSha256,
     "Published native binding",
   );
+  const sameNativeGeneration =
+    transaction.previous !== null &&
+    transaction.previous.nativeSha256 === transaction.next.nativeSha256;
+  if (sameNativeGeneration && nativeKind !== "absent") {
+    const previousBackupExists = existsSync(paths.previousNative);
+    const nextStagedExists = existsSync(paths.nextNative);
+    if (previousBackupExists && !nextStagedExists) {
+      nativeKind = "next";
+    } else if (!previousBackupExists && nextStagedExists) {
+      nativeKind = "previous";
+    } else {
+      throw new Error(
+        "native publication recovery cannot determine the location of an identical native generation",
+      );
+    }
+  }
   const manifestKind = classifyFile(
     checksumManifestPath,
     transaction.previous?.manifestSha256,
@@ -702,10 +1315,80 @@ function transactionDirectories(destinationDirectory) {
     .map((name) => join(destinationDirectory, name));
 }
 
-function cleanupDirectories(destinationDirectory) {
-  return readdirSync(destinationDirectory)
-    .filter((name) => name.startsWith(CLEANUP_PREFIX))
-    .map((name) => join(destinationDirectory, name));
+function recoverCleanupArtifacts(destinationDirectory, lock) {
+  const records = cleanupArtifactRecords(destinationDirectory);
+  const prepared = [];
+  const transactionIds = new Set();
+  for (const record of records) {
+    if (record.markerPath === undefined) {
+      throw new Error(
+        `native publication refuses an unmarked cleanup directory: ${record.baseName}`,
+      );
+    }
+    if (transactionIds.has(record.transactionId)) {
+      throw new Error(
+        `native publication found multiple cleanup markers for transaction ${record.transactionId}`,
+      );
+    }
+    transactionIds.add(record.transactionId);
+    const markerSnapshot = readCleanupMarker(record);
+    const cleanupDirectory =
+      record.directory ?? join(destinationDirectory, record.baseName);
+    const transactionDirectory = join(
+      destinationDirectory,
+      `${TRANSACTION_PREFIX}${record.transactionId}`,
+    );
+    const cleanupExists = record.directory !== undefined;
+    const transactionExists = existsSync(transactionDirectory);
+    if (cleanupExists && transactionExists) {
+      throw new Error(
+        "native publication cleanup marker ambiguously owns both transaction and cleanup directories",
+      );
+    }
+    if (cleanupExists) {
+      assertOwnedCleanupDirectory(record.directory, markerSnapshot.marker);
+    } else if (transactionExists) {
+      assertOwnedCleanupDirectory(
+        transactionDirectory,
+        markerSnapshot.marker,
+        { requireComplete: true },
+      );
+    }
+    prepared.push({
+      markerSnapshot,
+      record: { ...record, directory: cleanupDirectory },
+      transactionDirectory: transactionExists ? transactionDirectory : undefined,
+    });
+  }
+
+  for (const item of prepared) {
+    const { markerSnapshot, record, transactionDirectory } = item;
+    if (transactionDirectory !== undefined) {
+      assertCleanupMarkerUnchanged(record, markerSnapshot);
+      assertOwnedCleanupDirectory(transactionDirectory, markerSnapshot.marker, {
+        requireComplete: true,
+      });
+      assertDistLockOwnership(lock);
+      renameSync(transactionDirectory, record.directory);
+      syncDirectory(destinationDirectory);
+    }
+    if (existsSync(record.directory)) {
+      removeOwnedCleanupDirectory(
+        record,
+        markerSnapshot,
+        destinationDirectory,
+        lock,
+      );
+      continue;
+    }
+    // A marker can outlive its directory if the process was interrupted
+    // between rmdir() and unlinking the marker. Removing this exact, validated
+    // marker never traverses or mutates an unrelated directory.
+    assertCleanupMarkerUnchanged(record, markerSnapshot);
+    assertDistLockOwnership(lock);
+    unlinkSync(record.markerPath);
+    syncDirectory(destinationDirectory);
+  }
 }
 
 function recoverInterruptedPublications({
@@ -714,12 +1397,7 @@ function recoverInterruptedPublications({
   verifyBinding,
   lock,
 }) {
-  for (const cleanup of cleanupDirectories(destinationDirectory)) {
-    assertDirectory(cleanup, "Native publication cleanup artifact");
-    assertDistLockOwnership(lock);
-    rmSync(cleanup, { recursive: true, force: true });
-    syncDirectory(destinationDirectory);
-  }
+  recoverCleanupArtifacts(destinationDirectory, lock);
 
   const journaled = [];
   for (const directory of transactionDirectories(destinationDirectory)) {
@@ -949,6 +1627,7 @@ export async function publishNativeBinding({
     }
 
     let previous = null;
+    let previousVerification;
     let previousSupportsDarwinResigning = platform !== "darwin";
     if (nativeExists) {
       const verification = verifyBinding(dest, {
@@ -958,6 +1637,7 @@ export async function publishNativeBinding({
       if (!verification?.ok) {
         throw verificationError("Existing native binding", verification);
       }
+      previousVerification = verification;
       previous = pairIdentity(dest, checksumManifestPath);
       previousSupportsDarwinResigning =
         platform !== "darwin" ||
@@ -1008,6 +1688,7 @@ export async function publishNativeBinding({
     }
     const checksumEntry = {
       sha256,
+      build_execution_policy: buildProvenance.build_execution_policy,
       cargo_profile: cargoProfile,
       source_git_revision: buildProvenance.source_git_revision,
       source_tree_clean: buildProvenance.source_tree_clean,
@@ -1050,18 +1731,32 @@ export async function publishNativeBinding({
     if (staged.sha256 !== undefined && staged.sha256 !== transaction.next.nativeSha256) {
       throw new Error("Staged native verifier returned an inconsistent checksum");
     }
-    // A checksum manifest is an authentication sidecar, not part of the
-    // executable generation. Existing valid manifests may differ in harmless
-    // formatting or contain additional platform entries. Treat an identical
-    // probed binary as idempotent so recovery never has to distinguish two
-    // byte-identical native generations by their filesystem position alone.
+    // An identical executable is idempotent only when its build provenance is
+    // also identical. A byte-identical build from a different sealed source
+    // still needs a transactional manifest update.
+    const previousProvenanceMatches =
+      previousVerification?.buildExecutionPolicy ===
+        buildProvenance.build_execution_policy &&
+      previousVerification?.cargoProfile === buildProvenance.cargo_profile &&
+      previousVerification?.sourceGitRevision ===
+        buildProvenance.source_git_revision &&
+      previousVerification?.sourceTreeClean ===
+        buildProvenance.source_tree_clean &&
+      previousVerification?.sourceTreeSha256 ===
+        buildProvenance.source_tree_sha256;
     if (
       transaction.previous !== null &&
       transaction.previous.nativeSha256 === transaction.next.nativeSha256 &&
-      previousSupportsDarwinResigning
+      previousSupportsDarwinResigning &&
+      previousProvenanceMatches
     ) {
       const matchingSha256 = transaction.next.nativeSha256;
-      cleanupTransactionDirectory(transaction.directory, destinationDirectory, lock);
+      cleanupTransactionDirectory(
+        transaction.directory,
+        destinationDirectory,
+        lock,
+        phaseHook,
+      );
       transaction = undefined;
       log(`Native module at ${dest} already matches the verified build output`);
       return {
@@ -1092,7 +1787,12 @@ export async function publishNativeBinding({
       phaseHook,
       lock,
     });
-    cleanupTransactionDirectory(transaction.directory, destinationDirectory, lock);
+    cleanupTransactionDirectory(
+      transaction.directory,
+      destinationDirectory,
+      lock,
+      phaseHook,
+    );
     transaction = undefined;
     log(`Published verified native module to ${dest}`);
     log(`Wrote checksum manifest to ${checksumManifestPath}`);

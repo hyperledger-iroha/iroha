@@ -17,6 +17,8 @@ pub mod sampling;
 mod toolbox;
 pub mod transcript;
 
+pub(crate) use toolbox::application_relation_digest_v1;
+
 /// This engine remains fail-closed until its trusted runtime inputs and the
 /// complete presentation prover/verifier are compiled and wired.
 pub const BOOTLE_LANTERN_FULL_ENGINE_AVAILABLE_V1: bool = false;

@@ -8,6 +8,13 @@ export {
 } from "./address.js";
 
 export {
+  PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+  PRIVACY_PROTOCOL_IDS_V1,
+  PrivacyCapabilitySnapshotError,
+  parsePrivacyCapabilitySnapshotV1,
+} from "./privacyCapabilities.js";
+
+export {
   buildMintAssetInstruction,
   buildTransferAssetInstruction,
   SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,

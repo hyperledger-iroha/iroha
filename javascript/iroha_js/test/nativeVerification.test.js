@@ -16,6 +16,8 @@ const NATIVE_IMPLEMENTATIONS = [
   ["package dist", await import("../dist/native.js")],
 ];
 const SOURCE_PROVENANCE = Object.freeze({
+  build_execution_policy: "trusted-local-cargo-v1",
+  build_provenance_version: 3,
   source_git_revision: "a".repeat(40),
   source_tree_clean: true,
   source_tree_sha256: "b".repeat(64),
@@ -464,6 +466,41 @@ variantTest("verification rejects malformed checksum manifests and entries", asy
       { entries: [] },
       { entries: { [platformKey]: { sha256: "A".repeat(64) } } },
       { entries: { [platformKey]: { sha256: "0".repeat(64), extra: true } } },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            build_execution_policy: "trusted-local-cargo-v1",
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            build_execution_policy: "hermetic-build-v1",
+            build_provenance_version: 3,
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
+          },
+        },
+      },
+      {
+        entries: {
+          [platformKey]: {
+            sha256: validHash,
+            build_execution_policy: "trusted-local-cargo-v1",
+            build_provenance_version: 2,
+            source_git_revision: "a".repeat(40),
+            source_tree_clean: true,
+            source_tree_sha256: "b".repeat(64),
+          },
+        },
+      },
       {
         entries: {
           [platformKey]: {

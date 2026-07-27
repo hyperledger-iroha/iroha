@@ -11,12 +11,13 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     privacy::{
-        AnonymousPgcKOutOfNStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, OrchardHalo2ActionsStatementV1,
-        PrivacyCommitmentV1, PrivacyConsensusLimitsV1, PrivacyNamespaceV1, PrivacyNullifierV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
-        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyDigestV1,
-        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        AnonymousPgcKOutOfNStatementV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPolicyV1, IrohaBootleLanternAnoncredStatementV1,
+        IrohaJindoPolynomialCommitmentStatementV1, IrohaZkAmsProofV1, IrohaZkAmsStatementV1,
+        OrchardHalo2ActionsStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
         PrivacyProofEnvelopeValidationError, PrivacyProofV1, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
         PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVeRangeBitLengthV1,
@@ -32,6 +33,16 @@ use crate::{
             AnonymousPgcError, AnonymousPgcParametersV1, AnonymousPgcPoolInvariantV1,
             TwistedElGamalCiphertextV1, TwistedElGamalPublicKeyV1,
             payment::{AnonymousPgcPaymentStatementV1, verify_payment_encoded},
+        },
+        bootle_lantern::{
+            application_relation_digest_v1,
+            codec::{BootleLanternPresentationProofV1, ProofCodecErrorV1},
+            proof::{PresentationProofErrorV1, verify_presentation_v1},
+            relation::{RelationErrorV1, compile_application_relation_v1},
+            transcript::{
+                PresentationChallengeBindingV1, PresentationTranscriptV1, TranscriptErrorV1,
+                matrix_seed_v1,
+            },
         },
         jindo::{JindoErrorV1, jindo_crs_digest_v1, verify_batched_evaluation_v1},
         orchard::{
@@ -109,6 +120,8 @@ pub(crate) struct PrivacyVerificationContextV1<'a> {
     pub(crate) pgc_state: Option<PrivacyPgcVerificationStateV1<'a>>,
     /// Complete trusted Orchard pool state, required only by Orchard bundles.
     pub(crate) orchard_state: Option<&'a PrivacyOrchardPoolSnapshotV1>,
+    /// Exact current governed Bootle/Lantern issuer policy.
+    pub(crate) bootle_lantern_policy: Option<&'a BootleLanternIssuerPolicyV1>,
 }
 
 /// Complete successor account-table transition derived by the native verifier.
@@ -502,6 +515,10 @@ pub(crate) fn verify_privacy_envelope_v1(
             PrivacyStatementV1::OrchardHalo2ActionsV1(statement),
             PrivacyProofV1::OrchardHalo2ActionsV1(proof),
         ) => verify_orchard_actions_v1(statement, proof, envelope, &context)?,
+        (
+            PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement),
+            PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof),
+        ) => verify_bootle_lantern_presentation_v1(statement, proof, envelope, &context)?,
         _ => {
             return Err(PrivacyVerificationErrorV1::EngineUnavailable(Box::new(
                 PrivacyEngineUnavailableFailureV1 {
@@ -519,6 +536,73 @@ pub(crate) fn verify_privacy_envelope_v1(
         encoded_action_bytes,
         ledger,
     })
+}
+
+fn verify_bootle_lantern_presentation_v1(
+    statement: &IrohaBootleLanternAnoncredStatementV1,
+    proof: &PrivacyProofBytesV1,
+    envelope: &PrivacyProofEnvelopeV1,
+    context: &PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
+    let policy = context.bootle_lantern_policy.ok_or_else(|| {
+        PrivacyVerificationErrorV1::BootleLanternState(Box::new(
+            PrivacyBootleLanternStateFailureV1 {
+                code: PrivacyBootleLanternStateFailureCodeV1::MissingTrustedPolicy,
+            },
+        ))
+    })?;
+    policy.validate().map_err(|_| {
+        PrivacyVerificationErrorV1::BootleLanternState(Box::new(
+            PrivacyBootleLanternStateFailureV1 {
+                code: PrivacyBootleLanternStateFailureCodeV1::InvalidTrustedPolicy,
+            },
+        ))
+    })?;
+    if policy.lifecycle != BootleLanternIssuerPolicyLifecycleV1::Active {
+        return Err(PrivacyVerificationErrorV1::BootleLanternState(Box::new(
+            PrivacyBootleLanternStateFailureV1 {
+                code: PrivacyBootleLanternStateFailureCodeV1::PolicyRevoked,
+            },
+        )));
+    }
+
+    let matrix_seed = matrix_seed_v1(*context.activation.parameter_digest.as_bytes())
+        .map_err(PrivacyBootleLanternNativeFailureSourceV1::Transcript)
+        .map_err(native_bootle_lantern_error)?;
+    let relation = compile_application_relation_v1(statement, policy, matrix_seed)
+        .map_err(PrivacyBootleLanternNativeFailureSourceV1::Relation)
+        .map_err(native_bootle_lantern_error)?;
+    let transcript = PresentationTranscriptV1::new(
+        PresentationChallengeBindingV1 {
+            parameter_digest: *context.activation.parameter_digest.as_bytes(),
+            genesis_hash: context.genesis_hash,
+            statement_digest: *envelope.statement_digest.as_bytes(),
+            issuer_policy_record_digest: *policy.record_digest.as_bytes(),
+            transaction_intent_digest: *statement.context.transaction_intent_digest.as_bytes(),
+        },
+        matrix_seed,
+        application_relation_digest_v1(&relation),
+    )
+    .map_err(PrivacyBootleLanternNativeFailureSourceV1::Transcript)
+    .map_err(native_bootle_lantern_error)?;
+    let proof = BootleLanternPresentationProofV1::decode_exact(
+        proof.as_bytes(),
+        context.consensus_limits.max_proof_bytes_per_action,
+    )
+    .map_err(PrivacyBootleLanternNativeFailureSourceV1::Codec)
+    .map_err(native_bootle_lantern_error)?;
+    verify_presentation_v1(&relation, transcript, &proof)
+        .map_err(PrivacyBootleLanternNativeFailureSourceV1::Proof)
+        .map_err(native_bootle_lantern_error)?;
+    Ok(VerifiedPrivacyLedgerEffectsV1::None)
+}
+
+fn native_bootle_lantern_error(
+    source: PrivacyBootleLanternNativeFailureSourceV1,
+) -> PrivacyVerificationErrorV1 {
+    PrivacyVerificationErrorV1::NativeBootleLantern(Box::new(
+        PrivacyBootleLanternVerificationFailureV1 { source },
+    ))
 }
 
 fn orchard_state_error(code: PrivacyOrchardStateFailureCodeV1) -> PrivacyVerificationErrorV1 {
@@ -932,6 +1016,12 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     /// Native Anonymous-PGC decoding or verification failed.
     #[error(transparent)]
     NativeAnonymousPgc(Box<PrivacyAnonymousPgcVerificationFailureV1>),
+    /// Trusted Bootle/Lantern issuer policy was absent, invalid, or revoked.
+    #[error(transparent)]
+    BootleLanternState(Box<PrivacyBootleLanternStateFailureV1>),
+    /// Native Bootle/Lantern relation, decoding, transcript, or proof verification failed.
+    #[error(transparent)]
+    NativeBootleLantern(Box<PrivacyBootleLanternVerificationFailureV1>),
     /// Canonical envelope encoding or length conversion failed.
     #[error(transparent)]
     CanonicalEncoding(Box<PrivacyCanonicalEncodingFailureV1>),
@@ -1093,6 +1183,46 @@ pub(crate) struct PrivacyAnonymousPgcVerificationFailureV1 {
     source: AnonymousPgcError,
 }
 
+/// Stable trusted-state failure for a Bootle/Lantern presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrivacyBootleLanternStateFailureCodeV1 {
+    /// The submit path did not resolve the statement-selected policy.
+    MissingTrustedPolicy,
+    /// Persisted policy bytes failed canonical intrinsic validation.
+    InvalidTrustedPolicy,
+    /// The selected policy lineage is terminal-revoked.
+    PolicyRevoked,
+}
+
+#[derive(Debug, Error)]
+#[error("trusted Bootle/Lantern issuer policy failed validation: {code:?}")]
+pub(crate) struct PrivacyBootleLanternStateFailureV1 {
+    /// Exact stable failure category.
+    pub(crate) code: PrivacyBootleLanternStateFailureCodeV1,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum PrivacyBootleLanternNativeFailureSourceV1 {
+    /// Trusted record and statement could not compile one canonical relation.
+    #[error("relation compilation failed: {0}")]
+    Relation(RelationErrorV1),
+    /// Transparent setup or transcript binding failed.
+    #[error("transcript construction failed: {0}")]
+    Transcript(TranscriptErrorV1),
+    /// Proof bytes were not the one canonical fixed-width wire value.
+    #[error("proof decoding failed: {0}")]
+    Codec(ProofCodecErrorV1),
+    /// Native Lantern/LNP22 proof verification failed.
+    #[error("proof verification failed: {0}")]
+    Proof(PresentationProofErrorV1),
+}
+
+#[derive(Debug, Error)]
+#[error("native Bootle/Lantern verification failed: {source}")]
+pub(crate) struct PrivacyBootleLanternVerificationFailureV1 {
+    source: PrivacyBootleLanternNativeFailureSourceV1,
+}
+
 #[derive(Debug, Error)]
 #[error("canonical privacy envelope encoding failed")]
 pub(crate) struct PrivacyCanonicalEncodingFailureV1;
@@ -1107,13 +1237,17 @@ mod tests {
         domain::DomainId,
         name::Name,
         privacy::{
-            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1, PrivacyActiveLifecycleV1,
-            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
+            BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
+            BootleLanternDisclosedAttributeV1, BootleLanternIssuerPublicMatrixV1,
+            BootleLanternPolynomialV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+            PrivacyActiveLifecycleV1, PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyChallengeV1,
+            PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1, PrivacyIssuerIdV1,
             PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyOrchardActionV1,
-            PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1,
-            PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
-            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
-            PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
+            PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapDigestV1,
+            PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+            PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofSystemIdV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
             PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
             PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1,
             PrivacyValueBalanceV1, PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
@@ -1133,6 +1267,13 @@ mod tests {
                 payment::{
                     AnonymousPgcPaymentWitnessV1, encrypt_signed_with_randomness, prove_payment,
                 },
+            },
+            bootle_lantern::{
+                codec::PROOF_BYTES_V1 as BOOTLE_LANTERN_PROOF_BYTES_V1,
+                proof::prove_presentation_v1,
+                relation::{BootleLanternPresentationWitnessV1, validate_presentation_witness_v1},
+                ring::ApplicationPolynomialV1,
+                transcript::{MatrixRoleV1, expand_application_matrix_v1},
             },
             jindo::{
                 JINDO_NATIVE_PROOF_BYTES_V1, commit_polynomial_v1, evaluate_polynomial_v1,
@@ -1406,6 +1547,7 @@ mod tests {
                 block_timestamp_ms: 1_800_000_000_000,
                 pgc_state: None,
                 orchard_state: None,
+                bootle_lantern_policy: None,
             }
         }
     }
@@ -1413,6 +1555,203 @@ mod tests {
     fn jindo_fixture() -> &'static JindoFixture {
         static FIXTURE: OnceLock<JindoFixture> = OnceLock::new();
         FIXTURE.get_or_init(JindoFixture::new)
+    }
+
+    struct BootleLanternFixture {
+        envelope: PrivacyProofEnvelopeV1,
+        activation: PrivacyProtocolActivationRecordV1,
+        chain_id: ChainId,
+        policy: BootleLanternIssuerPolicyV1,
+    }
+
+    impl BootleLanternFixture {
+        fn new() -> Self {
+            let compiled =
+                compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
+                    .expect("compiled Bootle/Lantern");
+            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
+                PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1,
+                    activated_at_height: 2,
+                    state_since_height: 2,
+                },
+            ));
+            let chain_id = ChainId::from("taira-privacy-bootle-lantern-test");
+            let genesis_hash = [0xA7; 32];
+            let matrix_seed =
+                matrix_seed_v1(*compiled.parameter_digest.as_bytes()).expect("matrix seed");
+            let attribute_matrix =
+                expand_application_matrix_v1(matrix_seed, MatrixRoleV1::ApplicationAttributes)
+                    .expect("application attribute matrix");
+            let issuer_public_matrix = BootleLanternIssuerPublicMatrixV1 {
+                entries: attribute_matrix
+                    .entries()
+                    .iter()
+                    .map(|polynomial| BootleLanternPolynomialV1 {
+                        coefficients: polynomial.coefficients().to_vec(),
+                    })
+                    .collect(),
+            };
+            let mut policy = BootleLanternIssuerPolicyV1 {
+                issuer_id: PrivacyIssuerIdV1::new([0xB1; 32]),
+                policy_id: PrivacyPolicyIdV1::new([0xB2; 32]),
+                epoch: 1,
+                lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
+                issuer_parameter_id: PrivacyParameterIdV1::new([0xB3; 32]),
+                issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
+                issuer_public_matrix,
+                required_disclosure_bitmap: 0b0000_0010,
+                allowed_values: (0..8)
+                    .map(|index| BootleLanternAllowedAttributeValuesV1 {
+                        values: if index == 1 {
+                            vec![BootleLanternAttributeValueV1::new([1; 8])]
+                        } else {
+                            Vec::new()
+                        },
+                    })
+                    .collect(),
+                record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+            };
+            policy.issuer_parameter_digest = policy
+                .computed_issuer_parameter_digest()
+                .expect("issuer parameter digest");
+            policy.record_digest = policy.computed_record_digest().expect("policy digest");
+            policy.validate_initial().expect("canonical initial policy");
+
+            let statement = IrohaBootleLanternAnoncredStatementV1 {
+                context: PrivacyStatementContextV1 {
+                    chain_id: chain_id.clone(),
+                    action_index: 0,
+                    transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xB4; 32]),
+                    parameter_id: compiled.parameter_id,
+                    parameter_digest: compiled.parameter_digest,
+                    verifier_digest: compiled.verifier_digest,
+                    statement_schema_digest: compiled.statement_schema_digest,
+                    engine_manifest_digest: compiled.engine_manifest_digest,
+                },
+                issuer_id: policy.issuer_id,
+                policy_id: policy.policy_id,
+                issuer_policy_epoch: policy.epoch,
+                issuer_policy_record_digest: policy.record_digest,
+                issuer_parameter_id: policy.issuer_parameter_id,
+                issuer_parameter_digest: policy.issuer_parameter_digest,
+                disclosures: vec![BootleLanternDisclosedAttributeV1 {
+                    index: 1,
+                    value: BootleLanternAttributeValueV1::new([1; 8]),
+                }],
+            };
+            let typed_statement =
+                PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
+            let statement_digest = typed_statement
+                .digest()
+                .expect("Bootle/Lantern statement digest");
+            let relation = compile_application_relation_v1(&statement, &policy, matrix_seed)
+                .expect("Bootle/Lantern application relation");
+
+            // The fixture sets B=A_m. With all other secret components zero,
+            // direct attributes are a valid short s2 preimage.
+            let mut attributes = [[0_u8; 8]; 8];
+            attributes[1] = [1; 8];
+            let mut signature_two = [ApplicationPolynomialV1::ZERO; 8];
+            for (output, attribute) in signature_two.iter_mut().zip(attributes) {
+                *output = ApplicationPolynomialV1::from_direct_attribute(attribute);
+            }
+            let witness = BootleLanternPresentationWitnessV1 {
+                randomness: [ApplicationPolynomialV1::ZERO; 16],
+                tag: [ApplicationPolynomialV1::ZERO; 8],
+                signature_one: [ApplicationPolynomialV1::ZERO; 8],
+                signature_two,
+                attributes,
+            };
+            validate_presentation_witness_v1(&relation, &witness)
+                .expect("valid Bootle/Lantern witness");
+            let transcript = PresentationTranscriptV1::new(
+                PresentationChallengeBindingV1 {
+                    parameter_digest: *compiled.parameter_digest.as_bytes(),
+                    genesis_hash,
+                    statement_digest: *statement_digest.as_bytes(),
+                    issuer_policy_record_digest: *policy.record_digest.as_bytes(),
+                    transaction_intent_digest: *statement
+                        .context
+                        .transaction_intent_digest
+                        .as_bytes(),
+                },
+                matrix_seed,
+                application_relation_digest_v1(&relation),
+            )
+            .expect("fully bound Bootle/Lantern transcript");
+            let proof = prove_presentation_v1(
+                &relation,
+                &witness,
+                transcript,
+                &mut KatRng::new([0xB5; 32]),
+            )
+            .expect("Bootle/Lantern proof")
+            .encode();
+            assert_eq!(proof.len(), BOOTLE_LANTERN_PROOF_BYTES_V1);
+
+            Self {
+                envelope: PrivacyProofEnvelopeV1 {
+                    protocol_id: compiled.protocol_id,
+                    proof_system_id: compiled.proof_system_id,
+                    engine_id: compiled.engine_id,
+                    parameter_id: compiled.parameter_id,
+                    parameter_digest: compiled.parameter_digest,
+                    verifier_digest: compiled.verifier_digest,
+                    statement_schema_digest: compiled.statement_schema_digest,
+                    engine_manifest_digest: compiled.engine_manifest_digest,
+                    statement_digest,
+                    statement: typed_statement,
+                    proof: PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(
+                        proof,
+                    )),
+                },
+                activation,
+                chain_id,
+                policy,
+            }
+        }
+
+        fn verification_context<'a>(
+            &'a self,
+            consensus_limits: &'a PrivacyConsensusLimitsV1,
+        ) -> PrivacyVerificationContextV1<'a> {
+            PrivacyVerificationContextV1 {
+                activation: &self.activation,
+                consensus_limits,
+                chain_id: &self.chain_id,
+                genesis_hash: [0xA7; 32],
+                current_height: 10,
+                expected_action_index: 0,
+                block_timestamp_ms: 1_800_000_000_000,
+                pgc_state: None,
+                orchard_state: None,
+                bootle_lantern_policy: Some(&self.policy),
+            }
+        }
+    }
+
+    fn bootle_lantern_fixture() -> &'static BootleLanternFixture {
+        static FIXTURE: OnceLock<BootleLanternFixture> = OnceLock::new();
+        FIXTURE.get_or_init(BootleLanternFixture::new)
+    }
+
+    fn bootle_lantern_statement_mut(
+        envelope: &mut PrivacyProofEnvelopeV1,
+    ) -> &mut IrohaBootleLanternAnoncredStatementV1 {
+        let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &mut envelope.statement
+        else {
+            unreachable!("Bootle/Lantern fixture")
+        };
+        statement
+    }
+
+    fn redigest_bootle_lantern_policy(policy: &mut BootleLanternIssuerPolicyV1) {
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("issuer parameter digest");
+        policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        policy.record_digest = policy.computed_record_digest().expect("policy digest");
     }
 
     const VEGA_TRUSTED_TIMESTAMP_MS: u64 = 1_785_024_000_000;
@@ -1619,6 +1958,7 @@ mod tests {
                 block_timestamp_ms: 1_800_000_000_000,
                 pgc_state: None,
                 orchard_state: Some(&self.snapshot),
+                bootle_lantern_policy: None,
             }
         }
     }
@@ -1873,6 +2213,7 @@ mod tests {
                 block_timestamp_ms: 1_800_000_000_000,
                 pgc_state: Some(self.pgc_state(&self.accounts)),
                 orchard_state: None,
+                bootle_lantern_policy: None,
             }
         }
 
@@ -1914,6 +2255,7 @@ mod tests {
             block_timestamp_ms: 1_800_000_000_000,
             pgc_state: None,
             orchard_state: None,
+            bootle_lantern_policy: None,
         }
     }
 
@@ -3104,6 +3446,257 @@ mod tests {
         context.activation = &altered_activation;
         assert!(matches!(
             verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::CompiledActivation(_))
+        ));
+    }
+
+    #[test]
+    fn bootle_lantern_runtime_verifies_without_effects_and_enforces_the_exact_proof_cap() {
+        let fixture = bootle_lantern_fixture();
+        let PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof) = &fixture.envelope.proof else {
+            unreachable!("Bootle/Lantern fixture")
+        };
+        assert_eq!(proof.as_bytes().len(), BOOTLE_LANTERN_PROOF_BYTES_V1);
+
+        let effects = verify_privacy_envelope_v1(
+            &fixture.envelope,
+            fixture.verification_context(&TEST_CONSENSUS_LIMITS),
+        )
+        .expect("valid Bootle/Lantern presentation");
+        assert_eq!(
+            effects.protocol_id(),
+            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
+        );
+        assert_eq!(
+            effects.statement_digest(),
+            fixture.envelope.statement_digest
+        );
+        assert_eq!(effects.action_index(), 0);
+        assert_eq!(effects.ledger(), &VerifiedPrivacyLedgerEffectsV1::None);
+
+        let proof_len =
+            u32::try_from(proof.as_bytes().len()).expect("Bootle/Lantern proof length fits u32");
+        let mut exact_limit = TEST_CONSENSUS_LIMITS;
+        exact_limit.max_proof_bytes_per_action = proof_len;
+        verify_privacy_envelope_v1(
+            &fixture.envelope,
+            fixture.verification_context(&exact_limit),
+        )
+        .expect("exact proof-byte boundary is admitted");
+
+        let mut one_byte_below = exact_limit;
+        one_byte_below.max_proof_bytes_per_action = proof_len - 1;
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &fixture.envelope,
+                fixture.verification_context(&one_byte_below)
+            ),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+    }
+
+    #[test]
+    fn bootle_lantern_trusted_policy_is_mandatory_valid_active_and_exact() {
+        let fixture = bootle_lantern_fixture();
+
+        let mut missing = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        missing.bootle_lantern_policy = None;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, missing),
+            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
+                if detail.code == PrivacyBootleLanternStateFailureCodeV1::MissingTrustedPolicy
+        ));
+
+        let mut corrupt = fixture.policy.clone();
+        corrupt.record_digest.0[0] ^= 1;
+        let mut corrupt_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        corrupt_context.bootle_lantern_policy = Some(&corrupt);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, corrupt_context),
+            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
+                if detail.code == PrivacyBootleLanternStateFailureCodeV1::InvalidTrustedPolicy
+        ));
+
+        let mut revoked = fixture.policy.clone();
+        revoked.epoch += 1;
+        revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest_bootle_lantern_policy(&mut revoked);
+        revoked
+            .validate_revocation_successor(&fixture.policy)
+            .expect("canonical terminal successor");
+        let mut revoked_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        revoked_context.bootle_lantern_policy = Some(&revoked);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, revoked_context),
+            Err(PrivacyVerificationErrorV1::BootleLanternState(detail))
+                if detail.code == PrivacyBootleLanternStateFailureCodeV1::PolicyRevoked
+        ));
+
+        let mut rotated = fixture.policy.clone();
+        rotated.epoch += 1;
+        rotated.required_disclosure_bitmap |= 1;
+        redigest_bootle_lantern_policy(&mut rotated);
+        rotated
+            .validate_rotation_successor(&fixture.policy)
+            .expect("canonical active successor");
+        let mut rotated_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        rotated_context.bootle_lantern_policy = Some(&rotated);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, rotated_context),
+            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+        ));
+    }
+
+    #[test]
+    fn bootle_lantern_wire_rejects_truncation_extension_malleation_and_cross_suite_replay() {
+        let fixture = bootle_lantern_fixture();
+        let PrivacyProofV1::IrohaBootleLanternAnoncredV1(valid_proof) = &fixture.envelope.proof
+        else {
+            unreachable!("Bootle/Lantern fixture")
+        };
+        let proof_len = valid_proof.as_bytes().len();
+
+        for length in [1, proof_len / 3, proof_len / 2, proof_len - 1] {
+            let mut candidate = fixture.envelope.clone();
+            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof else {
+                unreachable!("Bootle/Lantern fixture")
+            };
+            bytes.bytes.truncate(length);
+            assert!(
+                matches!(
+                    verify_privacy_envelope_v1(
+                        &candidate,
+                        fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+                    ),
+                    Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+                ),
+                "truncated Bootle/Lantern proof length {length} was not rejected by the native boundary"
+            );
+        }
+
+        for suffix in [&[0_u8][..], &[0xff][..], &[0, 0xff][..]] {
+            let mut candidate = fixture.envelope.clone();
+            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof else {
+                unreachable!("Bootle/Lantern fixture")
+            };
+            bytes.bytes.extend_from_slice(suffix);
+            assert!(matches!(
+                verify_privacy_envelope_v1(
+                    &candidate,
+                    fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+                ),
+                Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+            ));
+        }
+
+        for offset in [0, 1, proof_len / 3, proof_len / 2, proof_len - 1] {
+            let mut candidate = fixture.envelope.clone();
+            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut candidate.proof else {
+                unreachable!("Bootle/Lantern fixture")
+            };
+            bytes.bytes[offset] ^= 0x80;
+            assert!(matches!(
+                verify_privacy_envelope_v1(
+                    &candidate,
+                    fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+                ),
+                Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+            ));
+        }
+
+        let mut noncanonical_residue = fixture.envelope.clone();
+        let PrivacyProofV1::IrohaBootleLanternAnoncredV1(bytes) = &mut noncanonical_residue.proof
+        else {
+            unreachable!("Bootle/Lantern fixture")
+        };
+        bytes.bytes[8..16].fill(0xff);
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &noncanonical_residue,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+            ),
+            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+        ));
+
+        let mut cross_suite = fixture.envelope.clone();
+        cross_suite.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(
+            PrivacyProofBytesV1::new(valid_proof.as_bytes().to_vec()),
+        );
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &cross_suite,
+                fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+            ),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+    }
+
+    #[test]
+    fn bootle_lantern_statement_intent_chain_genesis_action_and_policy_are_proof_bound() {
+        let fixture = bootle_lantern_fixture();
+
+        let statement_mutations: [fn(&mut IrohaBootleLanternAnoncredStatementV1); 8] = [
+            |statement| statement.context.transaction_intent_digest.0[0] ^= 1,
+            |statement| statement.issuer_id.0[0] ^= 1,
+            |statement| statement.policy_id.0[0] ^= 1,
+            |statement| statement.issuer_policy_epoch += 1,
+            |statement| statement.issuer_policy_record_digest.0[0] ^= 1,
+            |statement| statement.issuer_parameter_id.0[0] ^= 1,
+            |statement| statement.issuer_parameter_digest.0[0] ^= 1,
+            |statement| statement.disclosures[0].value.0[0] ^= 1,
+        ];
+        for mutate in statement_mutations {
+            let mut candidate = fixture.envelope.clone();
+            mutate(bootle_lantern_statement_mut(&mut candidate));
+            refresh_statement_digest(&mut candidate);
+            assert!(matches!(
+                verify_privacy_envelope_v1(
+                    &candidate,
+                    fixture.verification_context(&TEST_CONSENSUS_LIMITS)
+                ),
+                Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+            ));
+        }
+
+        let replay_chain = ChainId::from("taira-privacy-bootle-lantern-replay");
+        let mut changed_chain = fixture.envelope.clone();
+        bootle_lantern_statement_mut(&mut changed_chain)
+            .context
+            .chain_id = replay_chain.clone();
+        refresh_statement_digest(&mut changed_chain);
+        let mut replay_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        replay_context.chain_id = &replay_chain;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&changed_chain, replay_context),
+            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+        ));
+
+        let mut changed_genesis = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        changed_genesis.genesis_hash[0] ^= 1;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, changed_genesis),
+            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+        ));
+
+        let mut changed_action = fixture.envelope.clone();
+        bootle_lantern_statement_mut(&mut changed_action)
+            .context
+            .action_index = 1;
+        refresh_statement_digest(&mut changed_action);
+        let mut action_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        action_context.expected_action_index = 1;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&changed_action, action_context),
+            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+                | Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+
+        let mut altered_activation = fixture.activation;
+        altered_activation.engine_manifest_digest.0[0] ^= 1;
+        let mut activation_context = fixture.verification_context(&TEST_CONSENSUS_LIMITS);
+        activation_context.activation = &altered_activation;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, activation_context),
             Err(PrivacyVerificationErrorV1::CompiledActivation(_))
         ));
     }
