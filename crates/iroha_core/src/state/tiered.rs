@@ -2777,6 +2777,9 @@ mod measured_bytes_impls {
         },
         sorafs_uri::SorafsUri,
         trigger::{TriggerId, action::Repeats},
+        validation_fee::{
+            ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateSnapshotV1,
+        },
         zk::BackendTag,
     };
     use iroha_primitives::{
@@ -2797,13 +2800,13 @@ mod measured_bytes_impls {
         state::{
             AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord,
             DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
-            FrontierCheckpoint, GovernanceLockRecord, GovernanceLocksForReferendum,
-            GovernanceParliamentSnapshot, GovernancePipeline, GovernanceProposalRecord,
-            GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
-            GovernanceReferendumStatus, GovernanceSlashEntry, GovernanceSlashLedger,
-            GovernanceStage, GovernanceStageApproval, GovernanceStageApprovals,
-            GovernanceStageFailure, GovernanceStageRecord, ZkAceIdentityRecord,
-            ZkAceIdentityStatus, ZkAssetState, ZkAssetVerifierBinding,
+            FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
+            GovernanceLocksForReferendum, GovernanceParliamentSnapshot, GovernancePipeline,
+            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
+            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceSlashEntry,
+            GovernanceSlashLedger, GovernanceStage, GovernanceStageApproval,
+            GovernanceStageApprovals, GovernanceStageFailure, GovernanceStageRecord, ZkAssetState,
+            ZkAssetVerifierBinding,
         },
     };
 
@@ -3842,26 +3845,6 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for ZkAceIdentityStatus {
-        fn measured_bytes(&self) -> usize {
-            size_of::<ZkAceIdentityStatus>()
-        }
-    }
-
-    impl MeasuredBytes for ZkAceIdentityRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ZkAceIdentityRecord>();
-            total = total.saturating_add(self.policy_hash.measured_bytes_extra());
-            total = total.saturating_add(self.allowed_accounts.measured_bytes_extra());
-            total = total.saturating_add(self.action_class.measured_bytes_extra());
-            total = total.saturating_add(self.domain_tag.measured_bytes_extra());
-            total = total.saturating_add(self.verifier.measured_bytes_extra());
-            total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.successor.measured_bytes_extra());
-            total
-        }
-    }
-
     impl MeasuredBytes for FrontierCheckpoint {
         fn measured_bytes(&self) -> usize {
             size_of::<FrontierCheckpoint>()
@@ -3882,8 +3865,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
             total = total.saturating_add(self.asset_hidden_pool_id.measured_bytes_extra());
             total = total.saturating_add(self.asset_hidden_asset_set_root.measured_bytes_extra());
-            total = total.saturating_add(self.zk_ace_identities.measured_bytes_extra());
-            total = total.saturating_add(self.zk_ace_replay_nullifiers.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
             total = total.saturating_add(self.tree.measured_bytes_extra());
             total
@@ -3942,6 +3923,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePolicyProposal>()
                 .saturating_add(norito::codec::Encode::encode(&self.policy).len())
+                .saturating_add(norito::codec::Encode::encode(&self.plain_electorate_rules).len())
         }
     }
 
@@ -3949,6 +3931,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePayoutLifecycleProposal>()
                 .saturating_add(norito::codec::Encode::encode(&self.payout_binding).len())
+                .saturating_add(norito::codec::Encode::encode(&self.plain_electorate_rules).len())
         }
     }
 
@@ -4002,6 +3985,28 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceStageApprovals>();
             total = total.saturating_add(self.stages.measured_bytes_extra());
+            total = total.saturating_add(
+                self.validation_fee_plain_electorate_snapshot
+                    .measured_bytes_extra(),
+            );
+            total
+        }
+    }
+
+    impl MeasuredBytes for ValidationFeePlainElectorateMemberV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ValidationFeePlainElectorateMemberV1>();
+            total = total.saturating_add(self.account_id.measured_bytes_extra());
+            total = total.saturating_add(self.bonded_amount.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ValidationFeePlainElectorateSnapshotV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ValidationFeePlainElectorateSnapshotV1>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
+            total = total.saturating_add(self.members.measured_bytes_extra());
             total
         }
     }
@@ -4142,6 +4147,18 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.expiry_height.measured_bytes_extra());
             total = total.saturating_add(self.direction.measured_bytes_extra());
             total = total.saturating_add(self.duration_blocks.measured_bytes_extra());
+            total = total.saturating_add(self.custody.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for GovernanceLockCustody {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<GovernanceLockCustody>();
+            total = total.saturating_add(self.escrowed.measured_bytes_extra());
+            total = total.saturating_add(self.asset_definition_id.measured_bytes_extra());
+            total = total.saturating_add(self.bond_escrow_account.measured_bytes_extra());
+            total = total.saturating_add(self.slash_receiver_account.measured_bytes_extra());
             total
         }
     }

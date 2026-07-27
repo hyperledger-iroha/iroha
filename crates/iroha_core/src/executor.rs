@@ -8739,10 +8739,6 @@ fn initial_permission_resource_authority(
             let token = decode!(executor_permission::account::CanReplaceAccountController);
             token.account == *authority
         }
-        "CanManageZkAceIdentityForAccount" => {
-            let token = decode!(executor_permission::zk_ace::CanManageZkAceIdentityForAccount);
-            token.account == *authority
-        }
         "CanResolveAccountAlias" => {
             let token = decode!(executor_permission::account::CanResolveAccountAlias);
             let delegation: Permission =
@@ -9464,6 +9460,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::RemoveAssetKeyValue,
         iroha_data_model::isi::SetAssetTransferFreeze,
         iroha_data_model::isi::SetAssetTransferControl,
+        iroha_data_model::isi::SetAssetHoldingLimit,
         iroha_data_model::isi::SetAssetTransferBlacklist,
         iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias,
         iroha_data_model::isi::asset_alias::SetAssetDefinitionBalancePolicy,
@@ -10573,7 +10570,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyAssetMetadata",
     "CanSetAssetTransferFreeze",
     "CanSetAssetTransferDailyLimit",
-    "CanManageZkAceIdentityForAccount",
     "CanRegisterNft",
     "CanUnregisterNft",
     "CanTransferNft",

@@ -19,7 +19,36 @@ constitution are not active until implemented and separately enacted.
 - The first validation-fee release supports PLAIN finalization only. `h_end` is
   inclusive; close/tally executes at `h_end + 1`, evidence is anchored to
   `h_end`, and ballot locks must remain active through that height. Other
-  governance paths may retain ZK behavior where explicitly configured.
+  governance paths may retain ZK behavior where explicitly configured. The
+  Taira validation-fee profile retains an exact 3,600-block window, so
+  `h_end = h_start + 3,599`.
+- At the `h_start` boundary, after all seven proposal-local Parliament bodies
+  have reached quorum, consensus freezes the complete PLAIN electorate. The
+  snapshot binds the proposal id and operator, Parliament approval-gate height,
+  capture height, canonical member records, member count, and a
+  domain-separated roster root. It is absent before opening and mandatory once
+  the referendum is open; later citizen-registry changes cannot add, remove, or
+  alter eligible voters. Ballot admission and live/final tallying fail closed
+  on a non-member or a lock that differs from the retained rules.
+- Every validation-fee proposal fingerprints and retains its exact
+  `plain_electorate_rules`. Ballots use the retained asset, bond escrow, slash
+  receiver, amount, duration, conviction, turnout, approval threshold, member
+  cap, and citizen gate even if live governance configuration later changes.
+  Lock, expiry-release, slash, and restitution transfers are atomic and retain
+  the lock on any custody mismatch or transfer failure. Unregistering retained
+  custody accounts, asset definitions, or their domains is rejected even
+  before the first ballot while the proposal is pending or approved. The typed
+  `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` route derives
+  these immutable fields and rejects duplicate effective ballots; clients
+  supply only the owner and closed AYE/NAY/ABSTAIN direction.
+- An enacted validation-fee policy is valid only when
+  `effective_from_height = enacted_at_height + 120,960`; an earlier or later
+  activation, or height overflow, is rejected. The proof-bearing current-policy
+  flow rechecks that relation and projects the exact proposal rules together
+  with the frozen-roster root, member count, capture height, and approval-gate
+  height. Clients must complete every bounded proof page and verify the finality
+  chain, registry witness, chain/genesis binding, and policy-chain genesis
+  before enabling fees.
 - Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
 - Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
 

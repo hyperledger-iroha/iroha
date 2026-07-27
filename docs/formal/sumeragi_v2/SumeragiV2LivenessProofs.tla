@@ -62,6 +62,65 @@ ApplicationLivenessProperty(specification) ==
        /\ (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
 
 (***************************************************************************
+Retained-lock reproposal vocabulary.
+
+These operators sit below the asynchronous proof-shard chain so the direct
+timeout/retained-lock/rotating-leader leaves can prove the release properties
+without importing their own proofless debt declarations through the
+compatibility facade.  They add no transition, fairness clause, or outcome:
+the source is the exact durable lock and retained body, and the only terminal
+cases are the old-round Commit, an unchanged later proposal, Decision, or a
+strictly higher certified Prepare lock.
+***************************************************************************)
+StableAvailableRetainedLock(node, lockedRound, subject) ==
+  /\ gst
+  /\ node \in AsyncCurrentResponsiveVoters \cap up
+  /\ lockedRound \in Views
+  /\ subject \in Subjects
+  /\ lockRank[node] = lockedRound
+  /\ lockSubject[node] = subject
+  /\ BodyHeldBy(durableBodies, node, context, lockedRound, subject)
+  /\ RetainedLockedBodyHeldBy(
+       retainedLockedBodies, node, context, subject)
+
+LockedBodyCommittedInOldRound(node, lockedRound, subject) ==
+  \E qc \in commitQCs:
+    /\ qc.context = context
+    /\ qc.phase = "Commit"
+    /\ qc.view = lockedRound
+    /\ qc.subject = subject
+    /\ node \in qc.signers
+
+LockedBodyReproposedUnchangedLater(lockedRound, subject) ==
+  \E envelope \in proposalNetwork:
+    /\ envelope.proposal.context = context
+    /\ envelope.proposal.view > lockedRound
+    /\ envelope.proposal.subject = subject
+
+LockedBodyLegitimatelyDecidedOrSuperseded(
+    node, lockedRound, subject) ==
+  \/ NodeHasDecision(node)
+  \/ /\ lockRank[node] > lockedRound
+     /\ \E qc \in prepareQCs:
+          /\ qc.context = context
+          /\ qc.phase = "Prepare"
+          /\ qc.view = lockRank[node]
+          /\ qc.subject = lockSubject[node]
+
+LockedBodyReproposalOutcome(node, lockedRound, subject) ==
+  \/ LockedBodyCommittedInOldRound(node, lockedRound, subject)
+  \/ LockedBodyReproposedUnchangedLater(lockedRound, subject)
+  \/ LockedBodyLegitimatelyDecidedOrSuperseded(
+       node, lockedRound, subject)
+
+LockedBodyReproposalProgressProperty(specification) ==
+  specification
+    => \A node \in ValidatorIds, lockedRound \in Views,
+          subject \in Subjects:
+         StableAvailableRetainedLock(node, lockedRound, subject)
+           ~> LockedBodyReproposalOutcome(node, lockedRound, subject)
+
+(***************************************************************************
 Explicit progress obligations.
 
 These predicates expose the proof seams that were previously described only

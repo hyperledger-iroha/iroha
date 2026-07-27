@@ -700,16 +700,187 @@ HistoricalDiscoveryServeJobOwned(node, job) ==
   /\ job \in AsyncServeJobSet
   /\ job \in SequenceSet(asyncIoQueues[node])
 
+(***************************************************************************
+Frozen packet-derived producer lineage.
+
+The occurrence tail must not range over every historical candidate or Serve
+job at the packet recipient.  Such a recipient-wide set admits unrelated
+fresh-view work forever and therefore has no finite semantic universe when
+`ViewDomain = Nat`.  Unrelated work is already charged by the ingress,
+capacity, selector, causal, runner, and I/O predecessor coordinates which
+precede this tail.
+
+The tail below names only work causally rooted at the selected packet:
+
+  * ordinary `CausalCandidate` successors retain the packet evidence;
+  * the only evidence-overwriting edge is TimeoutVote `DeliverTimeout` to the
+    exact formed-TC `PersistInstallTC` successor, so that one deterministic
+    evidence value is included explicitly;
+  * one causal chain can use only the packet view or its immediate installed
+    successor view before a newly emitted wire item owns a different packet;
+    and
+  * Serve ownership is the route-local process owner paired with the exact
+    route-neutral logical request identity.
+
+Consumer view/generation are deliberately absent from the service identity.
+They are process-incarnation coordinates, while the route-neutral item and
+evidence projections retain the immutable logical admission lineage.  The
+carrier below ranges only over finite roster/configuration fields and the two
+fixed views derived from `packet`; it never quantifies unrestricted `Views`,
+`AsyncNetworkItems`, or `AsyncEvidenceSet`.
+***************************************************************************)
+
+HistoricalDiscoveryPacketCausalEvidenceCarrier(packet) ==
+  LET root == packet.item
+      delivery == DeliveryCandidate(root)
+  IN {root}
+       \cup
+     IF /\ root.kind = "TimeoutVote"
+        /\ DeliverTimeoutFormsTC(delivery)
+     THEN {ExactFormedTcForTimeoutCommand(delivery)}
+     ELSE {}
+
+HistoricalDiscoveryPacketCausalEvidenceIdentityCarrier(packet) ==
+  {AsyncRouteNeutralCandidateEvidence(evidence):
+     evidence \in HistoricalDiscoveryPacketCausalEvidenceCarrier(packet)}
+
+HistoricalDiscoveryPacketCausalItemCarrier(packet) ==
+  {NoAsyncItem, packet.item}
+    \cup
+  IF packet.item.kind = "CommitCertificateResponse"
+  THEN {DiscoveredCommitQcItem(packet.item)}
+  ELSE {}
+
+HistoricalDiscoveryPacketCausalItemIdentityCarrier(packet) ==
+  {AsyncRouteNeutralCandidateItem(item):
+     item \in HistoricalDiscoveryPacketCausalItemCarrier(packet)}
+
+HistoricalDiscoveryPacketCausalViewCarrier(packet) ==
+  {DeliveryView(packet.item), DeliveryView(packet.item) + 1}
+
+HistoricalDiscoveryPacketCausalHeightCarrier(packet) ==
+  {DeliveryHeight(packet.item), context.height}
+
+HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(packet) ==
+  LET recipient == packet.item.envelope.recipient
+      views == HistoricalDiscoveryPacketCausalViewCarrier(packet)
+      heights == HistoricalDiscoveryPacketCausalHeightCarrier(packet)
+      items == HistoricalDiscoveryPacketCausalItemIdentityCarrier(packet)
+      evidence ==
+        HistoricalDiscoveryPacketCausalEvidenceIdentityCarrier(packet)
+  IN {[target |-> recipient,
+       context |-> context,
+       height |-> blockHeight,
+       leader |-> Leader(context, roundView),
+       view |-> roundView,
+       subject |-> subject,
+       phase |-> workKind,
+       owner |-> recipient,
+       kind |-> "Candidate",
+       payload |->
+         [class |-> commandClass,
+          workKind |-> workKind,
+          item |-> itemIdentity,
+          evidence |-> evidenceIdentity,
+          body |-> bodyIdentity,
+          manifest |-> manifestIdentity,
+          commitment |-> commitmentIdentity]]:
+       blockHeight \in heights,
+       roundView \in views,
+       subject \in SubjectOrNone,
+       commandClass \in AsyncCommandClasses,
+       workKind \in AsyncWorkKinds,
+       itemIdentity \in items,
+       evidenceIdentity \in evidence,
+       bodyIdentity \in SubjectOrNone,
+       manifestIdentity \in SubjectOrNone,
+       commitmentIdentity \in SubjectOrNone}
+
+HistoricalDiscoveryPacketServeIdentityCarrier(packet) ==
+  LET recipient == packet.item.envelope.recipient
+  IN IF packet.item.kind \in AsyncReplyRequestKinds
+     THEN {[owner |-> recipient,
+            request |->
+              AsyncReplySemanticIdentity(
+                packet.item.kind, packet.item.envelope)]}
+     ELSE {}
+
+HistoricalDiscoveryPacketCandidateInCausalLineage(packet, candidate) ==
+  AsyncCandidateServiceIdentity(candidate)
+    \in HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(packet)
+
+HistoricalDiscoveryPacketServeInCausalLineage(packet, job) ==
+  AsyncIoServeJobIdentity(packet.item.envelope.recipient, job)
+    \in HistoricalDiscoveryPacketServeIdentityCarrier(packet)
+
 HistoricalDiscoveryPacketCandidateOwners(packet) ==
   LET recipient == packet.item.envelope.recipient
   IN {candidate \in ActiveScheduledCandidates:
         /\ candidate.node = recipient
-        /\ HistoricalProtectedCandidateOwned(candidate)}
+        /\ HistoricalProtectedCandidateOwned(candidate)
+        /\ HistoricalDiscoveryPacketCandidateInCausalLineage(
+             packet, candidate)}
 
 HistoricalDiscoveryPacketServeOwners(packet) ==
   LET recipient == packet.item.envelope.recipient
   IN {job \in ActiveIoJobs:
-        HistoricalDiscoveryServeJobOwned(recipient, job)}
+        /\ HistoricalDiscoveryServeJobOwned(recipient, job)
+        /\ HistoricalDiscoveryPacketServeInCausalLineage(packet, job)}
+
+THEOREM HistoricalDiscoveryPacketCausalCarriersAreFinite ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCausalEvidenceCarrier(packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCausalEvidenceIdentityCarrier(
+                packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCausalItemCarrier(packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCausalItemIdentityCarrier(packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCausalViewCarrier(packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCausalHeightCarrier(packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(
+                packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketServeIdentityCarrier(packet))
+BY FS_Product, FS_Image, FS_Union, FS_Subset, Isa
+   DEF HistoricalDiscoveryPacketCausalEvidenceCarrier,
+       HistoricalDiscoveryPacketCausalEvidenceIdentityCarrier,
+       HistoricalDiscoveryPacketCausalItemCarrier,
+       HistoricalDiscoveryPacketCausalItemIdentityCarrier,
+       HistoricalDiscoveryPacketCausalViewCarrier,
+       HistoricalDiscoveryPacketCausalHeightCarrier,
+       HistoricalDiscoveryPacketCandidateServiceIdentityCarrier,
+       HistoricalDiscoveryPacketServeIdentityCarrier,
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+       AsyncStrongTypeInvariant, StrongInductiveInvariant,
+       Safety, TypeInvariant, ModelConfiguration,
+       AsyncConfiguration, AsyncCommandClasses, AsyncWorkKinds,
+       AsyncCompletionTags, AsyncDeliveryKinds, AsyncReducerKinds,
+       SubjectOrNone, Subjects, ValidatorIds
+
+THEOREM HistoricalDiscoveryPacketOwnersStayInFrozenCausalCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    /\ {AsyncCandidateServiceIdentity(candidate):
+          candidate \in
+            HistoricalDiscoveryPacketCandidateOwners(packet)}
+         \subseteq
+           HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(packet)
+       /\ {AsyncIoServeJobIdentity(
+               packet.item.envelope.recipient, job):
+             job \in HistoricalDiscoveryPacketServeOwners(packet)}
+            \subseteq
+              HistoricalDiscoveryPacketServeIdentityCarrier(packet)
+BY Isa
+   DEF HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryPacketCandidateInCausalLineage,
+       HistoricalDiscoveryPacketServeInCausalLineage
 
 HistoricalDiscoveryPacketCandidateRanks(packet) ==
   {CandidateServiceRank(candidate):
@@ -1094,7 +1265,7 @@ BY HistoricalDiscoveryOwnersIncludeNonVoterService,
        HistoricalDiscoveryIoOwners,
        ActiveIoJobs, AsyncIoServeIndices,
        AsyncIoQueueDepth, ServeJobRank,
-       OverdueResponsivePackets,
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
        AsyncTimedServiceNodes,
        AsyncStrongTypeInvariant, AsyncTypeInvariant,
        AsyncSchedulerTypeInvariant,
@@ -1130,7 +1301,7 @@ BY ServeOccurrenceIndexCharacterization,
    DEF HistoricalDiscoveryPacketServeOwners,
        HistoricalDiscoveryServeJobOwned,
        HistoricalDiscoveryIoOwners,
-       OverdueResponsivePackets,
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
        ServeJobRank,
        AsyncStrongTypeInvariant,
        AsyncSchedulerTypeInvariant,
@@ -1283,7 +1454,7 @@ BY AsyncStrongTypeProjectsAsyncType,
        HistoricalDiscoveryReadyTailCarrier,
        HistoricalDiscoveryStage4TailCarrier,
        HistoricalDiscoveryCandidateServeTailCarrier,
-       OverdueResponsivePackets,
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
        AsyncStrongTypeInvariant,
        AsyncTransportTypeInvariant,
        AsyncPacketContentTypeInvariant,

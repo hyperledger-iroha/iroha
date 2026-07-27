@@ -1,4 +1,4 @@
-//! Asset transfer control records used for CBDC-style on-chain outbound controls.
+//! Asset transfer control records used for account-scoped on-chain asset policy.
 
 use std::{format, string::String, vec::Vec};
 
@@ -108,6 +108,13 @@ pub struct AssetTransferControlRecord {
     /// Whether outbound transfers are blacklisted.
     #[norito(default)]
     pub blacklisted: bool,
+    /// Maximum post-credit balance for future transfers and mints.
+    ///
+    /// `None` means that no native holding limit is configured. A limit below the
+    /// current balance leaves existing funds untouched and rejects further credit
+    /// until the balance is no greater than the limit.
+    #[norito(default)]
+    pub holding_limit: Option<Quantity>,
     /// Configured transfer caps.
     #[norito(default)]
     pub limits: Vec<AssetTransferLimit>,
@@ -125,6 +132,7 @@ impl AssetTransferControlRecord {
     pub fn is_empty(&self) -> bool {
         !self.outgoing_frozen
             && !self.blacklisted
+            && self.holding_limit.is_none()
             && self.limits.iter().all(|limit| limit.cap_amount.is_none())
     }
 }

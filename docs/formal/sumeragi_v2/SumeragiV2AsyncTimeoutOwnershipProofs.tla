@@ -112,6 +112,7 @@ ResponsiveViewCertificateAuthority(source, minimumView) ==
   /\ \E tc \in TcRecordSet:
        /\ TimeoutCertificateSemanticIdentity(tc, minimumView)
        /\ nodeView[source] = tc.view + 1
+       /\ tc = lastInstalledTc[source]
        /\ TcOutbox(source, tc) \subseteq asyncRetainedControl
 
 DecisionSourceAt(source, qc) ==
@@ -288,6 +289,1165 @@ TimeoutViewOwnershipInvariant ==
        /\ DecisionSourceAt(source, qc)
        /\ ~NodeHasDecision(target)
        => DecisionPropagationFrontier(target)
+
+(***************************************************************************
+Inductive ownership kernel.
+
+The public invariant above names transport and scheduler frontiers.  The
+transition induction is clearer over the four durable authorities which
+create those frontiers:
+
+  * an installed view retains the exact preceding TC broadcast batch;
+  * a current timeout intent is in WAL, signing, retained broadcast, or the
+    one pre-GST responsive replay lifecycle;
+  * a completed responsive receipt quorum owns its exact local install WAL;
+    and
+  * every current-context Decision retains its exact CommitQC broadcast.
+
+The recovery disjunct is deliberately unavailable once replay starts.  It
+covers only `RestartRequired` and `ReplayRequired`, after a responsive
+pre-GST crash has removed volatile timeout staging and before the replay entry
+action reconstructs the exact timeout signature request.  `Replaying` and
+`Recovered` therefore already require the concrete WAL/sign/retained owner;
+the GST projection does not hide an unfinished replay lifecycle.
+***************************************************************************)
+
+RetainedViewCertificateAuthority(source, minimumView) ==
+  /\ source \in AsyncCurrentResponsiveVoters
+  /\ ~NodeHasDecision(source)
+  /\ \E tc \in TcRecordSet:
+       /\ TimeoutCertificateSemanticIdentity(tc, minimumView)
+       /\ nodeView[source] = tc.view + 1
+       /\ TcOutbox(source, tc) \subseteq asyncRetainedControl
+
+TimeoutReplayRecoveryAuthority(node) ==
+  /\ asyncRecoveryPhase
+       \in {"RestartRequired", "ReplayRequired"}
+  /\ asyncRecoveryNode = node
+  /\ generation[node] = asyncRecoveryGeneration
+
+RetainedTimeoutVoteAuthority(node, vote) ==
+  TimeoutOutbox(TimeoutSign(node, vote))
+    \subseteq asyncRetainedControl
+
+TimeoutVoteConcreteAuthority(node, vote) ==
+  \/ TimeoutWal(node, vote) \in pendingTimeout
+  \/ TimeoutSign(node, vote) \in signTimeouts
+  \/ RetainedTimeoutVoteAuthority(node, vote)
+
+TimeoutVoteLifecycleAuthority(node, vote) ==
+  \/ TimeoutVoteConcreteAuthority(node, vote)
+  \/ TimeoutReplayRecoveryAuthority(node)
+
+TimeoutReceiptQuorumInstallAuthority(target, roundView) ==
+  \E tc \in TcRecordSet:
+    /\ TimeoutCertificateSemanticIdentity(tc, roundView)
+    /\ tc.view = roundView
+    /\ InstallTcWal(target, tc, TRUE) \in pendingInstallTC
+
+DecisionCertificateRetainedAuthority(source, qc) ==
+  QcOutbox(source, qc) \subseteq asyncRetainedControl
+
+ResponsiveRetainedTimeoutVoteControlSound ==
+  \A item \in asyncRetainedControl:
+    /\ item.kind = "TimeoutVote"
+    /\ item.source \in AsyncCurrentResponsiveVoters
+    => /\ item.envelope.vote.signer = item.source
+       /\ item.envelope.vote.context = context
+       /\ item.envelope.vote \in timeoutIntents
+       /\ item.envelope.vote.view <= nodeView[item.source]
+
+ResponsiveRetainedTcControlSound ==
+  \A item \in asyncRetainedControl:
+    /\ item.kind = "TimeoutCertificate"
+    /\ item.source \in AsyncCurrentResponsiveVoters
+    => /\ item.envelope.tc.context = context
+       /\ TCValid(item.envelope.tc)
+       /\ item.envelope.tc.view + 1 <= nodeView[item.source]
+
+ResponsiveRetainedDecisionControlSound ==
+  \A item \in asyncRetainedControl:
+    /\ item.kind = "CommitQC"
+    /\ item.source \in AsyncCurrentResponsiveVoters
+    => /\ item.envelope.qc.context = context
+       /\ item.envelope.qc.phase = "Commit"
+       /\ item.envelope.qc \in commitQCs
+       /\ item.envelope.qc.view <= nodeView[item.source]
+
+ResponsiveRetainedTimeoutOwnershipControlSound ==
+  /\ ResponsiveRetainedTimeoutVoteControlSound
+  /\ ResponsiveRetainedTcControlSound
+  /\ ResponsiveRetainedDecisionControlSound
+
+ResponsiveInstalledTcAuthorityInvariant ==
+  \A source \in AsyncCurrentResponsiveVoters:
+       /\ nodeView[source] > 0
+       /\ ~NodeHasDecision(source)
+       => RetainedViewCertificateAuthority(
+            source, nodeView[source] - 1)
+
+ResponsiveTimeoutVoteAuthorityInvariant ==
+  \A node \in AsyncCurrentResponsiveVoters,
+       roundView \in Views, vote \in timeoutIntents:
+       /\ TimeoutVoteSemanticIdentity(node, roundView, vote)
+       /\ nodeView[node] = roundView
+       /\ ~NodeHasDecision(node)
+       => TimeoutVoteLifecycleAuthority(node, vote)
+
+ResponsiveTimeoutQuorumAuthorityInvariant ==
+  \A target \in AsyncCurrentResponsiveVoters,
+       roundView \in Views:
+       /\ nodeView[target] = roundView
+       /\ ~NodeHasDecision(target)
+       /\ ResponsiveTimeoutReceiptQuorumAt(target, roundView)
+       => TimeoutReceiptQuorumInstallAuthority(target, roundView)
+
+ResponsiveDecisionCertificateAuthorityInvariant ==
+  \A source \in AsyncCurrentResponsiveVoters,
+       qc \in QcRecordSet:
+       DecisionSourceAt(source, qc)
+         => DecisionCertificateRetainedAuthority(source, qc)
+
+TimeoutViewOwnershipKernelInvariant ==
+  /\ ResponsiveRetainedTimeoutOwnershipControlSound
+  /\ ResponsiveInstalledTcAuthorityInvariant
+  /\ ResponsiveTimeoutVoteAuthorityInvariant
+  /\ ResponsiveTimeoutQuorumAuthorityInvariant
+  /\ ResponsiveDecisionCertificateAuthorityInvariant
+
+THEOREM TimeoutViewOwnershipKernelProjectsPublicInvariant ==
+  /\ AsyncStrongTypeInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  => TimeoutViewOwnershipInvariant
+BY GstResponsiveNodesAreUp, IsaT(300)
+   DEF AsyncStrongTypeInvariant, AsyncGstRecoveryPhaseInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       TimeoutVoteConcreteAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutViewOwnershipInvariant,
+       ResponsiveViewCertificateAuthority,
+       TimeoutOrigin, TimeoutDelivery,
+       TimeoutVoteItem, TimeoutVoteSemanticIdentity,
+       TimeoutCertificateFormationFrontier,
+       TcFrontier, TimeoutCertificateInstallOwner,
+       TimeoutCertificateSemanticIdentity,
+       DecisionPropagationFrontier,
+       CommitCertificateDelivery, CommitCertificateItem,
+       DecisionSourceAt
+
+THEOREM AsyncInitEstablishesTimeoutViewOwnershipKernel ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => TimeoutViewOwnershipKernelInvariant
+BY IsaT(300)
+   DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       TimeoutVoteConcreteAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt,
+       AsyncCurrentResponsiveVoters,
+       AsyncRuntimeInit, AsyncTransportInit
+
+TimeoutOwnershipControlKinds ==
+  {"TimeoutVote", "TimeoutCertificate", "CommitQC"}
+
+TimeoutOwnershipRetainedItemsIn(retained) ==
+  {item \in retained: item.kind \in TimeoutOwnershipControlKinds}
+
+TimeoutOwnershipRetainedItems ==
+  TimeoutOwnershipRetainedItemsIn(asyncRetainedControl)
+
+TimeoutViewOwnershipKernelProjection ==
+  <<context, nodeView, generation, decisions, timeoutIntents,
+    pendingTimeout, signTimeouts, receivedTimeoutVotes, pendingInstallTC,
+    commitQCs, lastInstalledTc,
+    TimeoutOwnershipRetainedItems, AsyncRecoveryControlVars>>
+
+THEOREM TimeoutViewOwnershipKernelProjectionFrame ==
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ UNCHANGED TimeoutViewOwnershipKernelProjection
+  => TimeoutViewOwnershipKernelInvariant'
+BY Isa
+   DEF TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       TimeoutVoteConcreteAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       TimeoutViewOwnershipKernelProjection,
+       AsyncRecoveryControlVars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM RememberedUnownedControlPreservesTimeoutOwnershipItems ==
+  \A retained, items:
+    (\A item \in items:
+       item.kind \notin TimeoutOwnershipControlKinds)
+      => TimeoutOwnershipRetainedItemsIn(
+           RememberedControl(retained, items))
+           = TimeoutOwnershipRetainedItemsIn(retained)
+BY IsaM("blast")
+   DEF TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       RememberedControl, RetainedClassItems, ControlClass
+
+THEOREM ExecuteRegularCommandPreservesTimeoutViewOwnershipKernel ==
+  \A command:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ ExecuteRegularCommand(command)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       ExecuteRegularCommand, RegularCoreCommand,
+       AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       FetchBody, RebindRetainedBody, StoreBody,
+       ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
+       BeginPrepare, PersistPrepare,
+       BeginObservePrepare, PersistObservePrepare,
+       BeginLockCommit, PersistLockCommit,
+       FormCommitQC, BeginDecision, PersistTimeout, BeginInstallTC,
+       AcceptCertifiedResponseCapability,
+       RetireCompletedBodyCertifiedResponseAuthority,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncAuxVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM ExecuteSignTimeoutPreservesTimeoutViewOwnershipKernel ==
+  \A command:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ ExecuteSignTimeout(command)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, HonestTimeoutTransportBacked,
+       TimeoutSigningProvenanceInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       ExecuteSignTimeout, CompleteTimeoutSignature,
+       LocalTimeoutCompletionGuard, LocalTimeoutVoteFor,
+       TimeoutReceiptsAfter, TimeoutReceiptAdmitted,
+       TimeoutVoteSlotOccupied, SameTimeoutVoteSlot,
+       TimeoutCertificateAfterReceipt,
+       TimeoutInstallRequestAfterReceipt, TimeoutReceiptFormsTC,
+       PublishControlItems, TimeoutOutbox,
+       RememberedControl, RetainedClassItems, ControlClass, ControlView,
+       PacketForItem, PacketsForItems,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM ExecutePersistInstallPreservesTimeoutViewOwnershipKernel ==
+  \A command:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ ExecutePersistInstall(command)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, PendingCertificateWritesAuthorized,
+       AsyncProgressOwnershipInvariant,
+       SerializedBusyOwnershipInvariant,
+       DecisionTimeoutFrontierInvariant,
+       PendingTimeoutExcludesDecision,
+       PendingInstallExcludesDecision,
+       TimeoutSigningExcludesDecision,
+       PendingDecisionExcludesTimeoutWork,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       ExecutePersistInstall, PersistInstallTC,
+       PersistInstalledControlAfterInstall,
+       InstalledControlAfterTC, CurrentTimeoutControlFor,
+       ReseedExactHighestPrepareControl,
+       RememberedControl, RetainedClassItems, ControlClass, ControlView,
+       TcOutbox, QcOutbox, PacketForItem, PacketsForItems,
+       StrictSameRoundTcUpgrade, TimeoutReceiptSurvivesInstall,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       RequestNodeSet, AllPendingRequests, NoDecisionForNode
+
+THEOREM ExecutePersistDecisionPreservesTimeoutViewOwnershipKernel ==
+  \A command:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ ExecutePersistDecision(command)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, PendingCertificateWritesAuthorized,
+       AsyncProgressOwnershipInvariant,
+       SerializedBusyOwnershipInvariant,
+       DecisionFrontierUniquenessInvariant,
+       DecisionsUniqueByNodeContext,
+       DecisionTimeoutFrontierInvariant,
+       PendingTimeoutExcludesDecision,
+       PendingInstallExcludesDecision,
+       TimeoutSigningExcludesDecision,
+       PendingDecisionExcludesTimeoutWork,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       ExecutePersistDecision, PersistDecision,
+       PersistDecisionControl, QcOutbox,
+       RememberedControl, RetainedClassItems, ControlClass, ControlView,
+       PacketForItem, PacketsForItems,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       RequestNodeSet, AllPendingRequests, NoDecisionForNode
+
+THEOREM ExecuteCoreDeliveryPreservesTimeoutViewOwnershipKernel ==
+  \A command:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ ExecuteCoreDelivery(command)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY RememberedUnownedControlPreservesTimeoutOwnershipItems,
+   IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       ExecuteCoreDelivery,
+       DeliverProposal, DeliverVote, DeliverQC, DeliverTimeout, DeliverTC,
+       TimeoutDeliveryGuard,
+       TimeoutReceiptsAfter, TimeoutReceiptAdmitted,
+       TimeoutVoteSlotOccupied, SameTimeoutVoteSlot,
+       TimeoutCertificateAfterReceipt,
+       TimeoutInstallRequestAfterReceipt, TimeoutReceiptFormsTC,
+       RememberedControl, RetainedClassItems, ControlClass, ControlView,
+       QcOutbox, TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM ExecuteOtherCommandLeavesTimeoutOwnershipProjection ==
+  \A command:
+    /\ ~ExecuteRegularCommand(command)
+    /\ ~ExecuteSignTimeout(command)
+    /\ ~ExecutePersistInstall(command)
+    /\ ~ExecutePersistDecision(command)
+    /\ ~ExecuteCoreDelivery(command)
+    /\ ExecuteCommand(command)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => UNCHANGED TimeoutViewOwnershipKernelProjection
+BY RememberedUnownedControlPreservesTimeoutOwnershipItems,
+   IsaM("blast")
+   DEF ExecuteCommand, ExecuteDecisionFetch,
+       ExecuteSignProposal, ExecuteSignVote, ExecuteFormPrepareQC,
+       ExecuteRequestCertifiedBody, ExecuteApply,
+       ExecuteChunkDelivery, ExecuteRejectAuthenticatedJunk,
+       CompleteProposalSignature, CompleteVoteSignature, FormPrepareQC,
+       ApplyDecision, PublishControlItems,
+       PublishControlAndEphemeralItems, PublishCertifiedRequests,
+       RetireNodeCertifiedResponseAuthority,
+       RememberedControl, RetainedClassItems, ControlClass,
+       ProposalOutbox, VoteOutbox, QcOutbox,
+       TimeoutViewOwnershipKernelProjection,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncAuxVars, vars
+
+THEOREM ExecuteCommandPreservesTimeoutViewOwnershipKernel ==
+  \A command:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ ExecuteCommand(command)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+              AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              DecisionFrontierUniquenessInvariant,
+              DecisionTimeoutFrontierInvariant,
+              TimeoutViewOwnershipKernelInvariant,
+              ExecuteCommand(command),
+              UNCHANGED AsyncRecoveryControlVars
+         PROVE TimeoutViewOwnershipKernelInvariant'
+    <2>1. CASE ExecuteRegularCommand(command)
+      BY <1>1, <2>1,
+         ExecuteRegularCommandPreservesTimeoutViewOwnershipKernel
+    <2>2. CASE ExecuteSignTimeout(command)
+      BY <1>1, <2>2,
+         ExecuteSignTimeoutPreservesTimeoutViewOwnershipKernel
+    <2>3. CASE ExecutePersistInstall(command)
+      BY <1>1, <2>3,
+         ExecutePersistInstallPreservesTimeoutViewOwnershipKernel
+    <2>4. CASE ExecutePersistDecision(command)
+      BY <1>1, <2>4,
+         ExecutePersistDecisionPreservesTimeoutViewOwnershipKernel
+    <2>5. CASE ExecuteCoreDelivery(command)
+      BY <1>1, <2>5,
+         ExecuteCoreDeliveryPreservesTimeoutViewOwnershipKernel
+    <2>6. CASE /\ ~ExecuteRegularCommand(command)
+                 /\ ~ExecuteSignTimeout(command)
+                 /\ ~ExecutePersistInstall(command)
+                 /\ ~ExecutePersistDecision(command)
+                 /\ ~ExecuteCoreDelivery(command)
+      <3>1. UNCHANGED TimeoutViewOwnershipKernelProjection
+        BY <1>1, <2>6,
+           ExecuteOtherCommandLeavesTimeoutOwnershipProjection
+      <3> QED BY <1>1, <3>1,
+           TimeoutViewOwnershipKernelProjectionFrame
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
+         DEF ExecuteCommand
+  <1> QED BY <1>1
+
+THEOREM LocalTimeoutStepPreservesTimeoutViewOwnershipKernel ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ (DirectTimeoutStep(node) \/ DeferredTimeoutStep(node))
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, PendingVoteWritesAuthorized,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       DirectTimeoutStep, DeferredTimeoutStep,
+       BeginTimeoutEnabled, BeginTimeout, BeginTimeoutReady,
+       TimeoutRequestFor, LocalTimeoutVoteFor,
+       AppendCausalSuccessors, LeaveCausalQueues,
+       TimeoutViewOwnershipKernelProjection,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM RuntimeStepPreservesTimeoutViewOwnershipKernel ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ RuntimeStep(node)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY ExecuteCommandPreservesTimeoutViewOwnershipKernel,
+   LocalTimeoutStepPreservesTimeoutViewOwnershipKernel,
+   TimeoutViewOwnershipKernelProjectionFrame,
+   IsaT(1200)
+   DEF RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
+       DeferCommand, DiscardCommand,
+       RemoveNextNodeCommand, RemoveNextDeferredCommand,
+       ClearDeferredHandoff, RetainDeferredHandoffs,
+       AdvanceNextDeferredClass, InstallDeferredHandoff,
+       AppendCausalSuccessors, LeaveCausalQueues,
+       SendNodeRetransmissions, NoSendItem,
+       TimeoutViewOwnershipKernelProjection,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars
+
+THEOREM RunNodeWorkPreservesTimeoutViewOwnershipKernel ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ RunNodeWork(node)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY RuntimeStepPreservesTimeoutViewOwnershipKernel,
+   TimeoutViewOwnershipKernelProjectionFrame,
+   IsaT(600)
+   DEF RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, AdmitProducerCompletion,
+       AdmitCausalHead, UpdateLocalAdmissionMetadata,
+       RecordBlockedCausalDebt, DrainFairIngressSelected,
+       LeaveCausalQueues,
+       TimeoutViewOwnershipKernelProjection,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars
+
+THEOREM AsyncRunnerStepPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ DecisionFrontierUniquenessInvariant
+  /\ DecisionTimeoutFrontierInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ AsyncRunnerStep
+  /\ UNCHANGED AsyncRecoveryControlVars
+  => TimeoutViewOwnershipKernelInvariant'
+BY RunNodeWorkPreservesTimeoutViewOwnershipKernel,
+   TimeoutViewOwnershipKernelProjectionFrame,
+   IsaT(600)
+   DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       RunHistoricalServer, DrainHistoricalIngressSelected,
+       HistoricalIdleStep,
+       TimeoutViewOwnershipKernelProjection,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, vars
+
+THEOREM PreGstNonresponsiveCrashPreservesTimeoutViewOwnershipKernel ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ PreGstCrash(node)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       PreGstCrash, Crash,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       RequestNodeSet
+
+THEOREM AsyncNonRunnerStepPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ AsyncNonRunnerStep
+  /\ UNCHANGED AsyncRecoveryControlVars
+  => TimeoutViewOwnershipKernelInvariant'
+BY PreGstNonresponsiveCrashPreservesTimeoutViewOwnershipKernel,
+   TimeoutViewOwnershipKernelProjectionFrame,
+   IsaT(1200)
+   DEF AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
+       OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       EnqueueIoLocalControlWork,
+       AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       AsyncFaultStep, PreGstLosePacket,
+       PreGstServeReceiverCloseRollback,
+       PreGstPendingServeReceiverCloseRollback,
+       PreGstMaterializedServeReceiverCloseRollback,
+       InjectByzantineNoise, InjectUntrustedTransportCompletion,
+       InjectAuthenticatedJunk, InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout, PublishEphemeralItems,
+       PublishCommitCertificateRequests,
+       TimeoutViewOwnershipKernelProjection,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars,
+       AsyncNonClockVars, vars
+
+THEOREM PreGstResponsiveCrashPreservesTimeoutViewOwnershipKernel ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ TimeoutViewOwnershipKernelInvariant
+    /\ PreGstResponsiveCrash(node)
+    => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       PreGstResponsiveCrash, Crash,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       RequestNodeSet
+
+THEOREM PreGstResponsiveRestartPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ PreGstResponsiveRestart
+  => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       PreGstResponsiveRestart, Restart,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM RestartRetainedControlRestoresLastTcAuthority ==
+  \A node \in ValidatorIds:
+    lastInstalledTc[node] # NoTimeoutCertificate
+      => TcOutbox(node, lastInstalledTc[node])
+           \subseteq RestartRetainedControl(node)
+BY IsaM("blast")
+   DEF RestartRetainedControl,
+       RestartLastTCControl, RestartLastInstalledTCs,
+       RestartDecisionControl, RestartDecisionQCs,
+       RestartHighestPrepareControl,
+       RememberedControl, RetainedClassItems,
+       ControlClass, ControlView,
+       TcOutbox, QcOutbox
+
+THEOREM RestartRetainedControlRestoresDecisionAuthority ==
+  \A node \in ValidatorIds, qc \in QcRecordSet:
+    /\ DecisionsUniqueByNodeContext
+    /\ DecisionSourceAt(node, qc)
+    => QcOutbox(node, qc) \subseteq RestartRetainedControl(node)
+BY IsaM("blast")
+   DEF DecisionsUniqueByNodeContext,
+       DecisionSourceAt, RestartRetainedControl,
+       RestartDecisionControl, RestartDecisionQCs,
+       RestartHighestPrepareControl,
+       RestartLastTCControl, RestartLastInstalledTCs,
+       RememberedControl, RetainedClassItems,
+       ControlClass, ControlView,
+       TcOutbox, QcOutbox
+
+THEOREM PreGstResponsiveReplayPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ DecisionFrontierUniquenessInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ PreGstResponsiveReplay
+  => TimeoutViewOwnershipKernelInvariant'
+BY RestartRetainedControlRestoresLastTcAuthority,
+   RestartRetainedControlRestoresDecisionAuthority,
+   IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, HonestTimeoutUnique,
+       TimeoutSigningProvenanceInvariant,
+       DecisionFrontierUniquenessInvariant,
+       DecisionsUniqueByNodeContext,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       PreGstResponsiveReplay, RecoveryCoreReplay,
+       ResetNodeSchedulerForRestart, RestartRetainedControl,
+       RestartSignatureReplay, RestartTimeoutOrProposalReplay,
+       RestartTimeoutReplay, RestartTimeoutIntents,
+       RestartTimeoutIntent, RestartDecisions,
+       RestartPrepareReplayIfActive,
+       RestartLockedCommitReplayIfActive,
+       FreshRestartCandidateSequence,
+       AsyncCandidateRestartReplayTombstoned,
+       ResumeTimeout, TimeoutSign,
+       RestartRetainedActiveRequests,
+       CertifiedResponseClaimForRequestsExceptRecipient,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       RequestNodeSet
+
+THEOREM DriveResponsiveReplayPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ DriveResponsiveReplayHead
+  => TimeoutViewOwnershipKernelInvariant'
+BY IsaM("blast")
+   DEF AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       DriveResponsiveReplayHead, RecoveryCoreReplay,
+       ResumeProposal, ResumeVote, ResumeTimeout,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM FinishResponsiveReplayPreservesTimeoutViewOwnershipKernel ==
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ FinishResponsiveReplay
+  => TimeoutViewOwnershipKernelInvariant'
+BY Isa
+   DEF TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       FinishResponsiveReplay,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM RearmResponsiveRecoveryPreservesTimeoutViewOwnershipKernel ==
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ RearmResponsiveRecovery
+  => TimeoutViewOwnershipKernelInvariant'
+BY Isa
+   DEF TimeoutViewOwnershipKernelInvariant,
+       ResponsiveRetainedTimeoutOwnershipControlSound,
+       ResponsiveRetainedTimeoutVoteControlSound,
+       ResponsiveRetainedTcControlSound,
+       ResponsiveRetainedDecisionControlSound,
+       ResponsiveInstalledTcAuthorityInvariant,
+       ResponsiveTimeoutVoteAuthorityInvariant,
+       ResponsiveTimeoutQuorumAuthorityInvariant,
+       ResponsiveDecisionCertificateAuthorityInvariant,
+       RetainedViewCertificateAuthority,
+       TimeoutVoteLifecycleAuthority,
+       RetainedTimeoutVoteAuthority,
+       TimeoutReplayRecoveryAuthority,
+       TimeoutReceiptQuorumInstallAuthority,
+       DecisionCertificateRetainedAuthority,
+       TimeoutVoteSemanticIdentity,
+       TimeoutCertificateSemanticIdentity,
+       DecisionSourceAt, NodeHasDecision,
+       ResponsiveTimeoutReceiptQuorumAt, ReceivedTimeoutVoteAt,
+       RearmResponsiveRecovery,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncRecoveryControlVars, AsyncSchedulerVars, vars,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM AsyncNonCrashStepPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ DecisionFrontierUniquenessInvariant
+  /\ DecisionTimeoutFrontierInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ AsyncNonCrashStep
+  => TimeoutViewOwnershipKernelInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              DecisionFrontierUniquenessInvariant,
+              DecisionTimeoutFrontierInvariant,
+              TimeoutViewOwnershipKernelInvariant,
+              AsyncNonCrashStep
+         PROVE TimeoutViewOwnershipKernelInvariant'
+    <2>1. CASE /\ (AsyncRunnerStep \/ AsyncNonRunnerStep)
+                 /\ UNCHANGED <<up, AsyncRecoveryControlVars>>
+      <3>1. UNCHANGED AsyncRecoveryControlVars
+        BY <2>1
+      <3>2. CASE AsyncRunnerStep
+        BY <1>1, <2>1, <3>1, <3>2,
+           AsyncRunnerStepPreservesTimeoutViewOwnershipKernel
+      <3>3. CASE AsyncNonRunnerStep
+        BY <1>1, <2>1, <3>1, <3>3,
+           AsyncNonRunnerStepPreservesTimeoutViewOwnershipKernel
+      <3> QED BY <2>1, <3>2, <3>3
+    <2>2. CASE DriveResponsiveReplayHead
+      BY <1>1, <2>2,
+         DriveResponsiveReplayPreservesTimeoutViewOwnershipKernel
+    <2>3. CASE FinishResponsiveReplay
+      BY <1>1, <2>3,
+         FinishResponsiveReplayPreservesTimeoutViewOwnershipKernel
+    <2>4. CASE RearmResponsiveRecovery
+      BY <1>1, <2>4,
+         RearmResponsiveRecoveryPreservesTimeoutViewOwnershipKernel
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4
+         DEF AsyncNonCrashStep
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ DecisionFrontierUniquenessInvariant
+  /\ DecisionTimeoutFrontierInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ AsyncNext
+  => TimeoutViewOwnershipKernelInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              DecisionFrontierUniquenessInvariant,
+              DecisionTimeoutFrontierInvariant,
+              TimeoutViewOwnershipKernelInvariant,
+              AsyncNext
+         PROVE TimeoutViewOwnershipKernelInvariant'
+    <2>1. CASE AsyncNonCrashStep
+      BY <1>1, <2>1,
+         AsyncNonCrashStepPreservesTimeoutViewOwnershipKernel
+    <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      <3>1. ASSUME NEW node \in ValidatorIds, PreGstCrash(node)
+             PROVE TimeoutViewOwnershipKernelInvariant'
+        <4>1. UNCHANGED AsyncRecoveryControlVars
+          BY <3>1 DEF PreGstCrash, AsyncSchedulerVars
+        <4> QED BY <1>1, <3>1, <4>1,
+             PreGstNonresponsiveCrashPreservesTimeoutViewOwnershipKernel
+      <3> QED BY <2>2, <3>1
+    <2>3. CASE \E node \in ValidatorIds: PreGstResponsiveCrash(node)
+      BY <1>1, <2>3,
+         PreGstResponsiveCrashPreservesTimeoutViewOwnershipKernel
+    <2>4. CASE PreGstResponsiveRestart
+      BY <1>1, <2>4,
+         PreGstResponsiveRestartPreservesTimeoutViewOwnershipKernel
+    <2>5. CASE PreGstResponsiveReplay
+      BY <1>1, <2>5,
+         PreGstResponsiveReplayPreservesTimeoutViewOwnershipKernel
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+         DEF AsyncNext
+  <1> QED BY <1>1
+
+THEOREM AsyncAllVarsStutterPreservesTimeoutViewOwnershipKernel ==
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ UNCHANGED AsyncAllVars
+  => TimeoutViewOwnershipKernelInvariant'
+BY TimeoutViewOwnershipKernelProjectionFrame, Isa
+   DEF TimeoutViewOwnershipKernelProjection,
+       TimeoutOwnershipRetainedItems,
+       TimeoutOwnershipRetainedItemsIn,
+       TimeoutOwnershipControlKinds,
+       AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+       AsyncRecoveryControlVars, vars
+
+THEOREM AsyncBracketPreservesTimeoutViewOwnershipKernel ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ DecisionFrontierUniquenessInvariant
+  /\ DecisionTimeoutFrontierInvariant
+  /\ TimeoutViewOwnershipKernelInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => TimeoutViewOwnershipKernelInvariant'
+BY AsyncNextPreservesTimeoutViewOwnershipKernel,
+   AsyncAllVarsStutterPreservesTimeoutViewOwnershipKernel, Isa
+
+THEOREM TimeoutViewOwnershipKernelInvariantFromAsyncSpec ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []TimeoutViewOwnershipKernelInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []TimeoutViewOwnershipKernelInvariant
+    <2> DEFINE Inductive ==
+           /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ DecisionFrontierUniquenessInvariant
+           /\ DecisionTimeoutFrontierInvariant
+           /\ TimeoutViewOwnershipKernelInvariant
+    <2>1. AsyncInitAt(initialContext) => Inductive
+      BY AsyncInitEstablishesStrongTypeInvariant,
+         AsyncInitEstablishesProgressOwnership,
+         AsyncInitEstablishesDecisionFrontierUniqueness,
+         AsyncInitEstablishesDecisionTimeoutFrontier,
+         AsyncInitEstablishesTimeoutViewOwnershipKernel
+         DEF Inductive
+    <2>2. Inductive /\ [AsyncNext]_AsyncAllVars => Inductive'
+      BY AsyncBracketNextPreservesStrongTypeInvariant,
+         AsyncBracketNextPreservesProgressOwnership,
+         AsyncBracketPreservesStrongDecisionFrontier,
+         AsyncBracketPreservesDecisionTimeoutFrontier,
+         AsyncBracketPreservesTimeoutViewOwnershipKernel
+         DEF Inductive
+    <2>3. AsyncSpecAt(initialContext) => []Inductive
+      BY <2>1, <2>2, PTL DEF AsyncSpecAt
+    <2>4. Inductive => TimeoutViewOwnershipKernelInvariant
+      BY DEF Inductive
+    <2> QED BY <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM TimeoutViewOwnershipInvariantFromAsyncSpec ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => []TimeoutViewOwnershipInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []TimeoutViewOwnershipInvariant
+    <2>1. AsyncSpecAt(initialContext)
+             => []TimeoutViewOwnershipKernelInvariant
+      BY TimeoutViewOwnershipKernelInvariantFromAsyncSpec
+    <2>2. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+      BY AsyncSpecAlwaysStrongTypeInvariant
+    <2>3. /\ AsyncStrongTypeInvariant
+           /\ TimeoutViewOwnershipKernelInvariant
+          => TimeoutViewOwnershipInvariant
+      BY TimeoutViewOwnershipKernelProjectsPublicInvariant
+    <2> QED BY <2>1, <2>2, <2>3, PTL
+  <1> QED BY <1>1
 
 THEOREM TimeoutMissingRanksAreNatural ==
   AsyncTypeInvariant

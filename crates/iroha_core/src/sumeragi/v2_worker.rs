@@ -714,7 +714,7 @@ pub(crate) enum CertifiedServePrepareError {
     Service(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CertifiedServeIngressReservationId(u128);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21693,10 +21693,11 @@ pub(super) mod tests {
     #[test]
     fn applied_height_handoff_accepts_historical_kura_global_responses_atomically() {
         let history = durable_history_fixture();
-        let mut service = successor_service_for_history(
+        let mut service = successor_service_for_history_as(
             Arc::clone(&history.kura),
             &history.artifact,
             &history.validators,
+            3,
         );
         let (receipt, applied_artifact) = durable_finality_fixture(&service, &history.validators);
         let commit_message =
@@ -21762,6 +21763,23 @@ pub(super) mod tests {
             pending.fanouts[1].rollover_claim,
             ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
         ));
+        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(archive_body_response) =
+            &history.body_response.payload
+        else {
+            panic!("history fixture must contain a certified body response")
+        };
+        assert_eq!(
+            archive_body_response.responder, 3,
+            "durable rollover must retain a frozen-roster archive that did not sign the old QC"
+        );
+        assert!(
+            !history
+                .artifact
+                .commit_qc
+                .signers
+                .contains(&archive_body_response.responder),
+            "the regression must exercise archive authority independently of QC signing"
+        );
         drop(pending);
         let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
             &applied_artifact,
@@ -21786,7 +21804,7 @@ pub(super) mod tests {
         };
         substituted_commit.certificate.aggregate_signature[0] ^= 0x01;
         substituted_commit.signature = Signature::new(
-            history.validators[0].private_key(),
+            history.validators[3].private_key(),
             &substituted_commit.signature_preimage(),
         )
         .payload()
@@ -21828,10 +21846,11 @@ pub(super) mod tests {
         assert!(error.contains("differs from its Kura finality source"));
         assert!(mismatched.is_pending(), "failed handoff remains atomic");
 
-        let mut rejected_commit_service = successor_service_for_history(
+        let mut rejected_commit_service = successor_service_for_history_as(
             Arc::clone(&history.kura),
             &history.artifact,
             &history.validators,
+            3,
         );
         let commit_attempts = Arc::new(AtomicUsize::new(0));
         let commit_attempts_for_hook = Arc::clone(&commit_attempts);
@@ -21866,10 +21885,11 @@ pub(super) mod tests {
         );
         assert!(rejected_commit_service.output_guard.restart_required());
 
-        let mut rejected_service = successor_service_for_history(
+        let mut rejected_service = successor_service_for_history_as(
             Arc::clone(&history.kura),
             &history.artifact,
             &history.validators,
+            3,
         );
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_for_hook = Arc::clone(&attempts);
@@ -21916,10 +21936,11 @@ pub(super) mod tests {
         );
         assert!(rejected_service.output_guard.restart_required());
 
-        let mut rejected_body_service = successor_service_for_history(
+        let mut rejected_body_service = successor_service_for_history_as(
             Arc::clone(&history.kura),
             &history.artifact,
             &history.validators,
+            3,
         );
         let body_attempts = Arc::new(AtomicUsize::new(0));
         let body_attempts_for_hook = Arc::clone(&body_attempts);
@@ -21951,7 +21972,7 @@ pub(super) mod tests {
         .into_parts();
         substituted_body.manifest = substituted_manifest;
         substituted_body.signature = Signature::new(
-            history.validators[0].private_key(),
+            history.validators[3].private_key(),
             &substituted_body.signature_preimage(),
         )
         .payload()
@@ -22808,6 +22829,78 @@ pub(super) mod tests {
             vec![service.local_peer.clone()],
             request,
         )
+    }
+
+    #[test]
+    fn certified_fetch_fans_out_to_every_frozen_roster_archive() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let request =
+            certified_fetch_task(&service, 62, tag, None, proposal.round, proposal.subject)
+                .certified_request()
+                .expect("fixture certified request")
+                .clone();
+        assert_eq!(request.certificate.signers, vec![0]);
+        let sources = service
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let expected_targets = sources
+            .iter()
+            .filter(|peer| *peer != &service.local_peer)
+            .cloned()
+            .collect::<Vec<_>>();
+        let task = BodyFetchTask::certified_for_test(62, tag, None, sources.clone(), request);
+        let admitted = Arc::new(Mutex::new(Vec::new()));
+        let admitted_for_hook = Arc::clone(&admitted);
+        service.set_exact_output_admission_hook(move |post, ticket| {
+            assert!(ticket.is_none());
+            let NetworkMessage::SumeragiBlock(envelope) = &post.data else {
+                panic!("certified archive fanout emitted a non-Sumeragi message")
+            };
+            assert!(matches!(
+                envelope.as_message(),
+                BlockMessage::V2(message)
+                    if matches!(
+                        &message.payload,
+                        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+                    )
+            ));
+            admitted_for_hook
+                .lock()
+                .expect("record frozen-roster archive target")
+                .push(post.peer_id);
+            Ok(())
+        });
+
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("fan out one certified request to every remote archive");
+
+        assert_eq!(task.sources(), sources.as_slice());
+        assert_eq!(
+            admitted
+                .lock()
+                .expect("inspect frozen-roster archive targets")
+                .as_slice(),
+            expected_targets.as_slice()
+        );
+        assert_eq!(
+            expected_targets,
+            service.context.roster[1..]
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect::<Vec<_>>(),
+            "every remote fixture archive is intentionally outside the one-signer QC"
+        );
     }
 
     #[test]
@@ -28824,10 +28917,19 @@ pub(super) mod tests {
         parent: &wire::finality::V2FinalityArtifact,
         validators: &[KeyPair],
     ) -> ProductionV2Services {
+        successor_service_for_history_as(kura, parent, validators, 0)
+    }
+
+    fn successor_service_for_history_as(
+        kura: Arc<Kura>,
+        parent: &wire::finality::V2FinalityArtifact,
+        validators: &[KeyPair],
+        local_validator: wire::ValidatorIndex,
+    ) -> ProductionV2Services {
         let mut context = parent.height_context.clone();
         context.height = parent.height.saturating_add(1);
         context.parent_commit_qc = Some(parent.commit_qc.clone());
-        service_for_history_context(kura, context, validators)
+        service_for_history_context_with_local_validator(kura, context, validators, local_validator)
     }
 
     #[test]

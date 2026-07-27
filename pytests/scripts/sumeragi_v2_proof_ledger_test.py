@@ -89,7 +89,10 @@ def copy_reply_writer_deadline_formal_fixture(tmp_path: Path, module) -> Path:
 
     formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True, exist_ok=True)
-    for name in module._REPLY_WRITER_DEADLINE_FORMAL_SOURCE_SHA256:
+    for name in (
+        *module._REPLY_WRITER_DEADLINE_FORMAL_SOURCE_SHA256,
+        *module.DORMANT_REPLY_CLOCK_MUTATION_ARTIFACTS,
+    ):
         shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
     runner = Path(
         "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh"
@@ -237,6 +240,26 @@ def copy_async_source_fidelity_fixture(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT_DIR / relative, destination)
     for name in formal_names:
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+    return formal_dir
+
+
+def copy_acyclic_liveness_debt_topology_fixture(
+    tmp_path: Path, module
+) -> Path:
+    """Copy the lower retained-lock vocabulary and every debt consumer."""
+
+    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True)
+    for name in (
+        "SumeragiV2LivenessProofs.tla",
+        "SumeragiV2Stage2BusyRankScratch.tla",
+        "SumeragiV2Stage3CursorKernelScratch.tla",
+        "SumeragiV2Stage6CapacityScratch.tla",
+        "SumeragiV2LockedBodyProposalActionProofs.tla",
+        "SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla",
+        "SumeragiV2AsyncOutstandingLivenessDebt.tla",
+    ):
         shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
     return formal_dir
 
@@ -1049,6 +1072,73 @@ BY PendingLowerLockCommitRequiresHistoricalTcAuthorization,
     )
     errors = module._historical_timeout_derivation_errors(formal_dir)
     assert any("must state only" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("needle", "replacement", "symbol"),
+    (
+        (
+            "/\\ TimeoutRoundStable(node, roundView)\n"
+            "  /\\ ~NodeTimedOut",
+            "TRUE\n  /\\ ~NodeTimedOut",
+            "TimeoutDeadlineArmedOwner",
+        ),
+        (
+            "asyncNow >= asyncNodeDeadlines[node]",
+            "asyncNow > asyncNodeDeadlines[node]",
+            "TimeoutDeadlineArmedOwner",
+        ),
+        (
+            '\\/ "TimeoutElapsed" \\in asyncOutstandingTags[node]',
+            '\\/ FALSE',
+            "TimeoutDeadlineArmedOwner",
+        ),
+        (
+            "/\\ gst\n              /\\ TimeoutOrigin",
+            "TimeoutOrigin",
+            "TimeoutSemanticOwnerHandoffProperty",
+        ),
+        (
+            "/\\ gst\n          /\\ vote.signer",
+            "/\\ vote.signer",
+            "TimeoutSourceIsolatedDeliveryConvergenceProperty",
+        ),
+        (
+            "vote.signer \\in AsyncCurrentResponsiveVoters\n"
+            "          /\\ TimeoutDelivery",
+            "TRUE\n          /\\ TimeoutDelivery",
+            "TimeoutSourceIsolatedDeliveryConvergenceProperty",
+        ),
+    ),
+)
+def test_timeout_view_liveness_contract_rejects_guard_weakening(
+    tmp_path: Path,
+    needle: str,
+    replacement: str,
+    symbol: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    path = formal_dir / "SumeragiV2TimeoutViewProgressProofs.tla"
+    shutil.copyfile(module.FORMAL_DIR / path.name, path)
+
+    assert module._timeout_view_liveness_contract_source_fidelity_errors(
+        formal_dir
+    ) == []
+
+    source = path.read_text(encoding="utf-8")
+    mutated = source.replace(needle, replacement, 1)
+    assert mutated != source
+    path.write_text(mutated, encoding="utf-8")
+
+    errors = module._timeout_view_liveness_contract_source_fidelity_errors(
+        formal_dir
+    )
+    assert any(
+        symbol in error and "GST/responsive-source contract" in error
+        for error in errors
+    )
 
 
 def test_completion_claim_rejects_unproved_debt_without_release_mode() -> None:
@@ -7480,6 +7570,66 @@ def test_liveness_ownership_source_seal_rejects_skipped_ci_invocation(
     ), errors
 
 
+@pytest.mark.parametrize("mutation", ("missing", "guarded"))
+@pytest.mark.parametrize(
+    "invocation",
+    (
+        "bash scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+        "bash scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
+        "bash scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
+        "bash scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+    ),
+)
+def test_formal_ci_new_mutation_runner_seal_rejects_weakening(
+    tmp_path: Path,
+    invocation: str,
+    mutation: str,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
+    ci_gate.parent.mkdir(parents=True)
+    shutil.copy2(ROOT_DIR / "ci" / "check_sumeragi_formal.sh", ci_gate)
+    source = ci_gate.read_text(encoding="utf-8")
+    line = invocation + "\n"
+    assert source.count(line) == 1
+    replacement = "" if mutation == "missing" else invocation + " || true\n"
+    ci_gate.write_text(source.replace(line, replacement, 1), encoding="utf-8")
+
+    errors = module._formal_ci_new_mutation_runner_invocation_errors(repo_root)
+
+    assert any(
+        invocation in error
+        and "exactly once as an unguarded fail-closed command" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize("left_index", (0, 1, 2))
+def test_formal_ci_new_mutation_runner_seal_rejects_reordering(
+    tmp_path: Path,
+    left_index: int,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
+    ci_gate.parent.mkdir(parents=True)
+    shutil.copy2(ROOT_DIR / "ci" / "check_sumeragi_formal.sh", ci_gate)
+    invocations = module._FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS
+    source = ci_gate.read_text(encoding="utf-8")
+    left = invocations[left_index]
+    right = invocations[left_index + 1]
+    assert source.index(left) < source.index(right)
+    source = source.replace(left, "__FORMAL_CI_MUTATION_SWAP__", 1)
+    source = source.replace(right, left, 1)
+    source = source.replace("__FORMAL_CI_MUTATION_SWAP__", right, 1)
+    ci_gate.write_text(source, encoding="utf-8")
+
+    errors = module._formal_ci_new_mutation_runner_invocation_errors(repo_root)
+
+    assert any("must retain reviewed order" in error for error in errors), errors
+
+
 def test_historical_discovery_occurrence_rank_source_seal_covers_exact_pair(
     tmp_path: Path,
 ) -> None:
@@ -9401,6 +9551,108 @@ def test_reply_writer_deadline_formal_source_is_bound() -> None:
         )
         == []
     )
+
+
+def test_dormant_reply_clock_mutation_contract_is_bound() -> None:
+    module = load_checker()
+
+    assert (
+        module._dormant_reply_clock_mutation_contract_errors(
+            module.FORMAL_DIR, ROOT_DIR
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "old", "new", "error_fragment"),
+    (
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2DormantReplyClockMutation.tla",
+            "AsyncServeTransportAdmissionGateAllows ==\n"
+            "  requestServiceable \\/ lifecycleOwned",
+            "AsyncServeTransportAdmissionGateAllows ==\n"
+            "  /\\ (requestServiceable \\/ lifecycleOwned)\n"
+            "  /\\ capacityOpen",
+            "AsyncServeTransportAdmissionGateAllows must equal only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2DormantReplyClockMutation.tla",
+            "        ELSE ~AsyncDormantExactReplyRequestPacket",
+            "        ELSE AsyncPhysicalAdmissionGateAllows",
+            "AsyncPacketOwnsClockDeadline must equal only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2DormantReplyClockMutation.tla",
+            "UNCHANGED <<asyncNow, requestRetained, requestServiceable,\n"
+            "                  lifecycleOwned, capacityOpen, selectorOpen, "
+            "served>>",
+            "UNCHANGED <<asyncNow, requestServiceable,\n"
+            "                  lifecycleOwned, capacityOpen, selectorOpen, "
+            "served>>",
+            "InstallTimeoutCertificate must retain dormant reply clock fragment",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2DormantReplyClockMutation.tla",
+            '  /\\ lastTransition = "Init"',
+            "  \\/ TRUE",
+            "Init must equal only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2DormantReplyClockMutation.tla",
+            "  \\/ ServeRetainedRequest\n\nSpec ==",
+            "\nSpec ==",
+            "Next must equal only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2DormantReplyClockMutation.tla",
+            "  /\\ WF_dormantReplyClockVars(AsyncTick)",
+            "  /\\ TRUE",
+            "Spec must equal only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/"
+            "SumeragiV2DormantReplyClockMutation.tla",
+            "  /\\ requestRetained \\in BOOLEAN",
+            "  /\\ requestRetained = TRUE",
+            "TypeInvariant must equal only",
+        ),
+        (
+            "docs/formal/sumeragi_v2/dormant_reply_clock_fixed.cfg",
+            "PROPERTY NextViewClockProgress",
+            "",
+            "dormant reply clock config must equal only",
+        ),
+        (
+            "scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+            "dormant_reply_clock_all_due_bug.cfg 13",
+            "dormant_reply_clock_all_due_bug.cfg 0",
+            "failing all-due mutation case exactly once",
+        ),
+    ),
+)
+def test_dormant_reply_clock_mutations_fail_closed(
+    tmp_path: Path,
+    relative_path: str,
+    old: str,
+    new: str,
+    error_fragment: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_reply_writer_deadline_formal_fixture(tmp_path, module)
+    mutate_source_once(tmp_path / relative_path, old, new)
+
+    errors = module._dormant_reply_clock_mutation_contract_errors(
+        formal_dir, tmp_path
+    )
+
+    assert any(error_fragment in error for error in errors), errors
 
 
 def test_typed_rollover_handoff_formal_source_is_bound() -> None:
@@ -12150,7 +12402,7 @@ def test_exact_output_production_source_is_bound() -> None:
             "pub(crate) fn admit_server_request(",
             "self.ensure_server_stream_slot(sender)?;",
             "let _ = sender;",
-            "full responder table may roll only through checked terminal compaction",
+            "full current-generation responder table rejects before pruning or mutating lifecycle state",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -13971,6 +14223,26 @@ def test_target_local_temporal_closure_operator_contracts_reject_weakening(
             "AsyncSpecAt(initialContext))",
             "AsyncLiveSpecAt(initialContext))",
         ),
+        (
+            "ExactDecisionAsyncNextPreservesCandidateTombstones",
+            "=> AsyncCandidateServiceLifecycleInvariant'",
+            "=> TRUE",
+        ),
+        (
+            "ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst",
+            "/\\ ~CandidateScheduled(candidate)'",
+            "/\\ TRUE",
+        ),
+        (
+            "ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst",
+            'identity.service.phase = "DeliverChunk"',
+            'identity.service.phase = "Apply"',
+        ),
+        (
+            "ExactDecisionResponsiveRestartPermitsNonterminalCandidateReconstruction",
+            "/\\ ~AsyncCandidateServicePacketRetired(item)'",
+            "/\\ TRUE",
+        ),
     ),
 )
 def test_exact_target_neutral_theorem_statements_reject_weakening(
@@ -14021,8 +14293,36 @@ def test_exact_target_neutral_theorem_statements_reject_weakening(
             "ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded",
         ),
         (
+            "ExactDecisionTargetNeutralDueHeadDisablesTick",
+            "AsyncPacketOwnsClockDeadline",
+        ),
+        (
             "ExactDecisionRequestHeadGateOwnerConvergence",
             "ExactDecisionTargetNeutralDueHeadReachesReadyGoal",
+        ),
+        (
+            "ExactDecisionAsyncNextPreservesCandidateTombstones",
+            "AsyncCandidateSuccessfulServiceInstallsTransientMarker",
+        ),
+        (
+            "ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst",
+            "AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst",
+        ),
+        (
+            "ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst",
+            "AsyncCandidateTerminalIdentityCannotReactivateAtGst",
+        ),
+        (
+            "ExactDecisionResponsiveRestartPermitsNonterminalCandidateReconstruction",
+            "AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction",
+        ),
+        (
+            "ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor",
+            "AsyncCandidateTerminalTombstoneCoalescesFreshCandidate",
+        ),
+        (
+            "ExactDecisionTargetNeutralNonDescentConsumesOrdinal",
+            "ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst",
         ),
     ),
 )
@@ -14053,6 +14353,16 @@ def test_exact_target_neutral_proof_dependencies_reject_deletion(
     ("symbol", "old", "new"),
     (
         (
+            "AsyncDormantExactReplyRequestPacketIsRetained",
+            "=> packet \\in asyncTransport",
+            "=> TRUE",
+        ),
+        (
+            "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
+            "/\\ packet \\in OverdueResponsivePackets",
+            "/\\ TRUE",
+        ),
+        (
             "AsyncServeQueuedIdentityDepartureInstallsTombstone",
             "=> AsyncServeLifecycleTombstone(node, identity)'",
             "=> TRUE",
@@ -14069,7 +14379,7 @@ def test_exact_target_neutral_proof_dependencies_reject_deletion(
         ),
         (
             "AsyncCandidateDiscardInstallsTerminalTombstone",
-            "=> AsyncCandidateServiceTombstoned(candidate)'",
+            "=> AsyncCandidateTerminalTombstoned(candidate)'",
             "=> TRUE",
         ),
         (
@@ -14095,9 +14405,48 @@ def test_exact_target_neutral_proof_dependencies_reject_deletion(
         (
             "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
             (
-                "=> AsyncCandidateAdmissionIdentityTerminallyCovered("
+                "=> AsyncCandidateAdmissionIdentityLifecycleCovered("
                 "identity)'"
             ),
+            "=> TRUE",
+        ),
+        (
+            "AsyncCandidateSuccessfulServiceInstallsTransientMarker",
+            "=> /\\ AsyncCandidateTransientServiceMarked(candidate)'",
+            "=> /\\ TRUE",
+        ),
+        (
+            "AsyncCandidateSuccessfulServiceAllocatesExactOrdinal",
+            "AsyncNextCandidateServiceOrdinal(node)' = ordinal + 1",
+            "AsyncNextCandidateServiceOrdinal(node)' >= ordinal",
+        ),
+        (
+            "AsyncCandidateTransientMarkerPersistsWithinGeneration",
+            "=> AsyncCandidateTransientServiceActive(candidate)'",
+            "=> TRUE",
+        ),
+        (
+            "AsyncCandidateTerminalTombstonePersistsWithoutExit",
+            "=> AsyncCandidateTerminalTombstoneActive(candidate)'",
+            "=> TRUE",
+        ),
+        (
+            "AsyncCandidateSameHeightRestartPreservesServicedIdentity",
+            "=> ~AsyncCandidateTransientServiceMarked(candidate)'",
+            "=> TRUE",
+        ),
+        (
+            "AsyncCandidateSameHeightRestartPreservesTombstone",
+            (
+                "/\\ AsyncCandidateTerminalTombstones'\n"
+                "          = {record \\in AsyncCandidateTerminalTombstones:"
+            ),
+            "/\\ TRUE\n"
+            "          = {record \\in AsyncCandidateTerminalTombstones:",
+        ),
+        (
+            "AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay",
+            "=> ~AsyncCandidateRestartReplayTombstoned(candidate)",
             "=> TRUE",
         ),
     ),
@@ -14126,6 +14475,14 @@ def test_async_terminal_lifecycle_theorem_statements_reject_weakening(
 @pytest.mark.parametrize(
     ("symbol", "token"),
     (
+        (
+            "AsyncDormantExactReplyRequestPacketIsRetained",
+            "AsyncDormantExactReplyRequestPacket",
+        ),
+        (
+            "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
+            "AsyncPacketOwnsClockDeadline",
+        ),
         (
             "AsyncServeQueuedIdentityDepartureInstallsTombstone",
             "AsyncServeReservationsAfterIoService",
@@ -14161,6 +14518,42 @@ def test_async_terminal_lifecycle_theorem_statements_reject_weakening(
         (
             "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
             "AsyncCandidateDiscardRetiresLogicalLifecycle",
+        ),
+        (
+            "AsyncCandidateSuccessfulServiceInstallsTransientMarker",
+            "AsyncCandidateServiceStateAfterSuccessfulService",
+        ),
+        (
+            "AsyncCandidateSuccessfulServiceAllocatesExactOrdinal",
+            "AsyncCandidateServiceMarker",
+        ),
+        (
+            "AsyncCandidateTransientMarkerPersistsWithinGeneration",
+            "AsyncCandidateServiceMarkersAfterReset",
+        ),
+        (
+            "AsyncCandidateTerminalTombstonePersistsWithoutExit",
+            "AsyncCandidateTerminalTombstoneExitThisStep",
+        ),
+        (
+            "AsyncCandidateSameHeightRestartPreservesServicedIdentity",
+            "AsyncCandidateRestartReplayTombstoned",
+        ),
+        (
+            "AsyncCandidateSameHeightRestartPreservesTombstone",
+            "ResetNodeSchedulerForRestart",
+        ),
+        (
+            "AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay",
+            "AsyncCandidateRestartReplayTombstoned",
+        ),
+        (
+            "AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst",
+            "AsyncCandidateTransientMarkerPersistsWithinGeneration",
+        ),
+        (
+            "AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction",
+            "AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay",
         ),
     ),
 )
@@ -15264,6 +15657,26 @@ def test_new_fixed_obligation_property_bodies_cannot_weaken_to_true(
         ),
         (
             "SumeragiV2AsyncHistoricalRecoveryTemporalSupportProofs",
+            "HistoricalTemporalCandidateIdentityBudgetBridgeProperty",
+            "               => "
+            "AsyncCandidateAdmissionIdentityLifecycleCovered(\n"
+            "                    identity)'))",
+            "               => "
+            "AsyncCandidateAdmissionIdentityTerminallyCovered(\n"
+            "                    identity)'))",
+        ),
+        (
+            "SumeragiV2AdequateLeaderServiceClosureProofs",
+            "AsyncCandidateIdentityBudgetBridgeProperty",
+            "               => "
+            "AsyncCandidateAdmissionIdentityLifecycleCovered(\n"
+            "                    identity)'))",
+            "               => "
+            "AsyncCandidateAdmissionIdentityTerminallyCovered(\n"
+            "                    identity)'))",
+        ),
+        (
+            "SumeragiV2AsyncHistoricalRecoveryTemporalSupportProofs",
             "HistoricalTemporalServeExactRetryCoalescingAction",
             "  \\/ RejectConflictingExactServeRequest(node, candidate)",
             "",
@@ -16147,18 +16560,38 @@ def test_new_obligation_composition_proof_dependencies_fail_closed(
         (
             "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
             (
-                "EXTENDS SumeragiV2ChainEpochRefinement,\n"
+                "EXTENDS "
+                "SumeragiV2SuccessorActivationRefinementProofs,\n"
                 "        "
                 "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs,\n"
                 "        "
                 "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs"
             ),
             (
-                "EXTENDS SumeragiV2ChainEpochRefinement,\n"
+                "EXTENDS "
+                "SumeragiV2SuccessorActivationRefinementProofs,\n"
                 "        "
                 "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs"
             ),
             "must EXTEND exactly",
+        ),
+        (
+            "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+            (
+                "EXTENDS "
+                "SumeragiV2SuccessorActivationRefinementProofs,\n"
+            ),
+            "EXTENDS SumeragiV2ChainEpochRefinement,\n",
+            "may not directly import circular historical/height proof modules",
+        ),
+        (
+            "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+            (
+                "EXTENDS "
+                "SumeragiV2SuccessorActivationRefinementProofs,\n"
+            ),
+            "EXTENDS SumeragiV2ChainLivenessProofs,\n",
+            "may not directly import circular historical/height proof modules",
         ),
         (
             "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
@@ -16418,6 +16851,36 @@ def test_historical_decision_stage_ownership_proof_body_is_source_bound() -> Non
     ), errors
 
 
+def test_exact_decision_residual_composition_cannot_drop_a_leaf() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AsyncTemporalClosureProofs"
+    symbol = "ExactDecisionOffSchedulerResidualConvergenceObligation"
+    dependency = "ExactDecisionRequestClockOwnerConvergence"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    sources = {
+        target_module: mutate_tla_theorem(
+            source,
+            symbol,
+            f"BY {dependency},\n",
+            "BY ",
+        )
+    }
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        sources,
+    )
+
+    assert any(
+        f"{symbol} must retain reviewed proof dependencies" in error
+        and dependency in error
+        for error in errors
+    ), errors
+
+
 def test_protected_service_rank_contract_cannot_drop_serve_fifo_rank(
     tmp_path: Path,
 ) -> None:
@@ -16446,6 +16909,130 @@ def test_protected_service_rank_contract_cannot_drop_serve_fifo_rank(
     assert any(
         "ProtectedServiceRanksProgressProperty must equal only" in error
         for error in errors
+    ), errors
+
+
+def test_acyclic_liveness_debt_topology_is_pinned(tmp_path: Path) -> None:
+    module = load_checker()
+    formal_dir = copy_acyclic_liveness_debt_topology_fixture(tmp_path, module)
+
+    assert module._acyclic_liveness_debt_topology_errors(formal_dir) == []
+
+
+@pytest.mark.parametrize(
+    "module_name",
+    (
+        "SumeragiV2Stage2BusyRankScratch",
+        "SumeragiV2LockedBodyProposalActionProofs",
+        "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
+    ),
+)
+def test_acyclic_liveness_debt_topology_rejects_facade_import(
+    tmp_path: Path, module_name: str
+) -> None:
+    module = load_checker()
+    formal_dir = copy_acyclic_liveness_debt_topology_fixture(tmp_path, module)
+    path = formal_dir / f"{module_name}.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs",
+            "EXTENDS SumeragiV2AsyncLivenessProofs",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._acyclic_liveness_debt_topology_errors(formal_dir)
+
+    assert any(
+        f"{module_name}.tla must EXTEND exactly" in error for error in errors
+    ), errors
+    assert any(
+        f"{module_name}.tla must not depend on SumeragiV2AsyncLivenessProofs"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_acyclic_liveness_debt_topology_rejects_transitive_facade_import(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_acyclic_liveness_debt_topology_fixture(tmp_path, module)
+    (formal_dir / "SumeragiV2AsyncTemporalClosureProofs.tla").write_text(
+        "---- MODULE SumeragiV2AsyncTemporalClosureProofs ----\n"
+        "EXTENDS SyntheticDebtBridge\n\n"
+        "=============================================================================\n",
+        encoding="utf-8",
+    )
+    (formal_dir / "SyntheticDebtBridge.tla").write_text(
+        "---- MODULE SyntheticDebtBridge ----\n"
+        "EXTENDS SumeragiV2AsyncLivenessProofs\n\n"
+        "=============================================================================\n",
+        encoding="utf-8",
+    )
+
+    errors = module._acyclic_liveness_debt_topology_errors(formal_dir)
+
+    assert any(
+        "must not transitively depend on SumeragiV2AsyncLivenessProofs" in error
+        and "SyntheticDebtBridge" in error
+        for error in errors
+    ), errors
+
+
+def test_acyclic_liveness_debt_topology_rejects_lower_operator_in_debt(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_acyclic_liveness_debt_topology_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2AsyncOutstandingLivenessDebt.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "\n=============================================================================\n",
+            "\nStableAvailableRetainedLock(node, lockedRound, subject) == TRUE\n\n"
+            "=============================================================================\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._acyclic_liveness_debt_topology_errors(formal_dir)
+
+    assert any(
+        "StableAvailableRetainedLock must have exactly one lower provider" in error
+        for error in errors
+    ), errors
+    assert any(
+        "must not redeclare lower liveness vocabulary operator "
+        "StableAvailableRetainedLock" in error
+        for error in errors
+    ), errors
+
+
+def test_acyclic_liveness_debt_topology_rejects_vocabulary_weakening(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_acyclic_liveness_debt_topology_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "StableAvailableRetainedLock",
+            "/\\ gst",
+            "/\\ TRUE",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._acyclic_liveness_debt_topology_errors(formal_dir)
+
+    assert any(
+        "StableAvailableRetainedLock must equal only" in error for error in errors
     ), errors
 
 
@@ -17460,7 +18047,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
         ),
         (
             "AsyncCandidateServiceIdentityScheduled(candidate) \\/ "
-            "AsyncCandidateServiceTombstoned(candidate)",
+            "AsyncCandidateServiceCoalesced(candidate)",
             "AsyncCandidateServiceIdentityScheduled(candidate) \\/ FALSE",
             "CandidateAdmissionCoalesced must equal only",
         ),
@@ -17577,6 +18164,25 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
             "       item.envelope.recipient, item)\n",
             "",
             "CanAdmitIngressItem must equal only",
+        ),
+        (
+            "  /\\ packet \\in asyncTransport\n"
+            "  /\\ ~AsyncServeTransportAdmissionGateAllows(\n"
+            "       packet.item.envelope.recipient, packet.item)",
+            "  /\\ ~AsyncServeTransportAdmissionGateAllows(\n"
+            "       packet.item.envelope.recipient, packet.item)",
+            "AsyncDormantExactReplyRequestPacket must equal only",
+        ),
+        (
+            "  /\\ AsyncServeTransportAdmissionGateAllows(\n"
+            "       packet.item.envelope.recipient, packet.item)\n",
+            "  /\\ CanAdmitIngressItem(packet.item)\n",
+            "AsyncPacketOwnsClockDeadline must equal only",
+        ),
+        (
+            "     AsyncPacketOwnsClockDeadline(packet)}",
+            "     packet.deadline <= asyncNow}",
+            "OverdueResponsivePackets must equal only",
         ),
         (
             "THEN UNCHANGED <<\n"
@@ -21685,7 +22291,7 @@ def test_async_source_fidelity_rejects_durable_ingress_and_restart_weakening(
     mutations = (
         (
             "CandidateAdmissionCoalesced",
-            "AsyncCandidateServiceTombstoned(candidate)",
+            "AsyncCandidateServiceCoalesced(candidate)",
             "FALSE",
         ),
         (
@@ -21710,13 +22316,23 @@ def test_async_source_fidelity_rejects_durable_ingress_and_restart_weakening(
         ),
         (
             "AsyncCandidateTerminalRetirementsThisStep",
-            "\\cup AsyncCandidateTerminalDiscardsThisStep",
-            "\\cup {}",
+            "AsyncCandidateTerminalDiscardsThisStep",
+            "{}",
+        ),
+        (
+            "AsyncCandidateTerminalRetirementEligibleAfterStep",
+            "candidate.kind \\notin AsyncRestartScopedCandidateServiceKinds",
+            "TRUE",
         ),
         (
             "AsyncCandidateServiceStateAfterTerminalRetirement",
             "\\/ existing # {}",
             "\\/ TRUE",
+        ),
+        (
+            "AsyncCandidateServiceStateAfterSuccessfulService",
+            "!.candidateServiceMarkers =",
+            "!.candidateTerminalTombstones =",
         ),
         (
             "AsyncControlServiceSlotTransition",
@@ -21748,8 +22364,8 @@ def test_async_source_fidelity_rejects_durable_ingress_and_restart_weakening(
         ),
         (
             "AsyncCandidateRestartReplayTombstoned",
-            "candidate.kind \\notin AsyncRestartScopedCandidateServiceKinds",
-            "FALSE",
+            "AsyncCandidateTerminalTombstoned(candidate)",
+            "AsyncCandidateServiceCoalesced(candidate)",
         ),
         (
             "FreshRestartCandidateSequence",
@@ -21757,14 +22373,14 @@ def test_async_source_fidelity_rejects_durable_ingress_and_restart_weakening(
             "CandidateAdmissionCoalesced(replay[1])",
         ),
         (
-            "AsyncCandidateServiceTombstonesAfterReset",
-            "record.phase \\notin AsyncRestartScopedCandidateServiceKinds",
+            "AsyncCandidateServiceMarkersAfterReset",
+            "record.node \\notin resetNodes",
             "TRUE",
         ),
         (
             "AsyncControlServiceStateAfterReset",
-            "AsyncCandidateServiceTombstonesAfterReset(state, resetNodes)",
-            "state.candidateServiceTombstones",
+            "AsyncCandidateServiceMarkersAfterReset(state, resetNodes)",
+            "state.candidateServiceMarkers",
         ),
         (
             "AsyncNext",
@@ -21795,7 +22411,9 @@ def test_async_source_fidelity_rejects_durable_ingress_and_restart_weakening(
         "AsyncCandidateStageRetired must equal only",
         "AsyncCandidateTerminallyDiscardedThisStep must equal only",
         "AsyncCandidateTerminalRetirementsThisStep must equal only",
+        "AsyncCandidateTerminalRetirementEligibleAfterStep must equal only",
         "AsyncCandidateServiceStateAfterTerminalRetirement must equal only",
+        "AsyncCandidateServiceStateAfterSuccessfulService must equal only",
         "AsyncControlServiceSlotTransition omits required production behavior",
         "AsyncServeLogicalIdentityRetiredOrSuperseded must equal only",
         "ReserveExactServeCapacity must equal only",
@@ -21803,13 +22421,125 @@ def test_async_source_fidelity_rejects_durable_ingress_and_restart_weakening(
         "AsyncServeLifecycleTypeInvariant must equal only",
         "AsyncCandidateRestartReplayTombstoned must equal only",
         "FreshRestartCandidateSequence must equal only",
-        "AsyncCandidateServiceTombstonesAfterReset must equal only",
+        "AsyncCandidateServiceMarkersAfterReset must equal only",
         "AsyncControlServiceStateAfterReset omits required production behavior",
         "AsyncNext omits required production behavior",
         "CanAdmitIngressItem must equal only",
     )
     for marker in expected:
         assert any(marker in error for error in errors), (marker, errors)
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected"),
+    (
+        (
+            "AsyncCandidateServiceMarker",
+            "generation |-> episodeGeneration",
+            "generation |-> 0",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateServiceMarkerSet",
+            "episodeGeneration \\in Generations",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateServiceTombstone",
+            "phase |-> candidate.kind",
+            'phase |-> "DeliverChunk"',
+            "must equal only",
+        ),
+        (
+            "AsyncControlServiceStateTypeInvariant",
+            "IsFiniteSet(AsyncCandidateTerminalTombstones)",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateServiceRecordRetainedAfterStep",
+            "~AsyncNodeHasDecisionAfter(record.node)",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateServiceEligibleAfterStep",
+            "candidate.consumerGeneration = generation'[candidate.node]",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateServiceLifecycleInvariant",
+            "record.phase \\notin AsyncRestartScopedCandidateServiceKinds",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateTransientServiceActive",
+            "~CandidateScheduled(candidate)",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateTerminalTombstoneActive",
+            "~CandidateScheduled(candidate)",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncControlServiceSlotTransition",
+            "ELSE candidateReclamationState",
+            "ELSE candidateReclamationState \\/ TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateRestartReplayTombstoned",
+            "AsyncCandidateTerminalTombstoned(candidate)",
+            "AsyncCandidateServiceCoalesced(candidate)",
+            "must equal only",
+        ),
+        (
+            "AsyncCandidateServiceMarkersAfterReset",
+            "record.node \\notin resetNodes",
+            "TRUE",
+            "must equal only",
+        ),
+        (
+            "AsyncControlServiceStateAfterReset",
+            "AsyncCandidateServiceMarkersAfterReset(state, resetNodes)",
+            "state.candidateServiceMarkers",
+            "omits required production behavior",
+        ),
+    ),
+)
+def test_async_source_fidelity_rejects_restart_durable_transient_marker(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    assert module._async_source_fidelity_errors(formal_dir) == []
+
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        symbol in error and expected in error for error in errors
+    ), errors
 
 
 def test_async_source_fidelity_pins_restart_reset_and_retained_control(
@@ -23966,6 +24696,16 @@ def test_async_historical_recovery_child_source_fidelity() -> None:
             "  /\\ TRUE\n",
         ),
         (
+            "HistoricalRecoveryAsyncTemporalClosurePremises",
+            "  /\\ ApplicationCompletionProgressProperty(specification)\n",
+            "  /\\ TRUE\n",
+        ),
+        (
+            "HistoricalRecoveryAsyncRemainingCorridorPremises",
+            "  /\\ ApplicationCompletionProgressProperty(specification)\n",
+            "  /\\ TRUE\n",
+        ),
+        (
             "HistoricalLockedBodyRecoveryOutcome",
             "  \\/ HistoricalLockedBodyRecoveryTerminal(node, qc)",
             "  \\/ TRUE",
@@ -24059,6 +24799,10 @@ def test_async_historical_recovery_operator_mutations_fail_closed(
             "ResponsiveDecisionServiceOwnershipProperty",
         ),
         (
+            "ResponsiveDecisionApplicationFromExactCorridor",
+            "ApplicationCompletionProgressProperty",
+        ),
+        (
             "HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor",
             "ResponsiveDecisionApplicationFromExactCorridor",
         ),
@@ -24118,8 +24862,8 @@ def test_async_historical_recovery_rejects_constants_and_endpoint_theorems(
     path = formal_dir / "SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla"
     source = path.read_text(encoding="utf-8")
     source = source.replace(
-        "EXTENDS SumeragiV2AsyncLivenessProofs, TLAPS\n",
-        "EXTENDS SumeragiV2AsyncLivenessProofs, TLAPS\n"
+        "EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs, TLAPS\n",
+        "EXTENDS SumeragiV2AsyncTimeoutOwnershipProofs, TLAPS\n"
         "CONSTANT HistoricalRecoveryOracle\n",
         1,
     )
@@ -24215,7 +24959,8 @@ def test_async_historical_recovery_rejects_constants_and_endpoint_theorems(
         ),
         (
             "IndexedHistoricalRecoverySourceReady",
-            "  /\\ server \\in source.qc.signers \\cap Honest\n",
+            "  /\\ server \\in IndexedAsync(initialContext)!\n"
+            "                 AsyncCurrentResponsiveVoters\n",
             "",
             "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
         ),
@@ -27895,6 +28640,24 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
     effect_capacity_mutations = source.index(
         "run_sumeragi_v2_effect_capacity_ownership_mutation.sh"
     )
+    liveness_ownership_mutations = source.index(
+        "run_sumeragi_v2_liveness_ownership_mutations.sh"
+    )
+    adequate_leader_readiness_mutations = source.index(
+        "run_sumeragi_v2_adequate_leader_readiness_mutations.sh"
+    )
+    indexed_height_mutation = source.index(
+        "run_sumeragi_v2_indexed_height_mutation.sh"
+    )
+    item_carrier_typing_mutation = source.index(
+        "run_sumeragi_v2_item_carrier_typing_mutation.sh"
+    )
+    reply_writer_deadline_mutations = source.index(
+        "run_sumeragi_v2_reply_writer_deadline_mutations.sh"
+    )
+    historical_discovery_mutation = source.index(
+        "run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh"
+    )
     typed_rollover_mutations = source.index(
         "run_sumeragi_v2_typed_rollover_handoff_mutations.sh"
     )
@@ -27912,6 +28675,12 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
         < candidate_restart
         < progress_mutations
         < effect_capacity_mutations
+        < liveness_ownership_mutations
+        < adequate_leader_readiness_mutations
+        < indexed_height_mutation
+        < item_carrier_typing_mutation
+        < reply_writer_deadline_mutations
+        < historical_discovery_mutation
         < typed_rollover_mutations
         < tlc
         < replay
@@ -27919,6 +28688,13 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
         < final_release
         < final_marker
     )
+    for invocation in (
+        "run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+        "run_sumeragi_v2_indexed_height_mutation.sh",
+        "run_sumeragi_v2_item_carrier_typing_mutation.sh",
+        "run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+    ):
+        assert source.count(invocation) == 1
     assert source.count("run_sumeragi_v2_typed_rollover_handoff_mutations.sh") == 1
     assert "proof_evidence.json" in source
     cross_requirement = source.index("--print-cross-tool-obligations")
@@ -35644,3 +36420,110 @@ def test_atomic_timeout_completion_contract_rejects_split_or_stale_projection(
         )
         assert any(expected_error in error for error in errors), errors
         paths[name].write_text(source, encoding="utf-8")
+
+
+def test_adequate_leader_scheduler_readiness_contract_is_bound(
+    tmp_path: Path,
+) -> None:
+    """The exact-leader induction seam accepts the reviewed source."""
+
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    shutil.copy2(
+        module.FORMAL_DIR
+        / "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+        formal_dir / "SumeragiV2AdequateLeaderServiceClosureProofs.tla",
+    )
+
+    assert (
+        module._adequate_leader_scheduler_readiness_source_fidelity_errors(
+            formal_dir
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "symbol", "old", "new"),
+    (
+        (
+            "operator",
+            "ExactLeaderSchedulerReadinessFrame",
+            "  /\\ UNCHANGED up\n",
+            "",
+        ),
+        (
+            "operator",
+            "ExactLeaderSchedulerReadinessFrame",
+            "                 asyncHeldChunks,\n"
+            "                 asyncControlServiceState>>",
+            "                 asyncHeldChunks>>",
+        ),
+        (
+            "theorem",
+            "AsyncNetworkStepPreservesExactLeaderSchedulerOriginReadiness",
+            "  /\\ AsyncNext\n  /\\ AsyncNetworkStep\n",
+            "  /\\ AsyncNetworkStep\n",
+        ),
+        (
+            "theorem",
+            "AsyncNetworkReplacementRetiresReadyOccurrenceIntoAuthenticatedProvenance",
+            "    => AuthenticatedLeaderDiscardProvenance(candidate)'\n",
+            "    => TRUE\n",
+        ),
+        (
+            "theorem",
+            "AuthenticatedExactLeaderTerminalDiscardInstallsClosedTombstone",
+            "    /\\ candidate.kind \\notin "
+            "AsyncRestartScopedCandidateServiceKinds\n"
+            "    /\\ SameConsumerLeaderDiscard(candidate)",
+            "    /\\ TRUE\n"
+            "    /\\ SameConsumerLeaderDiscard(candidate)",
+        ),
+        (
+            "theorem",
+            "AsyncLiveExactLeaderSchedulerOriginReadiness",
+            "    ExactLeaderSchedulerOriginReadinessProperty(\n"
+            "      AsyncLiveSpecAt(initialContext))",
+            "    TRUE",
+        ),
+        (
+            "theorem",
+            "AsyncLiveResponsiveExactLeaderSchedulerSourcesAreUp",
+            "             /\\ gst\n"
+            "             /\\ ExactLeaderCandidateRank(candidate, rank)\n"
+            "             => candidate.node \\in up)",
+            "             /\\ gst\n"
+            "             /\\ ExactLeaderCandidateRank(candidate, rank)\n"
+            "             /\\ candidate.node \\in AsyncCurrentResponsiveVoters\n"
+            "             => candidate.node \\in up)",
+        ),
+    ),
+)
+def test_adequate_leader_scheduler_readiness_contract_rejects_weakening(
+    tmp_path: Path,
+    kind: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    """Frame, outer-transition, provenance, and source-scope drift fail."""
+
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    path = formal_dir / "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
+    source = (
+        module.FORMAL_DIR
+        / "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
+    ).read_text(encoding="utf-8")
+    mutate = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
+    path.write_text(mutate(source, symbol, old, new), encoding="utf-8")
+
+    errors = (
+        module._adequate_leader_scheduler_readiness_source_fidelity_errors(
+            formal_dir
+        )
+    )
+    assert any(symbol in error for error in errors), errors

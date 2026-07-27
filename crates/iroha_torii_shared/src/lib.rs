@@ -178,6 +178,9 @@ pub mod uri {
     /// URI used to draft one strict native validation-fee Parliament proposal.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT: &str =
         crate::route_catalog::runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT_PATH;
+    /// URI used to draft one exact proposal-bound validation-fee PLAIN ballot.
+    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT: &str =
+        crate::route_catalog::runtime_governance::VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH;
     /// URI used to fetch an offline operation by ID.
     pub const OFFLINE_OPERATION: &str = crate::route_catalog::offline::OPERATION_PATH;
     /// Transaction URI is used to handle incoming signed transaction requests.

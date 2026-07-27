@@ -1,8 +1,8 @@
 //! Reducer-preserving sequential block synchronization for Sumeragi v2.
 //!
 //! This module discovers the CommitQC for the caller's already-frozen active
-//! [`wire::HeightContext`] and lets a certified historical signer serve the
-//! exact canonical body after active peers have rolled forward. It never
+//! [`wire::HeightContext`] and lets an authenticated frozen-roster archive peer
+//! serve the exact canonical body after active peers have rolled forward. It never
 //! imports a block, writes Kura, forms a certificate, or changes height
 //! directly. A successfully authenticated certificate response is converted
 //! to the ordinary v2 `QuorumCertificate` envelope and must be admitted through
@@ -153,14 +153,17 @@ impl V2BlockSyncServer {
         })
     }
 
-    /// Serve an exact historical canonical body only when this node is one of
-    /// the request QC's certified signers under that height's frozen roster.
+    /// Serve an exact historical canonical body only when this node belongs to
+    /// that height's frozen roster and its durable history contains the applied
+    /// block and matching finality artifact.
     ///
     /// The historical context and PoPs are loaded from the immutable context
     /// store, while Kura supplies both the canonical finality artifact and
-    /// exact block bytes. The receiver still stores and validates the returned
-    /// body through its active reducer effects; this service never imports or
-    /// applies a block locally.
+    /// exact block bytes. The archive peer need not have signed the historical
+    /// QC: the QC authenticates the subject, and the peer signs the response
+    /// containing the exact subject-bound bytes. The receiver still stores and
+    /// validates the returned body through its active reducer effects; this
+    /// service never imports or applies a block locally.
     pub(crate) fn serve_historical_body(
         &mut self,
         kura: &Kura,
@@ -662,15 +665,6 @@ fn build_historical_body_response(
         return Ok(None);
     };
     let responder = u32::try_from(responder_position)?;
-    if request
-        .certificate
-        .signers
-        .binary_search(&responder)
-        .is_err()
-    {
-        return Ok(None);
-    }
-
     let block_height = usize::try_from(height)?;
     let block_height = NonZeroUsize::new(block_height)
         .ok_or(V2BlockSyncError::MissingHistoricalBlock { height })?;
@@ -1161,7 +1155,7 @@ pub(super) mod tests {
             &artifact,
             commit_request,
             &requester,
-            &fixture.old_validators[0],
+            &fixture.old_validators[3],
         )
         .expect("build durable CommitQC response");
         let body_request = fixture.body_request(certificate);
@@ -1170,10 +1164,10 @@ pub(super) mod tests {
             &context_store,
             body_request,
             &requester,
-            &fixture.old_validators[0],
+            &fixture.old_validators[3],
         )
         .expect("build durable body response")
-        .expect("history fixture has a certified responder");
+        .expect("history fixture has a frozen-roster archive responder");
         DurableHistoryFixture {
             kura,
             artifact,
@@ -1672,7 +1666,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn historical_body_comes_from_kura_and_only_a_certified_signer_can_serve() {
+    fn historical_body_comes_from_kura_and_a_non_signer_archive_can_serve() {
         let fixture = Fixture::new();
         let committed = ValidBlock::new_dummy_and_modify_header(
             fixture.old_validators[0].private_key(),
@@ -1761,7 +1755,7 @@ pub(super) mod tests {
                 &fixture.old_validators[0],
             )
             .expect("serve historical body")
-            .expect("certified signer retained canonical Kura body");
+            .expect("frozen-roster signer retained canonical Kura body");
         assert_eq!(server.body_len(), 1);
         let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) = response.payload
         else {
@@ -1818,19 +1812,50 @@ pub(super) mod tests {
         assert!(outstanding.complete(request_hash));
         assert!(outstanding.is_empty());
 
-        assert!(
-            server
-                .serve_historical_body(
-                    kura.as_ref(),
-                    &context_store,
-                    request.clone(),
-                    &peer(&fixture.requester),
-                    &fixture.old_validators[3],
+        let archive_response = server
+            .serve_historical_body(
+                kura.as_ref(),
+                &context_store,
+                request.clone(),
+                &peer(&fixture.requester),
+                &fixture.old_validators[3],
+            )
+            .expect("serve from applied frozen-roster archive")
+            .expect("non-QC-signer archive serves exact Kura body");
+        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(archive_response) =
+            archive_response.payload
+        else {
+            panic!("historical archive emits certified body response")
+        };
+        assert_eq!(archive_response.responder, 3);
+        assert_eq!(archive_response.request_hash, request_hash);
+        assert_eq!(archive_response.body, canonical_wire);
+        let authenticated_archive_request = authenticate_certified_body_request(
+            &context,
+            request.clone(),
+            &peer(&fixture.requester),
+            |context, certificate| {
+                verify_persisted_quorum_certificate(
+                    context,
+                    &fixture.proofs_of_possession,
+                    certificate,
                 )
-                .expect("non-signer is safely ignored")
-                .is_none()
-        );
-        assert_eq!(server.body_len(), 0);
+            },
+        )
+        .expect("authenticate archive request");
+        let mut archive_outstanding =
+            OutstandingCertifiedBodyRequests::new(1).expect("bounded archive tracker");
+        archive_outstanding
+            .register(authenticated_archive_request)
+            .expect("register archive request");
+        archive_outstanding
+            .authenticate_response(
+                &context,
+                archive_response,
+                &peer(&fixture.old_validators[3]),
+            )
+            .expect("lagging peer accepts non-QC-signer archive response");
+        assert_eq!(server.body_len(), 1);
         assert!(
             server
                 .serve_historical_body(
@@ -1843,6 +1868,7 @@ pub(super) mod tests {
                 .expect("rotated non-historical key is safely ignored")
                 .is_none()
         );
+        assert_eq!(server.body_len(), 0);
 
         let mut forged = request;
         forged.certificate.aggregate_signature = vec![0xEE; 96];

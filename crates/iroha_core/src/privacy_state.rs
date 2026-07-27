@@ -9,17 +9,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::privacy::{
-    ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
-    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PRIVACY_ZK_ACE_MAX_POLICIES_V1,
-    PrivacyActivationValidationError, PrivacyConsensusPolicyV1, PrivacyNamespaceV1,
+    ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, IrohaZkX509StarkP256StatementV1,
+    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+    PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyActivationValidationError, PrivacyConsensusLimitsV1,
+    PrivacyConsensusPolicyV1, PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
     PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
     PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
     PrivacyPolicyIdV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
-    PrivacyStatementDigestV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
-    PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPhcHashV1,
-    PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
-    ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
+    PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+    PrivacyTrustAnchorPolicyNamespaceV1, PrivacyZkAcePolicyRecordDigestV1,
+    PrivacyZkAcePolicyRecordV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
+    PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
+    PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordDigestV1,
+    PrivacyZkX509TrustAnchorRecordV1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+    ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
+    ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_zk_x509_certificate_policy_revocation_v1,
+    validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_trust_anchor_revocation_v1,
+    validate_zk_x509_trust_anchor_rotation_v1,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -820,6 +828,7 @@ fn validate_pgc_retained_root_chain_v1(
             }
         }
         PrivacyRootProvenanceV1::Governance { .. }
+        | PrivacyRootProvenanceV1::ZkX509Governance { .. }
         | PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
         | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. } => {
@@ -1064,33 +1073,43 @@ pub(crate) fn privacy_zk_ace_policy_count_v1(
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
 ) -> Result<usize, String> {
     let mut policy_count = 0usize;
-    for (candidate, record) in commitments.iter() {
-        if let PrivacyCommitmentKeyV1::ZkAcePolicy {
+    for (candidate, record) in commitments.range(PrivacyCommitmentKeyV1::zk_ace_policy_range()) {
+        let PrivacyCommitmentKeyV1::ZkAcePolicy {
             policy_id: candidate_policy_id,
         } = candidate
-        {
-            policy_count = policy_count
-                .checked_add(1)
-                .ok_or_else(|| "ZK-ACE policy count overflow".to_owned())?;
-            if policy_count > PRIVACY_ZK_ACE_MAX_POLICIES_V1 {
-                return Err(format!(
-                    "ZK-ACE policy count exceeds {}",
-                    PRIVACY_ZK_ACE_MAX_POLICIES_V1
-                ));
-            }
-            let PrivacyStateItemRecordV1::ZkAcePolicyGovernance { policy, .. } = record else {
-                return Err(format!(
-                    "ZK-ACE policy {candidate_policy_id:?} has wrong-role provenance"
-                ));
-            };
-            policy.validate().map_err(|error| {
-                format!("ZK-ACE policy {candidate_policy_id:?} is invalid: {error}")
-            })?;
-            if policy.policy_id != *candidate_policy_id {
-                return Err(format!(
-                    "ZK-ACE policy key {candidate_policy_id:?} does not match its record"
-                ));
-            }
+        else {
+            return Err("ZK-ACE policy range crossed a typed key boundary".to_owned());
+        };
+        policy_count = policy_count
+            .checked_add(1)
+            .ok_or_else(|| "ZK-ACE policy count overflow".to_owned())?;
+        if policy_count > PRIVACY_ZK_ACE_MAX_POLICIES_V1 {
+            return Err(format!(
+                "ZK-ACE policy count exceeds {}",
+                PRIVACY_ZK_ACE_MAX_POLICIES_V1
+            ));
+        }
+        let PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
+            policy,
+            admitted_at_height,
+        } = record
+        else {
+            return Err(format!(
+                "ZK-ACE policy {candidate_policy_id:?} has wrong-role provenance"
+            ));
+        };
+        if *admitted_at_height == 0 {
+            return Err(format!(
+                "ZK-ACE policy {candidate_policy_id:?} has zero admission height"
+            ));
+        }
+        policy.validate().map_err(|error| {
+            format!("ZK-ACE policy {candidate_policy_id:?} is invalid: {error}")
+        })?;
+        if policy.policy_id != *candidate_policy_id {
+            return Err(format!(
+                "ZK-ACE policy key {candidate_policy_id:?} does not match its record"
+            ));
         }
     }
     Ok(policy_count)
@@ -1113,6 +1132,695 @@ pub(crate) fn load_privacy_zk_ace_policy_v1(
         ));
     };
     Ok(policy.clone())
+}
+
+#[derive(Default)]
+struct PrivacyZkX509GovernanceIndexV1 {
+    trust_anchors: BTreeMap<PrivacyIssuerIdV1, Vec<PrivacyZkX509TrustAnchorRecordV1>>,
+    certificate_policies: BTreeMap<
+        (PrivacyIssuerIdV1, PrivacyPolicyIdV1),
+        Vec<PrivacyZkX509CertificatePolicyRecordV1>,
+    >,
+    trust_anchor_record_count: usize,
+    certificate_policy_record_count: usize,
+}
+
+fn validate_zk_x509_trust_anchor_lineage_v1(
+    trust_anchor_id: PrivacyIssuerIdV1,
+    records: &[PrivacyZkX509TrustAnchorRecordV1],
+) -> Result<(), String> {
+    if records.is_empty() {
+        return Err(format!(
+            "X.509 trust-anchor lineage {trust_anchor_id:?} is empty"
+        ));
+    }
+    if records.len() > ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1 {
+        return Err(format!(
+            "X.509 trust-anchor lineage {trust_anchor_id:?} exceeds {} revisions",
+            ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1
+        ));
+    }
+    records[0].validate_initial().map_err(|error| {
+        format!("X.509 trust-anchor lineage {trust_anchor_id:?} has invalid origin: {error}")
+    })?;
+    for pair in records.windows(2) {
+        let result = match pair[1].lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active => {
+                validate_zk_x509_trust_anchor_rotation_v1(&pair[0], &pair[1])
+            }
+            PrivacyZkX509RecordLifecycleV1::Revoked => {
+                validate_zk_x509_trust_anchor_revocation_v1(&pair[0], &pair[1])
+            }
+        };
+        result.map_err(|error| {
+            format!("X.509 trust-anchor lineage {trust_anchor_id:?} is invalid: {error}")
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_zk_x509_certificate_policy_lineage_v1(
+    trust_anchor_id: PrivacyIssuerIdV1,
+    policy_id: PrivacyPolicyIdV1,
+    records: &[PrivacyZkX509CertificatePolicyRecordV1],
+) -> Result<(), String> {
+    if records.is_empty() {
+        return Err(format!(
+            "X.509 certificate-policy lineage {trust_anchor_id:?}/{policy_id:?} is empty"
+        ));
+    }
+    if records.len() > ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1 {
+        return Err(format!(
+            "X.509 certificate-policy lineage {trust_anchor_id:?}/{policy_id:?} exceeds {} revisions",
+            ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1
+        ));
+    }
+    records[0].validate_initial().map_err(|error| {
+        format!(
+            "X.509 certificate-policy lineage {trust_anchor_id:?}/{policy_id:?} has invalid origin: {error}"
+        )
+    })?;
+    for pair in records.windows(2) {
+        let result = match pair[1].lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active => {
+                validate_zk_x509_certificate_policy_rotation_v1(&pair[0], &pair[1])
+            }
+            PrivacyZkX509RecordLifecycleV1::Revoked => {
+                validate_zk_x509_certificate_policy_revocation_v1(&pair[0], &pair[1])
+            }
+        };
+        result.map_err(|error| {
+            format!(
+                "X.509 certificate-policy lineage {trust_anchor_id:?}/{policy_id:?} is invalid: {error}"
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn load_privacy_zk_x509_governance_index_v1(
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<PrivacyZkX509GovernanceIndexV1, String> {
+    let mut index = PrivacyZkX509GovernanceIndexV1::default();
+    for (key, state_record) in
+        commitments.range(PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision_range())
+    {
+        key.validate()
+            .map_err(|error| format!("invalid X.509 trust-anchor revision key: {error}"))?;
+        let PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision {
+            trust_anchor_id,
+            record_epoch,
+        } = *key
+        else {
+            return Err("X.509 trust-anchor range crossed a typed key boundary".to_owned());
+        };
+        index.trust_anchor_record_count = index
+            .trust_anchor_record_count
+            .checked_add(1)
+            .ok_or_else(|| "X.509 trust-anchor revision count overflow".to_owned())?;
+        if index.trust_anchor_record_count > ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1 {
+            return Err(format!(
+                "X.509 trust-anchor revision count exceeds {}",
+                ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1
+            ));
+        }
+        let PrivacyStateItemRecordV1::ZkX509TrustAnchorGovernance {
+            record,
+            admitted_at_height,
+        } = state_record
+        else {
+            return Err(format!(
+                "X.509 trust-anchor revision {trust_anchor_id:?}/{record_epoch} has wrong-role provenance"
+            ));
+        };
+        if *admitted_at_height == 0 {
+            return Err(format!(
+                "X.509 trust-anchor revision {trust_anchor_id:?}/{record_epoch} has zero admission height"
+            ));
+        }
+        record.validate().map_err(|error| {
+            format!(
+                "X.509 trust-anchor revision {trust_anchor_id:?}/{record_epoch} is invalid: {error}"
+            )
+        })?;
+        if record.trust_anchor_id != trust_anchor_id || record.record_epoch != record_epoch {
+            return Err(format!(
+                "X.509 trust-anchor revision key {trust_anchor_id:?}/{record_epoch} differs from its record"
+            ));
+        }
+        index
+            .trust_anchors
+            .entry(trust_anchor_id)
+            .or_default()
+            .push(*record);
+    }
+
+    for (key, state_record) in
+        commitments.range(PrivacyCommitmentKeyV1::zk_x509_certificate_policy_revision_range())
+    {
+        key.validate()
+            .map_err(|error| format!("invalid X.509 certificate-policy revision key: {error}"))?;
+        let PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision {
+            trust_anchor_id,
+            policy_id,
+            record_epoch,
+        } = *key
+        else {
+            return Err("X.509 certificate-policy range crossed a typed key boundary".to_owned());
+        };
+        index.certificate_policy_record_count = index
+            .certificate_policy_record_count
+            .checked_add(1)
+            .ok_or_else(|| "X.509 certificate-policy revision count overflow".to_owned())?;
+        if index.certificate_policy_record_count > ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1 {
+            return Err(format!(
+                "X.509 certificate-policy revision count exceeds {}",
+                ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1
+            ));
+        }
+        let PrivacyStateItemRecordV1::ZkX509CertificatePolicyGovernance {
+            record,
+            admitted_at_height,
+        } = state_record
+        else {
+            return Err(format!(
+                "X.509 certificate-policy revision {trust_anchor_id:?}/{policy_id:?}/{record_epoch} has wrong-role provenance"
+            ));
+        };
+        if *admitted_at_height == 0 {
+            return Err(format!(
+                "X.509 certificate-policy revision {trust_anchor_id:?}/{policy_id:?}/{record_epoch} has zero admission height"
+            ));
+        }
+        record.validate().map_err(|error| {
+            format!(
+                "X.509 certificate-policy revision {trust_anchor_id:?}/{policy_id:?}/{record_epoch} is invalid: {error}"
+            )
+        })?;
+        if record.trust_anchor_id != trust_anchor_id
+            || record.policy_id != policy_id
+            || record.record_epoch != record_epoch
+        {
+            return Err(format!(
+                "X.509 certificate-policy revision key {trust_anchor_id:?}/{policy_id:?}/{record_epoch} differs from its record"
+            ));
+        }
+        index
+            .certificate_policies
+            .entry((trust_anchor_id, policy_id))
+            .or_default()
+            .push(record.clone());
+    }
+
+    for (trust_anchor_id, records) in &index.trust_anchors {
+        validate_zk_x509_trust_anchor_lineage_v1(*trust_anchor_id, records)?;
+    }
+    for ((trust_anchor_id, policy_id), records) in &index.certificate_policies {
+        if !index.trust_anchors.contains_key(trust_anchor_id) {
+            return Err(format!(
+                "X.509 certificate-policy lineage {trust_anchor_id:?}/{policy_id:?} references a missing trust-anchor lineage"
+            ));
+        }
+        validate_zk_x509_certificate_policy_lineage_v1(*trust_anchor_id, *policy_id, records)?;
+    }
+    Ok(index)
+}
+
+/// Validate all X.509 governance lineages and return their exact global counts.
+pub(crate) fn privacy_zk_x509_governance_record_counts_v1(
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<(usize, usize), String> {
+    let index = load_privacy_zk_x509_governance_index_v1(commitments)?;
+    Ok((
+        index.trust_anchor_record_count,
+        index.certificate_policy_record_count,
+    ))
+}
+
+/// Load the current revision of one validated X.509 trust-anchor lineage.
+pub(crate) fn load_privacy_zk_x509_trust_anchor_v1(
+    trust_anchor_id: PrivacyIssuerIdV1,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<PrivacyZkX509TrustAnchorRecordV1, String> {
+    if trust_anchor_id.is_zero() {
+        return Err("X.509 trust-anchor lookup id must be non-zero".to_owned());
+    }
+    let index = load_privacy_zk_x509_governance_index_v1(commitments)?;
+    index
+        .trust_anchors
+        .get(&trust_anchor_id)
+        .and_then(|records| records.last())
+        .copied()
+        .ok_or_else(|| format!("X.509 trust-anchor {trust_anchor_id:?} is not registered"))
+}
+
+/// Load the current revision of one validated X.509 certificate-policy lineage.
+pub(crate) fn load_privacy_zk_x509_certificate_policy_v1(
+    trust_anchor_id: PrivacyIssuerIdV1,
+    policy_id: PrivacyPolicyIdV1,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<PrivacyZkX509CertificatePolicyRecordV1, String> {
+    if trust_anchor_id.is_zero() || policy_id.is_zero() {
+        return Err("X.509 certificate-policy lookup ids must be non-zero".to_owned());
+    }
+    let index = load_privacy_zk_x509_governance_index_v1(commitments)?;
+    index
+        .certificate_policies
+        .get(&(trust_anchor_id, policy_id))
+        .and_then(|records| records.last())
+        .cloned()
+        .ok_or_else(|| {
+            format!("X.509 certificate policy {trust_anchor_id:?}/{policy_id:?} is not registered")
+        })
+}
+
+fn require_active_zk_x509_trust_anchor_v1(
+    record: PrivacyZkX509TrustAnchorRecordV1,
+) -> Result<PrivacyZkX509TrustAnchorRecordV1, String> {
+    if record.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(format!(
+            "X.509 trust-anchor {:?} is revoked",
+            record.trust_anchor_id
+        ));
+    }
+    Ok(record)
+}
+
+fn require_active_zk_x509_certificate_policy_v1(
+    record: PrivacyZkX509CertificatePolicyRecordV1,
+) -> Result<PrivacyZkX509CertificatePolicyRecordV1, String> {
+    if record.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(format!(
+            "X.509 certificate policy {:?}/{:?} is revoked",
+            record.trust_anchor_id, record.policy_id
+        ));
+    }
+    Ok(record)
+}
+
+fn zk_x509_namespace_components_v1(
+    namespace: PrivacyNamespaceV1,
+) -> Result<(PrivacyIssuerIdV1, PrivacyPolicyIdV1), String> {
+    namespace
+        .validate()
+        .map_err(|error| format!("invalid X.509 namespace: {error}"))?;
+    if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+        return Err("X.509 authoritative state requires the X.509 protocol namespace".to_owned());
+    }
+    let PrivacyNamespaceScopeV1::TrustAnchorPolicy(scope) = namespace.scope() else {
+        return Err("X.509 authoritative state requires a trust-anchor/policy scope".to_owned());
+    };
+    Ok((scope.trust_anchor_id, scope.policy_id))
+}
+
+fn validate_zk_x509_root_provenance_v1(
+    key: PrivacyRootKeyV1,
+    provenance: PrivacyRootProvenanceV1,
+    index: &PrivacyZkX509GovernanceIndexV1,
+) -> Result<(), String> {
+    let PrivacyRootProvenanceV1::ZkX509Governance {
+        publication_digest,
+        namespace,
+        role,
+        epoch,
+        root,
+        trust_anchor_record_digest,
+        trust_anchor_record_epoch,
+        certificate_policy_record_digest,
+        certificate_policy_record_epoch,
+        ..
+    } = provenance
+    else {
+        return Err(format!(
+            "X.509 root {:?}/{:?}/{} has non-X.509 provenance",
+            key.namespace(),
+            key.role(),
+            key.epoch()
+        ));
+    };
+    if namespace != key.namespace()
+        || role != key.role()
+        || epoch != key.epoch()
+        || root != key.root()
+    {
+        return Err(format!(
+            "X.509 root provenance does not reproduce its exact key {:?}/{:?}/{}",
+            key.namespace(),
+            key.role(),
+            key.epoch()
+        ));
+    }
+    let publication = PrivacyRootPublicationV1 {
+        namespace,
+        role,
+        epoch,
+        root,
+    };
+    let expected_publication_digest = publication
+        .digest()
+        .map_err(|error| format!("X.509 root publication digest encoding failed: {error}"))?;
+    if publication_digest != expected_publication_digest {
+        return Err("X.509 root provenance carries a substituted publication digest".to_owned());
+    }
+    let (trust_anchor_id, policy_id) = zk_x509_namespace_components_v1(namespace)?;
+    let trust_anchor = index
+        .trust_anchors
+        .get(&trust_anchor_id)
+        .and_then(|records| {
+            records
+                .iter()
+                .find(|record| record.record_epoch == trust_anchor_record_epoch)
+        })
+        .ok_or_else(|| {
+            format!(
+                "X.509 root provenance references missing trust-anchor revision {trust_anchor_id:?}/{trust_anchor_record_epoch}"
+            )
+        })?;
+    if trust_anchor.record_digest != trust_anchor_record_digest
+        || trust_anchor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active
+    {
+        return Err(
+            "X.509 root provenance references a substituted or non-active trust-anchor revision"
+                .to_owned(),
+        );
+    }
+    let certificate_policy = index
+        .certificate_policies
+        .get(&(trust_anchor_id, policy_id))
+        .and_then(|records| {
+            records
+                .iter()
+                .find(|record| record.record_epoch == certificate_policy_record_epoch)
+        })
+        .ok_or_else(|| {
+            format!(
+                "X.509 root provenance references missing certificate-policy revision {trust_anchor_id:?}/{policy_id:?}/{certificate_policy_record_epoch}"
+            )
+        })?;
+    if certificate_policy.record_digest != certificate_policy_record_digest
+        || certificate_policy.lifecycle != PrivacyZkX509RecordLifecycleV1::Active
+    {
+        return Err(
+            "X.509 root provenance references a substituted or non-active certificate-policy revision"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_zk_x509_root_history_v1(
+    namespace: PrivacyNamespaceV1,
+    role: PrivacyRootRoleV1,
+    retained_root_count: usize,
+    index: &PrivacyZkX509GovernanceIndexV1,
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
+) -> Result<PrivacyRootHeadRecordV1, String> {
+    if retained_root_count == 0 {
+        return Err("X.509 retained-root count must be non-zero".to_owned());
+    }
+    let head_key = PrivacyRootHeadKeyV1::new(namespace, role)
+        .map_err(|error| format!("invalid X.509 root-head key: {error}"))?;
+    let head = root_heads
+        .get(&head_key)
+        .copied()
+        .ok_or_else(|| format!("X.509 {role:?} history has no current head"))?;
+    head.validate()
+        .map_err(|error| format!("invalid X.509 {role:?} head: {error}"))?;
+    if head.retention_anchor().is_some() {
+        return Err("X.509 root heads do not support unvalidated retention anchors".to_owned());
+    }
+
+    let mut history = Vec::new();
+    for (key, provenance) in roots.range(PrivacyRootKeyV1::history_range(namespace, role)) {
+        if history.len() == retained_root_count {
+            return Err(format!(
+                "X.509 {role:?} history exceeds retention {retained_root_count}"
+            ));
+        }
+        key.validate()
+            .map_err(|error| format!("invalid X.509 root key: {error}"))?;
+        provenance
+            .validate()
+            .map_err(|error| format!("invalid X.509 root provenance: {error}"))?;
+        validate_zk_x509_root_provenance_v1(*key, *provenance, index)?;
+        history.push((*key, *provenance));
+    }
+    let first = history
+        .first()
+        .ok_or_else(|| format!("X.509 {role:?} history is empty"))?;
+    if first.0.epoch() != 1 {
+        return Err(format!("X.509 {role:?} history must begin at epoch one"));
+    }
+    for pair in history.windows(2) {
+        if pair[0].0.epoch().checked_add(1) != Some(pair[1].0.epoch()) {
+            return Err(format!(
+                "X.509 {role:?} history has a gap or duplicate epoch"
+            ));
+        }
+    }
+    let latest = history
+        .last()
+        .expect("non-empty X.509 history checked above");
+    if head.epoch() != latest.0.epoch()
+        || head.root() != latest.0.root()
+        || head.provenance() != latest.1
+    {
+        return Err(format!(
+            "X.509 {role:?} head does not equal its latest retained history entry"
+        ));
+    }
+    Ok(head)
+}
+
+/// Fully joined authoritative X.509 governance and root state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyZkX509AuthoritativeStateV1 {
+    namespace: PrivacyNamespaceV1,
+    trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+    certificate_policy: PrivacyZkX509CertificatePolicyRecordV1,
+    ca_membership_root_epoch: u64,
+    ca_membership_root: PrivacyRootV1,
+    crl_nonmembership_root_epoch: u64,
+    crl_nonmembership_root: PrivacyRootV1,
+}
+
+impl PrivacyZkX509AuthoritativeStateV1 {
+    #[must_use]
+    pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
+        self.namespace
+    }
+
+    #[must_use]
+    pub(crate) const fn trust_anchor(&self) -> PrivacyZkX509TrustAnchorRecordV1 {
+        self.trust_anchor
+    }
+
+    #[must_use]
+    pub(crate) const fn certificate_policy(&self) -> &PrivacyZkX509CertificatePolicyRecordV1 {
+        &self.certificate_policy
+    }
+
+    #[must_use]
+    pub(crate) const fn ca_membership_root_epoch(&self) -> u64 {
+        self.ca_membership_root_epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn ca_membership_root(&self) -> PrivacyRootV1 {
+        self.ca_membership_root
+    }
+
+    #[must_use]
+    pub(crate) const fn crl_nonmembership_root_epoch(&self) -> u64 {
+        self.crl_nonmembership_root_epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn crl_nonmembership_root(&self) -> PrivacyRootV1 {
+        self.crl_nonmembership_root
+    }
+}
+
+fn validate_current_zk_x509_root_binding_v1(
+    head: PrivacyRootHeadRecordV1,
+    trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+    certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
+) -> Result<(), String> {
+    let PrivacyRootProvenanceV1::ZkX509Governance {
+        trust_anchor_record_digest,
+        trust_anchor_record_epoch,
+        certificate_policy_record_digest,
+        certificate_policy_record_epoch,
+        ..
+    } = head.provenance()
+    else {
+        return Err("current X.509 root head has non-X.509 provenance".to_owned());
+    };
+    if trust_anchor_record_digest != trust_anchor.record_digest
+        || trust_anchor_record_epoch != trust_anchor.record_epoch
+        || certificate_policy_record_digest != certificate_policy.record_digest
+        || certificate_policy_record_epoch != certificate_policy.record_epoch
+    {
+        return Err(
+            "current X.509 root head is stale against authoritative governance revisions"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Load current active X.509 records and both exact authoritative root heads.
+pub(crate) fn load_privacy_zk_x509_authoritative_state_v1(
+    trust_anchor_id: PrivacyIssuerIdV1,
+    policy_id: PrivacyPolicyIdV1,
+    retained_root_count: u32,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
+) -> Result<PrivacyZkX509AuthoritativeStateV1, String> {
+    let retained_root_count = usize::try_from(retained_root_count)
+        .map_err(|_| "X.509 retained-root count cannot be represented".to_owned())?;
+    let index = load_privacy_zk_x509_governance_index_v1(commitments)?;
+    let trust_anchor = index
+        .trust_anchors
+        .get(&trust_anchor_id)
+        .and_then(|records| records.last())
+        .copied()
+        .ok_or_else(|| format!("X.509 trust-anchor {trust_anchor_id:?} is not registered"))
+        .and_then(require_active_zk_x509_trust_anchor_v1)?;
+    let certificate_policy = index
+        .certificate_policies
+        .get(&(trust_anchor_id, policy_id))
+        .and_then(|records| records.last())
+        .cloned()
+        .ok_or_else(|| {
+            format!("X.509 certificate policy {trust_anchor_id:?}/{policy_id:?} is not registered")
+        })
+        .and_then(require_active_zk_x509_certificate_policy_v1)?;
+    let namespace = PrivacyNamespaceV1::new(
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+        PrivacyNamespaceScopeV1::TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1 {
+            trust_anchor_id,
+            policy_id,
+        }),
+    );
+    namespace
+        .validate()
+        .map_err(|error| format!("invalid X.509 authoritative namespace: {error}"))?;
+    let ca_head = validate_zk_x509_root_history_v1(
+        namespace,
+        PrivacyRootRoleV1::CertificateAuthorityMembership,
+        retained_root_count,
+        &index,
+        roots,
+        root_heads,
+    )?;
+    let crl_head = validate_zk_x509_root_history_v1(
+        namespace,
+        PrivacyRootRoleV1::CertificateRevocationNonmembership,
+        retained_root_count,
+        &index,
+        roots,
+        root_heads,
+    )?;
+    validate_current_zk_x509_root_binding_v1(ca_head, trust_anchor, &certificate_policy)?;
+    validate_current_zk_x509_root_binding_v1(crl_head, trust_anchor, &certificate_policy)?;
+    Ok(PrivacyZkX509AuthoritativeStateV1 {
+        namespace,
+        trust_anchor,
+        certificate_policy,
+        ca_membership_root_epoch: ca_head.epoch(),
+        ca_membership_root: ca_head.root(),
+        crl_nonmembership_root_epoch: crl_head.epoch(),
+        crl_nonmembership_root: crl_head.root(),
+    })
+}
+
+/// Compare one public X.509 statement to a fully joined authoritative snapshot.
+pub(crate) fn validate_privacy_zk_x509_statement_state_v1(
+    statement: &IrohaZkX509StarkP256StatementV1,
+    state: &PrivacyZkX509AuthoritativeStateV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+) -> Result<(), String> {
+    PrivacyStatementV1::IrohaZkX509StarkP256V0(statement.clone())
+        .validate(consensus_limits)
+        .map_err(|error| format!("invalid X.509 public statement: {error}"))?;
+    if PrivacyNamespaceV1::from_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V0(
+        statement.clone(),
+    )) != state.namespace
+    {
+        return Err("X.509 statement namespace differs from authoritative state".to_owned());
+    }
+    if statement.trust_anchor_record_digest != state.trust_anchor.record_digest
+        || statement.trust_anchor_record_epoch != state.trust_anchor.record_epoch
+    {
+        return Err(
+            "X.509 statement selects a stale or substituted trust-anchor revision".to_owned(),
+        );
+    }
+    if statement.certificate_policy_record_digest != state.certificate_policy.record_digest
+        || statement.certificate_policy_record_epoch != state.certificate_policy.record_epoch
+    {
+        return Err(
+            "X.509 statement selects a stale or substituted certificate-policy revision".to_owned(),
+        );
+    }
+    if statement.ca_membership_root != state.ca_membership_root
+        || statement.ca_membership_root_epoch != state.ca_membership_root_epoch
+    {
+        return Err("X.509 statement selects a stale or substituted CA root".to_owned());
+    }
+    if statement.crl_nonmembership_root != state.crl_nonmembership_root
+        || statement.crl_nonmembership_root_epoch != state.crl_nonmembership_root_epoch
+    {
+        return Err("X.509 statement selects a stale or substituted CRL root".to_owned());
+    }
+    if statement.key_usage != state.certificate_policy.required_key_usage
+        || statement.extended_key_usages != state.certificate_policy.required_extended_key_usages
+    {
+        return Err("X.509 statement predicates differ from the authoritative policy".to_owned());
+    }
+    if !statement
+        .disclosed_attributes
+        .iter()
+        .map(|attribute| attribute.index)
+        .eq(state
+            .certificate_policy
+            .required_disclosed_attribute_indices
+            .iter()
+            .copied())
+    {
+        return Err(
+            "X.509 disclosed attributes do not exactly equal the authoritative required set"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_privacy_zk_ace_replay_binding_v1(
+    registered_policy_ids: &BTreeSet<PrivacyPolicyIdV1>,
+    policy_id: PrivacyPolicyIdV1,
+    record: &PrivacyStateItemRecordV1,
+) -> Result<(), String> {
+    if !registered_policy_ids.contains(&policy_id) {
+        return Err(format!(
+            "ZK-ACE replay marker references missing policy {policy_id:?}"
+        ));
+    }
+    if !matches!(
+        record,
+        PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
+            policy_id: observed,
+            ..
+        } if *observed == policy_id
+    ) {
+        return Err(format!(
+            "ZK-ACE replay marker for {policy_id:?} has wrong-role provenance"
+        ));
+    }
+    Ok(())
 }
 
 /// Fully validated, transaction-local view of one ZK-AMS AccountRegistry.
@@ -1277,6 +1985,7 @@ fn validate_zk_ams_retained_root_chain_v1(
             }
         }
         PrivacyRootProvenanceV1::Governance { .. }
+        | PrivacyRootProvenanceV1::ZkX509Governance { .. }
         | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. }
         | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
@@ -1493,8 +2202,11 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         record
             .validate()
             .map_err(|error| format!("invalid privacy commitment provenance: {error}"))?;
-        ensure_protocol_activation(key.protocol_id())?;
+        if key.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+            ensure_protocol_activation(key.protocol_id())?;
+        }
     }
+    let zk_x509_index = load_privacy_zk_x509_governance_index_v1(commitments)?;
 
     let mut history_by_scope = BTreeMap::<
         (PrivacyNamespaceV1, PrivacyRootRoleV1),
@@ -1506,7 +2218,9 @@ pub(crate) fn validate_privacy_persisted_state_v1(
         provenance
             .validate()
             .map_err(|error| format!("invalid privacy root provenance: {error}"))?;
-        ensure_activation(key.namespace())?;
+        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+            ensure_activation(key.namespace())?;
+        }
         history_by_scope
             .entry((key.namespace(), key.role()))
             .or_default()
@@ -1576,6 +2290,30 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 return Err(format!(
                     "duplicate ZK-AMS AccountRegistry scope for {namespace:?}"
                 ));
+            }
+        } else if namespace.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+            if head.retention_anchor().is_some() {
+                return Err(format!(
+                    "X.509 root head for {namespace:?}/{role:?} carries an unsupported retention anchor"
+                ));
+            }
+            let Some((first_key, _)) = history.first() else {
+                return Err("grouped X.509 root history is unexpectedly empty".to_owned());
+            };
+            if first_key.epoch() != 1 {
+                return Err(format!(
+                    "X.509 root history for {namespace:?}/{role:?} must begin at epoch one"
+                ));
+            }
+            for (key, provenance) in history {
+                validate_zk_x509_root_provenance_v1(*key, *provenance, &zk_x509_index)?;
+            }
+            for adjacent in history.windows(2) {
+                if adjacent[0].0.epoch().checked_add(1) != Some(adjacent[1].0.epoch()) {
+                    return Err(format!(
+                        "X.509 root history for {namespace:?}/{role:?} has a gap or duplicate epoch"
+                    ));
+                }
             }
         } else {
             if head.retention_anchor().is_some() {
@@ -1648,7 +2386,9 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             .map_err(|error| format!("invalid privacy root-head key: {error}"))?;
         head.validate()
             .map_err(|error| format!("invalid privacy root-head record: {error}"))?;
-        ensure_activation(key.namespace())?;
+        if key.namespace().protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+            ensure_activation(key.namespace())?;
+        }
         if !history_by_scope.contains_key(&(key.namespace(), key.role())) {
             return Err(format!(
                 "privacy root head for {:?}/{:?} has no retained history",
@@ -1679,6 +2419,8 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     ));
                 }
             }
+            PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
+            | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. } => {}
             PrivacyCommitmentKeyV1::ZkAmsIssuerPolicyRecord { namespace, .. }
             | PrivacyCommitmentKeyV1::ZkAmsPhc { namespace, .. }
             | PrivacyCommitmentKeyV1::ZkAmsSeedKey { namespace, .. } => {
@@ -1701,7 +2443,9 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                             ..
                         } if observed == bootstrap_digest
                     ),
-                    PrivacyCommitmentKeyV1::ZkAcePolicy { .. } => false,
+                    PrivacyCommitmentKeyV1::ZkAcePolicy { .. }
+                    | PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
+                    | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. } => false,
                 };
                 if !role_matches {
                     return Err(format!(
@@ -1714,22 +2458,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     for (key, record) in nullifiers.iter() {
         match key {
             PrivacyNullifierKeyV1::ZkAceReplay { policy_id, .. } => {
-                if !zk_ace_policy_ids.contains(policy_id) {
-                    return Err(format!(
-                        "ZK-ACE replay marker references missing policy {policy_id:?}"
-                    ));
-                }
-                if !matches!(
-                    record,
-                    PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
-                        policy_id: observed,
-                        ..
-                    } if observed == policy_id
-                ) {
-                    return Err(format!(
-                        "ZK-ACE replay marker for {policy_id:?} has wrong-role provenance"
-                    ));
-                }
+                validate_privacy_zk_ace_replay_binding_v1(&zk_ace_policy_ids, *policy_id, record)?;
             }
             PrivacyNullifierKeyV1::ZkAmsKeyImage { namespace, .. } => {
                 let bootstrap_digest = zk_ams_bootstraps.get(namespace).ok_or_else(|| {
@@ -2034,6 +2763,22 @@ pub enum PrivacyCommitmentKeyV1 {
         /// Stable policy lookup key.
         policy_id: PrivacyPolicyIdV1,
     },
+    /// One immutable revision in an X.509 trust-anchor lineage.
+    ZkX509TrustAnchorRevision {
+        /// Stable trust-anchor lineage identifier.
+        trust_anchor_id: PrivacyIssuerIdV1,
+        /// Exact immutable revision epoch.
+        record_epoch: u64,
+    },
+    /// One immutable revision in an X.509 certificate-policy lineage.
+    ZkX509CertificatePolicyRevision {
+        /// Trust-anchor namespace containing this policy.
+        trust_anchor_id: PrivacyIssuerIdV1,
+        /// Stable certificate-policy lineage identifier.
+        policy_id: PrivacyPolicyIdV1,
+        /// Exact immutable revision epoch.
+        record_epoch: u64,
+    },
     /// Governed issuer-key/policy record.
     ZkAmsIssuerPolicyRecord {
         /// Issuer/registry/policy namespace.
@@ -2064,6 +2809,112 @@ impl PrivacyCommitmentKeyV1 {
             return Err("ZK-ACE policy id must be non-zero");
         }
         Ok(Self::ZkAcePolicy { policy_id })
+    }
+
+    /// Ordered bounds covering exactly the complete ZK-ACE policy table.
+    #[must_use]
+    pub fn zk_ace_policy_range() -> core::ops::RangeInclusive<Self> {
+        Self::ZkAcePolicy {
+            policy_id: PrivacyPolicyIdV1::new([0; 32]),
+        }..=Self::ZkAcePolicy {
+            policy_id: PrivacyPolicyIdV1::new([u8::MAX; 32]),
+        }
+    }
+
+    /// Construct the exact key for one immutable X.509 trust-anchor revision.
+    pub fn zk_x509_trust_anchor_revision(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        record_epoch: u64,
+    ) -> Result<Self, &'static str> {
+        if trust_anchor_id.is_zero() {
+            return Err("X.509 trust-anchor id must be non-zero");
+        }
+        if record_epoch == 0 {
+            return Err("X.509 trust-anchor revision epoch must be non-zero");
+        }
+        Ok(Self::ZkX509TrustAnchorRevision {
+            trust_anchor_id,
+            record_epoch,
+        })
+    }
+
+    /// Ordered bounds covering the complete X.509 trust-anchor revision table.
+    #[must_use]
+    pub fn zk_x509_trust_anchor_revision_range() -> core::ops::RangeInclusive<Self> {
+        Self::ZkX509TrustAnchorRevision {
+            trust_anchor_id: PrivacyIssuerIdV1::new([0; 32]),
+            record_epoch: 0,
+        }..=Self::ZkX509TrustAnchorRevision {
+            trust_anchor_id: PrivacyIssuerIdV1::new([u8::MAX; 32]),
+            record_epoch: u64::MAX,
+        }
+    }
+
+    /// Ordered bounds covering one X.509 trust-anchor lineage.
+    #[must_use]
+    pub fn zk_x509_trust_anchor_lineage_range(
+        trust_anchor_id: PrivacyIssuerIdV1,
+    ) -> core::ops::RangeInclusive<Self> {
+        Self::ZkX509TrustAnchorRevision {
+            trust_anchor_id,
+            record_epoch: 0,
+        }..=Self::ZkX509TrustAnchorRevision {
+            trust_anchor_id,
+            record_epoch: u64::MAX,
+        }
+    }
+
+    /// Construct the exact key for one immutable X.509 certificate-policy revision.
+    pub fn zk_x509_certificate_policy_revision(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        policy_id: PrivacyPolicyIdV1,
+        record_epoch: u64,
+    ) -> Result<Self, &'static str> {
+        if trust_anchor_id.is_zero() {
+            return Err("X.509 trust-anchor id must be non-zero");
+        }
+        if policy_id.is_zero() {
+            return Err("X.509 certificate-policy id must be non-zero");
+        }
+        if record_epoch == 0 {
+            return Err("X.509 certificate-policy revision epoch must be non-zero");
+        }
+        Ok(Self::ZkX509CertificatePolicyRevision {
+            trust_anchor_id,
+            policy_id,
+            record_epoch,
+        })
+    }
+
+    /// Ordered bounds covering the complete X.509 certificate-policy revision table.
+    #[must_use]
+    pub fn zk_x509_certificate_policy_revision_range() -> core::ops::RangeInclusive<Self> {
+        Self::ZkX509CertificatePolicyRevision {
+            trust_anchor_id: PrivacyIssuerIdV1::new([0; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0; 32]),
+            record_epoch: 0,
+        }..=Self::ZkX509CertificatePolicyRevision {
+            trust_anchor_id: PrivacyIssuerIdV1::new([u8::MAX; 32]),
+            policy_id: PrivacyPolicyIdV1::new([u8::MAX; 32]),
+            record_epoch: u64::MAX,
+        }
+    }
+
+    /// Ordered bounds covering one X.509 certificate-policy lineage.
+    #[must_use]
+    pub fn zk_x509_certificate_policy_lineage_range(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        policy_id: PrivacyPolicyIdV1,
+    ) -> core::ops::RangeInclusive<Self> {
+        Self::ZkX509CertificatePolicyRevision {
+            trust_anchor_id,
+            policy_id,
+            record_epoch: 0,
+        }..=Self::ZkX509CertificatePolicyRevision {
+            trust_anchor_id,
+            policy_id,
+            record_epoch: u64::MAX,
+        }
     }
 
     /// Construct the exact governed ZK-AMS issuer-policy record key.
@@ -2115,7 +2966,9 @@ impl PrivacyCommitmentKeyV1 {
     #[must_use]
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
-            Self::ZkAcePolicy { .. } => None,
+            Self::ZkAcePolicy { .. }
+            | Self::ZkX509TrustAnchorRevision { .. }
+            | Self::ZkX509CertificatePolicyRevision { .. } => None,
             Self::ZkAmsIssuerPolicyRecord { namespace, .. }
             | Self::ZkAmsPhc { namespace, .. }
             | Self::ZkAmsSeedKey { namespace, .. } => Some(namespace),
@@ -2127,6 +2980,10 @@ impl PrivacyCommitmentKeyV1 {
     pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         match self {
             Self::ZkAcePolicy { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::ZkX509TrustAnchorRevision { .. }
+            | Self::ZkX509CertificatePolicyRevision { .. } => {
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+            }
             Self::ZkAmsIssuerPolicyRecord { .. }
             | Self::ZkAmsPhc { .. }
             | Self::ZkAmsSeedKey { .. } => PrivacyProtocolIdV1::IrohaZkAmsV1,
@@ -2139,7 +2996,9 @@ impl PrivacyCommitmentKeyV1 {
         self,
     ) -> Option<PrivacyZkAmsIssuerPolicyRecordDigestV1> {
         match self {
-            Self::ZkAcePolicy { .. } => None,
+            Self::ZkAcePolicy { .. }
+            | Self::ZkX509TrustAnchorRevision { .. }
+            | Self::ZkX509CertificatePolicyRevision { .. } => None,
             Self::ZkAmsIssuerPolicyRecord { record_digest, .. } => Some(record_digest),
             Self::ZkAmsPhc { .. } | Self::ZkAmsSeedKey { .. } => None,
         }
@@ -2186,6 +3045,18 @@ impl PrivacyCommitmentKeyV1 {
     fn validate(self) -> Result<(), &'static str> {
         match self {
             Self::ZkAcePolicy { policy_id } => Self::zk_ace_policy(policy_id).map(|_| ()),
+            Self::ZkX509TrustAnchorRevision {
+                trust_anchor_id,
+                record_epoch,
+            } => Self::zk_x509_trust_anchor_revision(trust_anchor_id, record_epoch).map(|_| ()),
+            Self::ZkX509CertificatePolicyRevision {
+                trust_anchor_id,
+                policy_id,
+                record_epoch,
+            } => {
+                Self::zk_x509_certificate_policy_revision(trust_anchor_id, policy_id, record_epoch)
+                    .map(|_| ())
+            }
             Self::ZkAmsIssuerPolicyRecord {
                 namespace,
                 record_digest,
@@ -2363,6 +3234,29 @@ pub(crate) enum PrivacyRootProvenanceV1 {
         /// Block height at which the publication became durable.
         admitted_at_height: u64,
     },
+    /// X.509 CA/CRL root published against exact immutable governance revisions.
+    ZkX509Governance {
+        /// Digest of the exact canonical root-publication payload.
+        publication_digest: PrivacyRootPublicationDigestV1,
+        /// Exact protocol and trust-anchor/policy namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Exact CA-membership or CRL-nonmembership role.
+        role: PrivacyRootRoleV1,
+        /// Exact published root epoch.
+        epoch: u64,
+        /// Exact published root.
+        root: PrivacyRootV1,
+        /// Exact immutable trust-anchor revision digest used for publication.
+        trust_anchor_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+        /// Exact immutable trust-anchor revision epoch used for publication.
+        trust_anchor_record_epoch: u64,
+        /// Exact immutable certificate-policy revision digest used for publication.
+        certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+        /// Exact immutable certificate-policy revision epoch used for publication.
+        certificate_policy_record_epoch: u64,
+        /// Block height at which the publication became durable.
+        admitted_at_height: u64,
+    },
     /// Initial ZK-AMS AccountRegistry root installed by its typed bootstrap.
     ZkAmsRegistryBootstrap {
         /// Digest of the exact canonical registry-bootstrap payload.
@@ -2442,6 +3336,72 @@ impl PrivacyRootProvenanceV1 {
         }
         Ok(Self::Governance {
             publication_digest,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct namespace- and revision-bound X.509 root provenance.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed publication fields, a non-X.509 namespace or role,
+    /// zero immutable-record bindings, or zero admission height.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn zk_x509_governance(
+        publication_digest: PrivacyRootPublicationDigestV1,
+        namespace: PrivacyNamespaceV1,
+        role: PrivacyRootRoleV1,
+        epoch: u64,
+        root: PrivacyRootV1,
+        trust_anchor_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+        trust_anchor_record_epoch: u64,
+        certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+        certificate_policy_record_epoch: u64,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        if publication_digest.is_zero() {
+            return Err("X.509 root publication digest must be non-zero");
+        }
+        namespace
+            .validate()
+            .map_err(|_| "X.509 root namespace is invalid")?;
+        if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
+            return Err("X.509 root provenance requires the X.509 protocol namespace");
+        }
+        if !matches!(
+            role,
+            PrivacyRootRoleV1::CertificateAuthorityMembership
+                | PrivacyRootRoleV1::CertificateRevocationNonmembership
+        ) {
+            return Err("X.509 root provenance carries an incompatible root role");
+        }
+        PrivacyRootKeyV1::new(namespace, role, epoch, root)
+            .map_err(|_| "X.509 root publication fields are invalid")?;
+        if trust_anchor_record_digest.is_zero() {
+            return Err("X.509 root trust-anchor record digest must be non-zero");
+        }
+        if trust_anchor_record_epoch == 0 {
+            return Err("X.509 root trust-anchor record epoch must be non-zero");
+        }
+        if certificate_policy_record_digest.is_zero() {
+            return Err("X.509 root certificate-policy record digest must be non-zero");
+        }
+        if certificate_policy_record_epoch == 0 {
+            return Err("X.509 root certificate-policy record epoch must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy root admission height must be non-zero");
+        }
+        Ok(Self::ZkX509Governance {
+            publication_digest,
+            namespace,
+            role,
+            epoch,
+            root,
+            trust_anchor_record_digest,
+            trust_anchor_record_epoch,
+            certificate_policy_record_digest,
+            certificate_policy_record_epoch,
             admitted_at_height,
         })
     }
@@ -2613,6 +3573,7 @@ impl PrivacyRootProvenanceV1 {
                 ..
             } => Some((parent_epoch, parent_root)),
             Self::Governance { .. }
+            | Self::ZkX509Governance { .. }
             | Self::ZkAmsRegistryBootstrap { .. }
             | Self::VerifiedBootstrap { .. } => None,
         }
@@ -2632,6 +3593,7 @@ impl PrivacyRootProvenanceV1 {
                 bootstrap_digest, ..
             } => Some(bootstrap_digest),
             Self::Governance { .. }
+            | Self::ZkX509Governance { .. }
             | Self::VerifiedBootstrap { .. }
             | Self::VerifiedProof { .. }
             | Self::VerifiedPgcSuccessor { .. } => None,
@@ -2649,6 +3611,30 @@ impl PrivacyRootProvenanceV1 {
                 publication_digest,
                 admitted_at_height,
             } => Self::governance(publication_digest, admitted_at_height).map(|_| ()),
+            Self::ZkX509Governance {
+                publication_digest,
+                namespace,
+                role,
+                epoch,
+                root,
+                trust_anchor_record_digest,
+                trust_anchor_record_epoch,
+                certificate_policy_record_digest,
+                certificate_policy_record_epoch,
+                admitted_at_height,
+            } => Self::zk_x509_governance(
+                publication_digest,
+                namespace,
+                role,
+                epoch,
+                root,
+                trust_anchor_record_digest,
+                trust_anchor_record_epoch,
+                certificate_policy_record_digest,
+                certificate_policy_record_epoch,
+                admitted_at_height,
+            )
+            .map(|_| ()),
             Self::ZkAmsRegistryBootstrap {
                 bootstrap_digest,
                 admitted_at_height,
@@ -2843,6 +3829,20 @@ pub enum PrivacyStateItemRecordV1 {
         /// Block height at which governance installed this revision.
         admitted_at_height: u64,
     },
+    /// Immutable X.509 trust-anchor revision installed by typed governance.
+    ZkX509TrustAnchorGovernance {
+        /// Complete canonical self-digested trust-anchor revision.
+        record: PrivacyZkX509TrustAnchorRecordV1,
+        /// Block height at which governance admitted this revision.
+        admitted_at_height: u64,
+    },
+    /// Immutable X.509 certificate-policy revision installed by typed governance.
+    ZkX509CertificatePolicyGovernance {
+        /// Complete canonical self-digested certificate-policy revision.
+        record: PrivacyZkX509CertificatePolicyRecordV1,
+        /// Block height at which governance admitted this revision.
+        admitted_at_height: u64,
+    },
     /// Replay marker emitted by one directly verified ZK-ACE authorization.
     ZkAceVerifiedAuthorization {
         /// Stable policy lineage used for verification.
@@ -2890,6 +3890,40 @@ impl PrivacyStateItemRecordV1 {
         }
         Ok(Self::ZkAcePolicyGovernance {
             policy,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct provenance for one immutable governed X.509 trust-anchor revision.
+    pub fn zk_x509_trust_anchor_governance(
+        record: PrivacyZkX509TrustAnchorRecordV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        record
+            .validate()
+            .map_err(|_| "X.509 trust-anchor record is invalid")?;
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::ZkX509TrustAnchorGovernance {
+            record,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct provenance for one immutable governed X.509 certificate-policy revision.
+    pub fn zk_x509_certificate_policy_governance(
+        record: PrivacyZkX509CertificatePolicyRecordV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        record
+            .validate()
+            .map_err(|_| "X.509 certificate-policy record is invalid")?;
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::ZkX509CertificatePolicyGovernance {
+            record,
             admitted_at_height,
         })
     }
@@ -2975,6 +4009,15 @@ impl PrivacyStateItemRecordV1 {
                 policy,
                 admitted_at_height,
             } => Self::zk_ace_policy_governance(policy.clone(), *admitted_at_height).map(|_| ()),
+            Self::ZkX509TrustAnchorGovernance {
+                record,
+                admitted_at_height,
+            } => Self::zk_x509_trust_anchor_governance(*record, *admitted_at_height).map(|_| ()),
+            Self::ZkX509CertificatePolicyGovernance {
+                record,
+                admitted_at_height,
+            } => Self::zk_x509_certificate_policy_governance(record.clone(), *admitted_at_height)
+                .map(|_| ()),
             Self::ZkAceVerifiedAuthorization {
                 policy_id,
                 policy_record_digest,
@@ -3012,7 +4055,10 @@ impl PrivacyStateItemRecordV1 {
     #[must_use]
     pub const fn zk_ams_bootstrap_digest(&self) -> Option<PrivacyZkAmsRegistryBootstrapDigestV1> {
         match self {
-            Self::ZkAcePolicyGovernance { .. } | Self::ZkAceVerifiedAuthorization { .. } => None,
+            Self::ZkAcePolicyGovernance { .. }
+            | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::ZkAceVerifiedAuthorization { .. } => None,
             Self::ZkAmsGovernance {
                 bootstrap_digest, ..
             }
@@ -3028,6 +4074,36 @@ impl PrivacyStateItemRecordV1 {
         match self {
             Self::ZkAcePolicyGovernance { policy, .. } => Some(policy),
             Self::ZkAceVerifiedAuthorization { .. }
+            | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::ZkAmsGovernance { .. }
+            | Self::ZkAmsVerifiedProof { .. } => None,
+        }
+    }
+
+    /// Borrow the immutable X.509 trust-anchor revision carried by this record.
+    #[must_use]
+    pub const fn zk_x509_trust_anchor(&self) -> Option<&PrivacyZkX509TrustAnchorRecordV1> {
+        match self {
+            Self::ZkX509TrustAnchorGovernance { record, .. } => Some(record),
+            Self::ZkAcePolicyGovernance { .. }
+            | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::ZkAceVerifiedAuthorization { .. }
+            | Self::ZkAmsGovernance { .. }
+            | Self::ZkAmsVerifiedProof { .. } => None,
+        }
+    }
+
+    /// Borrow the immutable X.509 certificate-policy revision carried by this record.
+    #[must_use]
+    pub const fn zk_x509_certificate_policy(
+        &self,
+    ) -> Option<&PrivacyZkX509CertificatePolicyRecordV1> {
+        match self {
+            Self::ZkX509CertificatePolicyGovernance { record, .. } => Some(record),
+            Self::ZkAcePolicyGovernance { .. }
+            | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
@@ -3354,13 +4430,25 @@ impl_validated_json_key!(PrivacyPgcPoolInvariantKeyV1);
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::privacy::{
-        PrivacyActiveLifecycleV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
-        PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyNamespaceScopeV1, PrivacyParameterIdV1,
-        PrivacyParameterNamespaceV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-        PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1, PrivacyRootV1,
-        PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVerifierDigestV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsRegistryIdV1,
+        PrivacyActiveLifecycleV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
+        PrivacyChallengeV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
+        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyIssuerRegistryPolicyNamespaceV1,
+        PrivacyNamespaceScopeV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+        PrivacyParameterNamespaceV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
+        PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+        PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorPolicyNamespaceV1,
+        PrivacyVerifierDigestV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1,
+        PrivacyX509TrustStoreDigestV1, PrivacyZkAcePolicyLifecycleV1,
+        PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsRegistryIdV1, PrivacyZkX509DisclosedAttributeV1,
+    };
+    use iroha_data_model::{
+        ChainId, account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name,
     };
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
@@ -3369,6 +4457,37 @@ mod tests {
 
     fn nonzero(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed derives Ed25519 keypair");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn zk_ace_policy_id(index: u64) -> PrivacyPolicyIdV1 {
+        let mut bytes = [0; 32];
+        bytes[..8].copy_from_slice(&index.to_le_bytes());
+        bytes[8] = 1;
+        PrivacyPolicyIdV1::new(bytes)
+    }
+
+    fn zk_ace_policy_record(policy_id: PrivacyPolicyIdV1) -> PrivacyZkAcePolicyRecordV1 {
+        let mut allowlist = vec![account(11), account(12)];
+        allowlist.sort_unstable();
+        PrivacyZkAcePolicyRecordV1::new(
+            policy_id,
+            PrivacyCommitmentV1::new(nonzero(13)),
+            PrivacyPolicyDigestV1::new(nonzero(14)),
+            1,
+            AssetDefinitionId::new(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("asset").expect("asset name"),
+            ),
+            allowlist,
+            PrivacyZkAcePolicyLifecycleV1::Active,
+        )
+        .expect("canonical ZK-ACE policy")
     }
 
     fn pgc_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
@@ -3418,6 +4537,123 @@ mod tests {
             PrivacyRootV1::new(nonzero(root_byte)),
         )
         .expect("valid root key")
+    }
+
+    fn indexed_nonzero(domain: u8, index: u64) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[0] = domain;
+        bytes[1..9].copy_from_slice(&index.to_le_bytes());
+        bytes
+    }
+
+    fn x509_trust_anchor_record(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        epoch: u64,
+        trust_store_byte: u8,
+        previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509TrustAnchorRecordV1 {
+        PrivacyZkX509TrustAnchorRecordV1::new(
+            trust_anchor_id,
+            epoch,
+            PrivacyX509TrustStoreDigestV1::new(nonzero(trust_store_byte)),
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 trust-anchor record")
+    }
+
+    fn x509_certificate_policy_record(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        policy_id: PrivacyPolicyIdV1,
+        epoch: u64,
+        policy_byte: u8,
+        disclosures: Vec<u8>,
+        previous_record_digest: Option<PrivacyZkX509CertificatePolicyRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509CertificatePolicyRecordV1 {
+        PrivacyZkX509CertificatePolicyRecordV1::new(
+            trust_anchor_id,
+            policy_id,
+            epoch,
+            PrivacyPolicyDigestV1::new(nonzero(policy_byte)),
+            PrivacyX509KeyUsageV1 {
+                digital_signature: true,
+                content_commitment: false,
+                key_encipherment: false,
+                key_agreement: false,
+            },
+            vec![
+                PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+            ],
+            disclosures,
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 certificate-policy record")
+    }
+
+    fn insert_x509_trust_anchor(
+        commitments: &mut Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+        record: PrivacyZkX509TrustAnchorRecordV1,
+        admitted_at_height: u64,
+    ) {
+        let key = PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision(
+            record.trust_anchor_id,
+            record.record_epoch,
+        )
+        .expect("trust-anchor revision key");
+        let value =
+            PrivacyStateItemRecordV1::zk_x509_trust_anchor_governance(record, admitted_at_height)
+                .expect("trust-anchor state record");
+        commitments.insert(key, value);
+    }
+
+    fn insert_x509_certificate_policy(
+        commitments: &mut Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+        record: PrivacyZkX509CertificatePolicyRecordV1,
+        admitted_at_height: u64,
+    ) {
+        let key = PrivacyCommitmentKeyV1::zk_x509_certificate_policy_revision(
+            record.trust_anchor_id,
+            record.policy_id,
+            record.record_epoch,
+        )
+        .expect("certificate-policy revision key");
+        let value = PrivacyStateItemRecordV1::zk_x509_certificate_policy_governance(
+            record,
+            admitted_at_height,
+        )
+        .expect("certificate-policy state record");
+        commitments.insert(key, value);
+    }
+
+    fn x509_root_provenance(
+        key: PrivacyRootKeyV1,
+        trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
+        certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
+        admitted_at_height: u64,
+    ) -> PrivacyRootProvenanceV1 {
+        let publication = PrivacyRootPublicationV1 {
+            namespace: key.namespace(),
+            role: key.role(),
+            epoch: key.epoch(),
+            root: key.root(),
+        };
+        PrivacyRootProvenanceV1::zk_x509_governance(
+            publication.digest().expect("root publication digest"),
+            publication.namespace,
+            publication.role,
+            publication.epoch,
+            publication.root,
+            trust_anchor.record_digest,
+            trust_anchor.record_epoch,
+            certificate_policy.record_digest,
+            certificate_policy.record_epoch,
+            admitted_at_height,
+        )
+        .expect("X.509 root provenance")
     }
 
     fn root_provenance() -> PrivacyRootProvenanceV1 {
@@ -4822,6 +6058,280 @@ mod tests {
     }
 
     #[test]
+    fn zk_ace_storage_keys_are_scoped_role_separated_and_nonzero() {
+        let policy_a = zk_ace_policy_id(1);
+        let policy_b = zk_ace_policy_id(2);
+        let replay = PrivacyNullifierV1::new(nonzero(21));
+
+        let policy_key =
+            PrivacyCommitmentKeyV1::zk_ace_policy(policy_a).expect("nonzero policy key");
+        assert_eq!(
+            policy_key.protocol_id(),
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        );
+        assert_eq!(policy_key.zk_ams_namespace(), None);
+        assert!(PrivacyCommitmentKeyV1::zk_ace_policy(PrivacyPolicyIdV1::new([0; 32])).is_err());
+
+        let replay_a =
+            PrivacyNullifierKeyV1::zk_ace_replay(policy_a, replay).expect("scoped replay key");
+        let replay_b =
+            PrivacyNullifierKeyV1::zk_ace_replay(policy_b, replay).expect("scoped replay key");
+        assert_ne!(
+            replay_a, replay_b,
+            "the same nullifier in distinct policy lineages must not alias"
+        );
+        assert_eq!(
+            replay_a.protocol_id(),
+            PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
+        );
+        assert_eq!(replay_a.zk_ams_namespace(), None);
+        assert!(
+            PrivacyNullifierKeyV1::zk_ace_replay(PrivacyPolicyIdV1::new([0; 32]), replay,).is_err()
+        );
+        assert!(
+            PrivacyNullifierKeyV1::zk_ace_replay(policy_a, PrivacyNullifierV1::new([0; 32]))
+                .is_err()
+        );
+
+        let mut encoded = String::new();
+        replay_a.encode_json_key(&mut encoded);
+        let canonical = norito::json::from_json::<String>(&encoded).expect("JSON key string");
+        assert_eq!(
+            PrivacyNullifierKeyV1::decode_json_key(&canonical).expect("decode canonical key"),
+            replay_a
+        );
+    }
+
+    #[test]
+    fn zk_ace_policy_loader_rejects_missing_wrong_role_mismatch_and_corruption() {
+        let policy_id = zk_ace_policy_id(1);
+        let key = PrivacyCommitmentKeyV1::zk_ace_policy(policy_id).expect("policy key");
+        let policy = zk_ace_policy_record(policy_id);
+        let record = PrivacyStateItemRecordV1::zk_ace_policy_governance(policy.clone(), 7)
+            .expect("governance provenance");
+
+        let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        assert!(
+            load_privacy_zk_ace_policy_v1(policy_id, &commitments.view())
+                .expect_err("missing policy must reject")
+                .contains("not registered")
+        );
+        commitments.insert(key, record);
+        assert_eq!(
+            privacy_zk_ace_policy_count_v1(&commitments.view()).expect("bounded policy count"),
+            1
+        );
+        assert_eq!(
+            load_privacy_zk_ace_policy_v1(policy_id, &commitments.view())
+                .expect("load canonical policy"),
+            policy
+        );
+
+        let namespace = zk_ams_namespace(20);
+        commitments.insert(
+            PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record(
+                namespace,
+                PrivacyZkAmsIssuerPolicyRecordDigestV1::new(nonzero(22)),
+            )
+            .expect("ZK-AMS issuer-policy key"),
+            PrivacyStateItemRecordV1::zk_ams_governance(
+                PrivacyZkAmsRegistryBootstrapDigestV1::new(nonzero(23)),
+                7,
+            )
+            .expect("ZK-AMS provenance"),
+        );
+        assert_eq!(
+            privacy_zk_ace_policy_count_v1(&commitments.view())
+                .expect("unrelated protocols are not counted"),
+            1
+        );
+
+        let mut wrong_role = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        wrong_role.insert(
+            key,
+            PrivacyStateItemRecordV1::zk_ams_governance(
+                PrivacyZkAmsRegistryBootstrapDigestV1::new(nonzero(24)),
+                7,
+            )
+            .expect("valid but wrong-role provenance"),
+        );
+        assert!(
+            load_privacy_zk_ace_policy_v1(policy_id, &wrong_role.view())
+                .expect_err("wrong-role value must reject")
+                .contains("wrong-role")
+        );
+
+        let mismatched_policy_id = zk_ace_policy_id(2);
+        let mut mismatched = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        mismatched.insert(
+            key,
+            PrivacyStateItemRecordV1::zk_ace_policy_governance(
+                zk_ace_policy_record(mismatched_policy_id),
+                7,
+            )
+            .expect("valid mismatched policy record"),
+        );
+        assert!(
+            load_privacy_zk_ace_policy_v1(policy_id, &mismatched.view())
+                .expect_err("key/payload mismatch must reject")
+                .contains("does not match")
+        );
+
+        let mut corrupted_policy = zk_ace_policy_record(policy_id);
+        corrupted_policy.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25));
+        let mut corrupted = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        corrupted.insert(
+            key,
+            PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
+                policy: corrupted_policy,
+                admitted_at_height: 7,
+            },
+        );
+        assert!(
+            load_privacy_zk_ace_policy_v1(policy_id, &corrupted.view())
+                .expect_err("self-digest corruption must reject")
+                .contains("self-digest mismatch")
+        );
+
+        let mut zero_height = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        zero_height.insert(
+            key,
+            PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
+                policy,
+                admitted_at_height: 0,
+            },
+        );
+        assert!(
+            load_privacy_zk_ace_policy_v1(policy_id, &zero_height.view())
+                .expect_err("zero policy admission height must reject")
+                .contains("zero admission height")
+        );
+    }
+
+    #[test]
+    fn zk_ace_policy_count_rejects_state_above_the_closed_global_bound() {
+        let template = zk_ace_policy_record(zk_ace_policy_id(1));
+        let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        for index in
+            1..=u64::try_from(PRIVACY_ZK_ACE_MAX_POLICIES_V1 + 1).expect("policy bound fits u64")
+        {
+            let policy_id = zk_ace_policy_id(index);
+            let mut policy = template.clone();
+            policy.policy_id = policy_id;
+            policy.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
+            policy.record_digest = policy
+                .compute_record_digest()
+                .expect("canonical policy digest material");
+            commitments.insert(
+                PrivacyCommitmentKeyV1::zk_ace_policy(policy_id).expect("policy key"),
+                PrivacyStateItemRecordV1::zk_ace_policy_governance(policy, 7)
+                    .expect("policy provenance"),
+            );
+        }
+
+        let error = privacy_zk_ace_policy_count_v1(&commitments.view())
+            .expect_err("over-cap restored policy state must reject");
+        assert!(
+            error.contains("policy count exceeds"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn zk_ace_provenance_rejects_zero_fields_and_cross_role_reuse() {
+        let policy_id = zk_ace_policy_id(1);
+        let policy = zk_ace_policy_record(policy_id);
+        assert!(PrivacyStateItemRecordV1::zk_ace_policy_governance(policy.clone(), 0).is_err());
+        let mut corrupted_policy = policy.clone();
+        corrupted_policy.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(nonzero(31));
+        assert!(PrivacyStateItemRecordV1::zk_ace_policy_governance(corrupted_policy, 7).is_err());
+
+        let record_digest = policy.record_digest;
+        let statement_digest = PrivacyStatementDigestV1::new(nonzero(32));
+        let valid = PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+            policy_id,
+            record_digest,
+            statement_digest,
+            7,
+            0,
+        )
+        .expect("canonical replay provenance");
+        valid
+            .validate()
+            .expect("canonical replay provenance validates");
+
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                PrivacyPolicyIdV1::new([0; 32]),
+                record_digest,
+                statement_digest,
+                7,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                policy_id,
+                PrivacyZkAcePolicyRecordDigestV1::new([0; 32]),
+                statement_digest,
+                7,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                policy_id,
+                record_digest,
+                PrivacyStatementDigestV1::new([0; 32]),
+                7,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                policy_id,
+                record_digest,
+                statement_digest,
+                0,
+                0,
+            )
+            .is_err()
+        );
+
+        let registered = BTreeSet::from([policy_id]);
+        validate_privacy_zk_ace_replay_binding_v1(&registered, policy_id, &valid)
+            .expect("matching replay provenance");
+        let wrong_policy = PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization {
+            policy_id: zk_ace_policy_id(2),
+            policy_record_digest: record_digest,
+            statement_digest,
+            admitted_at_height: 7,
+            action_index: 0,
+        };
+        assert!(
+            validate_privacy_zk_ace_replay_binding_v1(&registered, policy_id, &wrong_policy)
+                .expect_err("cross-policy provenance must reject")
+                .contains("wrong-role")
+        );
+        let wrong_role = PrivacyStateItemRecordV1::zk_ace_policy_governance(policy, 7)
+            .expect("valid governance record");
+        assert!(
+            validate_privacy_zk_ace_replay_binding_v1(&registered, policy_id, &wrong_role)
+                .expect_err("governance record cannot serve as replay provenance")
+                .contains("wrong-role")
+        );
+        assert!(
+            validate_privacy_zk_ace_replay_binding_v1(&BTreeSet::new(), policy_id, &valid,)
+                .expect_err("orphan replay marker must reject")
+                .contains("missing policy")
+        );
+        assert_eq!(valid.zk_ace_policy(), None);
+    }
+
+    #[test]
     fn identical_key_images_in_distinct_registries_have_distinct_keys() {
         let namespace_a = zk_ams_namespace(20);
         let namespace_b = zk_ams_namespace(21);
@@ -4947,6 +6457,529 @@ mod tests {
         assert!(
             PrivacyNullifierKeyV1::decode_json_key(&trailing).is_err(),
             "trailing Norito bytes must not alias a canonical storage key"
+        );
+    }
+
+    #[test]
+    fn zk_x509_governance_lineages_are_append_only_terminal_and_role_typed() {
+        let trust_anchor_id = PrivacyIssuerIdV1::new(nonzero(41));
+        let policy_id = PrivacyPolicyIdV1::new(nonzero(42));
+        let mut commitments = Storage::new();
+        let anchor_origin = x509_trust_anchor_record(
+            trust_anchor_id,
+            1,
+            51,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        let policy_origin = x509_certificate_policy_record(
+            trust_anchor_id,
+            policy_id,
+            1,
+            52,
+            vec![0, 3],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_trust_anchor(&mut commitments, anchor_origin, 10);
+        insert_x509_certificate_policy(&mut commitments, policy_origin.clone(), 11);
+        assert_eq!(
+            privacy_zk_x509_governance_record_counts_v1(&commitments.view())
+                .expect("valid origins"),
+            (1, 1)
+        );
+
+        let anchor_rotation = x509_trust_anchor_record(
+            trust_anchor_id,
+            2,
+            53,
+            Some(anchor_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        let policy_rotation = x509_certificate_policy_record(
+            trust_anchor_id,
+            policy_id,
+            2,
+            54,
+            vec![0, 2, 3],
+            Some(policy_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_trust_anchor(&mut commitments, anchor_rotation, 12);
+        insert_x509_certificate_policy(&mut commitments, policy_rotation.clone(), 13);
+        assert_eq!(
+            load_privacy_zk_x509_trust_anchor_v1(trust_anchor_id, &commitments.view())
+                .expect("current trust anchor"),
+            anchor_rotation
+        );
+        assert_eq!(
+            load_privacy_zk_x509_certificate_policy_v1(
+                trust_anchor_id,
+                policy_id,
+                &commitments.view()
+            )
+            .expect("current certificate policy"),
+            policy_rotation
+        );
+
+        let anchor_revoked = x509_trust_anchor_record(
+            trust_anchor_id,
+            3,
+            53,
+            Some(anchor_rotation.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        let policy_revoked = x509_certificate_policy_record(
+            trust_anchor_id,
+            policy_id,
+            3,
+            54,
+            vec![0, 2, 3],
+            Some(policy_rotation.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        insert_x509_trust_anchor(&mut commitments, anchor_revoked, 14);
+        insert_x509_certificate_policy(&mut commitments, policy_revoked.clone(), 15);
+        privacy_zk_x509_governance_record_counts_v1(&commitments.view())
+            .expect("canonical terminal revisions");
+
+        let after_terminal = x509_trust_anchor_record(
+            trust_anchor_id,
+            4,
+            55,
+            Some(anchor_revoked.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_trust_anchor(&mut commitments, after_terminal, 16);
+        assert!(
+            privacy_zk_x509_governance_record_counts_v1(&commitments.view())
+                .expect_err("terminal lineage cannot advance")
+                .contains("not active")
+        );
+
+        let mut gap = Storage::new();
+        insert_x509_trust_anchor(&mut gap, anchor_origin, 10);
+        let skipped = x509_trust_anchor_record(
+            trust_anchor_id,
+            3,
+            56,
+            Some(anchor_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_trust_anchor(&mut gap, skipped, 11);
+        assert!(
+            privacy_zk_x509_governance_record_counts_v1(&gap.view())
+                .expect_err("skipped epoch must reject")
+                .contains("must be 2")
+        );
+
+        let mut wrong_role = Storage::new();
+        let anchor_key = PrivacyCommitmentKeyV1::zk_x509_trust_anchor_revision(trust_anchor_id, 1)
+            .expect("anchor key");
+        wrong_role.insert(
+            anchor_key,
+            PrivacyStateItemRecordV1::zk_x509_certificate_policy_governance(policy_origin, 10)
+                .expect("policy state record"),
+        );
+        assert!(
+            privacy_zk_x509_governance_record_counts_v1(&wrong_role.view())
+                .expect_err("cross-role record must reject")
+                .contains("wrong-role")
+        );
+    }
+
+    #[test]
+    fn zk_x509_revision_caps_accept_cap_and_reject_cap_plus_one() {
+        let trust_anchor_id = PrivacyIssuerIdV1::new(nonzero(61));
+        let mut lineage = Storage::new();
+        let mut current = x509_trust_anchor_record(
+            trust_anchor_id,
+            1,
+            1,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_trust_anchor(&mut lineage, current, 1);
+        for epoch in 2..=u64::try_from(ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1)
+            .expect("lineage cap fits u64")
+        {
+            let next = x509_trust_anchor_record(
+                trust_anchor_id,
+                epoch,
+                u8::try_from(epoch).expect("lineage test epoch fits u8"),
+                Some(current.record_digest),
+                PrivacyZkX509RecordLifecycleV1::Active,
+            );
+            insert_x509_trust_anchor(&mut lineage, next, epoch);
+            current = next;
+        }
+        assert_eq!(
+            privacy_zk_x509_governance_record_counts_v1(&lineage.view())
+                .expect("exact lineage cap"),
+            (ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, 0)
+        );
+        let over_cap_epoch =
+            u64::try_from(ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1).expect("cap fits u64") + 1;
+        let over_cap = x509_trust_anchor_record(
+            trust_anchor_id,
+            over_cap_epoch,
+            u8::try_from(over_cap_epoch).expect("cap+1 fits u8"),
+            Some(current.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_trust_anchor(&mut lineage, over_cap, over_cap_epoch);
+        assert!(
+            privacy_zk_x509_governance_record_counts_v1(&lineage.view())
+                .expect_err("lineage cap+1 must reject")
+                .contains("exceeds 64 revisions")
+        );
+
+        let mut anchors = Storage::new();
+        for index in 1..=ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1 {
+            let index = u64::try_from(index).expect("global anchor index fits u64");
+            let id = PrivacyIssuerIdV1::new(indexed_nonzero(0xA1, index));
+            let record = PrivacyZkX509TrustAnchorRecordV1::new(
+                id,
+                1,
+                PrivacyX509TrustStoreDigestV1::new(nonzero(71)),
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            )
+            .expect("global-cap anchor");
+            insert_x509_trust_anchor(&mut anchors, record, 1);
+        }
+        assert_eq!(
+            privacy_zk_x509_governance_record_counts_v1(&anchors.view())
+                .expect("exact global anchor cap"),
+            (ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, 0)
+        );
+        let over_index =
+            u64::try_from(ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1).expect("cap fits u64") + 1;
+        let over_id = PrivacyIssuerIdV1::new(indexed_nonzero(0xA1, over_index));
+        let over_record = PrivacyZkX509TrustAnchorRecordV1::new(
+            over_id,
+            1,
+            PrivacyX509TrustStoreDigestV1::new(nonzero(71)),
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("cap+1 anchor");
+        insert_x509_trust_anchor(&mut anchors, over_record, 1);
+        assert!(
+            privacy_zk_x509_governance_record_counts_v1(&anchors.view())
+                .expect_err("global anchor cap+1 must reject")
+                .contains("exceeds 4096")
+        );
+
+        let policy_anchor_id = PrivacyIssuerIdV1::new(nonzero(72));
+        let mut policies = Storage::new();
+        insert_x509_trust_anchor(
+            &mut policies,
+            x509_trust_anchor_record(
+                policy_anchor_id,
+                1,
+                73,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            1,
+        );
+        for index in 1..=ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1 {
+            let index = u64::try_from(index).expect("global policy index fits u64");
+            let policy_id = PrivacyPolicyIdV1::new(indexed_nonzero(0xB1, index));
+            let record = x509_certificate_policy_record(
+                policy_anchor_id,
+                policy_id,
+                1,
+                74,
+                vec![0, 3],
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            );
+            insert_x509_certificate_policy(&mut policies, record, 1);
+        }
+        assert_eq!(
+            privacy_zk_x509_governance_record_counts_v1(&policies.view())
+                .expect("exact global policy cap"),
+            (1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1)
+        );
+        let over_index =
+            u64::try_from(ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1).expect("cap fits u64") + 1;
+        let over_policy = x509_certificate_policy_record(
+            policy_anchor_id,
+            PrivacyPolicyIdV1::new(indexed_nonzero(0xB1, over_index)),
+            1,
+            74,
+            vec![0, 3],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_certificate_policy(&mut policies, over_policy, 1);
+        assert!(
+            privacy_zk_x509_governance_record_counts_v1(&policies.view())
+                .expect_err("global policy cap+1 must reject")
+                .contains("exceeds 4096")
+        );
+    }
+
+    #[test]
+    fn zk_x509_authoritative_roots_bind_exact_revisions_without_activation() {
+        let trust_anchor_id = PrivacyIssuerIdV1::new(nonzero(41));
+        let policy_id = PrivacyPolicyIdV1::new(nonzero(42));
+        let namespace = x509_namespace();
+        let anchor_origin = x509_trust_anchor_record(
+            trust_anchor_id,
+            1,
+            81,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        let policy_origin = x509_certificate_policy_record(
+            trust_anchor_id,
+            policy_id,
+            1,
+            82,
+            vec![0, 3],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        let mut commitments = Storage::new();
+        insert_x509_trust_anchor(&mut commitments, anchor_origin, 10);
+        insert_x509_certificate_policy(&mut commitments, policy_origin.clone(), 11);
+        let mut roots = Storage::new();
+        let mut root_heads = Storage::new();
+        for (role, root_byte) in [
+            (PrivacyRootRoleV1::CertificateAuthorityMembership, 83),
+            (PrivacyRootRoleV1::CertificateRevocationNonmembership, 84),
+        ] {
+            let key =
+                PrivacyRootKeyV1::new(namespace, role, 1, PrivacyRootV1::new(nonzero(root_byte)))
+                    .expect("X.509 root key");
+            let provenance = x509_root_provenance(key, anchor_origin, &policy_origin, 12);
+            roots.insert(key, provenance);
+            root_heads.insert(
+                PrivacyRootHeadKeyV1::new(namespace, role).expect("root-head key"),
+                PrivacyRootHeadRecordV1::new(1, key.root(), provenance, None).expect("root head"),
+            );
+        }
+        let snapshot = load_privacy_zk_x509_authoritative_state_v1(
+            trust_anchor_id,
+            policy_id,
+            8,
+            &commitments.view(),
+            &roots.view(),
+            &root_heads.view(),
+        )
+        .expect("complete authoritative snapshot");
+        assert_eq!(snapshot.namespace(), namespace);
+        assert_eq!(snapshot.trust_anchor(), anchor_origin);
+        assert_eq!(snapshot.certificate_policy(), &policy_origin);
+
+        let statement = IrohaZkX509StarkP256StatementV1 {
+            context: PrivacyStatementContextV1 {
+                chain_id: ChainId::from("x509-authoritative-state-test"),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(nonzero(91)),
+                parameter_id: PrivacyParameterIdV1::new(nonzero(92)),
+                parameter_digest: PrivacyParameterDigestV1::new(nonzero(93)),
+                verifier_digest: PrivacyVerifierDigestV1::new(nonzero(94)),
+                statement_schema_digest: PrivacyStatementSchemaDigestV1::new(nonzero(95)),
+                engine_manifest_digest: PrivacyEngineManifestDigestV1::new(nonzero(96)),
+            },
+            trust_anchor_id,
+            certificate_policy_id: policy_id,
+            trust_anchor_record_digest: anchor_origin.record_digest,
+            trust_anchor_record_epoch: anchor_origin.record_epoch,
+            certificate_policy_record_digest: policy_origin.record_digest,
+            certificate_policy_record_epoch: policy_origin.record_epoch,
+            subject_public_key_digest: PrivacyCertificateKeyDigestV1::new(nonzero(97)),
+            ca_membership_root: snapshot.ca_membership_root(),
+            ca_membership_root_epoch: snapshot.ca_membership_root_epoch(),
+            crl_nonmembership_root: snapshot.crl_nonmembership_root(),
+            crl_nonmembership_root_epoch: snapshot.crl_nonmembership_root_epoch(),
+            key_usage: policy_origin.required_key_usage,
+            extended_key_usages: policy_origin.required_extended_key_usages.clone(),
+            disclosed_attributes: policy_origin
+                .required_disclosed_attribute_indices
+                .iter()
+                .map(|index| PrivacyZkX509DisclosedAttributeV1 {
+                    index: *index,
+                    attribute_digest: PrivacyAttributeDigestV1::new(indexed_nonzero(
+                        0xD1,
+                        u64::from(*index) + 1,
+                    )),
+                })
+                .collect(),
+            not_before_unix_seconds: 1_700_000_000,
+            not_after_unix_seconds: 1_800_000_000,
+            validation_unix_seconds: 1_750_000_000,
+            chain_depth: 3,
+            leaf_certificate_bytes: 1_024,
+            chain_certificate_bytes: 3_072,
+            wallet_account: account(33),
+            wallet_challenge: PrivacyChallengeV1::new(nonzero(98)),
+            certificate_nullifier: PrivacyNullifierV1::new(nonzero(99)),
+        };
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        validate_privacy_zk_x509_statement_state_v1(&statement, &snapshot, &limits)
+            .expect("exact authoritative statement");
+
+        let assert_statement_rejected =
+            |label: &str, mutate: fn(&mut IrohaZkX509StarkP256StatementV1)| {
+                let mut candidate = statement.clone();
+                mutate(&mut candidate);
+                assert!(
+                    validate_privacy_zk_x509_statement_state_v1(&candidate, &snapshot, &limits)
+                        .is_err(),
+                    "{label} must fail closed"
+                );
+            };
+        assert_statement_rejected("substituted trust-anchor id", |candidate| {
+            candidate.trust_anchor_id = PrivacyIssuerIdV1::new(nonzero(100));
+        });
+        assert_statement_rejected("stale trust-anchor digest", |candidate| {
+            candidate.trust_anchor_record_digest =
+                PrivacyZkX509TrustAnchorRecordDigestV1::new(nonzero(101));
+        });
+        assert_statement_rejected("stale certificate-policy epoch", |candidate| {
+            candidate.certificate_policy_record_epoch += 1;
+        });
+        assert_statement_rejected("substituted CA root", |candidate| {
+            candidate.ca_membership_root = PrivacyRootV1::new(nonzero(102));
+        });
+        assert_statement_rejected("stale CRL root epoch", |candidate| {
+            candidate.crl_nonmembership_root_epoch += 1;
+        });
+        assert_statement_rejected("weakened key usage", |candidate| {
+            candidate.key_usage.digital_signature = false;
+        });
+        assert_statement_rejected("substituted EKU policy", |candidate| {
+            candidate.extended_key_usages = vec![PrivacyX509ExtendedKeyUsageV1::DocumentSigning];
+        });
+        assert_statement_rejected("omitted required disclosure", |candidate| {
+            candidate.disclosed_attributes.pop();
+        });
+        assert_statement_rejected("extra disclosure", |candidate| {
+            candidate.disclosed_attributes.insert(
+                1,
+                PrivacyZkX509DisclosedAttributeV1 {
+                    index: 1,
+                    attribute_digest: PrivacyAttributeDigestV1::new(nonzero(103)),
+                },
+            );
+        });
+
+        let activations = Storage::new();
+        let pgc_accounts = Storage::new();
+        let pgc_pool_invariants = Storage::new();
+        let nullifiers = Storage::new();
+        validate_privacy_persisted_state_v1(
+            &PrivacyConsensusPolicyV1::taira_default(),
+            &activations.view(),
+            &pgc_accounts.view(),
+            &pgc_pool_invariants.view(),
+            &nullifiers.view(),
+            &commitments.view(),
+            &roots.view(),
+            &root_heads.view(),
+        )
+        .expect("pre-activation X.509 governance state is durable");
+
+        let anchor_rotation = x509_trust_anchor_record(
+            trust_anchor_id,
+            2,
+            85,
+            Some(anchor_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        insert_x509_trust_anchor(&mut commitments, anchor_rotation, 13);
+        validate_privacy_persisted_state_v1(
+            &PrivacyConsensusPolicyV1::taira_default(),
+            &activations.view(),
+            &pgc_accounts.view(),
+            &pgc_pool_invariants.view(),
+            &nullifiers.view(),
+            &commitments.view(),
+            &roots.view(),
+            &root_heads.view(),
+        )
+        .expect("record rotation may precede root refresh");
+        assert!(
+            load_privacy_zk_x509_authoritative_state_v1(
+                trust_anchor_id,
+                policy_id,
+                8,
+                &commitments.view(),
+                &roots.view(),
+                &root_heads.view(),
+            )
+            .expect_err("old root bindings are stale after rotation")
+            .contains("stale")
+        );
+
+        for (role, root_byte) in [
+            (PrivacyRootRoleV1::CertificateAuthorityMembership, 86),
+            (PrivacyRootRoleV1::CertificateRevocationNonmembership, 87),
+        ] {
+            let key =
+                PrivacyRootKeyV1::new(namespace, role, 2, PrivacyRootV1::new(nonzero(root_byte)))
+                    .expect("successor X.509 root key");
+            let provenance = x509_root_provenance(key, anchor_rotation, &policy_origin, 14);
+            roots.insert(key, provenance);
+            root_heads.insert(
+                PrivacyRootHeadKeyV1::new(namespace, role).expect("root-head key"),
+                PrivacyRootHeadRecordV1::new(2, key.root(), provenance, None)
+                    .expect("successor root head"),
+            );
+        }
+        load_privacy_zk_x509_authoritative_state_v1(
+            trust_anchor_id,
+            policy_id,
+            8,
+            &commitments.view(),
+            &roots.view(),
+            &root_heads.view(),
+        )
+        .expect("both refreshed roots restore authoritative state");
+
+        let ca_head_key =
+            PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::CertificateAuthorityMembership)
+                .expect("CA head key");
+        let ca_key = PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::CertificateAuthorityMembership,
+            2,
+            PrivacyRootV1::new(nonzero(86)),
+        )
+        .expect("CA root key");
+        let generic = PrivacyRootProvenanceV1::governance(
+            PrivacyRootPublicationV1 {
+                namespace,
+                role: ca_key.role(),
+                epoch: ca_key.epoch(),
+                root: ca_key.root(),
+            }
+            .digest()
+            .expect("publication digest"),
+            14,
+        )
+        .expect("generic governance provenance");
+        roots.insert(ca_key, generic);
+        root_heads.insert(
+            ca_head_key,
+            PrivacyRootHeadRecordV1::new(2, ca_key.root(), generic, None).expect("generic head"),
+        );
+        assert!(
+            load_privacy_zk_x509_authoritative_state_v1(
+                trust_anchor_id,
+                policy_id,
+                8,
+                &commitments.view(),
+                &roots.view(),
+                &root_heads.view(),
+            )
+            .expect_err("generic provenance cannot impersonate X.509 governance")
+            .contains("non-X.509 provenance")
         );
     }
 

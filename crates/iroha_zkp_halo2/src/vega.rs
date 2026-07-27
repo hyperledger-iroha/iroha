@@ -80,7 +80,8 @@ pub use transcript::{VegaTranscriptError, VegaTranscriptV1};
 pub use wire::{VegaPointWireV1, VegaScalarWireV1, VegaWireError, validate_proof_byte_cap_v1};
 pub use zk_ams::{
     MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1,
-    ZkAmsAdmissionPublicInputV1, ZkAmsAdmissionRelationDimensionsV1, ZkAmsAdmissionRelationErrorV1,
+    ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1, ZkAmsAdmissionPublicInputV1,
+    ZkAmsAdmissionRelationDimensionsV1, ZkAmsAdmissionRelationErrorV1,
     ZkAmsAdmissionRelationWitnessV1, ZkAmsMaskedProverConfigV1, ZkAmsProofContextV1,
     prove_zk_ams_admission_relation_v1, verify_zk_ams_admission_relation_v1,
     zk_ams_admission_relation_dimensions_v1, zk_ams_compiled_profile_digest_v1,

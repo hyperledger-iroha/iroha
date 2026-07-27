@@ -268,7 +268,7 @@ const SCCP_MESSAGE_BUNDLE_NORITO_TYPE_NAME =
   "iroha_sccp::TairaSccpMessageProofV1";
 const SCCP_PROOF_REQUEST_NORITO_TYPE_NAME =
   "iroha_sccp::SccpGroth16Bn254ProofRequestV1";
-const EXPECTED_DATA_MODEL_VERSION = 3;
+const EXPECTED_DATA_MODEL_VERSION = 4;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
@@ -18871,6 +18871,7 @@ function parseGovernanceLockRecord(payload, context) {
     throw new RangeError(`${context}.direction must be within 0-255`);
   }
   const durationBlocks = coerceInteger(payload.duration_blocks ?? 0, `${context}.duration_blocks`);
+  const custody = parseGovernanceLockCustody(payload.custody, `${context}.custody`);
   return {
     owner,
     amount,
@@ -18878,6 +18879,41 @@ function parseGovernanceLockRecord(payload, context) {
     expiry_height: expiryHeight,
     direction,
     duration_blocks: durationBlocks,
+    custody,
+  };
+}
+
+const GOVERNANCE_LOCK_CUSTODY_KEYS = Object.freeze([
+  "escrowed",
+  "asset_definition_id",
+  "bond_escrow_account",
+  "slash_receiver_account",
+]);
+
+function parseGovernanceLockCustody(payload, context) {
+  if (payload === null) return null;
+  const custody = exactEnumerableDataRecord(
+    payload,
+    GOVERNANCE_LOCK_CUSTODY_KEYS,
+    context,
+  );
+  if (typeof custody.escrowed !== "boolean") {
+    throw new TypeError(`${context}.escrowed must be a boolean`);
+  }
+  return {
+    escrowed: custody.escrowed,
+    asset_definition_id: requireExactNonEmptyString(
+      custody.asset_definition_id,
+      `${context}.asset_definition_id`,
+    ),
+    bond_escrow_account: requireExactNonEmptyString(
+      custody.bond_escrow_account,
+      `${context}.bond_escrow_account`,
+    ),
+    slash_receiver_account: requireExactNonEmptyString(
+      custody.slash_receiver_account,
+      `${context}.slash_receiver_account`,
+    ),
   };
 }
 

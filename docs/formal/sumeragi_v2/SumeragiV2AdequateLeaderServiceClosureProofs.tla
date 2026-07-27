@@ -1290,6 +1290,7 @@ semantic evidence is frozen together with every carrier in
 
 ExactLeaderSchedulerReadinessFrame ==
   /\ UNCHANGED vars
+  /\ UNCHANGED up
   /\ UNCHANGED <<asyncCommandQueues,
                  asyncDeferredCompletionQueues,
                  asyncDeferredProgressQueues,
@@ -1297,7 +1298,8 @@ ExactLeaderSchedulerReadinessFrame ==
                  asyncCausalQueues,
                  asyncOutstandingWork,
                  asyncSentItems,
-                 asyncHeldChunks>>
+                 asyncHeldChunks,
+                 asyncControlServiceState>>
 
 THEOREM ExactLeaderSchedulerReadinessFramePreservesScheduled ==
   \A candidate:
@@ -2465,16 +2467,612 @@ BY ExactLeaderSchedulerReadinessFramePreservesInvariant, Isa
    DEF ExactLeaderSchedulerReadinessFrame,
        AsyncTick, AsyncNonClockVars
 
+ExactLeaderControlOccurrenceRetiredByNetwork(candidate) ==
+  /\ candidate.item \in AsyncNetworkItems
+  /\ candidate.item.kind \in AsyncControlKinds
+  /\ AsyncControlServiceOccurrenceIsCurrentOwner(candidate.item)
+  /\ ~AsyncControlServiceOccurrenceIsCurrentOwner(candidate.item)'
+
+THEOREM AsyncNetworkReplacementRetiresReadyOccurrenceIntoAuthenticatedProvenance ==
+  \A candidate, rank:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactLeaderCandidateRank(candidate, rank)
+    /\ ExecuteCoreDeliveryReady(candidate)
+    /\ ExactLeaderControlOccurrenceRetiredByNetwork(candidate)
+    /\ AsyncNext
+    /\ AsyncNetworkStep
+    => AuthenticatedLeaderDiscardProvenance(candidate)'
+BY IsaT(300)
+   DEF ExactLeaderControlOccurrenceRetiredByNetwork,
+       ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       ExactLeaderViewChangeRank, ExactLeaderProposalRank,
+       ExactLeaderPrepareRank, ExactLeaderPrepareStaticRank,
+       ExactLeaderPrepareSignRank, ExactLeaderCommitRank,
+       ExactLeaderCommitStaticRank, ExactLeaderCommitSignRank,
+       ExactLeaderDecisionRank,
+       CommandExecutionReady, ExecuteCoreDeliveryReady,
+       ExecuteChunkDeliveryReady,
+       IngressItemHasAuthenticatedHistory,
+       AuthenticatedLeaderDiscardProvenance,
+       AsyncNext, AsyncNonCrashStep, AsyncNonRunnerStep,
+       AsyncNetworkStep, AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceAdmissionsThisStep,
+       AsyncControlServicesThisStep,
+       AsyncControlServiceStateAfterAdmission,
+       AsyncControlServiceStateAfterService,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       AsyncControlServiceSlotOwned,
+       AsyncControlServiceRecordForItem,
+       AsyncControlServiceIdentityMatches
+
+THEOREM AsyncNetworkStepPreservesExactLeaderSchedulerOriginProvenance ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ ExactLeaderSchedulerOriginProvenanceInvariant
+  /\ AsyncNext
+  /\ AsyncNetworkStep
+  => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY AsyncNetworkReplacementRetiresReadyOccurrenceIntoAuthenticatedProvenance,
+   IsaT(600)
+   DEF ExactLeaderSchedulerOriginProvenanceInvariant,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       PriorPhaseLeaderDiscardProvenance,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       ExactLeaderViewChangeRank, ExactLeaderProposalRank,
+       ExactLeaderPrepareRank, ExactLeaderPrepareStaticRank,
+       ExactLeaderPrepareSignRank, ExactLeaderCommitRank,
+       ExactLeaderCommitStaticRank, ExactLeaderCommitSignRank,
+       ExactLeaderDecisionRank,
+       CommandExecutionReady, CommandDispatchable,
+       ExecuteCoreDeliveryReady, ExecuteChunkDeliveryReady,
+       AsyncNext, AsyncNonCrashStep, AsyncNonRunnerStep,
+       AsyncNetworkStep, AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceAdmissionsThisStep,
+       AsyncControlServicesThisStep,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       CandidateScheduled, CandidateScheduledIn,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, SequenceSet
+
 THEOREM AsyncNetworkStepPreservesExactLeaderSchedulerOriginReadiness ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
   /\ ExactLeaderSchedulerOriginReadinessInvariant
+  /\ AsyncNext
   /\ AsyncNetworkStep
   => ExactLeaderSchedulerOriginReadinessInvariant'
-BY ExactLeaderSchedulerReadinessFramePreservesInvariant, Isa
-   DEF ExactLeaderSchedulerReadinessFrame,
-       AsyncNetworkStep, AdmitIngressPacket,
-       AdmitHiddenPacket, CoalesceHiddenPacket,
-       DropPolicyRejectedHiddenPacket,
-       AsyncIoVars, AsyncDeferredVars, LeaveCausalQueues
+BY AsyncNetworkStepPreservesExactLeaderSchedulerOriginProvenance,
+   AsyncNextPreservesStrongTypeInvariant,
+   ExactLeaderOriginProvenanceImpliesIdleReadiness, Isa
+   DEF ExactLeaderSchedulerOriginReadinessInvariant
+
+(***************************************************************************
+Full source-action induction for scheduler origin.
+
+The induction context contains only independently proved safety invariants.
+It does not add fairness or a temporal progress premise.  Each action family
+below either transfers an already scheduled immutable candidate, admits an
+authenticated ingress occurrence, creates one of the closed causal/restart
+constructor inventories, or removes an owner after leaving its exact witness.
+The final `AsyncNext` theorem is therefore an action-safety result and does not
+call rotating-leader Decision convergence.
+***************************************************************************)
+
+ExactLeaderSchedulerOriginInductionSafetyContext ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ DecisionFrontierUniquenessInvariant
+  /\ DecisionTimeoutFrontierInvariant
+  /\ ResponsiveRecoveryValidationClearedInvariant
+  /\ FinalProgressWitnessClosureInvariant
+  /\ ReplayTailCommitReadyInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+
+ExactLeaderSchedulerOriginInductionContext ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ DecisionFrontierUniquenessInvariant
+  /\ DecisionTimeoutFrontierInvariant
+  /\ ResponsiveRecoveryValidationClearedInvariant
+  /\ FinalProgressWitnessClosureInvariant
+  /\ ReplayTailCommitReadyInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+  /\ ExactLeaderSchedulerOriginReadinessInvariant
+
+THEOREM AsyncLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ LocalAdmissionStep(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   IsaT(600)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       LocalAdmissionStep, LocalAdmissionCanAdvance,
+       SelectedLocalSource, PreferredLocalSource,
+       AdmitCausalHead, CausalHeadCanAdvance, CandidateInFlight,
+       AdmitProducerCompletion, ProducerCompletionCanAdvance,
+       SelectedCompletionCandidate, EnqueueCandidate,
+       UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, CommandExecutionReady,
+       CommandDispatchable, CandidateScheduled,
+       CandidateScheduledIn, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition
+
+THEOREM AsyncIngressDrainPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ IngressDrainStep(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY AsyncActiveControlServiceAdmissionPassesSlotGuard,
+   AsyncRetiredControlServiceAdmissionDropsWithoutCandidate,
+   IsaT(900)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       IngressDrainStep, DrainFairIngressSelected,
+       PopSelectedIngress, IngressItemCanDrain,
+       DeliveryCandidate, DeliveryKind, DeliveryClass,
+       CertifiedResponseCandidate,
+       CommitCertificateResponseCandidate,
+       CandidateAdmissionCoalesced, EnqueueCandidate,
+       IngressItemHasAuthenticatedHistory,
+       AuthenticatedLeaderDiscardProvenance,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       CommandExecutionReady, CommandDispatchable,
+       ExecuteCoreDeliveryReady, ExecuteChunkDeliveryReady,
+       ExecuteRejectAuthenticatedJunkReady,
+       CandidateScheduled, CandidateScheduledIn,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition,
+       AsyncControlServicesThisStep
+
+THEOREM AsyncFifoRuntimePreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ FifoRuntimeStep(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY FifoSuccessfulLeaderExecutionSchedulesDeclaredSuccessors,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   ExecuteSignProposalCreatesExactWireMilestone,
+   ExecuteSignVoteCreatesPhaseExactWireMilestone,
+   ExecuteFormPrepareQcCreatesExactWireMilestone,
+   ExecuteSignTimeoutCreatesExactWireMilestone,
+   ExecutePersistInstallCreatesExactPacemakerMilestone,
+   ExecutePersistDecisionCreatesExactDecisionMilestone,
+   IsaT(900)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       FifoRuntimeStep, RemoveNextNodeCommand, NextNodeCommand,
+       ExecuteCommand, ExecuteRegularCommand,
+       ExecuteDecisionFetch, ExecuteSignProposal, ExecuteSignVote,
+       ExecuteFormPrepareQC, ExecuteSignTimeout,
+       ExecutePersistInstall, ExecutePersistDecision,
+       ExecuteRequestCertifiedBody, ExecuteApply,
+       ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       FreshCandidateSequence, CommandSuccessors,
+       CausalCandidate, CausalCandidateWithEvidence,
+       RetainedBodyRebindCandidate,
+       DeferCommand, DiscardCommand,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       PriorPhaseLeaderDiscardProvenance,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       CommandExecutionReady, CommandDispatchable,
+       CandidateScheduled, CandidateScheduledIn,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition,
+       AsyncControlServicesThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateTerminalDiscardsThisStep
+
+THEOREM AsyncDeferredRuntimePreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ DeferredDrainStep(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY DeferredSuccessfulLeaderExecutionSchedulesDeclaredSuccessors,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   ExecuteSignProposalCreatesExactWireMilestone,
+   ExecuteSignVoteCreatesPhaseExactWireMilestone,
+   ExecuteFormPrepareQcCreatesExactWireMilestone,
+   ExecuteSignTimeoutCreatesExactWireMilestone,
+   ExecutePersistInstallCreatesExactPacemakerMilestone,
+   ExecutePersistDecisionCreatesExactDecisionMilestone,
+   IsaT(900)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       DeferredDrainStep, DeferredWorkServiceable,
+       DeferredQueueNonempty, NextDeferredCommand,
+       RemoveNextDeferredCommand, DeferredClassQueue,
+       DeferredHandoffAllowsExecution,
+       DeferredHandoffBlocksExecution,
+       InstallDeferredHandoff, ClearDeferredHandoff,
+       RetainDeferredHandoffs, AdvanceNextDeferredClass,
+       ExecuteCommand, ExecuteRegularCommand,
+       ExecuteDecisionFetch, ExecuteSignProposal, ExecuteSignVote,
+       ExecuteFormPrepareQC, ExecuteSignTimeout,
+       ExecutePersistInstall, ExecutePersistDecision,
+       ExecuteRequestCertifiedBody, ExecuteApply,
+       ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       FreshCandidateSequence, CommandSuccessors,
+       CausalCandidate, CausalCandidateWithEvidence,
+       RetainedBodyRebindCandidate,
+       DiscardCommand,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       PriorPhaseLeaderDiscardProvenance,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       CommandExecutionReady, CommandDispatchable,
+       CandidateScheduled, CandidateScheduledIn,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition,
+       AsyncControlServicesThisStep,
+       AsyncCandidateServicesThisStep,
+       AsyncCandidateTerminalDiscardsThisStep
+
+THEOREM AsyncTimerAndRetransmitProducerPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ (DirectTimeoutStep(node)
+          \/ DeferredTimeoutStep(node)
+          \/ DirectRetransmitStep(node)
+          \/ DeferredRetransmitStep(node))
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY IsaT(600)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       DirectTimeoutStep, DeferredTimeoutStep,
+       DirectRetransmitStep, DeferredRetransmitStep,
+       TimeoutCausalCommand, AppendCausalSuccessors,
+       HistoricalLockedRetransmitSuccessors,
+       HistoricalLockedRetransmitCandidate,
+       AppendHistoricalLockedRetransmitSuccessors,
+       FreshCommandSuccessors, FreshCandidateSequence,
+       CommandSuccessors, CausalCandidate,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       CommandExecutionReady, CommandDispatchable,
+       CandidateScheduled, CandidateScheduledIn,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition
+
+THEOREM AsyncRuntimePreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ RuntimeStep(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY AsyncFifoRuntimePreservesExactLeaderSchedulerOriginProvenance,
+   AsyncDeferredRuntimePreservesExactLeaderSchedulerOriginProvenance,
+   AsyncTimerAndRetransmitProducerPreservesExactLeaderSchedulerOriginProvenance,
+   ExactLeaderSchedulerReadinessFramePreservesInvariant,
+   IsaT(300)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginReadinessInvariant,
+       RuntimeStep, DeferredTagStep, DeferredTagExecutable,
+       IdleRuntimeStep, ExactLeaderSchedulerReadinessFrame,
+       AsyncNext, AsyncNonCrashStep
+
+THEOREM AsyncIoCompletionPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ ServiceIoWorkerWork(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY AsyncCandidateIoCompletionTransfersSameOwner,
+   IsaT(600)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       ServiceIoWorkerWork, PublishEphemeralItems,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, CommandExecutionReady,
+       CommandDispatchable, CandidateScheduled,
+       CandidateScheduledIn, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates,
+       ConsensusIoCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition
+
+THEOREM AsyncResponsiveRecoveryPreservesExactLeaderSchedulerOriginProvenance ==
+  /\ ExactLeaderSchedulerOriginInductionContext
+  /\ AsyncNext
+  /\ ((\E node \in ValidatorIds: PreGstResponsiveCrash(node))
+        \/ PreGstResponsiveRestart
+        \/ PreGstResponsiveReplay
+        \/ DriveResponsiveReplayHead
+        \/ FinishResponsiveReplay
+        \/ RearmResponsiveRecovery)
+  => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY IsaT(900)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       PreGstResponsiveCrash, PreGstResponsiveRestart,
+       PreGstResponsiveReplay, DriveResponsiveReplayHead,
+       FinishResponsiveReplay, RearmResponsiveRecovery,
+       RecoveryCoreReplay, ResetNodeSchedulerForRestart,
+       RestartReplay, RestartSignatureReplay,
+       RestartDecisionReplay, RestartLockedBodyReplay,
+       RestartLockedCommitReplay, RestartTimeoutReplay,
+       RestartPrepareReplay, RestartProposalReplay,
+       RestartRunnerAssembly, FreshRestartCandidateSequence,
+       RestartCandidate, ReplayCommitIntentReady,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, ExactLeaderPhaseRank,
+       CommandExecutionReady, CommandDispatchable,
+       CandidateScheduled, CandidateScheduledIn,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition
+
+THEOREM AsyncRunNodeWorkPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ RunNodeWork(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                ExactLeaderSchedulerOriginInductionContext,
+                AsyncNext,
+                RunNodeWork(node)
+         PROVE ExactLeaderSchedulerOriginProvenanceInvariant'
+    <2>1. CASE LocalAdmissionStep(node)
+      BY <1>1, <2>1,
+         AsyncLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance
+    <2>2. CASE IngressDrainStep(node)
+      BY <1>1, <2>2,
+         AsyncIngressDrainPreservesExactLeaderSchedulerOriginProvenance
+    <2>3. CASE SerializedRuntimeStep(node)
+      BY <1>1, <2>3,
+         AsyncRuntimePreservesExactLeaderSchedulerOriginProvenance
+         DEF SerializedRuntimeStep
+    <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, <2>4,
+         ExactLeaderSchedulerReadinessFramePreservesInvariant, Isa
+         DEF ExactLeaderSchedulerOriginInductionContext,
+             ExactLeaderSchedulerOriginReadinessInvariant,
+             ExactLeaderSchedulerReadinessFrame,
+             AsyncServeIngressTargetOnlyTurn
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4 DEF RunNodeWork
+  <1> QED BY <1>1
+
+THEOREM AsyncHistoricalRunnerPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ RunHistoricalServer(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY IsaT(600)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginReadinessInvariant,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       RunHistoricalServer, DrainHistoricalIngressSelected,
+       HistoricalIdleStep, PopSelectedIngress,
+       AsyncServeCachedReplayItems, PublishEphemeralItems,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, CommandExecutionReady,
+       CommandDispatchable, CandidateScheduled,
+       CandidateScheduledIn, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition
+
+THEOREM AsyncFaultPreservesExactLeaderSchedulerOriginProvenance ==
+  /\ ExactLeaderSchedulerOriginInductionContext
+  /\ AsyncNext
+  /\ AsyncFaultStep
+  => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY IsaT(600)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginReadinessInvariant,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       AsyncFaultStep, PreGstLosePacket,
+       PreGstServeReceiverCloseRollback, PreGstCrash,
+       InjectByzantineNoise, InjectUntrustedTransportCompletion,
+       InjectAuthenticatedJunk, InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout, PublishEphemeralItems,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       AuthenticatedLeaderDiscardProvenance,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, CommandExecutionReady,
+       CommandDispatchable, CandidateScheduled,
+       CandidateScheduledIn, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition
+
+THEOREM AsyncNonRunnerPreservesExactLeaderSchedulerOriginProvenance ==
+  /\ ExactLeaderSchedulerOriginInductionContext
+  /\ AsyncNext
+  /\ AsyncNonRunnerStep
+  => ExactLeaderSchedulerOriginProvenanceInvariant'
+PROOF
+  <1>1. ASSUME ExactLeaderSchedulerOriginInductionContext,
+              AsyncNext,
+              AsyncNonRunnerStep
+         PROVE ExactLeaderSchedulerOriginProvenanceInvariant'
+    <2>1. CASE AsyncTick
+      BY <1>1, <2>1,
+         AsyncTickPreservesExactLeaderSchedulerOriginReadiness
+         DEF ExactLeaderSchedulerOriginInductionContext,
+             ExactLeaderSchedulerOriginReadinessInvariant
+    <2>2. CASE \E node \in AsyncArchiveIoServiceNodes:
+                  ServiceIoWorker(node)
+      BY <1>1, <2>2,
+         AsyncIoCompletionPreservesExactLeaderSchedulerOriginProvenance
+         DEF ServiceIoWorker
+    <2>3. CASE \E node \in asyncHistoricalRecoveryTargets:
+                  ServiceHistoricalRecoveryIoWorker(node)
+      BY <1>1, <2>3,
+         AsyncIoCompletionPreservesExactLeaderSchedulerOriginProvenance,
+         HistoricalRecoveryTargetsAreValidators
+         DEF ServiceHistoricalRecoveryIoWorker
+    <2>4. CASE AsyncNetworkStep
+      BY <1>1, <2>4,
+         AsyncNetworkStepPreservesExactLeaderSchedulerOriginProvenance
+         DEF ExactLeaderSchedulerOriginInductionContext,
+             ExactLeaderSchedulerOriginReadinessInvariant
+    <2>5. CASE AsyncFaultStep
+      BY <1>1, <2>5,
+         AsyncFaultPreservesExactLeaderSchedulerOriginProvenance
+    <2>6. CASE ~(AsyncTick
+                   \/ (\E node \in AsyncArchiveIoServiceNodes:
+                         ServiceIoWorker(node))
+                   \/ (\E node \in asyncHistoricalRecoveryTargets:
+                         ServiceHistoricalRecoveryIoWorker(node))
+                   \/ AsyncNetworkStep
+                   \/ AsyncFaultStep)
+      BY <1>1, <2>6, IsaT(600)
+         DEF ExactLeaderSchedulerOriginInductionContext,
+             ExactLeaderSchedulerOriginReadinessInvariant,
+             ExactLeaderSchedulerOriginProvenanceInvariant,
+             AsyncNonRunnerStep, AsyncSetGST,
+             OpenHistoricalRecovery,
+             DirectCommitCertificateDiscoveryStep,
+             DirectHistoricalCommitCertificateDiscoveryStep,
+             CommitCertificateDiscoveryStepWork,
+             EnqueueIoLocalControl,
+             EnqueueHistoricalRecoveryIoLocalControl,
+             EnqueueIoLocalControlWork,
+             DispatchableSameIdentityLeaderOwner,
+             ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+             ExactLeaderSchedulerParked,
+             ExactLeaderCandidateRank, CommandExecutionReady,
+             CommandDispatchable, CandidateScheduled,
+             CandidateScheduledIn, QueuedCandidates,
+             DeferredCandidates, CausalCandidates,
+             TrackedWorkCandidates, SequenceSet,
+             AsyncNext, AsyncControlServiceSlotTransition
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesExactLeaderSchedulerOriginProvenance ==
+  /\ ExactLeaderSchedulerOriginInductionContext
+  /\ AsyncNext
+  => ExactLeaderSchedulerOriginProvenanceInvariant'
+PROOF
+  <1>1. ASSUME ExactLeaderSchedulerOriginInductionContext,
+              AsyncNext
+         PROVE ExactLeaderSchedulerOriginProvenanceInvariant'
+    <2>1. CASE AsyncNonCrashStep
+      <3>1. CASE AsyncRunnerStep
+        <4>1. CASE \E node \in AsyncCurrentResponsiveVoters:
+                      RunNode(node)
+          BY <1>1, <2>1, <3>1, <4>1,
+             AsyncCurrentResponsiveVotersAreValidators,
+             AsyncRunNodeWorkPreservesExactLeaderSchedulerOriginProvenance
+             DEF RunNode
+        <4>2. CASE \E node \in asyncHistoricalRecoveryTargets:
+                      RunHistoricalRecoveryNode(node)
+          BY <1>1, <2>1, <3>1, <4>2,
+             HistoricalRecoveryTargetsAreValidators,
+             AsyncRunNodeWorkPreservesExactLeaderSchedulerOriginProvenance
+             DEF RunHistoricalRecoveryNode
+        <4>3. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
+                      RunHistoricalServer(node)
+          BY <1>1, <2>1, <3>1, <4>3,
+             AsyncHistoricalRunnerPreservesExactLeaderSchedulerOriginProvenance,
+             Isa
+             DEF AsyncResponsiveAppliedArchiveServers
+        <4> QED BY <3>1, <4>1, <4>2, <4>3 DEF AsyncRunnerStep
+      <3>2. CASE AsyncNonRunnerStep
+        BY <1>1, <2>1, <3>2,
+           AsyncNonRunnerPreservesExactLeaderSchedulerOriginProvenance
+      <3>3. CASE DriveResponsiveReplayHead
+        BY <1>1, <3>3,
+           AsyncResponsiveRecoveryPreservesExactLeaderSchedulerOriginProvenance
+      <3>4. CASE FinishResponsiveReplay
+        BY <1>1, <3>4,
+           AsyncResponsiveRecoveryPreservesExactLeaderSchedulerOriginProvenance
+      <3>5. CASE RearmResponsiveRecovery
+        BY <1>1, <3>5,
+           AsyncResponsiveRecoveryPreservesExactLeaderSchedulerOriginProvenance
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5
+           DEF AsyncNonCrashStep
+    <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      BY <1>1, <2>2,
+         AsyncFaultPreservesExactLeaderSchedulerOriginProvenance,
+         Isa DEF AsyncFaultStep
+    <2>3. CASE \E node \in ValidatorIds:
+                  PreGstResponsiveCrash(node)
+      BY <1>1, <2>3,
+         AsyncResponsiveRecoveryPreservesExactLeaderSchedulerOriginProvenance
+    <2>4. CASE PreGstResponsiveRestart
+      BY <1>1, <2>4,
+         AsyncResponsiveRecoveryPreservesExactLeaderSchedulerOriginProvenance
+    <2>5. CASE PreGstResponsiveReplay
+      BY <1>1, <2>5,
+         AsyncResponsiveRecoveryPreservesExactLeaderSchedulerOriginProvenance
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5 DEF AsyncNext
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesExactLeaderSchedulerOriginReadiness ==
+  /\ ExactLeaderSchedulerOriginInductionContext
+  /\ AsyncNext
+  => ExactLeaderSchedulerOriginReadinessInvariant'
+BY AsyncNextPreservesExactLeaderSchedulerOriginProvenance,
+   AsyncNextPreservesStrongTypeInvariant,
+   ExactLeaderOriginProvenanceImpliesIdleReadiness, Isa
+   DEF ExactLeaderSchedulerOriginReadinessInvariant
+
+THEOREM AsyncAllVarsStutterPreservesExactLeaderSchedulerOriginReadiness ==
+  /\ ExactLeaderSchedulerOriginReadinessInvariant
+  /\ UNCHANGED AsyncAllVars
+  => ExactLeaderSchedulerOriginReadinessInvariant'
+BY Isa
+   DEF ExactLeaderSchedulerOriginReadinessInvariant,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       ExactLeaderSchedulerIdleReadinessInvariant,
+       AsyncAllVars
+
+THEOREM AsyncBracketNextPreservesExactLeaderSchedulerOriginReadiness ==
+  /\ ExactLeaderSchedulerOriginInductionContext
+  /\ [AsyncNext]_AsyncAllVars
+  => ExactLeaderSchedulerOriginReadinessInvariant'
+BY AsyncNextPreservesExactLeaderSchedulerOriginReadiness,
+   AsyncAllVarsStutterPreservesExactLeaderSchedulerOriginReadiness,
+   Isa
 
 THEOREM SameConsumerLeaderDiscardIsIdleAndDisabled ==
   \A candidate:
@@ -6496,8 +7094,31 @@ AsyncCandidateIdentityBudgetBridgeProperty(specification) ==
                /\ [AsyncNext]_AsyncAllVars
                /\ identity
                     \notin AsyncScheduledCandidateAdmissionIdentities'
-               => AsyncCandidateAdmissionIdentityTerminallyCovered(
+               => AsyncCandidateAdmissionIdentityLifecycleCovered(
                     identity)'))
+
+(***************************************************************************
+Terminal retirement is restart-stable only for phases whose durable local
+authority survives replay.  The eligibility predicate already excludes the
+three signature-completion phases reconstructed from durable intents, and the
+tombstone constructor copies the candidate kind verbatim into its phase.  Keep
+that bridge explicit so preservation cannot silently admit a restart-scoped
+terminal record when either definition evolves.
+***************************************************************************)
+
+THEOREM AsyncCandidateTerminalRetirementEligibilityIsRestartSafe ==
+  \A candidate:
+    AsyncCandidateTerminalRetirementEligibleAfterStep(candidate)
+      => candidate.kind \notin AsyncRestartScopedCandidateServiceKinds
+BY DEF AsyncCandidateTerminalRetirementEligibleAfterStep
+
+THEOREM AsyncCandidateTerminalTombstoneConstructorPreservesRestartSafety ==
+  \A candidate, episodeView, ordinal:
+    candidate.kind \notin AsyncRestartScopedCandidateServiceKinds
+      => AsyncCandidateServiceTombstone(
+           candidate, episodeView, ordinal).phase
+             \notin AsyncRestartScopedCandidateServiceKinds
+BY DEF AsyncCandidateServiceTombstone
 
 THEOREM AsyncInitEstablishesCandidateServiceTombstoneLifecycle ==
   \A initialContext:
@@ -6524,6 +7145,8 @@ THEOREM AsyncNextPreservesCandidateServiceTombstoneLifecycle ==
 BY AsyncNextPreservesControlServiceStateTypeInvariant,
    AsyncCandidateServicesThisStepIsSingleton,
    AsyncCandidateTerminalRetirementsThisStepIsSingleton,
+   AsyncCandidateTerminalRetirementEligibilityIsRestartSafe,
+   AsyncCandidateTerminalTombstoneConstructorPreservesRestartSafety,
    AsyncCandidateSuccessfulServiceInstallsTombstone,
    AsyncCandidateDiscardInstallsTerminalTombstone,
    AsyncCandidateCausalAdmissionTransfersSameOwner,
@@ -6552,6 +7175,8 @@ BY AsyncNextPreservesControlServiceStateTypeInvariant,
        AsyncCandidateTerminalDiscardsThisStep,
        AsyncCandidateTerminallyDiscardedThisStep,
        AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateServiceTombstone,
        FreshCandidateSequence, CandidateAdmissionCoalesced,
        AdmitIngressPacket, AdmitHiddenPacket,
        CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
@@ -6585,6 +7210,115 @@ PROOF
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, PTL
          DEF AsyncSpecAt
   <1> QED BY <1>1
+
+(***************************************************************************
+An authenticated exact occurrence which is later discarded cannot disappear
+into a reusable old stage.  If Decision did not make its lifecycle obsolete,
+the terminal-discard transition installs the route-neutral tombstone; the
+ordinary candidate admission constructor and the transport admission gate
+then both exclude recreation.  Signature-completion phases are deliberately
+outside this theorem because replay reconstructs them from durable intents.
+***************************************************************************)
+
+THEOREM AuthenticatedExactLeaderTerminalDiscardInstallsClosedTombstone ==
+  \A candidate \in AsyncCandidateSet,
+     rank \in (1..5) \X Nat:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ ExactLeaderCandidateRank(candidate, rank)
+    /\ AuthenticatedLeaderDiscardProvenance(candidate)
+    /\ candidate.kind \notin AsyncRestartScopedCandidateServiceKinds
+    /\ SameConsumerLeaderDiscard(candidate)
+    /\ AsyncNext
+    => /\ ExactLeaderDiscardProvenanceAt(candidate, rank)'
+       /\ ~CandidateScheduled(candidate)'
+       /\ \/ NodeHasDecision(candidate.node)'
+          \/ /\ AsyncCandidateTerminalTombstoned(candidate)'
+             /\ CandidateAdmissionCoalesced(candidate)'
+             /\ FreshCandidateSequence(candidate)' = <<>>
+BY ExactLeaderDiscardProvenanceSurvivesSameConsumerDiscard,
+   AsyncCandidateDiscardInstallsTerminalTombstone,
+   AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
+   AsyncCandidateTerminalRetirementEligibilityIsRestartSafe,
+   AsyncCandidateTerminalTombstoneConstructorPreservesRestartSafety,
+   IsaT(600)
+   DEF ExactLeaderDiscardProvenanceAt,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       SameConsumerLeaderDiscard,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateTerminalTombstoned,
+       CandidateScheduled, CandidateScheduledAfter,
+       CandidateScheduledIn,
+       FifoRuntimeStep, DeferredDrainStep,
+       RemoveNextNodeCommand, RemoveNextDeferredCommand,
+       DiscardCommand, AsyncNext
+
+THEOREM AsyncSpecAlwaysExactLeaderSchedulerOriginInductionSafety ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []ExactLeaderSchedulerOriginInductionSafetyContext
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   DecisionFrontierUniquenessInvariantFromAsyncSpec,
+   DecisionTimeoutFrontierInvariantFromAsyncSpec,
+   ResponsiveRecoveryValidationClearedInvariantObligation,
+   FinalProgressWitnessClosureInvariantObligation,
+   ReplayTailCommitReadyInvariantObligation,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle, PTL
+   DEF ExactLeaderSchedulerOriginInductionSafetyContext
+
+THEOREM AsyncSpecAlwaysExactLeaderSchedulerOriginReadiness ==
+  \A initialContext:
+    ExactLeaderSchedulerOriginReadinessProperty(
+      AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE ExactLeaderSchedulerOriginReadinessProperty(
+                 AsyncSpecAt(initialContext))
+    <2>1. AsyncInitAt(initialContext)
+             => ExactLeaderSchedulerOriginReadinessInvariant
+      BY AsyncInitEstablishesExactLeaderSchedulerOriginReadiness
+    <2>2. AsyncSpecAt(initialContext)
+             => []ExactLeaderSchedulerOriginInductionSafetyContext
+      BY AsyncSpecAlwaysExactLeaderSchedulerOriginInductionSafety
+    <2>3. /\ ExactLeaderSchedulerOriginInductionSafetyContext
+           /\ ExactLeaderSchedulerOriginReadinessInvariant
+           /\ [AsyncNext]_AsyncAllVars
+          => ExactLeaderSchedulerOriginReadinessInvariant'
+      BY AsyncBracketNextPreservesExactLeaderSchedulerOriginReadiness
+         DEF ExactLeaderSchedulerOriginInductionContext
+    <2> QED BY <2>1, <2>2, <2>3, PTL
+         DEF ExactLeaderSchedulerOriginReadinessProperty, AsyncSpecAt
+  <1> QED BY <1>1
+
+THEOREM AsyncLiveExactLeaderSchedulerOriginReadiness ==
+  \A initialContext:
+    ExactLeaderSchedulerOriginReadinessProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecAlwaysExactLeaderSchedulerOriginReadiness,
+   AsyncLiveSpecProjectsAsyncSpec, PTL
+   DEF ExactLeaderSchedulerOriginReadinessProperty
+
+THEOREM AsyncLiveResponsiveExactLeaderSchedulerSourcesAreUp ==
+  \A initialContext:
+    AsyncLiveSpecAt(initialContext)
+      => [](\A candidate \in AsyncCandidateSet,
+                rank \in (1..5) \X Nat:
+             /\ gst
+             /\ ExactLeaderCandidateRank(candidate, rank)
+             => candidate.node \in up)
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncLiveSpecProjectsAsyncSpec,
+   GstResponsiveNodesAreUp, PTL
+   DEF AsyncStrongTypeInvariant,
+       ExactLeaderCandidateRank,
+       ResponsiveProtectedCandidateOwned,
+       ProtectedCandidateOwned,
+       ProtectedServiceCandidate,
+       AsyncCurrentResponsiveVoters
 
 THEOREM AsyncSpecProvidesHistoricalDiscoveryCandidateIdentityBudgetBridge ==
   \A initialContext:

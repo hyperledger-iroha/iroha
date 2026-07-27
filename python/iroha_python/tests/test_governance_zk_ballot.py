@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
+from iroha_python import GovernanceLockCustody
 from iroha_python.address import AccountAddress
 from iroha_python.client import GovernanceLockRecord, ToriiClient
 
@@ -24,7 +26,7 @@ def _noncanonical_owner_literal(domain: str = "wonderland") -> str:
     return address.canonical_hex()
 
 
-def _governance_lock_payload(amount: object) -> dict[str, object]:
+def _governance_lock_payload(amount: object) -> dict[str, Any]:
     return {
         "owner": CANONICAL_AUTHORITY,
         "amount": amount,
@@ -32,6 +34,12 @@ def _governance_lock_payload(amount: object) -> dict[str, object]:
         "expiry_height": 10,
         "direction": 1,
         "duration_blocks": 5,
+        "custody": {
+            "escrowed": True,
+            "asset_definition_id": "xor#wonderland",
+            "bond_escrow_account": CANONICAL_AUTHORITY,
+            "slash_receiver_account": CANONICAL_AUTHORITY,
+        },
     }
 
 
@@ -41,6 +49,47 @@ def test_governance_lock_record_preserves_fraction_above_u64() -> None:
     )
     assert record.amount == CANONICAL_LARGE_FRACTION
     assert record.slashed == "0.25"
+    assert record.custody is not None
+    assert isinstance(record.custody, GovernanceLockCustody)
+    assert record.custody.escrowed is True
+    assert record.custody.asset_definition_id == "xor#wonderland"
+
+
+def test_governance_lock_record_accepts_explicit_null_custody() -> None:
+    payload = _governance_lock_payload("1")
+    payload["custody"] = None
+    assert GovernanceLockRecord.from_payload(payload).custody is None
+
+
+def test_governance_lock_record_requires_strict_nullable_custody() -> None:
+    missing = _governance_lock_payload("1")
+    del missing["custody"]
+    with pytest.raises(TypeError, match="custody"):
+        GovernanceLockRecord.from_payload(missing)
+
+    extra = _governance_lock_payload("1")
+    assert isinstance(extra["custody"], dict)
+    extra["custody"]["legacy"] = True
+    with pytest.raises(TypeError, match="exactly"):
+        GovernanceLockRecord.from_payload(extra)
+
+    incomplete = _governance_lock_payload("1")
+    assert isinstance(incomplete["custody"], dict)
+    del incomplete["custody"]["bond_escrow_account"]
+    with pytest.raises(TypeError, match="exactly"):
+        GovernanceLockRecord.from_payload(incomplete)
+
+    wrong = _governance_lock_payload("1")
+    assert isinstance(wrong["custody"], dict)
+    wrong["custody"]["escrowed"] = 1
+    with pytest.raises(TypeError, match="escrowed"):
+        GovernanceLockRecord.from_payload(wrong)
+
+    padded = _governance_lock_payload("1")
+    assert isinstance(padded["custody"], dict)
+    padded["custody"]["asset_definition_id"] = " xor#wonderland"
+    with pytest.raises(TypeError, match="whitespace"):
+        GovernanceLockRecord.from_payload(padded)
 
 
 @pytest.mark.parametrize(

@@ -8216,7 +8216,8 @@ impl Iroha {
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
         log_startup_trace("irohad.start.enter", startup_trace_started_at);
-        iroha_torii::ensure_mandatory_offline_configuration(
+        iroha_torii::ensure_mandatory_offline_configuration_for_chain(
+            &config.common.chain,
             &config.settlement.offline,
             config.torii.kagemusha_commands.as_ref(),
         )

@@ -2122,9 +2122,15 @@ impl CertifiedBodyResponse {
     ///
     /// # Errors
     ///
-    /// Returns an error when the response is replayed across requests,
-    /// changes round/subject, or comes from a validator not certified by the
-    /// request QC.
+    /// Returns an error when the response is replayed across requests, changes
+    /// round/subject, or the claimed frozen-roster responder differs from the
+    /// authenticated transport sender.
+    ///
+    /// The responder need not be one of the request QC signers. Historical
+    /// archive service is safe because the exact request carries the verified
+    /// QC while the response body and manifest are hash-bound to that QC's
+    /// subject. The serving path additionally proves that the frozen-roster
+    /// peer has the canonical applied block in durable storage.
     pub fn validate_against(
         &self,
         context: &HeightContext,
@@ -2138,14 +2144,6 @@ impl CertifiedBodyResponse {
             || self.manifest.subject != request.subject
         {
             return Err(ValidationError::CertifiedBodyRequestMismatch);
-        }
-        if request
-            .certificate
-            .signers
-            .binary_search(&self.responder)
-            .is_err()
-        {
-            return Err(ValidationError::ResponderNotCertified);
         }
         let responder = context
             .roster
@@ -3740,8 +3738,6 @@ pub enum ValidationError {
     CertifiedBodyHashMismatch,
     /// A certified response does not answer the exact outstanding request.
     CertifiedBodyRequestMismatch,
-    /// A certified response came from a validator outside the QC signer set.
-    ResponderNotCertified,
     /// The authenticated transport sender differs from the claimed responder.
     ResponderIdentityMismatch,
     /// A commit-certificate response did not carry a `CommitQC` for this context.
@@ -3908,9 +3904,6 @@ impl fmt::Display for ValidationError {
             }
             Self::CertifiedBodyRequestMismatch => {
                 f.write_str("certified body response does not match the outstanding request")
-            }
-            Self::ResponderNotCertified => {
-                f.write_str("certified body responder is not a certificate signer")
             }
             Self::ResponderIdentityMismatch => {
                 f.write_str("certified body responder does not match the transport sender")
@@ -5619,11 +5612,15 @@ mod tests {
             response.validate_against(&context, &request, &context.roster[1].validator),
             Err(ValidationError::ResponderIdentityMismatch)
         );
-        let mut uncertified = response.clone();
-        uncertified.responder = 3;
+        let mut archive_response = response.clone();
+        archive_response.responder = 3;
         assert_eq!(
-            uncertified.validate_against(&context, &request, &context.roster[3].validator),
-            Err(ValidationError::ResponderNotCertified)
+            archive_response.validate_against(&context, &request, &context.roster[3].validator,),
+            Ok(())
+        );
+        assert_eq!(
+            archive_response.validate_against(&context, &request, &context.roster[2].validator,),
+            Err(ValidationError::ResponderIdentityMismatch)
         );
         let mut wrong_request = response.clone();
         wrong_request.request_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong request"));

@@ -5208,7 +5208,7 @@ HistoricalTemporalCandidateIdentityBudgetBridgeProperty(specification) ==
                /\ [AsyncNext]_AsyncAllVars
                /\ identity
                     \notin AsyncScheduledCandidateAdmissionIdentities'
-               => AsyncCandidateAdmissionIdentityTerminallyCovered(
+               => AsyncCandidateAdmissionIdentityLifecycleCovered(
                     identity)'))
 
 HistoricalTemporalServeReservationsInIdentityCarrier(carrier) ==

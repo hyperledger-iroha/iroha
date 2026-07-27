@@ -2745,6 +2745,8 @@ import {
 
 const plainElectorateRules = {
   voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+  bond_escrow_account: BOND_ESCROW_ACCOUNT_ID,
+  slash_receiver_account: SLASH_RECEIVER_ACCOUNT_ID,
   ballot_amount: "150",
   ballot_duration_blocks: "3600",
   citizenship_amount: "10000",

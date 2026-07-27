@@ -9,10 +9,12 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(feature = "zk-stark")]
+use iroha_data_model::privacy::ZkAcePqAuthorizationStatementV1;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-    IrohaJindoPolynomialCommitmentStatementV1, JindoActivationLimitsV1,
+    IrohaJindoPolynomialCommitmentStatementV1, IrohaZkAmsStatementV1, JindoActivationLimitsV1,
     PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
     PrivacyAssuranceV1, PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
     PrivacyCapabilitySnapshotValidationErrorV1, PrivacyCompiledProfileResultV1,
@@ -25,15 +27,27 @@ use iroha_data_model::privacy::{
     TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
     VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
     VeRangeTransparentRangeStatementV1, VegaExistingCredentialStatementV1,
+    ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
+    ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsActivationLimitsV1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
 use iroha_zkp_halo2::vega::{
-    MAX_VEGA_PROOF_BYTES_V1, VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
-    VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1, vega_mdl_compiled_profile_digest_v1,
+    MAX_VEGA_PROOF_BYTES_V1, MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+    VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
+    ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1, ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1,
+    vega_mdl_compiled_profile_digest_v1, zk_ams_admission_relation_dimensions_v1,
+    zk_ams_compiled_profile_digest_v1, zk_ams_t256_generator_digest_v1,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+#[cfg(feature = "zk-stark")]
+use crate::privacy_engines::zk_ace::{
+    ZK_ACE_AIR_RELATION_SCHEMA_V1, ZK_ACE_AUTHORIZATION_PROJECTION_V1,
+    ZK_ACE_POSEIDON_MANIFEST_SHA256_V1, ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1,
+    ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1, ZK_ACE_PROOF_WIRE_V1, ZK_ACE_SOURCE_PROFILE_V1,
+    zk_ace_compiled_profile_digest_v1, zk_ace_stark_profile_descriptor_v1,
+};
 use crate::privacy_engines::{
     anonymous_pgc::{
         ANONYMOUS_PGC_FULL_ENGINE_AVAILABLE_V1, AnonymousPgcParametersV1, PGC_SOURCE_PROFILE_V1,
@@ -57,6 +71,12 @@ use crate::privacy_engines::{
     verange::{
         VERANGE_TYPE1_PROOF_VERSION_V1, VERANGE_TYPE1_SOURCE_PROFILE_V1, VERANGE_TYPE1_SUITE_V1,
         VeRangeBitLengthV1, VeRangeParametersV1,
+    },
+    zk_ams::{
+        MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1, MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
+        MAX_ZK_AMS_LSAG_PROOF_BYTES_V1, ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+        ZK_AMS_ADMISSION_POSSESSION_SUITE_V1, ZK_AMS_LSAG_PROOF_VERSION_V1, ZK_AMS_LSAG_SUITE_V1,
+        ZK_AMS_RING_SIZES_V1, ZK_AMS_SOURCE_PROFILE_V1, zk_ams_generator_digest_v1,
     },
 };
 
@@ -93,6 +113,22 @@ const VEGA_PROOF_WIRE_LABEL_V1: &[u8] =
     b"norito:vega-figure9-masked-relaxed-fold-spartan-hyrax:strict-exact:v1";
 const VEGA_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:microsoft-vega-prover:c0ee259053cd12eaf43ed71b5cde375452b3ee4d:figure9:v1";
+const ZK_AMS_PROTOCOL_LABEL_V1: &[u8] = b"iroha-zk-ams-v1";
+const ZK_AMS_PARAMETER_SET_LABEL_V1: &[u8] =
+    b"zk-ams-v2-masked-relaxed-spartan-t256-lsag-ristretto255-v1";
+const ZK_AMS_BATCH_PROOF_WIRE_LABEL_V1: &[u8] =
+    b"norito:zk-ams-batch-admission:masked-relaxed-spartan+ordered-possession:strict-exact:v1";
+const ZK_AMS_PROVISION_PROOF_WIRE_LABEL_V1: &[u8] =
+    b"norito:zk-ams-provision-account:lsag-ristretto255:strict-exact:v1";
+const ZK_AMS_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
+    b"iroha-native-rust:clean-room:arxiv-2602.16130v2:algorithms-1-4:appendices-a-c:closed-phase-v:v1";
+const ZK_AMS_BATCH_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|prior_root:32|prior_epoch:u64|next_root:32|next_epoch:u64|ordered_anchors[seed_key:32,link_tag:32]";
+const ZK_AMS_PROVISION_EFFECT_SCHEMA_V1: &[u8] = b"issuer_id:32|registry_id:32|current_root:32|current_epoch:u64|ring[seed_key:32]|account_id:norito|key_image:32";
+#[cfg(feature = "zk-stark")]
+const ZK_ACE_PROTOCOL_LABEL_V1: &[u8] = b"zk-ace-pq-authorization-v0";
+#[cfg(feature = "zk-stark")]
+const ZK_ACE_PARAMETER_SET_LABEL_V1: &[u8] =
+    b"goldilocks-poseidon2-trace4096-blowup16-mask255-three-lane-fri32-v1";
 const ANONYMOUS_PGC_ACCOUNT_ROOT_SCHEMA_V1: &[u8] = b"namespace_len:u64le|namespace:norito|epoch:u64le|total_supply:u32le|account_count:u32le|accounts[public_key:33,cipher_left:33,cipher_right:33]";
 const ANONYMOUS_PGC_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|total_supply:u32|current_root:32|current_epoch:u64|next_root:32|next_epoch:u64|complete_accounts[public_key:33,cipher_left:33,cipher_right:33]";
 
@@ -239,16 +275,21 @@ pub fn compiled_privacy_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
     match protocol_id {
+        #[cfg(feature = "zk-stark")]
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => compiled_zk_ace_profile_v1(),
         PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => compiled_anonymous_pgc_profile_v1(),
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => compiled_verange_profile_v1(),
+        PrivacyProtocolIdV1::IrohaZkAmsV1 => compiled_zk_ams_profile_v1(),
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => compiled_jindo_profile_v1(),
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => compiled_vega_profile_v1(),
         // TODO(privacy-native-engines): remove each fail-closed branch only
         // after its complete canonical verifier, effect derivation, KATs, and
         // adversarial tests are compiled into this manifest.
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
-        | PrivacyProtocolIdV1::IrohaZkAmsV1
-        | PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
+        #[cfg(not(feature = "zk-stark"))]
+        PrivacyProtocolIdV1::ZkAcePqAuthorizationV0 => {
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        }
+        PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
         | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
         | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
         | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
@@ -299,6 +340,290 @@ pub fn validate_compiled_privacy_activation_v1(
         return Err(CompiledPrivacyProfileValidationErrorV1::AssuranceMismatch);
     }
     Ok(())
+}
+
+#[cfg(feature = "zk-stark")]
+fn compiled_zk_ace_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+    let compiled_profile_digest = zk_ace_compiled_profile_digest_v1();
+    let proof_bytes = u64::from(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1);
+    if proof_bytes > u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1) {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+    let proof_bytes_encoded = proof_bytes.to_be_bytes();
+    let global_proof_cap = TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1.to_be_bytes();
+    let poseidon_manifest = ZK_ACE_POSEIDON_MANIFEST_SHA256_V1.as_bytes();
+    let stark_profile = zk_ace_stark_profile_descriptor_v1();
+    let parameter_id = digest_fields_v1(
+        PARAMETER_ID_DOMAIN_V1,
+        &[
+            ZK_ACE_PROTOCOL_LABEL_V1,
+            ZK_ACE_PARAMETER_SET_LABEL_V1,
+            ZK_ACE_SOURCE_PROFILE_V1,
+            poseidon_manifest,
+            stark_profile,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+        ],
+    );
+    let parameter_digest = digest_fields_v1(
+        PARAMETER_DIGEST_DOMAIN_V1,
+        &[
+            ZK_ACE_PROTOCOL_LABEL_V1,
+            ZK_ACE_PARAMETER_SET_LABEL_V1,
+            ZK_ACE_SOURCE_PROFILE_V1,
+            ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_AUTHORIZATION_PROJECTION_V1,
+            poseidon_manifest,
+            stark_profile,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+        ],
+    );
+    let statement_schema_digest = canonical_schema_digest_v1::<ZkAcePqAuthorizationStatementV1>()
+        .map_err(|source| {
+        CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
+            protocol_id,
+            source,
+        }
+    })?;
+    let verifier_digest = digest_fields_v1(
+        VERIFIER_DIGEST_DOMAIN_V1,
+        &[
+            ZK_ACE_PROTOCOL_LABEL_V1,
+            ZK_ACE_SOURCE_PROFILE_V1,
+            ZK_ACE_PARAMETER_SET_LABEL_V1,
+            ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes(),
+            ZK_ACE_PROOF_WIRE_V1,
+            ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_AUTHORIZATION_PROJECTION_V1,
+            poseidon_manifest,
+            stark_profile,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+            &statement_schema_digest,
+            &global_proof_cap,
+        ],
+    );
+    let engine_manifest_digest = digest_fields_v1(
+        ENGINE_MANIFEST_DIGEST_DOMAIN_V1,
+        &[
+            ZK_ACE_PROTOCOL_LABEL_V1,
+            ZK_ACE_SOURCE_PROFILE_V1,
+            b"proof-system:stark-fri-sha256-goldilocks",
+            b"engine:native-goldilocks-stark-fri",
+            ZK_ACE_PARAMETER_SET_LABEL_V1,
+            ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes(),
+            ZK_ACE_PROOF_WIRE_V1,
+            ZK_ACE_AIR_RELATION_SCHEMA_V1,
+            ZK_ACE_AUTHORIZATION_PROJECTION_V1,
+            poseidon_manifest,
+            stark_profile,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+            &parameter_id,
+            &parameter_digest,
+            &verifier_digest,
+            &statement_schema_digest,
+            &global_proof_cap,
+        ],
+    );
+
+    Ok(CompiledPrivacyProfileV1 {
+        protocol_id,
+        proof_system_id: PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
+        engine_id: PrivacyEngineIdV1::NativeGoldilocksStarkFri,
+        parameter_id: PrivacyParameterIdV1::new(parameter_id),
+        parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
+        verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
+        statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
+        engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
+        protocol_limits: PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0,
+    })
+}
+
+fn compiled_zk_ams_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::IrohaZkAmsV1;
+    if ZK_AMS_RING_SIZES_V1 != [16, 32, 64]
+        || ZK_AMS_MODEL_RING_SIZES_V1 != [16, 32, 64]
+        || ZK_AMS_MAX_RING_SIZE_V1 != 64
+        || ZK_AMS_MAX_BATCH_SIZE_V1 != 8
+    {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+
+    let dimensions = zk_ams_admission_relation_dimensions_v1()
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    let encode_usize = |value: usize| {
+        u64::try_from(value)
+            .map(u64::to_be_bytes)
+            .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })
+    };
+    let variable_count = encode_usize(dimensions.variable_count)?;
+    let constraint_count = encode_usize(dimensions.constraint_count)?;
+    let public_input_count = encode_usize(dimensions.public_input_count)?;
+    let witness_commitment_points = encode_usize(dimensions.witness_commitment_points)?;
+    let error_commitment_points = encode_usize(dimensions.error_commitment_points)?;
+    let outer_sumcheck_rounds = encode_usize(dimensions.outer_sumcheck_rounds)?;
+    let inner_sumcheck_rounds = encode_usize(dimensions.inner_sumcheck_rounds)?;
+    let declared_public_input_count = encode_usize(ZK_AMS_ADMISSION_PUBLIC_INPUTS_V1)?;
+    if public_input_count != declared_public_input_count {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+    let phc_payload_bytes = encode_usize(ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1)?;
+
+    let relation_proof_cap_value = u64::try_from(MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    let batch_proof_cap_value = u64::try_from(MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    let possession_proof_cap_value = u64::try_from(MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    let provision_proof_cap_value = u64::try_from(MAX_ZK_AMS_LSAG_PROOF_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    let global_proof_cap_value = u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1);
+    if batch_proof_cap_value > global_proof_cap_value
+        || provision_proof_cap_value > global_proof_cap_value
+    {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+    let relation_proof_cap = relation_proof_cap_value.to_be_bytes();
+    let batch_proof_cap = batch_proof_cap_value.to_be_bytes();
+    let possession_proof_cap = possession_proof_cap_value.to_be_bytes();
+    let provision_proof_cap = provision_proof_cap_value.to_be_bytes();
+    let global_proof_cap = global_proof_cap_value.to_be_bytes();
+
+    let max_batch_size = ZK_AMS_MAX_BATCH_SIZE_V1.to_be_bytes();
+    let ring_size_16 = ZK_AMS_MODEL_RING_SIZES_V1[0].to_be_bytes();
+    let ring_size_32 = ZK_AMS_MODEL_RING_SIZES_V1[1].to_be_bytes();
+    let ring_size_64 = ZK_AMS_MODEL_RING_SIZES_V1[2].to_be_bytes();
+    let admission_possession_version = [ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1];
+    let lsag_version = [ZK_AMS_LSAG_PROOF_VERSION_V1];
+    let compiled_relation_digest = zk_ams_compiled_profile_digest_v1();
+    let t256_generator_digest = zk_ams_t256_generator_digest_v1();
+    let combined_generator_digest = zk_ams_generator_digest_v1();
+
+    let parameter_id = digest_fields_v1(
+        PARAMETER_ID_DOMAIN_V1,
+        &[
+            ZK_AMS_PROTOCOL_LABEL_V1,
+            ZK_AMS_PARAMETER_SET_LABEL_V1,
+            ZK_AMS_SOURCE_PROFILE_V1,
+            &compiled_relation_digest,
+            &t256_generator_digest,
+            &combined_generator_digest,
+        ],
+    );
+    let parameter_digest = digest_fields_v1(
+        PARAMETER_DIGEST_DOMAIN_V1,
+        &[
+            ZK_AMS_PROTOCOL_LABEL_V1,
+            ZK_AMS_PARAMETER_SET_LABEL_V1,
+            ZK_AMS_SOURCE_PROFILE_V1,
+            ZK_AMS_LSAG_SUITE_V1,
+            ZK_AMS_ADMISSION_POSSESSION_SUITE_V1,
+            &compiled_relation_digest,
+            &t256_generator_digest,
+            &combined_generator_digest,
+            &variable_count,
+            &constraint_count,
+            &public_input_count,
+            &witness_commitment_points,
+            &error_commitment_points,
+            &outer_sumcheck_rounds,
+            &inner_sumcheck_rounds,
+            &phc_payload_bytes,
+            &max_batch_size,
+            &ring_size_16,
+            &ring_size_32,
+            &ring_size_64,
+        ],
+    );
+    let statement_schema_digest =
+        canonical_schema_digest_v1::<IrohaZkAmsStatementV1>().map_err(|source| {
+            CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
+                protocol_id,
+                source,
+            }
+        })?;
+    let verifier_digest = digest_fields_v1(
+        VERIFIER_DIGEST_DOMAIN_V1,
+        &[
+            ZK_AMS_PROTOCOL_LABEL_V1,
+            ZK_AMS_IMPLEMENTATION_PROVENANCE_V1,
+            ZK_AMS_SOURCE_PROFILE_V1,
+            ZK_AMS_PARAMETER_SET_LABEL_V1,
+            ZK_AMS_BATCH_PROOF_WIRE_LABEL_V1,
+            ZK_AMS_PROVISION_PROOF_WIRE_LABEL_V1,
+            ZK_AMS_LSAG_SUITE_V1,
+            ZK_AMS_ADMISSION_POSSESSION_SUITE_V1,
+            &admission_possession_version,
+            &lsag_version,
+            &compiled_relation_digest,
+            &t256_generator_digest,
+            &combined_generator_digest,
+            &variable_count,
+            &constraint_count,
+            &public_input_count,
+            &witness_commitment_points,
+            &error_commitment_points,
+            &outer_sumcheck_rounds,
+            &inner_sumcheck_rounds,
+            &phc_payload_bytes,
+            &relation_proof_cap,
+            &possession_proof_cap,
+            &batch_proof_cap,
+            &provision_proof_cap,
+            &max_batch_size,
+            &ring_size_16,
+            &ring_size_32,
+            &ring_size_64,
+            ZK_AMS_BATCH_EFFECT_SCHEMA_V1,
+            ZK_AMS_PROVISION_EFFECT_SCHEMA_V1,
+            &statement_schema_digest,
+            &global_proof_cap,
+        ],
+    );
+    let engine_manifest_digest = digest_fields_v1(
+        ENGINE_MANIFEST_DIGEST_DOMAIN_V1,
+        &[
+            ZK_AMS_PROTOCOL_LABEL_V1,
+            ZK_AMS_IMPLEMENTATION_PROVENANCE_V1,
+            b"proof-system:zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
+            b"engine:native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
+            ZK_AMS_PARAMETER_SET_LABEL_V1,
+            ZK_AMS_BATCH_PROOF_WIRE_LABEL_V1,
+            ZK_AMS_PROVISION_PROOF_WIRE_LABEL_V1,
+            ZK_AMS_BATCH_EFFECT_SCHEMA_V1,
+            ZK_AMS_PROVISION_EFFECT_SCHEMA_V1,
+            &compiled_relation_digest,
+            &t256_generator_digest,
+            &combined_generator_digest,
+            &parameter_id,
+            &parameter_digest,
+            &verifier_digest,
+            &statement_schema_digest,
+            &relation_proof_cap,
+            &possession_proof_cap,
+            &batch_proof_cap,
+            &provision_proof_cap,
+            &global_proof_cap,
+        ],
+    );
+
+    Ok(CompiledPrivacyProfileV1 {
+        protocol_id,
+        proof_system_id: PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
+        engine_id: PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,
+        parameter_id: PrivacyParameterIdV1::new(parameter_id),
+        parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
+        verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
+        statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
+        engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
+        protocol_limits: PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+            max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
+            max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
+        }),
+    })
 }
 
 fn compiled_vega_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
@@ -1241,9 +1566,32 @@ mod tests {
             ))
     }
 
+    #[cfg(feature = "zk-stark")]
+    fn zk_ace_activation() -> PrivacyProtocolActivationRecordV1 {
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
+            .expect("fixed ZK-ACE profile derives")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 100,
+                    activate_at_height: 400,
+                },
+            ))
+    }
+
     fn pgc_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("fixed Anonymous-PGC parameters derive")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 100,
+                    activate_at_height: 400,
+                },
+            ))
+    }
+
+    fn zk_ams_activation() -> PrivacyProtocolActivationRecordV1 {
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
+            .expect("fixed ZK-AMS profile derives")
             .activation_record(PrivacyProtocolLifecycleV1::Proposed(
                 PrivacyProposedLifecycleV1 {
                     proposed_at_height: 100,
@@ -1283,12 +1631,274 @@ mod tests {
         assert_eq!(
             available,
             vec![
+                #[cfg(feature = "zk-stark")]
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                PrivacyProtocolIdV1::IrohaZkAmsV1,
                 PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
                 PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
             ]
         );
+    }
+
+    #[cfg(not(feature = "zk-stark"))]
+    #[test]
+    fn zk_ace_remains_fail_closed_without_a_sound_compiled_profile() {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        assert_eq!(
+            compiled_privacy_profile_v1(protocol_id),
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        );
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn zk_ace_profile_is_deterministic_complete_and_bounded() {
+        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
+            .expect("profile");
+        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0)
+            .expect("profile");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.proof_system_id,
+            PrivacyProofSystemIdV1::StarkFriSha256Goldilocks
+        );
+        assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeGoldilocksStarkFri);
+        assert_eq!(
+            first.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::ZkAcePqAuthorizationV0
+        );
+        assert!(ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1 <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1);
+        assert_ne!(zk_ace_compiled_profile_digest_v1(), [0; 32]);
+        for digest in [
+            *first.parameter_id.as_bytes(),
+            *first.parameter_digest.as_bytes(),
+            *first.verifier_digest.as_bytes(),
+            *first.statement_schema_digest.as_bytes(),
+            *first.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
+        assert_eq!(
+            (
+                *first.parameter_id.as_bytes(),
+                *first.parameter_digest.as_bytes(),
+                *first.verifier_digest.as_bytes(),
+                *first.statement_schema_digest.as_bytes(),
+                *first.engine_manifest_digest.as_bytes(),
+            ),
+            (
+                [
+                    254, 89, 164, 122, 154, 145, 162, 236, 231, 205, 17, 164, 154, 156, 201, 35,
+                    145, 207, 25, 212, 20, 243, 87, 13, 218, 46, 219, 222, 219, 217, 163, 104,
+                ],
+                [
+                    142, 231, 214, 75, 162, 22, 103, 94, 54, 34, 56, 163, 73, 119, 57, 59, 86, 59,
+                    8, 253, 94, 90, 250, 52, 241, 214, 229, 4, 82, 81, 201, 123,
+                ],
+                [
+                    194, 216, 227, 126, 62, 3, 55, 81, 151, 214, 242, 118, 160, 22, 137, 21, 215,
+                    111, 147, 56, 192, 48, 75, 183, 222, 4, 45, 233, 147, 78, 181, 153,
+                ],
+                [
+                    149, 246, 40, 87, 47, 97, 157, 153, 226, 108, 237, 86, 152, 3, 50, 15, 32, 43,
+                    234, 29, 21, 110, 147, 161, 192, 15, 130, 16, 133, 137, 192, 74,
+                ],
+                [
+                    163, 108, 213, 105, 204, 79, 241, 59, 78, 53, 142, 14, 82, 167, 172, 226, 159,
+                    28, 153, 183, 164, 8, 175, 152, 101, 242, 175, 137, 239, 46, 133, 82,
+                ],
+            )
+        );
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn zk_ace_compiled_profile_rejects_every_binding_mismatch() {
+        let valid = zk_ace_activation();
+        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+        let mutations: [(
+            CompiledPrivacyProfileValidationErrorV1,
+            fn(&mut PrivacyProtocolActivationRecordV1),
+        ); 8] = [
+            (
+                CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
+                |record| {
+                    record.proof_system_id = PrivacyProofSystemIdV1::StarkFriPoseidon2Goldilocks;
+                },
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
+                |record| record.engine_id = PrivacyEngineIdV1::NativeJindo,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
+                |record| record.parameter_id.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch,
+                |record| record.parameter_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch,
+                |record| record.verifier_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch,
+                |record| record.statement_schema_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
+                |record| record.engine_manifest_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
+                |record| {
+                    record.protocol_limits =
+                        PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0;
+                },
+            ),
+        ];
+        for (expected, mutate) in mutations {
+            let mut changed = valid;
+            mutate(&mut changed);
+            assert_eq!(
+                validate_compiled_privacy_activation_v1(&changed),
+                Err(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn zk_ams_profile_is_deterministic_complete_and_bounded() {
+        let first =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1).expect("profile");
+        let second =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1).expect("profile");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.proof_system_id,
+            PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
+        );
+        assert_eq!(
+            first.engine_id,
+            PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
+        );
+        assert_eq!(
+            first.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
+                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
+            })
+        );
+        assert!(
+            MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1
+                <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
+        );
+        assert!(
+            MAX_ZK_AMS_LSAG_PROOF_BYTES_V1 <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
+        );
+        for digest in [
+            *first.parameter_id.as_bytes(),
+            *first.parameter_digest.as_bytes(),
+            *first.verifier_digest.as_bytes(),
+            *first.statement_schema_digest.as_bytes(),
+            *first.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
+        assert_eq!(
+            (
+                *first.parameter_id.as_bytes(),
+                *first.parameter_digest.as_bytes(),
+                *first.verifier_digest.as_bytes(),
+                *first.statement_schema_digest.as_bytes(),
+                *first.engine_manifest_digest.as_bytes(),
+            ),
+            (
+                [
+                    70, 247, 173, 84, 190, 160, 14, 222, 101, 31, 104, 149, 181, 141, 22, 106, 147,
+                    134, 93, 165, 55, 214, 247, 164, 72, 136, 205, 104, 245, 91, 223, 174,
+                ],
+                [
+                    146, 154, 50, 33, 11, 226, 74, 161, 247, 30, 128, 27, 120, 182, 0, 157, 56, 93,
+                    154, 34, 44, 20, 66, 167, 0, 191, 100, 27, 99, 33, 159, 187,
+                ],
+                [
+                    238, 198, 206, 167, 90, 54, 63, 19, 34, 83, 19, 215, 202, 231, 140, 91, 161,
+                    15, 46, 118, 142, 118, 155, 100, 77, 51, 213, 154, 197, 192, 223, 223,
+                ],
+                [
+                    18, 199, 81, 196, 252, 61, 89, 247, 231, 62, 169, 237, 114, 196, 11, 100, 227,
+                    131, 165, 43, 21, 119, 174, 3, 145, 12, 100, 135, 228, 185, 86, 147,
+                ],
+                [
+                    113, 64, 67, 124, 150, 74, 153, 202, 122, 232, 168, 149, 113, 211, 162, 61, 90,
+                    90, 216, 218, 235, 213, 180, 163, 251, 70, 89, 236, 19, 254, 192, 175,
+                ],
+            )
+        );
+    }
+
+    #[test]
+    fn zk_ams_compiled_profile_rejects_every_binding_mismatch() {
+        let valid = zk_ams_activation();
+        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+        let mutations: [(
+            CompiledPrivacyProfileValidationErrorV1,
+            fn(&mut PrivacyProtocolActivationRecordV1),
+        ); 8] = [
+            (
+                CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
+                |record| {
+                    record.proof_system_id =
+                        PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
+                },
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
+                |record| record.engine_id = PrivacyEngineIdV1::NativeVega,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
+                |record| record.parameter_id.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch,
+                |record| record.parameter_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch,
+                |record| record.verifier_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch,
+                |record| record.statement_schema_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
+                |record| record.engine_manifest_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
+                |record| {
+                    record.protocol_limits =
+                        PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                            max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1 + 1,
+                            max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
+                        });
+                },
+            ),
+        ];
+        for (expected, mutate) in mutations {
+            let mut changed = valid;
+            mutate(&mut changed);
+            assert_eq!(
+                validate_compiled_privacy_activation_v1(&changed),
+                Err(expected)
+            );
+        }
     }
 
     #[test]
@@ -1693,6 +2303,27 @@ mod tests {
             pgc_compiled.engine_manifest_digest
         );
 
+        let zk_ams_compiled =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1).expect("ZK-AMS profile");
+        let mut zk_ams = zk_ams_activation();
+        zk_ams.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                max_batch_size: 1,
+                max_ring_size: 16,
+            });
+        validate_compiled_privacy_activation_v1(&zk_ams).expect("lower ZK-AMS policy");
+        assert_eq!(zk_ams.parameter_id, zk_ams_compiled.parameter_id);
+        assert_eq!(zk_ams.parameter_digest, zk_ams_compiled.parameter_digest);
+        assert_eq!(zk_ams.verifier_digest, zk_ams_compiled.verifier_digest);
+        assert_eq!(
+            zk_ams.statement_schema_digest,
+            zk_ams_compiled.statement_schema_digest
+        );
+        assert_eq!(
+            zk_ams.engine_manifest_digest,
+            zk_ams_compiled.engine_manifest_digest
+        );
+
         let jindo_compiled =
             compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0)
                 .expect("Jindo profile");
@@ -1755,6 +2386,30 @@ mod tests {
                 },
             );
         invalid.push(pgc_bad_closed_set);
+
+        let mut zk_ams_batch_over = zk_ams_activation();
+        zk_ams_batch_over.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1 + 1,
+                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
+            });
+        invalid.push(zk_ams_batch_over);
+
+        let mut zk_ams_ring_over = zk_ams_activation();
+        zk_ams_ring_over.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
+                max_ring_size: ZK_AMS_MAX_RING_SIZE_V1 + 1,
+            });
+        invalid.push(zk_ams_ring_over);
+
+        let mut zk_ams_bad_closed_set = zk_ams_activation();
+        zk_ams_bad_closed_set.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                max_batch_size: 1,
+                max_ring_size: 17,
+            });
+        invalid.push(zk_ams_bad_closed_set);
 
         let mut zero_verange = verange_activation();
         zero_verange.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(

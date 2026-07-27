@@ -4657,7 +4657,9 @@ The exact indexed source selects the intersection member.
 The source is a current application owned by `server`, and the frozen
 transport context is `initialContext`.  The target has no such application,
 so `server # target`.  The remaining source guards put `server` in the current
-responsive voter set and in `up`.
+responsive voter set and in `up`.  The server need not occur in the historical
+QC signer set: that certificate binds the served subject, while this exact
+applied archive owns the independently authenticated response route.
 ***************************************************************************)
 
 THEOREM IndexedHistoricalSourceSelectsExactAppliedCurrentVoter ==

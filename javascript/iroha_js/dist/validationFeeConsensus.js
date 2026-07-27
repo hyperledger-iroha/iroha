@@ -38,6 +38,100 @@ const PROJECTION_KEYS = Object.freeze([
   "trusted_checkpoint_height",
   "version",
 ]);
+const CURRENT_POLICY_KEYS = Object.freeze([
+  "activePolicyHash",
+  "activePolicyVersion",
+  "chargingMode",
+  "effectiveFromHeight",
+  "expiresAfterHeight",
+  "feeAssetDefinitionId",
+  "feeMinorUnits",
+  "feeScale",
+  "parliament",
+  "payout",
+]);
+const PARLIAMENT_KEYS = Object.freeze([
+  "payoutLifecycle",
+  "payoutLifecycleSealHash",
+  "validationFeePolicy",
+]);
+const PARLIAMENT_PROPOSAL_KEYS = Object.freeze([
+  "enactment_window",
+  "finalization",
+  "parliament_roster_root",
+  "payload_hash",
+  "plainElectorateRules",
+  "plainElectorateSnapshot",
+  "proposal_id",
+  "proposal_kind",
+]);
+const PLAIN_ELECTORATE_RULE_KEYS = Object.freeze([
+  "approval_threshold_denominator",
+  "approval_threshold_numerator",
+  "ballot_amount",
+  "ballot_duration_blocks",
+  "bond_escrow_account",
+  "citizenship_amount",
+  "conviction_step_blocks",
+  "eligibility_rule",
+  "max_conviction",
+  "max_members",
+  "min_turnout",
+  "slash_receiver_account",
+  "voting_asset_id",
+]);
+const PLAIN_ELIGIBILITY_RULE_KEYS = Object.freeze(["rule", "value"]);
+const PLAIN_ELECTORATE_SNAPSHOT_KEYS = Object.freeze([
+  "approvalGateHeight",
+  "capturedAtHeight",
+  "memberCount",
+  "rosterRoot",
+]);
+const ENACTMENT_WINDOW_KEYS = Object.freeze([
+  "closes_at_height",
+  "enacted_at_height",
+  "opens_at_height",
+]);
+const FINALIZATION_KEYS = Object.freeze([
+  "abstain",
+  "approval_threshold_denominator",
+  "approval_threshold_numerator",
+  "approve",
+  "approved",
+  "finalized_at_height",
+  "min_turnout",
+  "mode",
+  "proposal_id",
+  "referendum_id",
+  "reject",
+]);
+const PAYOUT_KEYS = Object.freeze([
+  "batchSbdMinorUnits",
+  "codeHash",
+  "contractAddress",
+  "entrypoint",
+  "recipients",
+  "sbdAssetDefinitionId",
+  "sbdScale",
+  "treasuryAccountId",
+  "vaultAccountId",
+  "xorAssetDefinitionId",
+  "xorOutputMax",
+  "xorOutputMin",
+]);
+const PAYOUT_RECIPIENT_KEYS = Object.freeze([
+  "account_id",
+  "share_basis_points",
+]);
+const CANONICAL_UNSIGNED_DECIMAL = /^(?:0|[1-9][0-9]*)$/u;
+const MAX_U64 = 0xffff_ffff_ffff_ffffn;
+const MAX_U128 = (1n << 128n) - 1n;
+const VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS = 120_960n;
+const VALIDATION_FEE_PLAIN_BALLOT_AMOUNT = 150n;
+const VALIDATION_FEE_PLAIN_BALLOT_DURATION_BLOCKS = 3_600n;
+const VALIDATION_FEE_PLAIN_MAX_MEMBERS = 256n;
+const VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT = 4;
+const VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE_BASIS_POINTS = 2_500;
 
 function record(value, label) {
   if (
@@ -107,6 +201,452 @@ function exactChainId(value, label) {
     throw new TypeError(`${label} must be canonical bounded text`);
   }
   return value;
+}
+
+function canonicalText(value, label) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 4_096 ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError(`${label} must be canonical bounded text`);
+  }
+  return value;
+}
+
+function unsignedDecimalString(value, maximum, label, positive = false) {
+  if (
+    typeof value !== "string" ||
+    value.length > maximum.toString().length ||
+    !CANONICAL_UNSIGNED_DECIMAL.test(value)
+  ) {
+    throw new TypeError(`${label} must be a canonical unsigned decimal string`);
+  }
+  const parsed = BigInt(value);
+  if (parsed > maximum || (positive && parsed === 0n)) {
+    throw new TypeError(
+      `${label} must be a ${positive ? "positive" : "non-negative"} bounded integer`,
+    );
+  }
+  return parsed;
+}
+
+function u64String(value, label, positive = false) {
+  return unsignedDecimalString(value, MAX_U64, label, positive);
+}
+
+function u128String(value, label, positive = false) {
+  return unsignedDecimalString(value, MAX_U128, label, positive);
+}
+
+function unsignedInteger(value, maximum, label) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > maximum
+  ) {
+    throw new TypeError(`${label} must be an unsigned integer no greater than ${maximum}`);
+  }
+  return value;
+}
+
+function requireEqual(left, right, label) {
+  if (left !== right) {
+    throw new TypeError(`${label} must match its verified proposal evidence`);
+  }
+}
+
+function validatePlainElectorateRules(value, label) {
+  const rules = record(value, label);
+  exactKeys(rules, PLAIN_ELECTORATE_RULE_KEYS, label);
+  canonicalText(rules.voting_asset_id, `${label}.voting_asset_id`);
+  canonicalText(rules.bond_escrow_account, `${label}.bond_escrow_account`);
+  canonicalText(rules.slash_receiver_account, `${label}.slash_receiver_account`);
+  const ballotAmount = u128String(rules.ballot_amount, `${label}.ballot_amount`, true);
+  const ballotDuration = u64String(
+    rules.ballot_duration_blocks,
+    `${label}.ballot_duration_blocks`,
+    true,
+  );
+  const citizenshipAmount = u128String(
+    rules.citizenship_amount,
+    `${label}.citizenship_amount`,
+    true,
+  );
+  const maxMembers = u64String(rules.max_members, `${label}.max_members`, true);
+  const convictionStep = u64String(
+    rules.conviction_step_blocks,
+    `${label}.conviction_step_blocks`,
+    true,
+  );
+  const maxConviction = u64String(
+    rules.max_conviction,
+    `${label}.max_conviction`,
+    true,
+  );
+  const minTurnout = u128String(rules.min_turnout, `${label}.min_turnout`, true);
+  const approvalNumerator = u64String(
+    rules.approval_threshold_numerator,
+    `${label}.approval_threshold_numerator`,
+    true,
+  );
+  const approvalDenominator = u64String(
+    rules.approval_threshold_denominator,
+    `${label}.approval_threshold_denominator`,
+    true,
+  );
+  if (
+    ballotAmount !== VALIDATION_FEE_PLAIN_BALLOT_AMOUNT ||
+    ballotDuration !== VALIDATION_FEE_PLAIN_BALLOT_DURATION_BLOCKS ||
+    maxMembers > VALIDATION_FEE_PLAIN_MAX_MEMBERS ||
+    approvalNumerator > approvalDenominator
+  ) {
+    throw new TypeError(`${label} violates the bounded PLAIN electorate invariants`);
+  }
+  const eligibility = record(rules.eligibility_rule, `${label}.eligibility_rule`);
+  exactKeys(
+    eligibility,
+    PLAIN_ELIGIBILITY_RULE_KEYS,
+    `${label}.eligibility_rule`,
+  );
+  if (
+    eligibility.rule !==
+      "proposal_operator_at_or_before_gate_others_after_gate" ||
+    eligibility.value !== null
+  ) {
+    throw new TypeError(`${label}.eligibility_rule is not the closed V1 rule`);
+  }
+  return {
+    approvalDenominator,
+    approvalNumerator,
+    ballotAmount,
+    ballotDuration,
+    citizenshipAmount,
+    convictionStep,
+    maxConviction,
+    maxMembers,
+    minTurnout,
+    rules,
+  };
+}
+
+function validatePlainElectorateSnapshot(value, label) {
+  const snapshot = record(value, label);
+  exactKeys(snapshot, PLAIN_ELECTORATE_SNAPSHOT_KEYS, label);
+  lowerHex32(snapshot.rosterRoot, `${label}.rosterRoot`);
+  return {
+    approvalGateHeight: u64String(
+      snapshot.approvalGateHeight,
+      `${label}.approvalGateHeight`,
+    ),
+    capturedAtHeight: u64String(
+      snapshot.capturedAtHeight,
+      `${label}.capturedAtHeight`,
+      true,
+    ),
+    memberCount: u64String(snapshot.memberCount, `${label}.memberCount`, true),
+  };
+}
+
+function validateEnactmentWindow(value, label) {
+  const window = record(value, label);
+  exactKeys(window, ENACTMENT_WINDOW_KEYS, label);
+  return {
+    closesAtHeight: u64String(
+      window.closes_at_height,
+      `${label}.closes_at_height`,
+      true,
+    ),
+    enactedAtHeight: u64String(
+      window.enacted_at_height,
+      `${label}.enacted_at_height`,
+      true,
+    ),
+    opensAtHeight: u64String(
+      window.opens_at_height,
+      `${label}.opens_at_height`,
+      true,
+    ),
+  };
+}
+
+function validateFinalization(value, proposalId, rules, label) {
+  const finalization = record(value, label);
+  exactKeys(finalization, FINALIZATION_KEYS, label);
+  const finalizationProposalId = lowerHex32(
+    finalization.proposal_id,
+    `${label}.proposal_id`,
+  );
+  const referendumId = lowerHex32(
+    finalization.referendum_id,
+    `${label}.referendum_id`,
+  );
+  requireEqual(finalizationProposalId, proposalId, `${label}.proposal_id`);
+  requireEqual(referendumId, proposalId, `${label}.referendum_id`);
+  const finalizedAtHeight = u64String(
+    finalization.finalized_at_height,
+    `${label}.finalized_at_height`,
+    true,
+  );
+  if (finalization.mode !== "PLAIN") {
+    throw new TypeError(`${label}.mode must be PLAIN`);
+  }
+  const approve = u128String(finalization.approve, `${label}.approve`);
+  const reject = u128String(finalization.reject, `${label}.reject`);
+  const abstain = u128String(finalization.abstain, `${label}.abstain`);
+  const minTurnout = u128String(
+    finalization.min_turnout,
+    `${label}.min_turnout`,
+    true,
+  );
+  const approvalNumerator = u64String(
+    finalization.approval_threshold_numerator,
+    `${label}.approval_threshold_numerator`,
+    true,
+  );
+  const approvalDenominator = u64String(
+    finalization.approval_threshold_denominator,
+    `${label}.approval_threshold_denominator`,
+    true,
+  );
+  requireEqual(minTurnout, rules.minTurnout, `${label}.min_turnout`);
+  requireEqual(
+    approvalNumerator,
+    rules.approvalNumerator,
+    `${label}.approval_threshold_numerator`,
+  );
+  requireEqual(
+    approvalDenominator,
+    rules.approvalDenominator,
+    `${label}.approval_threshold_denominator`,
+  );
+  if (
+    typeof finalization.approved !== "boolean" ||
+    !finalization.approved ||
+    approvalNumerator > approvalDenominator
+  ) {
+    throw new TypeError(`${label} must contain an approved PLAIN decision`);
+  }
+  const turnout = approve + reject + abstain;
+  const weightedApprove = approve * approvalDenominator;
+  const requiredApprove = turnout * approvalNumerator;
+  if (
+    turnout > MAX_U128 ||
+    weightedApprove > MAX_U128 ||
+    requiredApprove > MAX_U128 ||
+    turnout < minTurnout ||
+    weightedApprove < requiredApprove
+  ) {
+    throw new TypeError(`${label} does not recompute to an approved PLAIN decision`);
+  }
+  return { finalizedAtHeight };
+}
+
+function validateParliamentProposal(value, expectedKind, label) {
+  const proposal = record(value, label);
+  exactKeys(proposal, PARLIAMENT_PROPOSAL_KEYS, label);
+  if (proposal.proposal_kind !== expectedKind) {
+    throw new TypeError(`${label}.proposal_kind must be ${expectedKind}`);
+  }
+  const proposalId = lowerHex32(proposal.proposal_id, `${label}.proposal_id`);
+  const payloadHash = lowerHex32(proposal.payload_hash, `${label}.payload_hash`);
+  requireEqual(payloadHash, proposalId, `${label}.payload_hash`);
+  lowerHex32(proposal.parliament_roster_root, `${label}.parliament_roster_root`);
+  const rules = validatePlainElectorateRules(
+    proposal.plainElectorateRules,
+    `${label}.plainElectorateRules`,
+  );
+  const snapshot = validatePlainElectorateSnapshot(
+    proposal.plainElectorateSnapshot,
+    `${label}.plainElectorateSnapshot`,
+  );
+  const window = validateEnactmentWindow(
+    proposal.enactment_window,
+    `${label}.enactment_window`,
+  );
+  const finalization = validateFinalization(
+    proposal.finalization,
+    proposalId,
+    rules,
+    `${label}.finalization`,
+  );
+  if (
+    snapshot.memberCount > rules.maxMembers ||
+    snapshot.capturedAtHeight !== window.opensAtHeight ||
+    snapshot.approvalGateHeight >= snapshot.capturedAtHeight ||
+    window.closesAtHeight < window.opensAtHeight ||
+    window.closesAtHeight - window.opensAtHeight + 1n !== rules.ballotDuration ||
+    finalization.finalizedAtHeight !== window.closesAtHeight ||
+    window.enactedAtHeight <= finalization.finalizedAtHeight
+  ) {
+    throw new TypeError(`${label} violates its frozen electorate or enactment anchors`);
+  }
+  return { proposalId, rules, window };
+}
+
+function equalPlainElectorateRules(left, right) {
+  return PLAIN_ELECTORATE_RULE_KEYS.every((key) => {
+    if (key !== "eligibility_rule") return left[key] === right[key];
+    return (
+      left.eligibility_rule.rule === right.eligibility_rule.rule &&
+      left.eligibility_rule.value === right.eligibility_rule.value
+    );
+  });
+}
+
+function validateParliament(value, label) {
+  const parliament = record(value, label);
+  exactKeys(parliament, PARLIAMENT_KEYS, label);
+  const policy = validateParliamentProposal(
+    parliament.validationFeePolicy,
+    "ValidationFeePolicyV1",
+    `${label}.validationFeePolicy`,
+  );
+  const payout = validateParliamentProposal(
+    parliament.payoutLifecycle,
+    "ValidationFeePayoutLifecycleV1",
+    `${label}.payoutLifecycle`,
+  );
+  irohaHash32(
+    parliament.payoutLifecycleSealHash,
+    `${label}.payoutLifecycleSealHash`,
+  );
+  if (
+    policy.proposalId === payout.proposalId ||
+    !equalPlainElectorateRules(policy.rules.rules, payout.rules.rules)
+  ) {
+    throw new TypeError(
+      `${label} must bind distinct proposals to identical PLAIN electorate rules`,
+    );
+  }
+  return { payout, policy };
+}
+
+function validatePayout(value, label) {
+  const payout = record(value, label);
+  exactKeys(payout, PAYOUT_KEYS, label);
+  canonicalText(payout.contractAddress, `${label}.contractAddress`);
+  lowerHex32(payout.codeHash, `${label}.codeHash`);
+  if (payout.entrypoint !== "autonomous_validation_fee_tick") {
+    throw new TypeError(
+      `${label}.entrypoint must be autonomous_validation_fee_tick`,
+    );
+  }
+  canonicalText(payout.sbdAssetDefinitionId, `${label}.sbdAssetDefinitionId`);
+  canonicalText(payout.xorAssetDefinitionId, `${label}.xorAssetDefinitionId`);
+  canonicalText(payout.treasuryAccountId, `${label}.treasuryAccountId`);
+  canonicalText(payout.vaultAccountId, `${label}.vaultAccountId`);
+  const batchSbdMinorUnits = u128String(
+    payout.batchSbdMinorUnits,
+    `${label}.batchSbdMinorUnits`,
+    true,
+  );
+  const sbdScale = unsignedInteger(payout.sbdScale, 255, `${label}.sbdScale`);
+  const xorOutputMin = u128String(
+    payout.xorOutputMin,
+    `${label}.xorOutputMin`,
+    true,
+  );
+  const xorOutputMax = u128String(
+    payout.xorOutputMax,
+    `${label}.xorOutputMax`,
+    true,
+  );
+  if (
+    payout.sbdAssetDefinitionId === payout.xorAssetDefinitionId ||
+    payout.treasuryAccountId === payout.vaultAccountId ||
+    batchSbdMinorUnits !== 1_000n ||
+    sbdScale !== 2 ||
+    xorOutputMin !== 4n ||
+    xorOutputMax !== 100n
+  ) {
+    throw new TypeError(`${label} violates the immutable first-release payout binding`);
+  }
+  if (
+    !Array.isArray(payout.recipients) ||
+    payout.recipients.length !== VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT
+  ) {
+    throw new TypeError(
+      `${label}.recipients must contain exactly ${VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT} entries`,
+    );
+  }
+  const recipients = new Set();
+  for (const [index, recipientValue] of payout.recipients.entries()) {
+    const recipientLabel = `${label}.recipients[${index}]`;
+    const recipient = record(recipientValue, recipientLabel);
+    exactKeys(recipient, PAYOUT_RECIPIENT_KEYS, recipientLabel);
+    const account = canonicalText(recipient.account_id, `${recipientLabel}.account_id`);
+    const share = unsignedInteger(
+      recipient.share_basis_points,
+      0xffff,
+      `${recipientLabel}.share_basis_points`,
+    );
+    if (
+      share !== VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE_BASIS_POINTS ||
+      account === payout.treasuryAccountId ||
+      account === payout.vaultAccountId ||
+      recipients.has(account)
+    ) {
+      throw new TypeError(`${recipientLabel} violates the exact payout recipient plan`);
+    }
+    recipients.add(account);
+  }
+  return { sbdScale };
+}
+
+function validateCurrentPolicy(value, label) {
+  if (value === null) return;
+  const policy = record(value, label);
+  exactKeys(policy, CURRENT_POLICY_KEYS, label);
+  u64String(policy.activePolicyVersion, `${label}.activePolicyVersion`, true);
+  irohaHash32(policy.activePolicyHash, `${label}.activePolicyHash`);
+  canonicalText(policy.feeAssetDefinitionId, `${label}.feeAssetDefinitionId`);
+  const feeScale = unsignedInteger(policy.feeScale, 255, `${label}.feeScale`);
+  const feeMinorUnits = u128String(
+    policy.feeMinorUnits,
+    `${label}.feeMinorUnits`,
+    true,
+  );
+  if (
+    feeScale !== 2 ||
+    feeMinorUnits !== 10n ||
+    policy.chargingMode !== "PER_QUALIFYING_TRANSFER_INSTRUCTION"
+  ) {
+    throw new TypeError(`${label} is not an enabled first-release policy`);
+  }
+  const effectiveFromHeight = u64String(
+    policy.effectiveFromHeight,
+    `${label}.effectiveFromHeight`,
+    true,
+  );
+  if (policy.expiresAfterHeight !== null) {
+    const expiresAfterHeight = u64String(
+      policy.expiresAfterHeight,
+      `${label}.expiresAfterHeight`,
+      true,
+    );
+    if (expiresAfterHeight <= effectiveFromHeight) {
+      throw new TypeError(`${label}.expiresAfterHeight must follow activation`);
+    }
+  }
+  const parliament = validateParliament(policy.parliament, `${label}.parliament`);
+  const payout = validatePayout(policy.payout, `${label}.payout`);
+  if (
+    policy.feeAssetDefinitionId !== policy.payout.sbdAssetDefinitionId ||
+    feeScale !== payout.sbdScale ||
+    parliament.policy.rules.rules.voting_asset_id !==
+      policy.payout.xorAssetDefinitionId ||
+    parliament.payout.rules.rules.voting_asset_id !==
+      policy.payout.xorAssetDefinitionId ||
+    parliament.policy.window.enactedAtHeight +
+      VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS !==
+      effectiveFromHeight
+  ) {
+    throw new TypeError(`${label} differs from its Parliament or payout binding`);
+  }
 }
 
 /** Parse the exact immutable CBSI deployment binding. */
@@ -287,5 +827,9 @@ export function verifyValidationFeeCurrentPolicyProofV1(
       "validation-fee projection.more_available must be boolean",
     );
   }
+  validateCurrentPolicy(
+    normalized.current_policy,
+    "validation-fee projection.current_policy",
+  );
   return freezeProjection(normalized);
 }

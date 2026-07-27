@@ -179,6 +179,24 @@ before signing. Existing instruction-only transactions continue to use
 `Executable` tag `0`, so adding the mixed form does not rewrite their canonical
 bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
 
+The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
+Version 4 changes the canonical validation-fee governance layout:
+`ProposeValidationFeePolicy` and `ProposeValidationFeePayoutLifecycle` require
+the exact `plain_electorate_rules` used by their ballot lifecycle—including
+the voting asset, bond-escrow account, and slash-receiver account—and enacted
+registry entries retain the same rules for historical verification. New locks
+retain the same custody identities so lock, release, slash, and restitution
+cannot be redirected by later configuration changes. At the referendum start
+height, the node freezes a canonical, account-sorted PLAIN electorate of at
+most 256 members from the pre-transaction committed state.
+The retained proposal state binds that full electorate, its member count, the
+capture and approval-gate heights, and its domain-separated roster root.
+Verified Parliament projections expose those immutable anchors; proposal read
+APIs may expose the full frozen member list. Missing or inconsistent snapshot
+evidence fails closed for voting, finalization, enactment, and fee admission.
+Version 3 peers and SDKs must therefore reject the version 4 wire contract
+instead of attempting a compatibility decode.
+
 Admission schedules a mixed batch as one global live-state barrier. Items run
 in canonical input order against the same transaction view, and failure of any
 item rolls back every staged state change. A signed transaction containing a

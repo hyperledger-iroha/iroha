@@ -165,6 +165,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferFreeze>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferBlacklist>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferControl>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetHoldingLimit>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,
@@ -425,10 +426,6 @@ define_instruction_handlers! {
     dispatch_instruction::<verifying_keys::UpdateVerifyingKey>,
     dispatch_instruction::<zk::RegisterZkAsset>,
     dispatch_instruction::<zk::RegisterAssetHiddenZkPool>,
-    dispatch_instruction::<zk::RegisterZkAceIdentityCommitment>,
-    dispatch_instruction::<zk::RotateZkAceIdentityCommitment>,
-    dispatch_instruction::<zk::RevokeZkAceIdentityCommitment>,
-    dispatch_instruction::<zk::SubmitZkAceAuthorizedTransfer>,
     dispatch_instruction::<zk::ScheduleConfidentialPolicyTransition>,
     dispatch_instruction::<zk::CancelConfidentialPolicyTransition>,
     dispatch_instruction::<zk::Shield>,
@@ -492,6 +489,24 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1>,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RotatePrivacyZkX509TrustAnchorV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RevokePrivacyZkX509TrustAnchorV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1
+    >,
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
 }
 

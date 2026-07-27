@@ -148,6 +148,7 @@ impl Default for MockToriiData {
             },
             nexus: None,
             stack: Default::default(),
+            offline: None,
             sumeragi: None,
             governance,
             teu_lane_commit: Vec::new(),

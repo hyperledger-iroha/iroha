@@ -6838,6 +6838,13 @@ export interface ToriiGovernanceTallyResult {
   tally: ToriiGovernanceTally | null;
 }
 
+export interface ToriiGovernanceLockCustody {
+  escrowed: boolean;
+  asset_definition_id: string;
+  bond_escrow_account: string;
+  slash_receiver_account: string;
+}
+
 export interface ToriiGovernanceLockRecord {
   owner: string;
   amount: string;
@@ -6845,6 +6852,7 @@ export interface ToriiGovernanceLockRecord {
   expiry_height: number;
   direction: number;
   duration_blocks: number;
+  custody: ToriiGovernanceLockCustody | null;
 }
 
 export interface ToriiGovernanceLocksResult {
@@ -12437,6 +12445,87 @@ export interface NormalizedValidationFeeLedgerBindingV1 {
   readonly checkpoint: NormalizedValidationFeeCheckpointV1;
 }
 
+export interface ValidationFeeVerifiedPlainElectorateSnapshotV1 {
+  readonly rosterRoot: string;
+  readonly memberCount: string;
+  readonly capturedAtHeight: string;
+  readonly approvalGateHeight: string;
+}
+
+export interface ValidationFeeVerifiedEnactmentWindowV1 {
+  readonly opens_at_height: string;
+  readonly closes_at_height: string;
+  readonly enacted_at_height: string;
+}
+
+export interface ValidationFeeVerifiedFinalizationV1 {
+  readonly proposal_id: string;
+  readonly referendum_id: string;
+  readonly finalized_at_height: string;
+  readonly mode: "PLAIN";
+  readonly approve: string;
+  readonly reject: string;
+  readonly abstain: string;
+  readonly min_turnout: string;
+  readonly approval_threshold_numerator: string;
+  readonly approval_threshold_denominator: string;
+  readonly approved: true;
+}
+
+export interface ValidationFeeVerifiedParliamentProposalV1 {
+  readonly proposal_kind:
+    | "ValidationFeePolicyV1"
+    | "ValidationFeePayoutLifecycleV1";
+  readonly proposal_id: string;
+  readonly payload_hash: string;
+  readonly parliament_roster_root: string;
+  readonly plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>;
+  readonly plainElectorateSnapshot: Readonly<ValidationFeeVerifiedPlainElectorateSnapshotV1>;
+  readonly enactment_window: Readonly<ValidationFeeVerifiedEnactmentWindowV1>;
+  readonly finalization: Readonly<ValidationFeeVerifiedFinalizationV1>;
+}
+
+export interface ValidationFeeVerifiedParliamentV1 {
+  readonly validationFeePolicy: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
+  readonly payoutLifecycle: Readonly<ValidationFeeVerifiedParliamentProposalV1>;
+  readonly payoutLifecycleSealHash: string;
+}
+
+export interface ValidationFeeVerifiedPayoutRecipientV1 {
+  readonly account_id: string;
+  readonly share_basis_points: 2500;
+}
+
+export interface ValidationFeeVerifiedPayoutV1 {
+  readonly contractAddress: string;
+  readonly codeHash: string;
+  readonly entrypoint: "autonomous_validation_fee_tick";
+  readonly sbdAssetDefinitionId: string;
+  readonly xorAssetDefinitionId: string;
+  readonly treasuryAccountId: string;
+  readonly vaultAccountId: string;
+  readonly batchSbdMinorUnits: "1000";
+  readonly sbdScale: 2;
+  readonly xorOutputMin: "4";
+  readonly xorOutputMax: "100";
+  readonly recipients: ReadonlyArray<
+    Readonly<ValidationFeeVerifiedPayoutRecipientV1>
+  >;
+}
+
+export interface ValidationFeeVerifiedCurrentPolicyV1 {
+  readonly activePolicyVersion: string;
+  readonly activePolicyHash: string;
+  readonly feeAssetDefinitionId: string;
+  readonly feeScale: 2;
+  readonly feeMinorUnits: "10";
+  readonly chargingMode: "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+  readonly effectiveFromHeight: string;
+  readonly expiresAfterHeight: string | null;
+  readonly parliament: Readonly<ValidationFeeVerifiedParliamentV1>;
+  readonly payout: Readonly<ValidationFeeVerifiedPayoutV1>;
+}
+
 export interface ValidationFeeVerifiedPolicyProjectionV1 {
   readonly schema: "iroha.validation_fee.verified_policy_projection.v1";
   readonly version: 1;
@@ -12446,7 +12535,7 @@ export interface ValidationFeeVerifiedPolicyProjectionV1 {
   readonly registry_hash: string;
   readonly head_policy_version: bigint;
   readonly head_policy_hash: string;
-  readonly current_policy: Readonly<Record<string, unknown>> | null;
+  readonly current_policy: Readonly<ValidationFeeVerifiedCurrentPolicyV1> | null;
   readonly trusted_checkpoint_height: bigint;
   readonly trusted_checkpoint_context_id: string;
   readonly evaluated_block_height: bigint;
@@ -14036,6 +14125,8 @@ export interface ValidationFeePlainEligibilityRuleV1 {
  */
 export interface ValidationFeePlainElectorateRulesV1 {
   readonly voting_asset_id: string;
+  readonly bond_escrow_account: string;
+  readonly slash_receiver_account: string;
   readonly ballot_amount: string;
   readonly ballot_duration_blocks: string;
   readonly citizenship_amount: string;

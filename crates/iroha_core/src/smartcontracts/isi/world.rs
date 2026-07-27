@@ -47,7 +47,6 @@ pub mod isi {
         },
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         smart_contract::CanRegisterSmartContractCode,
-        zk_ace::CanManageZkAceIdentityForAccount,
     };
     // Governance ISIs
     use iroha_data_model::isi::confidential;
@@ -131,8 +130,9 @@ pub mod isi {
             VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeeFinalizationEvidenceV1,
             ValidationFeeGovernanceVotingModeV1, ValidationFeeGovernanceWindowV1,
             ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
-            ValidationFeePlainElectorateRulesV1, ValidationFeePolicyRegistryEntryV1,
-            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+            ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
+            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
+            ValidationFeePolicyV1,
         },
         zk::{
             BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
@@ -2173,15 +2173,26 @@ pub mod isi {
         Ok(tally)
     }
 
-    fn voting_asset_ids(
+    fn governance_lock_custody(
         gov: &iroha_config::parameters::actual::Governance,
-        owner: &AccountId,
-    ) -> (AssetId, AssetId) {
-        let def_id = gov.voting_asset_id.clone();
-        (
-            AssetId::new(def_id.clone(), owner.clone()),
-            AssetId::new(def_id, gov.bond_escrow_account.clone()),
-        )
+    ) -> crate::state::GovernanceLockCustody {
+        crate::state::GovernanceLockCustody {
+            escrowed: !gov.min_bond_amount.is_zero(),
+            asset_definition_id: gov.voting_asset_id.clone(),
+            bond_escrow_account: gov.bond_escrow_account.clone(),
+            slash_receiver_account: gov.slash_receiver_account.clone(),
+        }
+    }
+
+    fn validation_fee_lock_custody(
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> crate::state::GovernanceLockCustody {
+        crate::state::GovernanceLockCustody {
+            escrowed: true,
+            asset_definition_id: rules.voting_asset_id.clone(),
+            bond_escrow_account: rules.bond_escrow_account.clone(),
+            slash_receiver_account: rules.slash_receiver_account.clone(),
+        }
     }
 
     fn citizenship_asset_ids(
@@ -2544,15 +2555,32 @@ pub mod isi {
     fn lock_voting_bond(
         ballot_amount: &Quantity,
         previous_amount: Option<&Quantity>,
+        minimum_bond: &Quantity,
+        custody: &crate::state::GovernanceLockCustody,
         authority: &AccountId,
         referendum_id: &str,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let min_bond = &state_transaction.gov.min_bond_amount;
-        if min_bond.is_zero() {
+        if minimum_bond.is_zero() {
+            if custody.escrowed {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "governance lock custody claims escrow for a zero-minimum ballot".into(),
+                ));
+            }
             return Ok(());
         }
-        if ballot_amount < min_bond {
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock custody omits escrow for a bonded ballot".into(),
+            ));
+        }
+        if authority == &custody.bond_escrow_account || authority == &custody.slash_receiver_account
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance custody accounts cannot cast bonded ballots".into(),
+            ));
+        }
+        if ballot_amount < minimum_bond {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
@@ -2571,15 +2599,18 @@ pub mod isi {
         if delta.is_zero() {
             return Ok(());
         }
-        let (owner_asset_id, escrow_asset_id) = voting_asset_ids(&state_transaction.gov, authority);
+        let owner_asset_id = AssetId::new(custody.asset_definition_id.clone(), authority.clone());
+        let escrow_asset_id = AssetId::new(
+            custody.asset_definition_id.clone(),
+            custody.bond_escrow_account.clone(),
+        );
         let spec = state_transaction.numeric_spec_for(owner_asset_id.definition())?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(delta.as_numeric(), spec)?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&owner_asset_id, &delta)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset_id, &delta)?;
+        state_transaction.world.transfer_numeric_asset_exact(
+            &owner_asset_id,
+            &escrow_asset_id,
+            &delta,
+        )?;
         Ok(())
     }
 
@@ -2710,12 +2741,17 @@ pub mod isi {
         rec: &mut crate::state::GovernanceLockRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let def_id = state_transaction.gov.voting_asset_id.clone();
-        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id.clone(),
-            state_transaction.gov.bond_escrow_account.clone(),
-        );
-        let receiver_account = state_transaction.gov.slash_receiver_account.clone();
+        let custody =
+            retained_governance_lock_custody(request.referendum_id, rec, state_transaction)?;
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock has no escrowed balance to slash".into(),
+            ));
+        }
+        let def_id = custody.asset_definition_id.clone();
+        let escrow_asset_id =
+            iroha_data_model::asset::AssetId::new(def_id.clone(), custody.bond_escrow_account);
+        let receiver_account = custody.slash_receiver_account;
         let receiver_asset_id =
             iroha_data_model::asset::AssetId::new(def_id, receiver_account.clone());
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
@@ -2723,42 +2759,47 @@ pub mod isi {
             request.amount.as_numeric(),
             spec,
         )?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&escrow_asset_id, &request.amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&receiver_asset_id, &request.amount)?;
-        rec.amount = rec
+        let next_amount = rec
             .amount
             .try_sub(&request.amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
-        rec.slashed = rec
+        let next_slashed = rec
             .slashed
             .try_add(&request.amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
-        locks.locks.insert(request.owner.clone(), rec.clone());
-        state_transaction
-            .world
-            .governance_locks
-            .insert(request.referendum_id.to_owned(), locks.clone());
-
         let mut ledger = state_transaction
             .world
             .governance_slashes
             .get(request.referendum_id)
             .cloned()
             .unwrap_or_default();
-        let entry = ledger
-            .slashes
-            .entry(request.owner.clone())
-            .or_insert_with(crate::state::GovernanceSlashEntry::default);
-        entry.total_slashed = entry
-            .total_slashed
-            .try_add(&request.amount)
-            .map_err(|_| Error::from(MathError::Overflow))?;
-        entry.last_reason = request.reason;
-        entry.last_height = state_transaction._curr_block.height().get();
+        {
+            let entry = ledger
+                .slashes
+                .entry(request.owner.clone())
+                .or_insert_with(crate::state::GovernanceSlashEntry::default);
+            entry.total_slashed = entry
+                .total_slashed
+                .try_add(&request.amount)
+                .map_err(|_| Error::from(MathError::Overflow))?;
+            entry.last_reason = request.reason;
+            entry.last_height = state_transaction._curr_block.height().get();
+        }
+
+        // No fallible lock or ledger arithmetic may remain after custody moves.
+        state_transaction.world.transfer_numeric_asset_exact(
+            &escrow_asset_id,
+            &receiver_asset_id,
+            &request.amount,
+        )?;
+        rec.amount = next_amount;
+        rec.slashed = next_slashed;
+        locks.locks.insert(request.owner.clone(), rec.clone());
+        state_transaction
+            .world
+            .governance_locks
+            .insert(request.referendum_id.to_owned(), locks.clone());
+
         state_transaction
             .world
             .governance_slashes
@@ -2823,35 +2864,31 @@ pub mod isi {
                 ),
             ));
         }
-        rec.amount = rec
+        let custody = retained_governance_lock_custody(referendum_id, &rec, state_transaction)?;
+        let next_amount = rec
             .amount
             .try_add(&amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
-        rec.slashed = rec
+        let next_slashed = rec
             .slashed
             .try_sub(&amount)
             .map_err(|_| Error::from(MathError::Overflow))?;
 
-        let def_id = state_transaction.gov.voting_asset_id.clone();
-        let escrow_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id.clone(),
-            state_transaction.gov.bond_escrow_account.clone(),
-        );
-        let receiver_asset_id = iroha_data_model::asset::AssetId::new(
-            def_id,
-            state_transaction.gov.slash_receiver_account.clone(),
-        );
+        if !custody.escrowed {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance lock has no escrowed balance to restitute".into(),
+            ));
+        }
+        let def_id = custody.asset_definition_id.clone();
+        let escrow_asset_id =
+            iroha_data_model::asset::AssetId::new(def_id.clone(), custody.bond_escrow_account);
+        let receiver_asset_id =
+            iroha_data_model::asset::AssetId::new(def_id, custody.slash_receiver_account);
         let spec = state_transaction.numeric_spec_for(escrow_asset_id.definition())?;
         crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with(
             amount.as_numeric(),
             spec,
         )?;
-        state_transaction
-            .world
-            .withdraw_numeric_asset(&receiver_asset_id, &amount)?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&escrow_asset_id, &amount)?;
         let mut ledger = state_transaction
             .world
             .governance_slashes
@@ -2878,6 +2915,15 @@ pub mod isi {
             .map_err(|_| Error::from(MathError::Overflow))?;
         entry.last_reason = reason;
         entry.last_height = state_transaction._curr_block.height().get();
+
+        // No fallible lock or ledger validation may remain after custody moves.
+        state_transaction.world.transfer_numeric_asset_exact(
+            &receiver_asset_id,
+            &escrow_asset_id,
+            &amount,
+        )?;
+        rec.amount = next_amount;
+        rec.slashed = next_slashed;
         locks.locks.insert(owner.clone(), rec);
         state_transaction
             .world
@@ -2903,6 +2949,36 @@ pub mod isi {
             .telemetry
             .record_governance_bond_event("lock_restituted");
         Ok(amount)
+    }
+
+    fn retained_governance_lock_custody(
+        referendum_id: &str,
+        rec: &crate::state::GovernanceLockRecord,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<crate::state::GovernanceLockCustody, Error> {
+        if let Some(proposal) =
+            validation_fee_proposal_for_referendum(referendum_id, state_transaction)?
+        {
+            let rules = validation_fee_plain_electorate_rules(&proposal.kind)
+                .expect("validation-fee proposal helper must retain PLAIN electorate rules");
+            let expected = validation_fee_lock_custody(rules);
+            return match rec.custody.as_ref() {
+                Some(actual) if actual == &expected => Ok(expected),
+                Some(_) => Err(InstructionExecutionError::InvariantViolation(
+                    "validation-fee governance lock custody differs from its immutable proposal rules"
+                        .into(),
+                )
+                .into()),
+                None => Err(InstructionExecutionError::InvariantViolation(
+                    "validation-fee governance lock is missing immutable proposal custody".into(),
+                )
+                .into()),
+            };
+        }
+        Ok(rec
+            .custody
+            .clone()
+            .unwrap_or_else(|| governance_lock_custody(&state_transaction.gov)))
     }
 
     fn ensure_manifest_signature(
@@ -4013,6 +4089,8 @@ pub mod isi {
         if !gov.plain_voting_enabled
             || rules.voting_asset_id != gov.voting_asset_id
             || rules.voting_asset_id != gov.citizenship_asset_id
+            || rules.bond_escrow_account != gov.bond_escrow_account
+            || rules.slash_receiver_account != gov.slash_receiver_account
             || rules.ballot_amount != gov.min_bond_amount
             || rules.ballot_duration_blocks != gov.window_span
             || rules.citizenship_amount != gov.citizenship_bond_amount
@@ -4028,17 +4106,6 @@ pub mod isi {
                     "validation-fee PLAIN electorate rules differ from active governance policy"
                         .into(),
                 ),
-            ));
-        }
-        let eligible_citizens = state_transaction
-            .world
-            .citizens
-            .values()
-            .filter(|record| record.amount >= rules.citizenship_amount)
-            .count();
-        if u64::try_from(eligible_citizens).unwrap_or(u64::MAX) > rules.max_members {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee PLAIN electorate exceeds its immutable member cap".into(),
             ));
         }
         Ok(())
@@ -5385,6 +5452,21 @@ pub mod isi {
                         .cloned()
                         .unwrap_or_default();
                     if let Some(prev) = locks.locks.get(&owner) {
+                        if !prev.slashed.is_zero() {
+                            state_transaction.world.emit_events(Some(
+                                iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                                    iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                                        referendum_id: rid,
+                                        reason:
+                                            "re-vote requires prior restitution of the existing slash"
+                                                .into(),
+                                    },
+                                ),
+                            ));
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "re-vote requires prior restitution of the existing slash".into(),
+                            ));
+                        }
                         if amount < prev.amount || new_expiry < prev.expiry_height {
                             state_transaction.world.emit_events(Some(
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -5400,21 +5482,34 @@ pub mod isi {
                             ));
                         }
                     }
+                    let custody = locks
+                        .locks
+                        .get(&owner)
+                        .and_then(|record| record.custody.clone())
+                        .unwrap_or_else(|| governance_lock_custody(&state_transaction.gov));
+                    let minimum_bond = state_transaction.gov.min_bond_amount.clone();
                     lock_voting_bond(
                         &amount,
                         locks.locks.get(&owner).map(|rec| &rec.amount),
+                        &minimum_bond,
+                        &custody,
                         &owner,
                         &self.election_id,
                         state_transaction,
                     )?;
                     let existed = locks.locks.contains_key(&owner);
+                    let slashed = locks
+                        .locks
+                        .get(&owner)
+                        .map_or_else(Quantity::zero, |record| record.slashed.clone());
                     let rec = crate::state::GovernanceLockRecord {
                         owner: owner.clone(),
                         amount,
-                        slashed: Quantity::zero(),
+                        slashed,
                         expiry_height: new_expiry,
                         direction,
                         duration_blocks,
+                        custody: Some(custody),
                     };
                     locks.locks.insert(owner.clone(), rec.clone());
                     state_transaction
@@ -5473,22 +5568,70 @@ pub mod isi {
     fn validation_fee_proposal_for_referendum(
         referendum_id: &str,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Option<crate::state::GovernanceProposalRecord> {
+    ) -> Result<Option<crate::state::GovernanceProposalRecord>, Error> {
         if referendum_id.len() != 64
             || !referendum_id
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
-            return None;
+            return Ok(None);
         }
-        let bytes = hex::decode(referendum_id).ok()?;
-        let proposal_id: [u8; 32] = bytes.try_into().ok()?;
-        let proposal = state_transaction
+        let Some(bytes) = hex::decode(referendum_id).ok() else {
+            return Ok(None);
+        };
+        let Some(proposal_id) = <[u8; 32]>::try_from(bytes).ok() else {
+            return Ok(None);
+        };
+        let Some(proposal) = state_transaction
             .world
             .governance_proposals
-            .get(&proposal_id)?
-            .clone();
-        validation_fee_plain_electorate_rules(&proposal.kind).map(|_| proposal)
+            .get(&proposal_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if validation_fee_plain_electorate_rules(&proposal.kind).is_none() {
+            return Ok(None);
+        }
+        if proposal.kind.fingerprint() != proposal_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal storage key differs from its exact typed fingerprint"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(Some(proposal))
+    }
+
+    fn retained_validation_fee_plain_electorate_snapshot<'a>(
+        proposal_id: [u8; 32],
+        proposal: &crate::state::GovernanceProposalRecord,
+        referendum: crate::state::GovernanceReferendumRecord,
+        approvals: &'a crate::state::GovernanceStageApprovals,
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> Result<&'a ValidationFeePlainElectorateSnapshotV1, Error> {
+        let snapshot = approvals
+            .validation_fee_plain_electorate_snapshot
+            .as_ref()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee proposal has no frozen PLAIN electorate snapshot".into(),
+                )
+            })?;
+        if let Some(reason) = snapshot.context_error(proposal_id, &proposal.proposer, rules) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("invalid validation-fee PLAIN electorate snapshot: {reason}").into(),
+            ));
+        }
+        if snapshot.captured_at_height != referendum.h_start
+            || approvals.approval_gate_height != Some(snapshot.approval_gate_height)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee PLAIN electorate snapshot anchors differ from retained governance state"
+                    .into(),
+            ));
+        }
+        Ok(snapshot)
     }
 
     fn ensure_validation_fee_plain_ballot_preconditions(
@@ -5496,13 +5639,20 @@ pub mod isi {
         authority: &AccountId,
         proposal: &crate::state::GovernanceProposalRecord,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<ValidationFeePlainElectorateRulesV1, Error> {
         let rules = validation_fee_plain_electorate_rules(&proposal.kind).ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "validation-fee proposal is missing its PLAIN electorate rules".into(),
             )
         })?;
-        validate_validation_fee_plain_electorate_rules(rules, state_transaction)?;
+        if let Some(reason) = rules.invariant_error() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validation-fee proposal retained invalid PLAIN electorate rules: {reason}"
+                )
+                .into(),
+            ));
+        }
         if ballot.amount != rules.ballot_amount
             || ballot.duration_blocks != rules.ballot_duration_blocks
         {
@@ -5526,20 +5676,16 @@ pub mod isi {
                 "validation-fee referendum accepts one effective ballot per account".into(),
             ));
         }
-        let citizen = state_transaction
+        let referendum = state_transaction
             .world
-            .citizens
-            .get(authority)
+            .governance_referenda
+            .get(&ballot.referendum_id)
+            .copied()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
-                    "validation-fee ballot requires a retained citizen record".into(),
+                    "validation-fee proposal has no retained referendum".into(),
                 )
             })?;
-        if citizen.amount < rules.citizenship_amount {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee ballot citizen bond is below the immutable requirement".into(),
-            ));
-        }
         let approvals = state_transaction
             .world
             .governance_stage_approvals
@@ -5549,47 +5695,27 @@ pub mod isi {
                     "validation-fee proposal has no retained Parliament approval gate".into(),
                 )
             })?;
-        let gate_height = approvals.approval_gate_height.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "validation-fee proposal has not crossed its Parliament approval gate".into(),
-            )
-        })?;
-        let eligible = if authority == &proposal.proposer {
-            citizen.bonded_height <= gate_height
-        } else {
-            citizen.bonded_height > gate_height
-        };
-        if !eligible {
+        let proposal_id = proposal.kind.fingerprint();
+        let electorate = retained_validation_fee_plain_electorate_snapshot(
+            proposal_id,
+            proposal,
+            referendum,
+            approvals,
+            rules,
+        )?;
+        if !electorate.contains(authority) {
             return Err(InstructionExecutionError::InvariantViolation(
-                "citizen registration height is outside the proposal-bound eligibility rule".into(),
+                "validation-fee ballot owner is not in the frozen PLAIN electorate".into(),
             ));
         }
-        let eligible_count = state_transaction
-            .world
-            .citizens
-            .iter()
-            .filter(|(account_id, record)| {
-                record.amount >= rules.citizenship_amount
-                    && if *account_id == &proposal.proposer {
-                        record.bonded_height <= gate_height
-                    } else {
-                        record.bonded_height > gate_height
-                    }
-            })
-            .count();
-        if u64::try_from(eligible_count).unwrap_or(u64::MAX) > rules.max_members {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee electorate exceeds its immutable member cap".into(),
-            ));
-        }
-        Ok(())
+        Ok(rules.clone())
     }
 
     fn ensure_plain_ballot_preconditions(
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<ValidationFeePlainElectorateRulesV1>, Error> {
         if ballot.owner != *authority {
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -5604,14 +5730,15 @@ pub mod isi {
             ));
         }
         if let Some(proposal) =
-            validation_fee_proposal_for_referendum(&ballot.referendum_id, state_transaction)
+            validation_fee_proposal_for_referendum(&ballot.referendum_id, state_transaction)?
         {
             return ensure_validation_fee_plain_ballot_preconditions(
                 ballot,
                 authority,
                 &proposal,
                 state_transaction,
-            );
+            )
+            .map(Some);
         }
         ensure_citizen_for_ballot(authority, &ballot.referendum_id, state_transaction)?;
         if !state_transaction.gov.min_bond_amount.is_zero()
@@ -5656,22 +5783,7 @@ pub mod isi {
                 "lock duration shorter than minimum".into(),
             ));
         }
-        Ok(())
-    }
-
-    fn sweep_expired_plain_locks(
-        ballot: &gov::CastPlainBallot,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) {
-        let rid = ballot.referendum_id.clone();
-        let current_h = state_transaction._curr_block.height().get();
-        if let Some(mut existing) = state_transaction.world.governance_locks.get(&rid).cloned() {
-            existing.locks.retain(|_, v| v.expiry_height >= current_h);
-            state_transaction
-                .world
-                .governance_locks
-                .insert(rid, existing);
-        }
+        Ok(None)
     }
 
     fn ensure_plain_referendum_open(
@@ -5841,6 +5953,7 @@ pub mod isi {
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
         weight: u128,
+        validation_fee_rules: Option<&ValidationFeePlainElectorateRulesV1>,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let rid = ballot.referendum_id.clone();
@@ -5875,6 +5988,20 @@ pub mod isi {
                     "re-vote cannot change direction".into(),
                 ));
             }
+            if !prev.slashed.is_zero() {
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: rid.clone(),
+                            reason: "re-vote requires prior restitution of the existing slash"
+                                .into(),
+                        },
+                    ),
+                ));
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "re-vote requires prior restitution of the existing slash".into(),
+                ));
+            }
             if ballot.amount < prev.amount || new_expiry < prev.expiry_height {
                 state_transaction.world.emit_events(Some(
                     iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
@@ -5889,25 +6016,54 @@ pub mod isi {
                 ));
             }
         }
+        let custody = locks
+            .locks
+            .get(authority)
+            .and_then(|record| record.custody.clone())
+            .unwrap_or_else(|| {
+                validation_fee_rules.map_or_else(
+                    || governance_lock_custody(&state_transaction.gov),
+                    validation_fee_lock_custody,
+                )
+            });
+        if let Some(rules) = validation_fee_rules
+            && custody != validation_fee_lock_custody(rules)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee governance lock custody differs from its immutable proposal rules"
+                    .into(),
+            ));
+        }
+        let minimum_bond = validation_fee_rules.map_or_else(
+            || state_transaction.gov.min_bond_amount.clone(),
+            |rules| rules.ballot_amount.clone(),
+        );
         lock_voting_bond(
             &ballot.amount,
             locks.locks.get(authority).map(|rec| &rec.amount),
+            &minimum_bond,
+            &custody,
             authority,
             &ballot.referendum_id,
             state_transaction,
         )?;
 
         let existed = locks.locks.contains_key(authority);
+        let slashed = locks
+            .locks
+            .get(authority)
+            .map_or_else(Quantity::zero, |record| record.slashed.clone());
         let expiry_height = locks.locks.get(authority).map_or(new_expiry, |prev| {
             core::cmp::max(prev.expiry_height, new_expiry)
         });
         let rec = crate::state::GovernanceLockRecord {
             owner: ballot.owner.clone(),
             amount: ballot.amount.clone(),
-            slashed: Quantity::zero(),
+            slashed,
             expiry_height,
             direction: ballot.direction,
             duration_blocks: ballot.duration_blocks,
+            custody: Some(custody),
         };
         locks.locks.insert(authority.clone(), rec.clone());
         state_transaction
@@ -5963,17 +6119,15 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
-            let (conviction_step_blocks, max_conviction) =
-                validation_fee_proposal_for_referendum(&self.referendum_id, state_transaction)
-                    .and_then(|proposal| {
-                        validation_fee_plain_electorate_rules(&proposal.kind)
-                            .map(|rules| (rules.conviction_step_blocks, rules.max_conviction))
-                    })
-                    .unwrap_or((
-                        state_transaction.gov.conviction_step_blocks,
-                        state_transaction.gov.max_conviction,
-                    ));
+            let validation_fee_rules =
+                ensure_plain_ballot_preconditions(&self, authority, state_transaction)?;
+            let (conviction_step_blocks, max_conviction) = validation_fee_rules
+                .as_ref()
+                .map(|rules| (rules.conviction_step_blocks, rules.max_conviction))
+                .unwrap_or((
+                    state_transaction.gov.conviction_step_blocks,
+                    state_transaction.gov.max_conviction,
+                ));
             // Validate all economic arithmetic before opening the referendum,
             // sweeping locks, moving the bond, or emitting acceptance events.
             let weight = plain_ballot_weight(
@@ -5982,10 +6136,15 @@ pub mod isi {
                 conviction_step_blocks,
                 max_conviction,
             )?;
-            sweep_expired_plain_locks(&self, state_transaction);
             let referendum = ensure_plain_referendum_open(&self, state_transaction)?;
             ensure_plain_ballot_lock_covers_window(&self, referendum, state_transaction)?;
-            apply_plain_ballot_lock(&self, authority, weight, state_transaction)?;
+            apply_plain_ballot_lock(
+                &self,
+                authority,
+                weight,
+                validation_fee_rules.as_ref(),
+                state_transaction,
+            )?;
             Ok(())
         }
     }
@@ -6335,6 +6494,22 @@ pub mod isi {
                     "validation-fee proposal has no retained referendum".into(),
                 )
             })?;
+        let rules = validation_fee_plain_electorate_rules(&proposal.kind).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal is missing its retained PLAIN electorate rules".into(),
+            )
+        })?;
+        if evidence.mode != gov::VotingMode::Plain
+            || evidence.finalized_at_height != referendum.h_end
+            || evidence.min_turnout != rules.min_turnout
+            || evidence.approval_threshold_numerator != rules.approval_threshold_numerator
+            || evidence.approval_threshold_denominator != rules.approval_threshold_denominator
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee finalization evidence differs from its retained PLAIN electorate rules"
+                    .into(),
+            ));
+        }
         let approvals = state_transaction
             .world
             .governance_stage_approvals
@@ -6361,11 +6536,22 @@ pub mod isi {
                     .into(),
             ));
         }
+        let electorate = retained_validation_fee_plain_electorate_snapshot(
+            proposal_id,
+            proposal,
+            referendum,
+            &approvals,
+            rules,
+        )?;
 
         let authorization = ValidationFeeParliamentAuthorizationV1 {
             proposal_id,
             proposal_fingerprint,
             proposal_time_roster_root: snapshot.roster_root,
+            plain_electorate_snapshot_root: electorate.roster_root,
+            plain_electorate_snapshot_member_count: electorate.member_count,
+            plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
+            plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
             referendum_window: ValidationFeeGovernanceWindowV1 {
                 lower: referendum.h_start,
                 upper: referendum.h_end,
@@ -6443,6 +6629,12 @@ pub mod isi {
         if &lifecycle_payload.payout_binding != payout_binding {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle does not authorize the exact policy binding"
+                    .into(),
+            ));
+        }
+        if lifecycle_payload.plain_electorate_rules != payload.plain_electorate_rules {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee policy and payout lifecycle bind different PLAIN electorate rules"
                     .into(),
             ));
         }
@@ -6954,12 +7146,6 @@ pub mod isi {
                     "validation-fee payout lifecycle requires the bound subject to be the sole direct holder of {selector_label}"
                 )
                 .into(),
-            ));
-        }
-        if lifecycle_payload.plain_electorate_rules != payload.plain_electorate_rules {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee policy and payout lifecycle bind different PLAIN electorate rules"
-                    .into(),
             ));
         }
         if state_transaction
@@ -8638,6 +8824,7 @@ pub mod isi {
             }
             let validation_fee_rules =
                 validation_fee_plain_electorate_rules(&proposal.kind).cloned();
+            let mut validation_fee_electorate_snapshot = None;
             if let Some(rules) = validation_fee_rules.as_ref() {
                 if let Some(reason) = rules.invariant_error() {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -8688,6 +8875,16 @@ pub mod isi {
                             .into(),
                     ));
                 }
+                validation_fee_electorate_snapshot = Some(
+                    retained_validation_fee_plain_electorate_snapshot(
+                        self.proposal_id,
+                        &proposal,
+                        referendum,
+                        &approvals,
+                        rules,
+                    )?
+                    .clone(),
+                );
             }
 
             let now_h = state_transaction._curr_block.height().get();
@@ -8739,8 +8936,40 @@ pub mod isi {
                             ),
                             |rules| (rules.conviction_step_blocks, rules.max_conviction),
                         );
-                        for rec in locks.locks.values() {
+                        for (owner, rec) in &locks.locks {
+                            if validation_fee_rules.is_some()
+                                && !validation_fee_electorate_snapshot
+                                    .as_ref()
+                                    .is_some_and(|snapshot| snapshot.contains(owner))
+                            {
+                                return Err(InstructionExecutionError::InvariantViolation(
+                                    "validation-fee citizen lock owner is outside the frozen PLAIN electorate"
+                                        .into(),
+                                ));
+                            }
+                            if let Some(rules) = validation_fee_rules.as_ref()
+                                && (&rec.owner != owner
+                                    || rec.amount != rules.ballot_amount
+                                    || !rec.slashed.is_zero()
+                                    || rec.duration_blocks != rules.ballot_duration_blocks
+                                    || rec.custody.as_ref()
+                                        != Some(&validation_fee_lock_custody(rules))
+                                    || rec.direction > 2)
+                            {
+                                return Err(InstructionExecutionError::InvariantViolation(
+                                    "validation-fee citizen lock differs from retained PLAIN electorate rules"
+                                        .into(),
+                                ));
+                            }
                             if rec.expiry_height < tally_height {
+                                if validation_fee_rules.is_some() {
+                                    return Err(
+                                        InstructionExecutionError::InvariantViolation(
+                                            "validation-fee citizen lock expires before the retained referendum end"
+                                                .into(),
+                                        ),
+                                    );
+                                }
                                 continue;
                             }
                             let weight =
@@ -9523,12 +9752,19 @@ pub mod isi {
                     .world
                     .deposit_numeric_asset(&escrow_asset_id, &delta)?;
             }
-            let bonded_height = state_transaction._curr_block.height().get();
-            let record = crate::state::CitizenshipRecord::new(
-                self.owner.clone(),
-                self.amount.clone(),
-                bonded_height,
-            );
+            let record = if let Some(mut record) = existing {
+                // A top-up (including a same-amount no-op) continues the
+                // original citizenship interval and must not erase service,
+                // cooldown, or discipline state.
+                record.amount = self.amount.clone();
+                record
+            } else {
+                crate::state::CitizenshipRecord::new(
+                    self.owner.clone(),
+                    self.amount.clone(),
+                    state_transaction._curr_block.height().get(),
+                )
+            };
             state_transaction
                 .world
                 .citizens
@@ -14951,849 +15187,6 @@ pub mod isi {
         }
     }
 
-    fn ensure_zk_ace_nonzero(label: &str, value: &[u8; 32]) -> Result<(), Error> {
-        if *value == [0u8; 32] {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(format!("{label} must be nonzero")),
-            ));
-        }
-        Ok(())
-    }
-
-    fn ensure_zk_ace_nonempty(label: &str, value: &str) -> Result<(), Error> {
-        if value.trim().is_empty() {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(format!("{label} must be non-empty")),
-            ));
-        }
-        Ok(())
-    }
-
-    fn ensure_zk_ace_action_and_domain(action_class: &str, domain_tag: &str) -> Result<(), Error> {
-        if action_class != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "ZK-ACE action class is not transparent_asset_transfer".into(),
-            ));
-        }
-        if domain_tag != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "ZK-ACE domain tag is not iroha:zk-ace:pq-authorization:v0".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    fn canonical_zk_ace_allowed_accounts(
-        state_transaction: &StateTransaction<'_, '_>,
-        allowed_accounts: &[AccountId],
-    ) -> Result<Vec<AccountId>, Error> {
-        if allowed_accounts.is_empty() {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "ZK-ACE allowed_accounts must be non-empty".into(),
-                ),
-            ));
-        }
-        if allowed_accounts.len() > iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(format!(
-                    "ZK-ACE allowed_accounts exceeds maximum of {}",
-                    iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS
-                )),
-            ));
-        }
-        let mut canonical = allowed_accounts.to_vec();
-        canonical.sort();
-        for account in &canonical {
-            if state_transaction.world.accounts.get(account).is_none() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "ZK-ACE allowed account `{account}` does not exist"
-                    )),
-                ));
-            }
-        }
-        if canonical.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "ZK-ACE allowed_accounts must not contain duplicates".into(),
-                ),
-            ));
-        }
-        Ok(canonical)
-    }
-
-    fn has_zk_ace_identity_manage_permission(
-        state_transaction: &StateTransaction<'_, '_>,
-        authority: &AccountId,
-        account: &AccountId,
-        asset: &AssetDefinitionId,
-    ) -> bool {
-        let required: Permission = CanManageZkAceIdentityForAccount {
-            account: account.clone(),
-            asset: asset.clone(),
-        }
-        .into();
-        if state_transaction
-            .world
-            .account_permissions
-            .get(authority)
-            .is_some_and(|permissions| permissions.iter().any(|permission| permission == &required))
-        {
-            return true;
-        }
-        state_transaction
-            .world
-            .account_roles
-            .iter()
-            .filter_map(|(role_key, ())| {
-                if &role_key.account == authority {
-                    state_transaction.world.roles.get(&role_key.id)
-                } else {
-                    None
-                }
-            })
-            .any(|role| role.permissions().any(|permission| permission == &required))
-    }
-
-    fn ensure_zk_ace_identity_manage_authority(
-        state_transaction: &StateTransaction<'_, '_>,
-        authority: &AccountId,
-        asset: &AssetDefinitionId,
-        allowed_accounts: &[AccountId],
-    ) -> Result<(), Error> {
-        for account in allowed_accounts {
-            if authority == account {
-                continue;
-            }
-            if !has_zk_ace_identity_manage_permission(state_transaction, authority, account, asset)
-            {
-                return Err(FindError::Permission(Box::new(Permission::new(
-                    "CanManageZkAceIdentityForAccount".into(),
-                    Json::new(CanManageZkAceIdentityForAccount {
-                        account: account.clone(),
-                        asset: asset.clone(),
-                    }),
-                )))
-                .into());
-            }
-        }
-        Ok(())
-    }
-
-    fn resolve_active_zk_ace_binding(
-        state_transaction: &StateTransaction<'_, '_>,
-        id: &VerifyingKeyId,
-    ) -> Result<crate::state::ZkAssetVerifierBinding, Error> {
-        if id.backend.as_str() != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "ZK-ACE verifier key must use stark/fri/sha256-goldilocks".into(),
-                ),
-            ));
-        }
-        let record = state_transaction
-            .world
-            .verifying_keys
-            .get(id)
-            .cloned()
-            .ok_or_else(|| {
-                FindError::Permission(Box::new(Permission::new(
-                    "VerifyingKeyMissing".into(),
-                    iroha_primitives::json::Json::from(
-                        format!("{}::{}", id.backend, id.name).as_str(),
-                    ),
-                )))
-            })?;
-        if record.status != ConfidentialStatus::Active {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "ZK-ACE verifying key is not active".into(),
-            ));
-        }
-        if record.backend != BackendTag::Stark
-            || !circuit_id_matches(
-                id.backend.as_str(),
-                &record.circuit_id,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-            )
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "ZK-ACE verifying key is not bound to zk_ace_pq_authorization_v0".into(),
-            ));
-        }
-        if record.public_inputs_schema_hash
-            != iroha_data_model::zk::zk_ace_public_inputs_schema_hash_v1()
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "ZK-ACE verifying key public input schema hash mismatch".into(),
-            ));
-        }
-        let key = record.key.as_ref().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "ZK-ACE verifying key bytes missing".into(),
-            )
-        })?;
-        if key.backend.as_str() != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "ZK-ACE verifying key backend mismatch".into(),
-            ));
-        }
-        #[cfg(feature = "zk-stark")]
-        {
-            let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-                norito::decode_from_bytes(&key.bytes).map_err(|_| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE verifying key payload is not a STARK/FRI verifier key".into(),
-                    )
-                })?;
-            crate::zk_stark::validate_zk_ace_stark_fri_verifying_key_payload(&vk_payload)
-                .map_err(|err| InstructionExecutionError::InvariantViolation(err.into()))?;
-            Ok(crate::state::ZkAssetVerifierBinding {
-                id: id.clone(),
-                commitment: record.commitment,
-            })
-        }
-        #[cfg(not(feature = "zk-stark"))]
-        {
-            Err(InstructionExecutionError::InvariantViolation(
-                "ZK-ACE STARK verifier is not enabled".into(),
-            ))
-        }
-    }
-
-    fn ensure_zk_ace_record_active(
-        record: &crate::state::ZkAceIdentityRecord,
-    ) -> Result<(), Error> {
-        match record.status {
-            crate::state::ZkAceIdentityStatus::Active => Ok(()),
-            crate::state::ZkAceIdentityStatus::Rotated => {
-                Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE identity commitment was rotated out".into(),
-                ))
-            }
-            crate::state::ZkAceIdentityStatus::Revoked => {
-                Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE identity commitment was revoked".into(),
-                ))
-            }
-        }
-    }
-
-    fn validate_zk_ace_proof_envelope(
-        label: &str,
-        attachment: &iroha_data_model::proof::ProofAttachment,
-        record: &VerifyingKeyRecord,
-        public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
-    ) -> Result<ZkOpenVerifyEnvelope, Error> {
-        if attachment.backend.as_str() != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-            || attachment.proof.backend.as_str()
-                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-            || attachment.vk_ref.backend.as_str()
-                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} proof must use stark/fri/sha256-goldilocks").into(),
-            ));
-        }
-        let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
-            .map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("{label} proof must use OpenVerifyEnvelope payload"),
-                ))
-            })?;
-        env.validate_for_admission()
-            .map_err(|err| open_verify_envelope_validation_error(label, err))?;
-        if env.backend != BackendTag::Stark {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
-            ));
-        }
-        if !env.aux.is_empty() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} envelope auxiliary bytes must be empty").into(),
-            ));
-        }
-        if !circuit_id_matches(
-            attachment.backend.as_str(),
-            &record.circuit_id,
-            &env.circuit_id,
-        ) || !circuit_id_matches(
-            attachment.backend.as_str(),
-            &record.circuit_id,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        ) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} verifying key circuit mismatch").into(),
-            ));
-        }
-        if env.vk_hash == [0u8; 32] {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero").into(),
-            ));
-        }
-        if env.vk_hash != record.commitment {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} verifying key commitment mismatch").into(),
-            ));
-        }
-        let expected_public_inputs = norito::to_bytes(public_inputs).map_err(|_| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                format!("{label} public inputs are not canonical"),
-            ))
-        })?;
-        if env.public_inputs != expected_public_inputs {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} public inputs do not match submitted fields").into(),
-            ));
-        }
-        let expected_word = iroha_data_model::zk::derive_zk_ace_public_inputs_digest(public_inputs)
-            .map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("{label} public input digest failed"),
-                ))
-            })?;
-        let open: StarkFriOpenProofV1 =
-            norito::decode_from_bytes(&env.proof_bytes).map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    format!("{label} malformed STARK/FRI proof wrapper"),
-                ))
-            })?;
-        if open.version != 1 {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} unsupported STARK/FRI wrapper version").into(),
-            ));
-        }
-        if open.public_inputs != vec![vec![expected_word]] {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} STARK public inputs mismatch").into(),
-            ));
-        }
-        if open.envelope_bytes.is_empty() {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(format!("{label} empty STARK proof bytes")),
-            ));
-        }
-        Ok(env)
-    }
-
-    impl Execute for zk::RegisterZkAceIdentityCommitment {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            ensure_zk_ace_nonzero("ZK-ACE identity commitment", self.identity_commitment())?;
-            ensure_zk_ace_nonzero("ZK-ACE policy hash", self.policy_hash())?;
-            ensure_zk_ace_nonempty("ZK-ACE action_class", self.action_class())?;
-            ensure_zk_ace_nonempty("ZK-ACE domain_tag", self.domain_tag())?;
-            ensure_zk_ace_action_and_domain(self.action_class(), self.domain_tag())?;
-            state_transaction
-                .world
-                .asset_definition_mut(self.asset())
-                .map_err(Error::from)?;
-            let allowed_accounts =
-                canonical_zk_ace_allowed_accounts(state_transaction, self.allowed_accounts())?;
-            ensure_zk_ace_identity_manage_authority(
-                state_transaction,
-                authority,
-                self.asset(),
-                &allowed_accounts,
-            )?;
-
-            let binding = resolve_active_zk_ace_binding(state_transaction, self.verifier_key())?;
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(self.asset())
-                .cloned()
-                .unwrap_or_default();
-            if st
-                .zk_ace_identities
-                .contains_key(self.identity_commitment())
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE identity commitment is already registered".into(),
-                ));
-            }
-            st.zk_ace_identities.insert(
-                *self.identity_commitment(),
-                crate::state::ZkAceIdentityRecord {
-                    policy_hash: *self.policy_hash(),
-                    allowed_accounts,
-                    action_class: self.action_class().trim().to_owned(),
-                    domain_tag: self.domain_tag().trim().to_owned(),
-                    verifier: binding,
-                    status: crate::state::ZkAceIdentityStatus::Active,
-                    successor: None,
-                },
-            );
-            let key: Name = "zk.ace.identity.last".parse().unwrap();
-            let mut summary_map = norito::json::native::Map::new();
-            summary_map.insert(
-                "event".into(),
-                norito::json::native::Value::from("registered"),
-            );
-            summary_map.insert(
-                "identity_commitment".into(),
-                norito::json::native::Value::from(hex::encode(self.identity_commitment())),
-            );
-            summary_map.insert(
-                "policy_hash".into(),
-                norito::json::native::Value::from(hex::encode(self.policy_hash())),
-            );
-            let summary = Json::from(norito::json::native::Value::Object(summary_map));
-            state_transaction
-                .world
-                .asset_definition_mut(self.asset())
-                .map_err(Error::from)
-                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
-                    iroha_data_model::prelude::MetadataChanged {
-                        target: self.asset().clone(),
-                        key,
-                        value: summary,
-                    },
-                ),
-            ));
-            state_transaction
-                .world
-                .zk_assets
-                .remove(self.asset().clone());
-            state_transaction
-                .world
-                .zk_assets
-                .insert(self.asset().clone(), st);
-            Ok(())
-        }
-    }
-
-    impl Execute for zk::RotateZkAceIdentityCommitment {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            ensure_zk_ace_nonzero(
-                "old ZK-ACE identity commitment",
-                self.old_identity_commitment(),
-            )?;
-            ensure_zk_ace_nonzero(
-                "new ZK-ACE identity commitment",
-                self.new_identity_commitment(),
-            )?;
-            ensure_zk_ace_nonzero("ZK-ACE policy hash", self.policy_hash())?;
-            ensure_zk_ace_nonempty("ZK-ACE action_class", self.action_class())?;
-            ensure_zk_ace_nonempty("ZK-ACE domain_tag", self.domain_tag())?;
-            ensure_zk_ace_action_and_domain(self.action_class(), self.domain_tag())?;
-            if self.old_identity_commitment() == self.new_identity_commitment() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "ZK-ACE rotation requires a distinct replacement commitment".into(),
-                    ),
-                ));
-            }
-            state_transaction
-                .world
-                .asset_definition_mut(self.asset())
-                .map_err(Error::from)?;
-            let allowed_accounts =
-                canonical_zk_ace_allowed_accounts(state_transaction, self.allowed_accounts())?;
-            ensure_zk_ace_identity_manage_authority(
-                state_transaction,
-                authority,
-                self.asset(),
-                &allowed_accounts,
-            )?;
-            let binding = resolve_active_zk_ace_binding(state_transaction, self.verifier_key())?;
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(self.asset())
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE asset has no identity state".into(),
-                    )
-                })?;
-            if st
-                .zk_ace_identities
-                .contains_key(self.new_identity_commitment())
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "replacement ZK-ACE identity commitment is already registered".into(),
-                ));
-            }
-            let old = st
-                .zk_ace_identities
-                .get_mut(self.old_identity_commitment())
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE identity commitment is unknown".into(),
-                    )
-                })?;
-            ensure_zk_ace_record_active(old)?;
-            old.status = crate::state::ZkAceIdentityStatus::Rotated;
-            old.successor = Some(*self.new_identity_commitment());
-            st.zk_ace_identities.insert(
-                *self.new_identity_commitment(),
-                crate::state::ZkAceIdentityRecord {
-                    policy_hash: *self.policy_hash(),
-                    allowed_accounts,
-                    action_class: self.action_class().trim().to_owned(),
-                    domain_tag: self.domain_tag().trim().to_owned(),
-                    verifier: binding,
-                    status: crate::state::ZkAceIdentityStatus::Active,
-                    successor: None,
-                },
-            );
-            state_transaction
-                .world
-                .zk_assets
-                .remove(self.asset().clone());
-            state_transaction
-                .world
-                .zk_assets
-                .insert(self.asset().clone(), st);
-            Ok(())
-        }
-    }
-
-    impl Execute for zk::RevokeZkAceIdentityCommitment {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            ensure_zk_ace_nonzero("ZK-ACE identity commitment", self.identity_commitment())?;
-            if let Some(reason_hash) = self.reason_hash() {
-                ensure_zk_ace_nonzero("ZK-ACE revocation reason hash", reason_hash)?;
-            }
-            state_transaction
-                .world
-                .asset_definition_mut(self.asset())
-                .map_err(Error::from)?;
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(self.asset())
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE asset has no identity state".into(),
-                    )
-                })?;
-            let allowed_accounts = st
-                .zk_ace_identities
-                .get(self.identity_commitment())
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE identity commitment is unknown".into(),
-                    )
-                })?
-                .allowed_accounts
-                .clone();
-            ensure_zk_ace_identity_manage_authority(
-                state_transaction,
-                authority,
-                self.asset(),
-                &allowed_accounts,
-            )?;
-            let record = st
-                .zk_ace_identities
-                .get_mut(self.identity_commitment())
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE identity commitment is unknown".into(),
-                    )
-                })?;
-            record.status = crate::state::ZkAceIdentityStatus::Revoked;
-            record.successor = None;
-            state_transaction
-                .world
-                .zk_assets
-                .remove(self.asset().clone());
-            state_transaction
-                .world
-                .zk_assets
-                .insert(self.asset().clone(), st);
-            Ok(())
-        }
-    }
-
-    impl Execute for zk::SubmitZkAceAuthorizedTransfer {
-        #[allow(clippy::too_many_lines)]
-        fn execute(
-            self,
-            _authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let proof_amount =
-                quantity_to_u128_proof_scalar(self.amount(), "ZK-ACE transfer amount")?;
-            validate_asset_quantity(state_transaction, self.asset(), self.amount())?;
-            if self.amount().is_zero() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "ZK-ACE authorized transfer amount must be greater than zero".into(),
-                    ),
-                ));
-            }
-            ensure_zk_ace_nonzero("ZK-ACE identity commitment", self.identity_commitment())?;
-            ensure_zk_ace_nonzero("ZK-ACE tx digest", self.tx_digest())?;
-            ensure_zk_ace_nonzero("ZK-ACE replay nullifier", self.replay_nullifier())?;
-            ensure_zk_ace_nonzero("ZK-ACE policy hash", self.policy_hash())?;
-            ensure_zk_ace_nonempty("ZK-ACE action_class", self.action_class())?;
-            ensure_zk_ace_nonempty("ZK-ACE domain_tag", self.domain_tag())?;
-            if self.chain_id() != &state_transaction.chain_id {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE proof is bound to a different chain id".into(),
-                ));
-            }
-            if self.action_class().trim()
-                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE action_class is not transparent_asset_transfer".into(),
-                ));
-            }
-            if self.domain_tag().trim()
-                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE domain_tag mismatch".into(),
-                ));
-            }
-            let expected_tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
-                self.from(),
-                self.to(),
-                self.asset(),
-                proof_amount,
-                self.chain_id(),
-                self.action_class().trim(),
-                self.policy_hash(),
-            );
-            if *self.tx_digest() != expected_tx_digest {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE tx_digest does not match transfer fields".into(),
-                ));
-            }
-            if crate::zk::is_stark_fri_v1_backend(self.proof().backend.as_str())
-                && !state_transaction.zk.stark.enabled
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "stark verification is disabled in node configuration".into(),
-                ));
-            }
-            let policy_mode = apply_policy_if_due(state_transaction, self.asset())?.mode();
-            if matches!(policy_mode, ConfidentialPolicyMode::ShieldedOnly) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE transparent transfer not permitted by asset policy".into(),
-                ));
-            }
-
-            let mut st = state_transaction
-                .world
-                .zk_assets
-                .get(self.asset())
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE asset has no identity state".into(),
-                    )
-                })?;
-            if st
-                .zk_ace_replay_nullifiers
-                .contains(self.replay_nullifier())
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE replay nullifier already consumed".into(),
-                ));
-            }
-            let identity_record = st
-                .zk_ace_identities
-                .get(self.identity_commitment())
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation(
-                        "ZK-ACE identity commitment is unknown".into(),
-                    )
-                })?;
-            ensure_zk_ace_record_active(&identity_record)?;
-            if identity_record.policy_hash != *self.policy_hash() {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE policy hash mismatch".into(),
-                ));
-            }
-            if identity_record.action_class != self.action_class().trim()
-                || identity_record.domain_tag != self.domain_tag().trim()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE identity record action/domain mismatch".into(),
-                ));
-            }
-            if !identity_record.allowed_accounts.contains(self.from()) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE source account is not in the identity allowlist".into(),
-                ));
-            }
-            let attachment = self.proof();
-            if attachment.backend != attachment.proof.backend {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE proof backend mismatch".into(),
-                ));
-            }
-            enforce_vk_binding(&identity_record.verifier, attachment)?;
-            let (vk_box, vk_record) = resolve_asset_vk(
-                state_transaction,
-                Some(&identity_record.verifier),
-                attachment,
-            )?;
-            let vk_record = vk_record.ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE verifier record missing".into(),
-                )
-            })?;
-            let public_inputs: iroha_data_model::zk::ZkAcePublicInputsV1 =
-                norito::decode_from_bytes(&{
-                    let env: ZkOpenVerifyEnvelope =
-                        norito::decode_from_bytes(&attachment.proof.bytes).map_err(|_| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "ZK-ACE proof must use OpenVerifyEnvelope payload".into(),
-                                ),
-                            )
-                        })?;
-                    env.validate_for_admission().map_err(|err| {
-                        open_verify_envelope_validation_error("ZK-ACE authorization", err)
-                    })?;
-                    env.public_inputs
-                })
-                .map_err(|_| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "ZK-ACE malformed public inputs".into(),
-                        ),
-                    )
-                })?;
-            let expected_public_inputs =
-                iroha_data_model::zk::ZkAcePublicInputsV1::transparent_transfer(
-                    *self.identity_commitment(),
-                    *self.tx_digest(),
-                    *self.tx_digest(),
-                    self.chain_id().clone(),
-                    *self.replay_nullifier(),
-                    *self.policy_hash(),
-                    self.from().clone(),
-                    self.to().clone(),
-                    self.asset().clone(),
-                    proof_amount,
-                    attachment.vk_ref.clone(),
-                );
-            if public_inputs != expected_public_inputs {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "ZK-ACE public inputs do not match submitted transfer".into(),
-                ));
-            }
-            let _env = validate_zk_ace_proof_envelope(
-                "ZK-ACE authorization",
-                attachment,
-                &vk_record,
-                &public_inputs,
-            )?;
-            enforce_vk_max_proof_bytes(
-                "ZK-ACE authorization",
-                &vk_record,
-                attachment.proof.bytes.len(),
-            )?;
-            state_transaction.register_confidential_proof(attachment.proof.bytes.len())?;
-            let report = crate::zk::verify_backend_with_timing_checked(
-                attachment.backend.as_str(),
-                &attachment.proof,
-                Some(&vk_box),
-                &state_transaction.zk,
-            );
-            if !report.ok {
-                if state_transaction.trust_committed_execution_results {
-                    iroha_logger::warn!(
-                        backend = attachment.backend.as_str(),
-                        proof_len = attachment.proof.bytes.len(),
-                        "replay rejected committed ZK-ACE authorization after local proof verifier rejection"
-                    );
-                }
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "invalid ZK-ACE authorization proof".into(),
-                ));
-            }
-            st.zk_ace_replay_nullifiers.insert(*self.replay_nullifier());
-
-            let source_asset_id =
-                privacy_public_asset_id(state_transaction, self.asset(), self.from())?;
-            let transfer =
-                Transfer::asset_quantity(source_asset_id, self.amount().clone(), self.to().clone());
-            transfer.execute(self.from(), state_transaction)?;
-
-            let proof_hash = crate::zk::hash_proof(&attachment.proof);
-            let key: Name = "zk.ace.transfer.last".parse().unwrap();
-            let mut summary_map = norito::json::native::Map::new();
-            summary_map.insert(
-                "identity_commitment".into(),
-                norito::json::native::Value::from(hex::encode(self.identity_commitment())),
-            );
-            summary_map.insert(
-                "replay_nullifier".into(),
-                norito::json::native::Value::from(hex::encode(self.replay_nullifier())),
-            );
-            summary_map.insert(
-                "tx_digest".into(),
-                norito::json::native::Value::from(hex::encode(self.tx_digest())),
-            );
-            summary_map.insert(
-                "policy_hash".into(),
-                norito::json::native::Value::from(hex::encode(self.policy_hash())),
-            );
-            summary_map.insert(
-                "proof_hash".into(),
-                norito::json::native::Value::from(hex::encode(proof_hash)),
-            );
-            summary_map.insert(
-                "from".into(),
-                norito::json::native::Value::from(self.from().to_string()),
-            );
-            summary_map.insert(
-                "to".into(),
-                norito::json::native::Value::from(self.to().to_string()),
-            );
-            summary_map.insert(
-                "amount".into(),
-                norito::json::native::Value::from(self.amount().to_string()),
-            );
-            let summary = Json::from(norito::json::native::Value::Object(summary_map));
-            state_transaction
-                .world
-                .asset_definition_mut(self.asset())
-                .map_err(Error::from)
-                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
-            state_transaction.world.emit_events(Some(
-                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
-                    iroha_data_model::prelude::MetadataChanged {
-                        target: self.asset().clone(),
-                        key,
-                        value: summary,
-                    },
-                ),
-            ));
-            state_transaction
-                .world
-                .zk_assets
-                .remove(self.asset().clone());
-            state_transaction
-                .world
-                .zk_assets
-                .insert(self.asset().clone(), st);
-            Ok(())
-        }
-    }
-
     impl Execute for zk::ScheduleConfidentialPolicyTransition {
         fn execute(
             self,
@@ -20292,6 +19685,109 @@ pub mod isi {
                 .map(|ad| ad.id().clone())
                 .collect();
 
+            for account_id in &relabeled_accounts {
+                if account_id == &state_transaction.gov.bond_escrow_account
+                    || account_id == &state_transaction.gov.slash_receiver_account
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account_id} is configured as active governance bond custody; update governance config first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((referendum_id, _)) = state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .find(|(_, locks)| {
+                        locks.locks.values().any(|record| {
+                            record.custody.as_ref().is_some_and(|custody| {
+                                custody.bond_escrow_account == *account_id
+                                    || custody.slash_receiver_account == *account_id
+                            })
+                        })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account_id} is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((proposal_id, _)) = state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .find(|(_, proposal)| {
+                        matches!(
+                            proposal.status,
+                            crate::state::GovernanceProposalStatus::Proposed
+                                | crate::state::GovernanceProposalStatus::Approved
+                        ) && validation_fee_plain_electorate_rules(&proposal.kind).is_some_and(
+                            |rules| {
+                                rules.bond_escrow_account == *account_id
+                                    || rules.slash_receiver_account == *account_id
+                            },
+                        )
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: account {account_id} is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+            for asset_definition_id in &remove_asset_definitions {
+                if let Some((referendum_id, _)) = state_transaction
+                    .world
+                    .governance_locks
+                    .iter()
+                    .find(|(_, locks)| {
+                        locks.locks.values().any(|record| {
+                            record.custody.as_ref().is_some_and(|custody| {
+                                custody.asset_definition_id == *asset_definition_id
+                            })
+                        })
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained by immutable governance lock custody (referendum {referendum_id}); clear the governance locks first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                if let Some((proposal_id, _)) = state_transaction
+                    .world
+                    .governance_proposals
+                    .iter()
+                    .find(|(_, proposal)| {
+                        matches!(
+                            proposal.status,
+                            crate::state::GovernanceProposalStatus::Proposed
+                                | crate::state::GovernanceProposalStatus::Approved
+                        ) && validation_fee_plain_electorate_rules(&proposal.kind)
+                            .is_some_and(|rules| rules.voting_asset_id == *asset_definition_id)
+                    })
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is retained by immutable validation-fee proposal custody (proposal {proposal_id:?}); reject or supersede the proposal first"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+            }
+
             remove_domain_associated_permissions(state_transaction, &domain_id);
 
             state_transaction
@@ -21162,8 +20658,6 @@ pub mod isi {
         use crate::smartcontracts::triggers::set::SetReadOnly;
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
-        #[cfg(feature = "zk-stark")]
-        use iroha_data_model::zk::{StarkFriOpenProofV1, ZkAcePublicInputsV1};
         #[allow(unused_imports)]
         use iroha_data_model::{
             IntoKeyValue,
@@ -21213,7 +20707,7 @@ pub mod isi {
             },
             parameter::system::{SumeragiNposParameters, SumeragiParameter},
             prelude::Parameter,
-            zk::{OpenVerifyEnvelope, ZkAceWitnessV1},
+            zk::OpenVerifyEnvelope,
         };
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
             Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
@@ -22846,7 +22340,6 @@ pub mod isi {
                 ProofBox::new("halo2/ipa".into(), vec![0xA5]),
                 VerifyingKeyId::new("halo2/ipa", "missing"),
             );
-            let chain_id = stx.chain_id.clone();
 
             for (literal, expected_message) in [
                 ("1.5", "must have scale 0"),
@@ -22870,28 +22363,6 @@ pub mod isi {
                 assert!(
                     smart_contract_instruction_error_message(error).contains(expected_message),
                     "unexpected unshield proof-boundary error for {literal}"
-                );
-
-                let transfer = iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer::new(
-                    ALICE_ID.clone(),
-                    ALICE_ID.clone(),
-                    asset.clone(),
-                    amount,
-                    [0x21; 32],
-                    [0x22; 32],
-                    chain_id.clone(),
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                    [0x23; 32],
-                    [0x24; 32],
-                    proof.clone(),
-                );
-                let error = transfer
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("invalid proof scalar must reject ZK-ACE transfer");
-                assert!(
-                    smart_contract_instruction_error_message(error).contains(expected_message),
-                    "unexpected ZK-ACE proof-boundary error for {literal}"
                 );
             }
 
@@ -27374,331 +26845,6 @@ seiyaku GovernanceLifecycle {
                 .clone()
         }
 
-        struct ZkAceTransferFixture {
-            state: State,
-            asset_def_id: AssetDefinitionId,
-            #[cfg(feature = "zk-stark")]
-            receiver: AccountId,
-            vk_id: VerifyingKeyId,
-            #[cfg(feature = "zk-stark")]
-            witness: ZkAceWitnessV1,
-            identity_commitment: [u8; 32],
-            policy_hash: [u8; 32],
-        }
-
-        #[cfg(feature = "zk-stark")]
-        const ZK_ACE_TEST_MAX_PROOF_BYTES: u32 =
-            crate::zk_stark::ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES;
-
-        fn zk_ace_test_witness(seed: u8) -> ZkAceWitnessV1 {
-            ZkAceWitnessV1 {
-                identity_root: [seed; 32],
-                identity_blinding: [seed.wrapping_add(1); 32],
-                replay_secret: [seed.wrapping_add(2); 32],
-            }
-        }
-
-        fn zk_ace_identity_commitment_for_test(witness: &ZkAceWitnessV1) -> [u8; 32] {
-            iroha_data_model::zk::derive_zk_ace_identity_commitment(
-                &witness.identity_root,
-                &witness.identity_blinding,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-            )
-        }
-
-        fn zk_ace_transfer_fixture() -> ZkAceTransferFixture {
-            let domain_id: DomainId =
-                DomainId::try_new("wonderland", "universal").expect("domain id parses");
-            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let receiver = gen_account_in(&domain_id).0;
-            let alice = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
-            let receiver_account = new_account_in_domain(&receiver).build(&ALICE_ID);
-            let asset_def_id =
-                AssetDefinitionId::new(domain_id, "zkace".parse().expect("asset name"));
-            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
-                .with_name(asset_def_id.name().to_string())
-                .build(&ALICE_ID);
-            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100_u32));
-            let world = World::with_assets(
-                [domain],
-                [alice, receiver_account],
-                [asset_definition],
-                [alice_asset],
-                [],
-            );
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(world, kura, query_handle);
-            state.zk.stark.enabled = true;
-            state.zk.halo2.enabled = false;
-            let witness = zk_ace_test_witness(0x11);
-            let identity_commitment = zk_ace_identity_commitment_for_test(&witness);
-
-            ZkAceTransferFixture {
-                state,
-                asset_def_id,
-                #[cfg(feature = "zk-stark")]
-                receiver,
-                vk_id: VerifyingKeyId::new(
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-                ),
-                #[cfg(feature = "zk-stark")]
-                witness,
-                identity_commitment,
-                policy_hash: [0x42; 32],
-            }
-        }
-
-        fn zk_ace_verifying_key_box_for_test() -> VerifyingKeyBox {
-            #[cfg(feature = "zk-stark")]
-            {
-                let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-                    version: 1,
-                    circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
-                        .to_owned(),
-                    n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_N_LOG2,
-                    blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
-                    fold_arity: 2,
-                    queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
-                    merkle_arity: 2,
-                    hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
-                };
-                VerifyingKeyBox::new(
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-                    norito::to_bytes(&payload).expect("encode ZK-ACE STARK verifying key"),
-                )
-            }
-            #[cfg(not(feature = "zk-stark"))]
-            {
-                VerifyingKeyBox::new(
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-                    vec![0xa5; 32],
-                )
-            }
-        }
-
-        #[cfg(feature = "zk-stark")]
-        fn weak_zk_ace_verifying_key_box_for_test() -> VerifyingKeyBox {
-            let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-                version: 1,
-                circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-                n_log2: 4,
-                blowup_log2: 1,
-                fold_arity: 2,
-                queries: 2,
-                merkle_arity: 2,
-                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
-            };
-            VerifyingKeyBox::new(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-                norito::to_bytes(&payload).expect("encode weak ZK-ACE STARK verifying key"),
-            )
-        }
-
-        fn install_zk_ace_verifier(
-            stx: &mut StateTransaction<'_, '_>,
-            vk_id: &VerifyingKeyId,
-            status: ConfidentialStatus,
-            max_proof_bytes: u32,
-        ) -> [u8; 32] {
-            let vk_box = zk_ace_verifying_key_box_for_test();
-            let commitment = hash_vk(&vk_box);
-            let mut record = VerifyingKeyRecord::new_with_owner(
-                1,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-                None,
-                "zk-ace",
-                BackendTag::Stark,
-                "goldilocks",
-                iroha_data_model::zk::zk_ace_public_inputs_schema_hash_v1(),
-                commitment,
-            );
-            record.vk_len =
-                u32::try_from(vk_box.bytes.len()).expect("test verifying key length fits");
-            record.max_proof_bytes = max_proof_bytes;
-            record.status = status;
-            record.key = Some(vk_box);
-            record.gas_schedule_id = Some("stark_default".into());
-            stx.world.verifying_keys.insert(vk_id.clone(), record);
-            commitment
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[allow(clippy::too_many_arguments)]
-        fn zk_ace_proof_attachment(
-            chain_id: iroha_data_model::ChainId,
-            from: AccountId,
-            to: AccountId,
-            asset: AssetDefinitionId,
-            amount: u128,
-            identity_commitment: [u8; 32],
-            witness: &ZkAceWitnessV1,
-            policy_hash: [u8; 32],
-            vk_id: VerifyingKeyId,
-            vk_commitment: [u8; 32],
-        ) -> (ProofAttachment, [u8; 32], [u8; 32]) {
-            assert_eq!(
-                identity_commitment,
-                zk_ace_identity_commitment_for_test(witness),
-                "test witness must match the submitted identity commitment"
-            );
-            let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
-                &from,
-                &to,
-                &asset,
-                amount,
-                &chain_id,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-                &policy_hash,
-            );
-            let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
-                &witness.replay_secret,
-                &tx_digest,
-                &chain_id,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-            );
-            let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
-                identity_commitment,
-                tx_digest,
-                tx_digest,
-                chain_id,
-                replay_nullifier,
-                policy_hash,
-                from,
-                to,
-                asset,
-                amount,
-                vk_id.clone(),
-            );
-            let vk_box = zk_ace_verifying_key_box_for_test();
-            assert_eq!(
-                vk_commitment,
-                hash_vk(&vk_box),
-                "test VK commitment must match the canonical ZK-ACE VK"
-            );
-            let proof_box = crate::zk::prove_stark_fri_zk_ace_open_verify_envelope(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-                &vk_box,
-                &public_inputs,
-                witness,
-            )
-            .expect("build valid ZK-ACE STARK proof");
-            let mut attachment = ProofAttachment::new_ref(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
-                proof_box,
-                vk_id,
-            );
-            attachment.vk_commitment = Some(vk_commitment);
-            (attachment, tx_digest, replay_nullifier)
-        }
-
-        #[cfg(feature = "zk-stark")]
-        fn mutate_zk_ace_envelope(
-            mut proof: ProofAttachment,
-            mutate: impl FnOnce(&mut OpenVerifyEnvelope),
-        ) -> ProofAttachment {
-            let mut envelope: OpenVerifyEnvelope =
-                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
-            mutate(&mut envelope);
-            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
-            proof
-        }
-
-        #[cfg(feature = "zk-stark")]
-        fn mutate_zk_ace_envelope_public_inputs(mut proof: ProofAttachment) -> ProofAttachment {
-            let mut envelope: OpenVerifyEnvelope =
-                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
-            let mut public_inputs: ZkAcePublicInputsV1 =
-                norito::decode_from_bytes(&envelope.public_inputs).expect("decode public inputs");
-            public_inputs.amount = public_inputs
-                .amount
-                .checked_add(1)
-                .expect("test amount mutation stays in bounds");
-            envelope.public_inputs =
-                norito::to_bytes(&public_inputs).expect("encode mutated public inputs");
-            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
-            proof
-        }
-
-        #[cfg(feature = "zk-stark")]
-        fn mutate_zk_ace_stark_public_input(mut proof: ProofAttachment) -> ProofAttachment {
-            let mut envelope: OpenVerifyEnvelope =
-                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
-            let mut open: StarkFriOpenProofV1 =
-                norito::decode_from_bytes(&envelope.proof_bytes).expect("decode STARK wrapper");
-            let first_word = open
-                .public_inputs
-                .first_mut()
-                .and_then(|column| column.first_mut())
-                .expect("fixture carries one STARK public input");
-            first_word[0] ^= 0x01;
-            envelope.proof_bytes = norito::to_bytes(&open).expect("encode mutated STARK wrapper");
-            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
-            proof
-        }
-
-        #[cfg(feature = "zk-stark")]
-        fn mutate_zk_ace_inner_stark_envelope_bytes(mut proof: ProofAttachment) -> ProofAttachment {
-            let mut envelope: OpenVerifyEnvelope =
-                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
-            let mut open: StarkFriOpenProofV1 =
-                norito::decode_from_bytes(&envelope.proof_bytes).expect("decode STARK wrapper");
-            let byte = open
-                .envelope_bytes
-                .last_mut()
-                .expect("fixture carries an inner STARK envelope");
-            *byte ^= 0x01;
-            envelope.proof_bytes = norito::to_bytes(&open).expect("encode mutated STARK wrapper");
-            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
-            proof
-        }
-
-        #[cfg(feature = "zk-stark")]
-        fn mutate_zk_ace_envelope_vk_hash(
-            mut proof: ProofAttachment,
-            vk_hash: [u8; 32],
-        ) -> ProofAttachment {
-            let mut envelope: OpenVerifyEnvelope =
-                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
-            envelope.vk_hash = vk_hash;
-            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
-            proof
-        }
-
-        #[allow(clippy::too_many_arguments)]
-        #[cfg(feature = "zk-stark")]
-        fn zk_ace_transfer_instruction(
-            from: AccountId,
-            to: AccountId,
-            asset: AssetDefinitionId,
-            amount: u128,
-            identity_commitment: [u8; 32],
-            tx_digest: [u8; 32],
-            chain_id: iroha_data_model::ChainId,
-            replay_nullifier: [u8; 32],
-            policy_hash: [u8; 32],
-            proof: ProofAttachment,
-        ) -> iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer {
-            iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer::new(
-                from,
-                to,
-                asset,
-                amount,
-                identity_commitment,
-                tx_digest,
-                chain_id,
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                replay_nullifier,
-                policy_hash,
-                proof,
-            )
-        }
-
         fn commitment_count(
             stx: &StateTransaction<'_, '_>,
             asset_def_id: &AssetDefinitionId,
@@ -27707,1340 +26853,6 @@ seiyaku GovernanceLifecycle {
                 .zk_assets
                 .get(asset_def_id)
                 .map_or(0, |state| state.commitments.len())
-        }
-
-        #[cfg(feature = "zk-stark")]
-        fn seed_zk_ace_call_hash(stx: &mut StateTransaction<'_, '_>, byte: u8) {
-            stx.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_authorized_transfer_records_state_and_rejects_replay() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-            let register_identity = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            );
-            register_identity
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register ZK-ACE identity commitment");
-
-            let amount = 7;
-            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                &fixture.witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                tx_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                fixture.policy_hash,
-                proof.clone(),
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x71);
-            transfer
-                .clone()
-                .execute(&ALICE_ID, &mut stx)
-                .expect("ZK-ACE authorized transfer succeeds with a valid STARK proof");
-
-            let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
-            let receiver_asset = AssetId::new(fixture.asset_def_id.clone(), fixture.receiver);
-            assert_eq!(quantity_balance(&stx, &alice_asset), Quantity::from(93_u32));
-            assert_eq!(
-                quantity_balance(&stx, &receiver_asset),
-                Quantity::from(7_u32)
-            );
-            assert!(
-                stx.world
-                    .zk_assets
-                    .get(&fixture.asset_def_id)
-                    .expect("ZK-ACE state exists")
-                    .zk_ace_replay_nullifiers
-                    .contains(&replay_nullifier)
-            );
-
-            let replay_err = transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("replay nullifier reuse must fail");
-            let msg = smart_contract_instruction_error_message(replay_err);
-            assert!(
-                msg.contains("replay nullifier already consumed"),
-                "unexpected replay error: {msg}"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_authorized_transfer_uses_definition_home_dataspace_on_universal_route() {
-            let fixture = zk_ace_transfer_fixture();
-            let home_dataspace = DataSpaceId::new(8);
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let dataspace_catalog = DataSpaceCatalog::new(vec![
-                DataSpaceMetadata::default(),
-                DataSpaceMetadata {
-                    id: home_dataspace,
-                    alias: "paynet".to_owned(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
-            .expect("dataspace catalog");
-            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
-            stx.world.dataspace_catalog = dataspace_catalog;
-            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-            {
-                let definition = stx
-                    .world
-                    .asset_definition_mut(&fixture.asset_def_id)
-                    .expect("asset definition exists");
-                definition.balance_scope_policy = AssetBalancePolicy::DataspaceRestricted;
-            }
-            stx.world
-                .bind_asset_definition_alias(
-                    &fixture.asset_def_id,
-                    "zkace#paynet".parse().expect("asset alias"),
-                    None,
-                    None,
-                    0,
-                )
-                .expect("bind asset definition alias");
-            let home_source_asset = AssetId::with_scope(
-                fixture.asset_def_id.clone(),
-                ALICE_ID.clone(),
-                AssetBalanceScope::Dataspace(home_dataspace),
-            );
-            let (home_source_asset_id, home_source_asset_value) =
-                Asset::new(home_source_asset.clone(), Quantity::from(100_u32)).into_key_value();
-            stx.world
-                .assets
-                .insert(home_source_asset_id.clone(), home_source_asset_value);
-            stx.world.track_asset_holder(&home_source_asset_id);
-
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register ZK-ACE identity commitment");
-
-            let amount = 7;
-            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                &fixture.witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                tx_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                fixture.policy_hash,
-                proof,
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x72);
-            transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect("ZK-ACE transfer should debit the definition home dataspace");
-
-            assert_eq!(
-                quantity_balance(&stx, &home_source_asset),
-                Quantity::from(93_u32)
-            );
-            let receiver_asset = AssetId::with_scope(
-                fixture.asset_def_id.clone(),
-                fixture.receiver.clone(),
-                AssetBalanceScope::Dataspace(home_dataspace),
-            );
-            assert_eq!(
-                quantity_balance(&stx, &receiver_asset),
-                Quantity::from(7_u32)
-            );
-            let global_source_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
-            assert_eq!(
-                quantity_balance(&stx, &global_source_asset),
-                Quantity::from(100_u32)
-            );
-            let global_receiver_asset =
-                AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
-            assert!(
-                stx.world.assets.get(&global_receiver_asset).is_none(),
-                "definition-home transfer must not create a global receiver bucket"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_identity_allowlist_is_canonical_and_enforced() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-
-            let canonical = super::canonical_zk_ace_allowed_accounts(
-                &stx,
-                &[fixture.receiver.clone(), ALICE_ID.clone()],
-            )
-            .expect("canonical allowlist");
-            let mut expected_canonical = vec![fixture.receiver.clone(), ALICE_ID.clone()];
-            expected_canonical.sort();
-            assert_eq!(canonical, expected_canonical);
-
-            for (allowed_accounts, expected) in [
-                (Vec::new(), "non-empty"),
-                (vec![ALICE_ID.clone(), ALICE_ID.clone()], "duplicates"),
-                (
-                    (0..=iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS)
-                        .map(|_| ALICE_ID.clone())
-                        .collect(),
-                    "exceeds maximum",
-                ),
-            ] {
-                let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                    fixture.asset_def_id.clone(),
-                    fixture.identity_commitment,
-                    fixture.policy_hash,
-                    allowed_accounts,
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                    fixture.vk_id.clone(),
-                )
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("invalid allowlist must fail");
-                let msg = smart_contract_instruction_error_message(err);
-                assert!(msg.contains(expected), "unexpected allowlist error: {msg}");
-            }
-
-            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&fixture.receiver, &mut stx)
-            .expect_err("unauthorized registrar must not bind victim account");
-            let msg = format!("{err:?}");
-            assert!(
-                msg.contains("CanManageZkAceIdentityForAccount"),
-                "unexpected unauthorized registrar error: {msg}"
-            );
-
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register allowlisted ZK-ACE identity commitment");
-
-            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                fixture.receiver.clone(),
-                ALICE_ID.clone(),
-                fixture.asset_def_id.clone(),
-                1,
-                fixture.identity_commitment,
-                &fixture.witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let transfer = zk_ace_transfer_instruction(
-                fixture.receiver,
-                ALICE_ID.clone(),
-                fixture.asset_def_id,
-                1,
-                fixture.identity_commitment,
-                tx_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                fixture.policy_hash,
-                proof,
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x7b);
-            let err = transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("non-allowlisted source must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("source account is not in the identity allowlist"),
-                "unexpected non-allowlisted source error: {msg}"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_identity_management_permission_is_account_scoped() {
-            let fixture = zk_ace_transfer_fixture();
-            let delegate = gen_account_in(fixture.asset_def_id.domain()).0;
-            let outsider = gen_account_in(fixture.asset_def_id.domain()).0;
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
-
-            Register::account(new_account_in_domain(&delegate))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register ZK-ACE delegate account");
-            Register::account(new_account_in_domain(&outsider))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register ZK-ACE outsider account");
-
-            let alice_permission: Permission = CanManageZkAceIdentityForAccount {
-                account: ALICE_ID.clone(),
-                asset: fixture.asset_def_id.clone(),
-            }
-            .into();
-            Grant::account_permission(alice_permission.clone(), delegate.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant delegate authority for Alice ZK-ACE identity");
-            Grant::account_permission(alice_permission, outsider.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant outsider authority only for Alice ZK-ACE identity");
-
-            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                [0x66; 32],
-                fixture.policy_hash,
-                vec![ALICE_ID.clone(), fixture.receiver.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&outsider, &mut stx)
-            .expect_err("partial ZK-ACE account authority must not register a wider allowlist");
-            let msg = format!("{err:?}");
-            assert!(
-                msg.contains("CanManageZkAceIdentityForAccount"),
-                "unexpected partial registration authority error: {msg}"
-            );
-
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&delegate, &mut stx)
-            .expect("delegated account authority registers Alice ZK-ACE identity");
-            let record = stx
-                .world
-                .zk_assets
-                .get(&fixture.asset_def_id)
-                .and_then(|state| state.zk_ace_identities.get(&fixture.identity_commitment))
-                .expect("delegated ZK-ACE registration creates identity record");
-            assert_eq!(record.allowed_accounts, vec![ALICE_ID.clone()]);
-
-            let replacement_commitment = [0x67; 32];
-            let err = iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                replacement_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone(), fixture.receiver.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&delegate, &mut stx)
-            .expect_err("partial ZK-ACE account authority must not rotate to a wider allowlist");
-            let msg = format!("{err:?}");
-            assert!(
-                msg.contains("CanManageZkAceIdentityForAccount"),
-                "unexpected partial rotation authority error: {msg}"
-            );
-
-            let receiver_permission: Permission = CanManageZkAceIdentityForAccount {
-                account: fixture.receiver.clone(),
-                asset: fixture.asset_def_id.clone(),
-            }
-            .into();
-            Grant::account_permission(receiver_permission, delegate.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect("grant delegate authority for receiver ZK-ACE identity");
-            iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                replacement_commitment,
-                fixture.policy_hash,
-                vec![fixture.receiver.clone(), ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&delegate, &mut stx)
-            .expect("fully delegated account authority rotates to the wider allowlist");
-            let record = stx
-                .world
-                .zk_assets
-                .get(&fixture.asset_def_id)
-                .and_then(|state| state.zk_ace_identities.get(&replacement_commitment))
-                .expect("delegated ZK-ACE rotation creates replacement identity record");
-            let mut expected_allowed_accounts = vec![fixture.receiver.clone(), ALICE_ID.clone()];
-            expected_allowed_accounts.sort();
-            assert_eq!(record.allowed_accounts, expected_allowed_accounts);
-
-            iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                replacement_commitment,
-                None,
-            )
-            .execute(&delegate, &mut stx)
-            .expect("fully delegated account authority revokes ZK-ACE identity");
-            let record = stx
-                .world
-                .zk_assets
-                .get(&fixture.asset_def_id)
-                .and_then(|state| state.zk_ace_identities.get(&replacement_commitment))
-                .expect("revoked replacement ZK-ACE identity remains recorded");
-            assert_eq!(record.status, crate::state::ZkAceIdentityStatus::Revoked);
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_rotation_and_revocation_enforce_identity_state() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register initial ZK-ACE identity commitment");
-
-            let replacement_witness = zk_ace_test_witness(0x49);
-            let replacement_commitment = zk_ace_identity_commitment_for_test(&replacement_witness);
-            iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                replacement_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("rotate ZK-ACE identity commitment");
-
-            let (stale_proof, stale_digest, stale_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                4,
-                fixture.identity_commitment,
-                &fixture.witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let stale_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                4,
-                fixture.identity_commitment,
-                stale_digest,
-                stx.chain_id.clone(),
-                stale_nullifier,
-                fixture.policy_hash,
-                stale_proof,
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x74);
-            let err = stale_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("rotated-out identity commitment must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("rotated out"),
-                "unexpected rotated identity error: {msg}"
-            );
-
-            let (active_proof, active_digest, active_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                4,
-                replacement_commitment,
-                &replacement_witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let active_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                4,
-                replacement_commitment,
-                active_digest,
-                stx.chain_id.clone(),
-                active_nullifier,
-                fixture.policy_hash,
-                active_proof,
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x75);
-            active_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect("replacement ZK-ACE identity commitment succeeds");
-
-            let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
-            let receiver_asset =
-                AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
-            assert_eq!(quantity_balance(&stx, &alice_asset), Quantity::from(96_u32));
-            assert_eq!(
-                quantity_balance(&stx, &receiver_asset),
-                Quantity::from(4_u32)
-            );
-
-            iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                replacement_commitment,
-                Some([0x4c; 32]),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("revoke replacement ZK-ACE identity commitment");
-
-            let (revoked_proof, revoked_digest, revoked_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                2,
-                replacement_commitment,
-                &replacement_witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let revoked_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver,
-                fixture.asset_def_id,
-                2,
-                replacement_commitment,
-                revoked_digest,
-                stx.chain_id.clone(),
-                revoked_nullifier,
-                fixture.policy_hash,
-                revoked_proof,
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x76);
-            let err = revoked_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("revoked identity commitment must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("revoked"),
-                "unexpected revoked identity error: {msg}"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_authorized_transfer_rejects_noncanonical_envelope_shape() {
-            #[derive(Clone, Copy)]
-            enum Tamper {
-                EmptyCircuitId,
-                EmptyPublicInputs,
-                OversizedPublicInputs,
-                EmptyProofBytes,
-                AuxiliaryBytes,
-            }
-
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register ZK-ACE identity commitment");
-
-            for (index, (case, tamper, expected_msg)) in [
-                (
-                    "empty_circuit",
-                    Tamper::EmptyCircuitId,
-                    "invalid OpenVerifyEnvelope",
-                ),
-                (
-                    "empty_public_inputs",
-                    Tamper::EmptyPublicInputs,
-                    "invalid OpenVerifyEnvelope",
-                ),
-                (
-                    "oversized_public_inputs",
-                    Tamper::OversizedPublicInputs,
-                    "invalid OpenVerifyEnvelope",
-                ),
-                (
-                    "empty_proof_bytes",
-                    Tamper::EmptyProofBytes,
-                    "invalid OpenVerifyEnvelope",
-                ),
-                (
-                    "auxiliary",
-                    Tamper::AuxiliaryBytes,
-                    "envelope auxiliary bytes must be empty",
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                    stx.chain_id.clone(),
-                    ALICE_ID.clone(),
-                    fixture.receiver.clone(),
-                    fixture.asset_def_id.clone(),
-                    5,
-                    fixture.identity_commitment,
-                    &fixture.witness,
-                    fixture.policy_hash,
-                    fixture.vk_id.clone(),
-                    vk_commitment,
-                );
-                let proof = mutate_zk_ace_envelope(proof, |envelope| match tamper {
-                    Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
-                    Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
-                    Tamper::OversizedPublicInputs => {
-                        envelope.public_inputs = vec![
-                            0xA5;
-                            iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
-                                + 1
-                        ];
-                    }
-                    Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
-                    Tamper::AuxiliaryBytes => envelope.aux = b"zk-ace-aux".to_vec(),
-                });
-                let transfer = zk_ace_transfer_instruction(
-                    ALICE_ID.clone(),
-                    fixture.receiver.clone(),
-                    fixture.asset_def_id.clone(),
-                    5,
-                    fixture.identity_commitment,
-                    tx_digest,
-                    stx.chain_id.clone(),
-                    replay_nullifier,
-                    fixture.policy_hash,
-                    proof,
-                );
-                seed_zk_ace_call_hash(&mut stx, 0x80u8.wrapping_add(index as u8));
-                let err = match transfer.execute(&ALICE_ID, &mut stx) {
-                    Ok(()) => panic!("{case} ZK-ACE proof must fail"),
-                    Err(err) => err,
-                };
-                let msg = smart_contract_instruction_error_message(err);
-                assert!(
-                    msg.contains(expected_msg),
-                    "expected {expected_msg:?}, got {msg:?} for {case}"
-                );
-            }
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_authorized_transfer_rejects_digest_and_public_input_mutations() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-
-            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                [0x55; 32],
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                "unsupported_action".to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("unsupported ZK-ACE action class must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("action class"),
-                "unexpected unsupported action error: {msg}"
-            );
-
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register ZK-ACE identity commitment");
-
-            let amount = 6;
-            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                &fixture.witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-
-            let mut wrong_digest = tx_digest;
-            wrong_digest[0] ^= 0x01;
-            let wrong_digest_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                wrong_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                fixture.policy_hash,
-                proof.clone(),
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x77);
-            let err = wrong_digest_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("tampered tx digest must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("tx_digest does not match transfer fields"),
-                "unexpected tx digest error: {msg}"
-            );
-
-            let wrong_recipient_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                ALICE_ID.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                tx_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                fixture.policy_hash,
-                proof.clone(),
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x78);
-            let err = wrong_recipient_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("recipient substitution must fail digest binding");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("tx_digest does not match transfer fields"),
-                "unexpected recipient-substitution error: {msg}"
-            );
-
-            let public_input_witness = zk_ace_test_witness(0x51);
-            let public_input_commitment =
-                zk_ace_identity_commitment_for_test(&public_input_witness);
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                public_input_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register public-input mutation identity");
-            let (public_input_proof, public_input_digest, public_input_nullifier) =
-                zk_ace_proof_attachment(
-                    stx.chain_id.clone(),
-                    ALICE_ID.clone(),
-                    fixture.receiver.clone(),
-                    fixture.asset_def_id.clone(),
-                    amount,
-                    public_input_commitment,
-                    &public_input_witness,
-                    fixture.policy_hash,
-                    fixture.vk_id.clone(),
-                    vk_commitment,
-                );
-            let public_input_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                public_input_commitment,
-                public_input_digest,
-                stx.chain_id.clone(),
-                public_input_nullifier,
-                fixture.policy_hash,
-                mutate_zk_ace_envelope_public_inputs(public_input_proof),
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x79);
-            let err = public_input_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("envelope public-input mutation must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("public inputs do not match submitted transfer"),
-                "unexpected public-input mutation error: {msg}"
-            );
-
-            let stark_witness = zk_ace_test_witness(0x52);
-            let stark_commitment = zk_ace_identity_commitment_for_test(&stark_witness);
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                stark_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register STARK public-input mutation identity");
-            let (stark_proof, stark_digest, stark_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                stark_commitment,
-                &stark_witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let stark_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver,
-                fixture.asset_def_id,
-                amount,
-                stark_commitment,
-                stark_digest,
-                stx.chain_id.clone(),
-                stark_nullifier,
-                fixture.policy_hash,
-                mutate_zk_ace_stark_public_input(stark_proof),
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x7a);
-            let err = stark_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("STARK public-input mutation must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("STARK public inputs mismatch"),
-                "unexpected STARK public-input error: {msg}"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_authorized_transfer_rejects_wrong_domain_chain_and_verifier() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register ZK-ACE identity commitment");
-
-            let amount = 5;
-            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                &fixture.witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x72);
-            let wrong_chain: iroha_data_model::ChainId =
-                "different-zk-ace-chain".parse().expect("chain id parses");
-            let wrong_chain_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                tx_digest,
-                wrong_chain,
-                replay_nullifier,
-                fixture.policy_hash,
-                proof.clone(),
-            );
-            let err = wrong_chain_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("wrong chain id must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("different chain id"),
-                "unexpected chain error: {msg}"
-            );
-
-            let wrong_domain_transfer =
-                iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer::new(
-                    ALICE_ID.clone(),
-                    fixture.receiver.clone(),
-                    fixture.asset_def_id.clone(),
-                    amount,
-                    fixture.identity_commitment,
-                    tx_digest,
-                    stx.chain_id.clone(),
-                    "iroha:wrong-domain".to_owned(),
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                    [0x45; 32],
-                    fixture.policy_hash,
-                    proof.clone(),
-                );
-            let err = wrong_domain_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("wrong domain tag must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("domain_tag mismatch"),
-                "unexpected domain error: {msg}"
-            );
-
-            let zero_vk_hash_proof = mutate_zk_ace_envelope_vk_hash(proof.clone(), [0u8; 32]);
-            let zero_vk_hash_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                tx_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                fixture.policy_hash,
-                zero_vk_hash_proof,
-            );
-            let err = zero_vk_hash_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("zero ZK-ACE envelope verifier hash must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("verifier-key hash must be non-zero"),
-                "unexpected zero verifier-hash error: {msg}"
-            );
-
-            let wrong_vk_id = VerifyingKeyId::new(
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-                "wrong_zk_ace_verifier",
-            );
-            let wrong_vk_witness = zk_ace_test_witness(0x46);
-            let wrong_vk_commitment = zk_ace_identity_commitment_for_test(&wrong_vk_witness);
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                wrong_vk_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register wrong-VK mutation identity");
-            let (wrong_vk_proof, wrong_vk_digest, wrong_vk_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                wrong_vk_commitment,
-                &wrong_vk_witness,
-                fixture.policy_hash,
-                wrong_vk_id,
-                vk_commitment,
-            );
-            let wrong_vk_transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver,
-                fixture.asset_def_id,
-                amount,
-                wrong_vk_commitment,
-                wrong_vk_digest,
-                stx.chain_id.clone(),
-                wrong_vk_nullifier,
-                fixture.policy_hash,
-                wrong_vk_proof,
-            );
-            let err = wrong_vk_transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("wrong verifier key reference must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("verifying key reference mismatch"),
-                "unexpected verifier error: {msg}"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_rejects_inner_stark_tamper_even_when_committed_result_trust_is_set() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            state_block.trust_committed_execution_results = true;
-            let mut stx = state_block.transaction();
-            let vk_commitment = install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register ZK-ACE identity commitment");
-
-            let amount = 3;
-            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                &fixture.witness,
-                fixture.policy_hash,
-                fixture.vk_id.clone(),
-                vk_commitment,
-            );
-            let transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                fixture.receiver.clone(),
-                fixture.asset_def_id.clone(),
-                amount,
-                fixture.identity_commitment,
-                tx_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                fixture.policy_hash,
-                mutate_zk_ace_inner_stark_envelope_bytes(proof),
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x53);
-            let err = transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("committed-result trust must not bypass invalid ZK-ACE proof");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("invalid ZK-ACE authorization proof"),
-                "unexpected invalid-proof error: {msg}"
-            );
-
-            let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
-            let receiver_asset = AssetId::new(fixture.asset_def_id.clone(), fixture.receiver);
-            assert_eq!(
-                quantity_balance(&stx, &alice_asset),
-                Quantity::from(100_u32)
-            );
-            assert!(
-                stx.world.assets.get(&receiver_asset).is_none(),
-                "invalid proof must not create receiver asset"
-            );
-            assert!(
-                !stx.world
-                    .zk_assets
-                    .get(&fixture.asset_def_id)
-                    .expect("ZK-ACE state exists")
-                    .zk_ace_replay_nullifiers
-                    .contains(&replay_nullifier),
-                "invalid proof must not consume replay nullifier"
-            );
-        }
-
-        #[test]
-        fn zk_ace_rejects_verifier_schema_hash_mismatch() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
-            stx.world
-                .verifying_keys
-                .get_mut(&fixture.vk_id)
-                .expect("ZK-ACE verifier is installed")
-                .public_inputs_schema_hash[0] ^= 1;
-
-            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id,
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id,
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("wrong ZK-ACE verifier schema hash must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("public input schema hash mismatch"),
-                "unexpected verifier schema error: {msg}"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_rejects_downgraded_stark_verifier_parameters() {
-            let fixture = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = fixture.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            install_zk_ace_verifier(
-                &mut stx,
-                &fixture.vk_id,
-                ConfidentialStatus::Active,
-                ZK_ACE_TEST_MAX_PROOF_BYTES,
-            );
-            let weak_vk = weak_zk_ace_verifying_key_box_for_test();
-            let weak_commitment = hash_vk(&weak_vk);
-            let weak_record = stx
-                .world
-                .verifying_keys
-                .get_mut(&fixture.vk_id)
-                .expect("ZK-ACE verifier is installed");
-            weak_record.commitment = weak_commitment;
-            weak_record.vk_len = u32::try_from(weak_vk.bytes.len()).expect("weak VK length fits");
-            weak_record.key = Some(weak_vk);
-
-            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                fixture.asset_def_id.clone(),
-                fixture.identity_commitment,
-                fixture.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                fixture.vk_id,
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("downgraded ZK-ACE STARK verifier must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("below consensus floor"),
-                "unexpected downgraded verifier error: {msg}"
-            );
-            assert!(
-                !stx.world
-                    .zk_assets
-                    .get(&fixture.asset_def_id)
-                    .is_some_and(|state| state
-                        .zk_ace_identities
-                        .contains_key(&fixture.identity_commitment)),
-                "downgraded verifier must not register ZK-ACE identity state"
-            );
-        }
-
-        #[cfg(feature = "zk-stark")]
-        #[test]
-        fn zk_ace_rejects_retired_verifier_and_oversized_authorization_proof() {
-            let retired = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = retired.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            install_zk_ace_verifier(
-                &mut stx,
-                &retired.vk_id,
-                ConfidentialStatus::Withdrawn,
-                4096,
-            );
-            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                retired.asset_def_id.clone(),
-                retired.identity_commitment,
-                retired.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                retired.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("retired ZK-ACE verifier must not register identities");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("verifying key is not active")
-                    || msg.contains("ZK-ACE verifying key is not active"),
-                "unexpected retired verifier error: {msg}"
-            );
-
-            let oversized = zk_ace_transfer_fixture();
-            let block = new_dummy_block();
-            let mut state_block = oversized.state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            let vk_commitment =
-                install_zk_ace_verifier(&mut stx, &oversized.vk_id, ConfidentialStatus::Active, 16);
-            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
-                oversized.asset_def_id.clone(),
-                oversized.identity_commitment,
-                oversized.policy_hash,
-                vec![ALICE_ID.clone()],
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
-                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-                oversized.vk_id.clone(),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register ZK-ACE identity commitment");
-            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
-                stx.chain_id.clone(),
-                ALICE_ID.clone(),
-                oversized.receiver.clone(),
-                oversized.asset_def_id.clone(),
-                3,
-                oversized.identity_commitment,
-                &oversized.witness,
-                oversized.policy_hash,
-                oversized.vk_id.clone(),
-                vk_commitment,
-            );
-            assert!(
-                proof.proof.bytes.len() > 16,
-                "fixture proof must exceed test verifier max"
-            );
-            let transfer = zk_ace_transfer_instruction(
-                ALICE_ID.clone(),
-                oversized.receiver,
-                oversized.asset_def_id,
-                3,
-                oversized.identity_commitment,
-                tx_digest,
-                stx.chain_id.clone(),
-                replay_nullifier,
-                oversized.policy_hash,
-                proof,
-            );
-            seed_zk_ace_call_hash(&mut stx, 0x73);
-            let err = transfer
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("oversized ZK-ACE proof must fail");
-            let msg = smart_contract_instruction_error_message(err);
-            assert!(
-                msg.contains("max_proof_bytes"),
-                "unexpected oversized proof error: {msg}"
-            );
         }
 
         #[test]
@@ -30197,6 +28009,75 @@ seiyaku GovernanceLifecycle {
             assert!(
                 stx.world.asset_definitions.get(&voting_def).is_some(),
                 "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_rejects_immutable_governance_lock_custody_after_config_change() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId =
+                DomainId::try_new("custody", "history").expect("domain id parses");
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register custody domain");
+            let custody_definition =
+                AssetDefinitionId::new(domain_id.clone(), "locked".parse().unwrap());
+            Register::asset_definition({
+                let __asset_definition_id = custody_definition.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register retained custody asset definition");
+
+            let owner = (*BOB_ID).clone();
+            let mut locks = crate::state::GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                owner.clone(),
+                crate::state::GovernanceLockRecord {
+                    owner,
+                    amount: Quantity::from(150_u32),
+                    slashed: Quantity::zero(),
+                    expiry_height: 10,
+                    direction: 0,
+                    duration_blocks: 3_600,
+                    custody: Some(crate::state::GovernanceLockCustody {
+                        escrowed: true,
+                        asset_definition_id: custody_definition.clone(),
+                        bond_escrow_account: (*ALICE_ID).clone(),
+                        slash_receiver_account: (*ALICE_ID).clone(),
+                    }),
+                },
+            );
+            stx.world
+                .governance_locks
+                .insert("retained-domain-custody".to_owned(), locks);
+
+            let err = Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("domain holding immutable lock custody must remain registered");
+            assert!(
+                err.to_string()
+                    .contains("retained by immutable governance lock custody"),
+                "error should identify retained lock custody: {err}"
+            );
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "custody domain must remain after rejected unregister"
+            );
+            assert!(
+                stx.world
+                    .asset_definitions
+                    .get(&custody_definition)
+                    .is_some(),
+                "custody asset definition must remain after rejected unregister"
             );
         }
 

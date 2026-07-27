@@ -17,6 +17,9 @@ use crate::{AssetDefinitionId, ChainId, account::AccountId};
 pub const PRIVACY_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:statement:v1";
 /// Domain separator used to hash canonical [`PrivacyRootPublicationV1`] values.
 pub const PRIVACY_ROOT_PUBLICATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:root-publication:v1";
+/// Domain separator used to hash canonical [`PrivacyOrchardPoolBootstrapV1`] values.
+pub const PRIVACY_ORCHARD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:orchard-pool-bootstrap:v1";
 /// Domain separator used to hash canonical [`PrivacyPgcAccountBootstrapV1`] payloads.
 pub const PRIVACY_PGC_ACCOUNT_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-bootstrap:v1";
@@ -42,6 +45,12 @@ pub const ZK_AMS_REGISTRY_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-ams:registry-bootstrap:v1";
 /// Domain separator for canonical authoritative ZK-ACE policy records.
 pub const ZK_ACE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ace:policy-record:v1";
+/// Domain separator for canonical X.509 trust-anchor revision self-digests.
+pub const ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-x509:trust-anchor-record:v1";
+/// Domain separator for canonical X.509 certificate-policy revision self-digests.
+pub const ZK_X509_CERTIFICATE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-x509:certificate-policy-record:v1";
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -462,6 +471,10 @@ define_privacy_digest!(
     PrivacyRootPublicationDigestV1
 );
 define_privacy_digest!(
+    /// Digest of one canonical governed Orchard pool bootstrap.
+    PrivacyOrchardPoolBootstrapDigestV1
+);
+define_privacy_digest!(
     /// Digest of a canonical PGC account bootstrap payload.
     PrivacyPgcAccountBootstrapDigestV1
 );
@@ -540,6 +553,18 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Digest of a certificate subject public key.
     PrivacyCertificateKeyDigestV1
+);
+define_privacy_digest!(
+    /// Digest of one canonical ordered RFC 5280 P-256/SHA-256 trust store.
+    PrivacyX509TrustStoreDigestV1
+);
+define_privacy_digest!(
+    /// Self-digest of one immutable authoritative X.509 trust-anchor revision.
+    PrivacyZkX509TrustAnchorRecordDigestV1
+);
+define_privacy_digest!(
+    /// Self-digest of one immutable authoritative X.509 certificate-policy revision.
+    PrivacyZkX509CertificatePolicyRecordDigestV1
 );
 define_privacy_digest!(
     /// Canonical commitment-tree or accumulator root.
@@ -3943,8 +3968,26 @@ pub const ZK_X509_MAX_CHAIN_DEPTH_V1: u8 = 3;
 pub const ZK_X509_MAX_CERTIFICATE_BYTES_V1: u32 = 16 * 1024;
 /// Maximum combined DER bytes for an admitted X.509 chain.
 pub const ZK_X509_MAX_CHAIN_BYTES_V1: u32 = ZK_X509_MAX_CERTIFICATE_BYTES_V1 * 3;
-/// Maximum Orchard spends and outputs in one first-release action.
+/// Closed number of selectively disclosable X.509 subject attributes.
+pub const ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1: usize = 4;
+/// Closed number of extended-key-usage purposes in the first-release profile.
+pub const ZK_X509_MAX_EXTENDED_KEY_USAGES_V1: usize = 3;
+/// Maximum immutable trust-anchor revisions retained across all lineages.
+pub const ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1: usize = 4_096;
+/// Maximum immutable certificate-policy revisions retained across all lineages.
+pub const ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1: usize = 4_096;
+/// Maximum immutable revisions retained for one trust-anchor or policy lineage.
+pub const ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1: usize = 64;
+/// Canonical origin epoch for an X.509 trust-anchor or certificate-policy lineage.
+pub const ZK_X509_INITIAL_RECORD_EPOCH_V1: u64 = 1;
+/// Maximum Orchard actions in one first-release bundle.
 pub const ORCHARD_MAX_ACTIONS_V1: u32 = 2;
+/// Exact Orchard V3 encrypted-note ciphertext width.
+pub const ORCHARD_ENCRYPTED_NOTE_BYTES_V1: usize = 580;
+/// Exact Orchard V3 outgoing ciphertext width.
+pub const ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1: usize = 80;
+/// Largest public Orchard value balance representable by the pinned native API.
+pub const ORCHARD_MAX_VALUE_BALANCE_V1: u128 = i64::MAX as u128;
 /// Maximum FCMP++ consumed outputs in one first-release transfer.
 pub const FCMP_MAX_INPUTS_V1: u32 = 2;
 /// Maximum FCMP++ new outputs in one first-release transfer.
@@ -4057,10 +4100,7 @@ pub struct PrivacyEncryptedOutputV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "state", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "state", content = "value")]
 pub enum PrivacyZkAcePolicyLifecycleV1 {
     /// The policy can authorize a matching proof action.
     #[cfg_attr(feature = "json", norito(rename = "active"))]
@@ -4091,6 +4131,7 @@ struct PrivacyZkAcePolicyDigestMaterialV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAcePolicyRecordV1 {
     /// Stable lookup key for this policy lineage.
     pub policy_id: PrivacyPolicyIdV1,
@@ -5104,6 +5145,768 @@ pub enum PrivacyX509ExtendedKeyUsageV1 {
     WalletIdentity,
 }
 
+/// Closed lifecycle of one immutable X.509 governance-record lineage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "state", content = "value"))]
+pub enum PrivacyZkX509RecordLifecycleV1 {
+    /// The trust-anchor or certificate-policy revision is authoritative.
+    #[cfg_attr(feature = "json", norito(rename = "active"))]
+    Active,
+    /// The lineage was irreversibly revoked.
+    #[cfg_attr(feature = "json", norito(rename = "revoked"))]
+    Revoked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct PrivacyZkX509TrustAnchorDigestMaterialV1 {
+    trust_anchor_id: PrivacyIssuerIdV1,
+    record_epoch: u64,
+    trust_store_digest: PrivacyX509TrustStoreDigestV1,
+    previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
+    lifecycle: PrivacyZkX509RecordLifecycleV1,
+}
+
+/// One immutable authoritative revision of an RFC 5280 P-256/SHA-256 trust store.
+///
+/// Revisions form an append-only self-digested chain. `trust_store_digest`
+/// commits the complete canonically ordered trust-anchor artifact; individual
+/// CA identity remains private behind the governed CA-membership root.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkX509TrustAnchorRecordV1 {
+    /// Stable lookup key for this trust-store lineage.
+    pub trust_anchor_id: PrivacyIssuerIdV1,
+    /// Strictly increasing immutable revision epoch.
+    pub record_epoch: u64,
+    /// Digest of the exact ordered P-256/SHA-256 trust-store artifact.
+    pub trust_store_digest: PrivacyX509TrustStoreDigestV1,
+    /// Exact predecessor revision digest, absent only at epoch one.
+    pub previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
+    /// Active or irreversibly revoked lifecycle.
+    pub lifecycle: PrivacyZkX509RecordLifecycleV1,
+    /// Self-digest of every authoritative field above.
+    pub record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+}
+
+impl PrivacyZkX509TrustAnchorRecordV1 {
+    /// Construct one canonical self-digested trust-anchor revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero fields, a non-canonical predecessor shape, or canonical
+    /// encoding failure.
+    pub fn new(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        record_epoch: u64,
+        trust_store_digest: PrivacyX509TrustStoreDigestV1,
+        previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> Result<Self, PrivacyZkX509RecordValidationErrorV1> {
+        let mut record = Self {
+            trust_anchor_id,
+            record_epoch,
+            trust_store_digest,
+            previous_record_digest,
+            lifecycle,
+            record_digest: PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32]),
+        };
+        record.validate_contents()?;
+        record.record_digest = record.compute_record_digest()?;
+        if record.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        Ok(record)
+    }
+
+    /// Validate a canonical active epoch-one registration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
+    /// revoked origin.
+    pub fn validate_initial(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate()?;
+        validate_zk_x509_initial_revision(
+            self.record_epoch,
+            self.previous_record_digest.is_some(),
+            self.lifecycle,
+        )
+    }
+
+    /// Validate all fields and the complete canonical self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any malformed or tampered revision.
+    pub fn validate(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate_contents()?;
+        if self.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        if self.compute_record_digest()? != self.record_digest {
+            return Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Recompute the domain-separated self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding error if canonical Norito serialization fails.
+    pub fn compute_record_digest(
+        &self,
+    ) -> Result<PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509RecordValidationErrorV1> {
+        let material = PrivacyZkX509TrustAnchorDigestMaterialV1 {
+            trust_anchor_id: self.trust_anchor_id,
+            record_epoch: self.record_epoch,
+            trust_store_digest: self.trust_store_digest,
+            previous_record_digest: self.previous_record_digest,
+            lifecycle: self.lifecycle,
+        };
+        Ok(PrivacyZkX509TrustAnchorRecordDigestV1::new(
+            privacy_zk_x509_record_digest(ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1, &material)?,
+        ))
+    }
+
+    fn validate_contents(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        if self.trust_anchor_id.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustAnchorId);
+        }
+        if self.trust_store_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustStoreDigest);
+        }
+        validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct PrivacyZkX509CertificatePolicyDigestMaterialV1 {
+    trust_anchor_id: PrivacyIssuerIdV1,
+    policy_id: PrivacyPolicyIdV1,
+    record_epoch: u64,
+    policy_digest: PrivacyPolicyDigestV1,
+    required_key_usage: PrivacyX509KeyUsageV1,
+    required_extended_key_usages: Vec<PrivacyX509ExtendedKeyUsageV1>,
+    required_disclosed_attribute_indices: Vec<u8>,
+    previous_record_digest: Option<PrivacyZkX509CertificatePolicyRecordDigestV1>,
+    lifecycle: PrivacyZkX509RecordLifecycleV1,
+}
+
+/// One immutable authoritative X.509 certificate-policy revision.
+///
+/// The policy fixes every public predicate selected outside the certificate
+/// witness. In particular, a statement must disclose exactly the governed
+/// ordered index set rather than a prover-chosen subset or superset.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkX509CertificatePolicyRecordV1 {
+    /// Exact trust-store lineage to which this policy belongs.
+    pub trust_anchor_id: PrivacyIssuerIdV1,
+    /// Stable policy lookup key inside the trust-store namespace.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Strictly increasing immutable revision epoch.
+    pub record_epoch: u64,
+    /// Digest of the exact governed RFC 5280 certificate-policy artifact.
+    pub policy_digest: PrivacyPolicyDigestV1,
+    /// Required RFC 5280 leaf key-usage bits.
+    pub required_key_usage: PrivacyX509KeyUsageV1,
+    /// Required extended-key usages in strict enum order.
+    pub required_extended_key_usages: Vec<PrivacyX509ExtendedKeyUsageV1>,
+    /// Exact required selective-disclosure indices in strict numeric order.
+    pub required_disclosed_attribute_indices: Vec<u8>,
+    /// Exact predecessor revision digest, absent only at epoch one.
+    pub previous_record_digest: Option<PrivacyZkX509CertificatePolicyRecordDigestV1>,
+    /// Active or irreversibly revoked lifecycle.
+    pub lifecycle: PrivacyZkX509RecordLifecycleV1,
+    /// Self-digest of every authoritative field above.
+    pub record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+}
+
+impl PrivacyZkX509CertificatePolicyRecordV1 {
+    /// Construct one canonical self-digested certificate-policy revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero fields, unsupported key usage, oversized or unordered
+    /// policy lists, a non-canonical predecessor shape, or encoding failure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        policy_id: PrivacyPolicyIdV1,
+        record_epoch: u64,
+        policy_digest: PrivacyPolicyDigestV1,
+        required_key_usage: PrivacyX509KeyUsageV1,
+        required_extended_key_usages: Vec<PrivacyX509ExtendedKeyUsageV1>,
+        required_disclosed_attribute_indices: Vec<u8>,
+        previous_record_digest: Option<PrivacyZkX509CertificatePolicyRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> Result<Self, PrivacyZkX509RecordValidationErrorV1> {
+        let mut record = Self {
+            trust_anchor_id,
+            policy_id,
+            record_epoch,
+            policy_digest,
+            required_key_usage,
+            required_extended_key_usages,
+            required_disclosed_attribute_indices,
+            previous_record_digest,
+            lifecycle,
+            record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1::new([0; 32]),
+        };
+        record.validate_contents()?;
+        record.record_digest = record.compute_record_digest()?;
+        if record.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        Ok(record)
+    }
+
+    /// Validate a canonical active epoch-one registration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
+    /// revoked origin.
+    pub fn validate_initial(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate()?;
+        validate_zk_x509_initial_revision(
+            self.record_epoch,
+            self.previous_record_digest.is_some(),
+            self.lifecycle,
+        )
+    }
+
+    /// Validate all fields and the complete canonical self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any malformed or tampered revision.
+    pub fn validate(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate_contents()?;
+        if self.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        if self.compute_record_digest()? != self.record_digest {
+            return Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Recompute the domain-separated self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding error if canonical Norito serialization fails.
+    pub fn compute_record_digest(
+        &self,
+    ) -> Result<PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509RecordValidationErrorV1>
+    {
+        let material = PrivacyZkX509CertificatePolicyDigestMaterialV1 {
+            trust_anchor_id: self.trust_anchor_id,
+            policy_id: self.policy_id,
+            record_epoch: self.record_epoch,
+            policy_digest: self.policy_digest,
+            required_key_usage: self.required_key_usage,
+            required_extended_key_usages: self.required_extended_key_usages.clone(),
+            required_disclosed_attribute_indices: self.required_disclosed_attribute_indices.clone(),
+            previous_record_digest: self.previous_record_digest,
+            lifecycle: self.lifecycle,
+        };
+        Ok(PrivacyZkX509CertificatePolicyRecordDigestV1::new(
+            privacy_zk_x509_record_digest(
+                ZK_X509_CERTIFICATE_POLICY_RECORD_DIGEST_DOMAIN_V1,
+                &material,
+            )?,
+        ))
+    }
+
+    fn validate_contents(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        if self.trust_anchor_id.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustAnchorId);
+        }
+        if self.policy_id.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroPolicyId);
+        }
+        if self.policy_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroPolicyDigest);
+        }
+        validate_zk_x509_key_usage(self.required_key_usage)?;
+        validate_zk_x509_extended_key_usages(&self.required_extended_key_usages)?;
+        validate_zk_x509_disclosure_indices(&self.required_disclosed_attribute_indices)?;
+        validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
+    }
+}
+
+fn privacy_zk_x509_record_digest<T: Encode>(
+    domain: &[u8],
+    material: &T,
+) -> Result<[u8; 32], PrivacyZkX509RecordValidationErrorV1> {
+    let encoded = norito::to_bytes(material)
+        .map_err(|_| PrivacyZkX509RecordValidationErrorV1::EncodingFailure)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    hasher.update(
+        &u64::try_from(encoded.len())
+            .expect("Norito output length fits u64 on supported targets")
+            .to_le_bytes(),
+    );
+    hasher.update(&encoded);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn validate_zk_x509_revision_shape<D: PrivacyDigestValueV1>(
+    record_epoch: u64,
+    previous_record_digest: Option<D>,
+) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+    if record_epoch == 0 {
+        return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordEpoch);
+    }
+    match (record_epoch, previous_record_digest) {
+        (ZK_X509_INITIAL_RECORD_EPOCH_V1, None) => Ok(()),
+        (ZK_X509_INITIAL_RECORD_EPOCH_V1, Some(_)) => {
+            Err(PrivacyZkX509RecordValidationErrorV1::OriginHasPredecessor)
+        }
+        (_, None) => Err(PrivacyZkX509RecordValidationErrorV1::SuccessorMissingPredecessor),
+        (_, Some(digest)) if digest.is_zero() => {
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroPreviousRecordDigest)
+        }
+        (_, Some(_)) => Ok(()),
+    }
+}
+
+trait PrivacyDigestValueV1: Copy {
+    fn is_zero(self) -> bool;
+}
+
+impl PrivacyDigestValueV1 for PrivacyZkX509TrustAnchorRecordDigestV1 {
+    fn is_zero(self) -> bool {
+        PrivacyZkX509TrustAnchorRecordDigestV1::is_zero(&self)
+    }
+}
+
+impl PrivacyDigestValueV1 for PrivacyZkX509CertificatePolicyRecordDigestV1 {
+    fn is_zero(self) -> bool {
+        PrivacyZkX509CertificatePolicyRecordDigestV1::is_zero(&self)
+    }
+}
+
+fn validate_zk_x509_initial_revision(
+    record_epoch: u64,
+    has_previous: bool,
+    lifecycle: PrivacyZkX509RecordLifecycleV1,
+) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+    if record_epoch != ZK_X509_INITIAL_RECORD_EPOCH_V1 {
+        return Err(
+            PrivacyZkX509RecordValidationErrorV1::NonCanonicalInitialEpoch {
+                actual: record_epoch,
+            },
+        );
+    }
+    if has_previous {
+        return Err(PrivacyZkX509RecordValidationErrorV1::OriginHasPredecessor);
+    }
+    if lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(PrivacyZkX509RecordValidationErrorV1::InitialRecordNotActive);
+    }
+    Ok(())
+}
+
+fn validate_zk_x509_key_usage(
+    key_usage: PrivacyX509KeyUsageV1,
+) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+    if !key_usage.digital_signature {
+        return Err(PrivacyZkX509RecordValidationErrorV1::InvalidKeyUsage);
+    }
+    Ok(())
+}
+
+fn validate_zk_x509_extended_key_usages(
+    usages: &[PrivacyX509ExtendedKeyUsageV1],
+) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+    if usages.is_empty() {
+        return Err(PrivacyZkX509RecordValidationErrorV1::MissingExtendedKeyUsage);
+    }
+    if usages.len() > ZK_X509_MAX_EXTENDED_KEY_USAGES_V1 {
+        return Err(
+            PrivacyZkX509RecordValidationErrorV1::TooManyExtendedKeyUsages {
+                actual: usages.len(),
+                max: ZK_X509_MAX_EXTENDED_KEY_USAGES_V1,
+            },
+        );
+    }
+    if usages.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(PrivacyZkX509RecordValidationErrorV1::ExtendedKeyUsagesNotStrictlyIncreasing);
+    }
+    Ok(())
+}
+
+fn validate_zk_x509_disclosure_indices(
+    indices: &[u8],
+) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+    if indices.len() > ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
+        return Err(
+            PrivacyZkX509RecordValidationErrorV1::TooManyDisclosedAttributes {
+                actual: indices.len(),
+                max: ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
+            },
+        );
+    }
+    for &index in indices {
+        if usize::from(index) >= ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
+            return Err(
+                PrivacyZkX509RecordValidationErrorV1::UnsupportedDisclosedAttributeIndex { index },
+            );
+        }
+    }
+    if indices.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(
+            PrivacyZkX509RecordValidationErrorV1::DisclosedAttributeIndicesNotStrictlyIncreasing,
+        );
+    }
+    Ok(())
+}
+
+/// Failure while validating one immutable X.509 governance revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyZkX509RecordValidationErrorV1 {
+    /// The trust-store identifier is all zero.
+    #[error("X.509 trust-anchor id must be non-zero")]
+    ZeroTrustAnchorId,
+    /// The certificate-policy identifier is all zero.
+    #[error("X.509 certificate-policy id must be non-zero")]
+    ZeroPolicyId,
+    /// The canonical trust-store digest is all zero.
+    #[error("X.509 trust-store digest must be non-zero")]
+    ZeroTrustStoreDigest,
+    /// The canonical certificate-policy digest is all zero.
+    #[error("X.509 certificate-policy digest must be non-zero")]
+    ZeroPolicyDigest,
+    /// Epoch zero is never authoritative.
+    #[error("X.509 governance-record epoch must be non-zero")]
+    ZeroRecordEpoch,
+    /// Registration must begin at canonical epoch one.
+    #[error(
+        "initial X.509 governance-record epoch must be {ZK_X509_INITIAL_RECORD_EPOCH_V1}, got {actual}"
+    )]
+    NonCanonicalInitialEpoch {
+        /// Rejected epoch.
+        actual: u64,
+    },
+    /// An origin revision cannot claim a predecessor.
+    #[error("X.509 epoch-one governance record must not carry a predecessor")]
+    OriginHasPredecessor,
+    /// Every non-origin revision must bind its exact predecessor.
+    #[error("X.509 successor governance record must carry a predecessor digest")]
+    SuccessorMissingPredecessor,
+    /// A predecessor digest cannot be the all-zero sentinel.
+    #[error("X.509 predecessor record digest must be non-zero")]
+    ZeroPreviousRecordDigest,
+    /// Registration cannot create a terminal lineage.
+    #[error("initial X.509 governance record must be active")]
+    InitialRecordNotActive,
+    /// The fixed certificate relation requires digital-signature usage.
+    #[error("X.509 policy must require digital-signature key usage")]
+    InvalidKeyUsage,
+    /// At least one closed extended-key usage must be governed.
+    #[error("X.509 policy must require at least one extended-key usage")]
+    MissingExtendedKeyUsage,
+    /// More EKUs were supplied than the closed profile supports.
+    #[error("X.509 policy has {actual} extended-key usages; maximum is {max}")]
+    TooManyExtendedKeyUsages {
+        /// Rejected length.
+        actual: usize,
+        /// Closed maximum.
+        max: usize,
+    },
+    /// EKUs were duplicated or reordered.
+    #[error("X.509 extended-key usages must be strictly increasing")]
+    ExtendedKeyUsagesNotStrictlyIncreasing,
+    /// More disclosures were supplied than the closed profile supports.
+    #[error("X.509 policy has {actual} disclosed attributes; maximum is {max}")]
+    TooManyDisclosedAttributes {
+        /// Rejected length.
+        actual: usize,
+        /// Closed maximum.
+        max: usize,
+    },
+    /// An attribute index is outside the closed C/O/OU/CN set.
+    #[error("X.509 disclosed attribute index {index} is unsupported")]
+    UnsupportedDisclosedAttributeIndex {
+        /// Rejected index.
+        index: u8,
+    },
+    /// Disclosure indices were duplicated or reordered.
+    #[error("X.509 disclosed attribute indices must be strictly increasing")]
+    DisclosedAttributeIndicesNotStrictlyIncreasing,
+    /// Canonical encoding of self-digest material failed.
+    #[error("X.509 governance-record digest material could not be encoded")]
+    EncodingFailure,
+    /// A decoded record supplied an all-zero self-digest.
+    #[error("X.509 governance-record self-digest must be non-zero")]
+    ZeroRecordDigest,
+    /// Recomputing every authoritative field produced a different digest.
+    #[error("X.509 governance-record self-digest mismatch")]
+    RecordDigestMismatch,
+}
+
+/// Failure while validating an append-only X.509 governance transition.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyZkX509TransitionValidationErrorV1 {
+    /// The persisted current revision is malformed.
+    #[error("current X.509 governance record is invalid: {0}")]
+    InvalidCurrent(PrivacyZkX509RecordValidationErrorV1),
+    /// The proposed successor revision is malformed.
+    #[error("successor X.509 governance record is invalid: {0}")]
+    InvalidSuccessor(PrivacyZkX509RecordValidationErrorV1),
+    /// A terminal lineage cannot advance.
+    #[error("current X.509 governance record is not active")]
+    CurrentNotActive,
+    /// A trust-anchor transition changed its stable identity.
+    #[error("X.509 trust-anchor transition changed trust-anchor id")]
+    TrustAnchorIdMismatch,
+    /// A policy transition changed its stable identity.
+    #[error("X.509 certificate-policy transition changed policy id")]
+    PolicyIdMismatch,
+    /// An epoch cannot advance past `u64::MAX`.
+    #[error("X.509 governance-record epoch overflow")]
+    EpochOverflow,
+    /// The successor did not advance exactly one epoch.
+    #[error("X.509 successor epoch must be {expected}, got {actual}")]
+    NonCanonicalSuccessorEpoch {
+        /// Required successor epoch.
+        expected: u64,
+        /// Rejected successor epoch.
+        actual: u64,
+    },
+    /// The successor did not bind the exact current revision.
+    #[error("X.509 successor predecessor digest does not match the current revision")]
+    PredecessorDigestMismatch,
+    /// A rotation successor must remain active.
+    #[error("X.509 rotation successor must be active")]
+    RotationSuccessorNotActive,
+    /// A rotation must alter at least one governed substantive field.
+    #[error("X.509 rotation must change governed contents")]
+    RotationContentsUnchanged,
+    /// A revocation successor must be terminal.
+    #[error("X.509 revocation successor must be revoked")]
+    RevocationSuccessorNotRevoked,
+    /// Revocation changed substantive governed contents.
+    #[error("X.509 revocation changed immutable governed contents")]
+    RevocationContentsChanged,
+}
+
+fn validate_zk_x509_transition_common<D: Copy + PartialEq>(
+    current_epoch: u64,
+    current_digest: D,
+    current_lifecycle: PrivacyZkX509RecordLifecycleV1,
+    successor_epoch: u64,
+    successor_previous_digest: Option<D>,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    if current_lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CurrentNotActive);
+    }
+    let expected = current_epoch
+        .checked_add(1)
+        .ok_or(PrivacyZkX509TransitionValidationErrorV1::EpochOverflow)?;
+    if successor_epoch != expected {
+        return Err(
+            PrivacyZkX509TransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                expected,
+                actual: successor_epoch,
+            },
+        );
+    }
+    if successor_previous_digest != Some(current_digest) {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::PredecessorDigestMismatch);
+    }
+    Ok(())
+}
+
+/// Validate an active-to-active trust-store rotation.
+///
+/// # Errors
+///
+/// Rejects malformed records, identity changes, stale/skipped epochs,
+/// predecessor substitution, terminal successors, and no-op rotations.
+pub fn validate_zk_x509_trust_anchor_rotation_v1(
+    current: &PrivacyZkX509TrustAnchorRecordV1,
+    successor: &PrivacyZkX509TrustAnchorRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationSuccessorNotActive);
+    }
+    if successor.trust_store_digest == current.trust_store_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+    }
+    Ok(())
+}
+
+/// Validate an irreversible trust-store revocation.
+///
+/// # Errors
+///
+/// Rejects malformed records, identity changes, stale/skipped epochs,
+/// predecessor substitution, nonterminal successors, or trust-store changes.
+pub fn validate_zk_x509_trust_anchor_revocation_v1(
+    current: &PrivacyZkX509TrustAnchorRecordV1,
+    successor: &PrivacyZkX509TrustAnchorRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Revoked {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationSuccessorNotRevoked);
+    }
+    if successor.trust_store_digest != current.trust_store_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged);
+    }
+    Ok(())
+}
+
+/// Validate an active-to-active certificate-policy rotation.
+///
+/// # Errors
+///
+/// Rejects malformed records, namespace changes, stale/skipped epochs,
+/// predecessor substitution, terminal successors, and no-op rotations.
+pub fn validate_zk_x509_certificate_policy_rotation_v1(
+    current: &PrivacyZkX509CertificatePolicyRecordV1,
+    successor: &PrivacyZkX509CertificatePolicyRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    if successor.policy_id != current.policy_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationSuccessorNotActive);
+    }
+    if successor.policy_digest == current.policy_digest
+        && successor.required_key_usage == current.required_key_usage
+        && successor.required_extended_key_usages == current.required_extended_key_usages
+        && successor.required_disclosed_attribute_indices
+            == current.required_disclosed_attribute_indices
+    {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+    }
+    Ok(())
+}
+
+/// Validate an irreversible certificate-policy revocation.
+///
+/// # Errors
+///
+/// Rejects malformed records, namespace changes, stale/skipped epochs,
+/// predecessor substitution, nonterminal successors, or policy changes.
+pub fn validate_zk_x509_certificate_policy_revocation_v1(
+    current: &PrivacyZkX509CertificatePolicyRecordV1,
+    successor: &PrivacyZkX509CertificatePolicyRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    if successor.policy_id != current.policy_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Revoked {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationSuccessorNotRevoked);
+    }
+    if successor.policy_digest != current.policy_digest
+        || successor.required_key_usage != current.required_key_usage
+        || successor.required_extended_key_usages != current.required_extended_key_usages
+        || successor.required_disclosed_attribute_indices
+            != current.required_disclosed_attribute_indices
+    {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged);
+    }
+    Ok(())
+}
+
+/// One public selectively disclosed X.509 subject attribute.
+///
+/// Indices use the paper's closed order: `0=C`, `1=O`, `2=OU`, `3=CN`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkX509DisclosedAttributeV1 {
+    /// Closed attribute index.
+    pub index: u8,
+    /// Public digest of the privately salted canonical attribute value.
+    pub attribute_digest: PrivacyAttributeDigestV1,
+}
+
 /// Native X.509 credential-predicate STARK statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -5117,6 +5920,14 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     pub trust_anchor_id: PrivacyIssuerIdV1,
     /// Governed certificate-policy identifier.
     pub certificate_policy_id: PrivacyPolicyIdV1,
+    /// Exact immutable trust-anchor revision selected by the statement.
+    pub trust_anchor_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+    /// Exact trust-anchor revision epoch selected by the statement.
+    pub trust_anchor_record_epoch: u64,
+    /// Exact immutable certificate-policy revision selected by the statement.
+    pub certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+    /// Exact certificate-policy revision epoch selected by the statement.
+    pub certificate_policy_record_epoch: u64,
     /// Digest of the certificate subject public key.
     pub subject_public_key_digest: PrivacyCertificateKeyDigestV1,
     /// CA membership accumulator root for the complete chain.
@@ -5131,6 +5942,8 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     pub key_usage: PrivacyX509KeyUsageV1,
     /// Required extended-key-usage purposes, sorted in enum order.
     pub extended_key_usages: Vec<PrivacyX509ExtendedKeyUsageV1>,
+    /// Canonical public selective disclosures in strict attribute-index order.
+    pub disclosed_attributes: Vec<PrivacyZkX509DisclosedAttributeV1>,
     /// Certificate validity start as Unix seconds, inclusive.
     pub not_before_unix_seconds: u64,
     /// Certificate validity end as Unix seconds, exclusive.
@@ -5771,12 +6584,44 @@ impl PrivacyValueBalanceV1 {
     }
 }
 
-/// Orchard Halo2 private action statement.
+/// Exact public data for one Orchard V3 action.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyOrchardActionV1 {
+    /// Canonical Pallas-base nullifier encoding.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub nullifier: [u8; 32],
+    /// Canonical non-identity randomized RedPallas verification key.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub randomized_key: [u8; 32],
+    /// Canonical extracted note commitment.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub note_commitment: [u8; 32],
+    /// Canonical non-identity ephemeral Pallas public key.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub ephemeral_key: [u8; 32],
+    /// Exact 580-byte Orchard encrypted-note ciphertext.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub encrypted_note: Vec<u8>,
+    /// Exact 80-byte Orchard outgoing ciphertext.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub outgoing_ciphertext: Vec<u8>,
+    /// Canonical Pallas value commitment.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub value_commitment: [u8; 32],
+}
+
+/// Orchard Halo2 private action-bundle statement.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct OrchardHalo2ActionsStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
@@ -5788,16 +6633,12 @@ pub struct OrchardHalo2ActionsStatementV1 {
     pub anchor: PrivacyRootV1,
     /// Epoch at which `anchor` was canonical.
     pub anchor_epoch: u64,
-    /// Resulting note-commitment tree anchor.
-    pub next_anchor: PrivacyRootV1,
-    /// Successor epoch committed with `next_anchor`.
-    pub next_anchor_epoch: u64,
-    /// Spent-note nullifiers.
-    pub spend_nullifiers: Vec<PrivacyNullifierV1>,
-    /// New note commitments.
-    pub output_commitments: Vec<PrivacyCommitmentV1>,
-    /// Encrypted output notes, in commitment order.
-    pub encrypted_outputs: Vec<PrivacyEncryptedOutputV1>,
+    /// Non-empty ordered Orchard actions.
+    ///
+    /// The node derives the successor frontier and root by appending these
+    /// note commitments to its authoritative pool frontier. A caller-selected
+    /// successor root is intentionally unrepresentable.
+    pub actions: Vec<PrivacyOrchardActionV1>,
     /// Public value balance in atomic units.
     pub value_balance: PrivacyValueBalanceV1,
     /// Public validation fee in atomic units.
@@ -6434,6 +7275,22 @@ fn validate_zk_x509(
         PrivacyTypedFieldV1::PolicyId,
     )?;
     require_nonzero_id(
+        statement.trust_anchor_record_digest.is_zero(),
+        PrivacyTypedFieldV1::X509TrustAnchorRecordDigest,
+    )?;
+    require_epoch(
+        statement.trust_anchor_record_epoch,
+        PrivacyEpochFieldV1::X509TrustAnchorRecord,
+    )?;
+    require_nonzero_id(
+        statement.certificate_policy_record_digest.is_zero(),
+        PrivacyTypedFieldV1::X509CertificatePolicyRecordDigest,
+    )?;
+    require_epoch(
+        statement.certificate_policy_record_epoch,
+        PrivacyEpochFieldV1::X509CertificatePolicyRecord,
+    )?;
+    require_nonzero_id(
         statement.subject_public_key_digest.is_zero(),
         PrivacyTypedFieldV1::CertificateKeyDigest,
     )?;
@@ -6459,10 +7316,47 @@ fn validate_zk_x509(
     if statement.extended_key_usages.is_empty() {
         return Err(PrivacyStatementValidationError::MissingX509ExtendedKeyUsage);
     }
+    if statement.extended_key_usages.len() > ZK_X509_MAX_EXTENDED_KEY_USAGES_V1 {
+        return Err(
+            PrivacyStatementValidationError::TooManyX509ExtendedKeyUsages {
+                actual: statement.extended_key_usages.len(),
+                max: ZK_X509_MAX_EXTENDED_KEY_USAGES_V1,
+            },
+        );
+    }
     for index in 1..statement.extended_key_usages.len() {
         if statement.extended_key_usages[index - 1] >= statement.extended_key_usages[index] {
             return Err(
                 PrivacyStatementValidationError::X509ExtendedKeyUsagesNotStrictlyIncreasing,
+            );
+        }
+    }
+    if statement.disclosed_attributes.len() > ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
+        return Err(
+            PrivacyStatementValidationError::TooManyX509DisclosedAttributes {
+                actual: statement.disclosed_attributes.len(),
+                max: ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
+            },
+        );
+    }
+    for (position, disclosed) in statement.disclosed_attributes.iter().enumerate() {
+        if usize::from(disclosed.index) >= ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1 {
+            return Err(
+                PrivacyStatementValidationError::UnsupportedX509DisclosedAttributeIndex {
+                    index: disclosed.index,
+                },
+            );
+        }
+        if disclosed.attribute_digest.is_zero() {
+            return Err(
+                PrivacyStatementValidationError::ZeroX509DisclosedAttributeDigest {
+                    index: disclosed.index,
+                },
+            );
+        }
+        if position > 0 && statement.disclosed_attributes[position - 1].index >= disclosed.index {
+            return Err(
+                PrivacyStatementValidationError::X509DisclosedAttributesNotStrictlyIncreasing,
             );
         }
     }
@@ -6650,39 +7544,61 @@ fn validate_orchard(
     require_nonzero_id(statement.pool_id.is_zero(), PrivacyTypedFieldV1::PoolId)?;
     require_nonzero_id(statement.anchor.is_zero(), PrivacyTypedFieldV1::Root)?;
     require_epoch(statement.anchor_epoch, PrivacyEpochFieldV1::Root)?;
-    validate_next_root_transition(
-        statement.anchor,
-        statement.anchor_epoch,
-        statement.next_anchor,
-        statement.next_anchor_epoch,
-        PrivacyRootTransitionFieldV1::NoteCommitmentAnchor,
-    )?;
     require_epoch(statement.expiry_height, PrivacyEpochFieldV1::ExpiryHeight)?;
     statement.value_balance.validate()?;
-    validate_nullifiers_with_max(
-        &statement.spend_nullifiers,
-        true,
-        ORCHARD_MAX_ACTIONS_V1.min(limits.max_nullifiers_per_action),
-    )?;
-    validate_commitments_with_max(
-        &statement.output_commitments,
-        true,
-        ORCHARD_MAX_ACTIONS_V1.min(limits.max_commitments_per_action),
-    )?;
-    if statement.spend_nullifiers.len() != statement.output_commitments.len() {
+    if statement.value_balance.amount > ORCHARD_MAX_VALUE_BALANCE_V1 {
         return Err(
-            PrivacyStatementValidationError::OrchardSpendOutputCountMismatch {
-                spends: u32_len(statement.spend_nullifiers.len())?,
-                outputs: u32_len(statement.output_commitments.len())?,
+            PrivacyStatementValidationError::OrchardValueBalanceOutOfRange {
+                amount: statement.value_balance.amount,
+                max: ORCHARD_MAX_VALUE_BALANCE_V1,
             },
         );
     }
-    validate_encrypted_outputs(
-        &statement.encrypted_outputs,
-        &statement.output_commitments,
-        true,
-        limits,
-    )
+    let max = ORCHARD_MAX_ACTIONS_V1
+        .min(limits.max_nullifiers_per_action)
+        .min(limits.max_commitments_per_action);
+    let count = u32_len(statement.actions.len())?;
+    if count == 0 || count > max {
+        return Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count, max });
+    }
+    for (index, action) in statement.actions.iter().enumerate() {
+        let index = u32_index(index)?;
+        let encrypted_note_bytes = u32_len(action.encrypted_note.len())?;
+        if action.encrypted_note.len() != ORCHARD_ENCRYPTED_NOTE_BYTES_V1 {
+            return Err(
+                PrivacyStatementValidationError::InvalidOrchardEncryptedNoteSize {
+                    index,
+                    bytes: encrypted_note_bytes,
+                    expected: u32::try_from(ORCHARD_ENCRYPTED_NOTE_BYTES_V1)
+                        .expect("compiled Orchard ciphertext width fits u32"),
+                },
+            );
+        }
+        let outgoing_ciphertext_bytes = u32_len(action.outgoing_ciphertext.len())?;
+        if action.outgoing_ciphertext.len() != ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1 {
+            return Err(
+                PrivacyStatementValidationError::InvalidOrchardOutgoingCiphertextSize {
+                    index,
+                    bytes: outgoing_ciphertext_bytes,
+                    expected: u32::try_from(ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1)
+                        .expect("compiled Orchard ciphertext width fits u32"),
+                },
+            );
+        }
+        if statement.actions[..usize::try_from(index).expect("u32 index fits usize")]
+            .iter()
+            .any(|earlier| earlier.nullifier == action.nullifier)
+        {
+            return Err(PrivacyStatementValidationError::DuplicateOrchardNullifier { index });
+        }
+        if statement.actions[..usize::try_from(index).expect("u32 index fits usize")]
+            .iter()
+            .any(|earlier| earlier.note_commitment == action.note_commitment)
+        {
+            return Err(PrivacyStatementValidationError::DuplicateOrchardNoteCommitment { index });
+        }
+    }
+    Ok(())
 }
 
 fn validate_fcmp(
@@ -7089,18 +8005,11 @@ impl PrivacyProtocolActivationLimitsV1 {
             (
                 Self::OrchardHalo2ActionsV1(limits),
                 PrivacyStatementV1::OrchardHalo2ActionsV1(statement),
-            ) => {
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::OrchardActionCount,
-                    statement.spend_nullifiers.len(),
-                    limits.max_action_count,
-                )?;
-                validate_activation_statement_len(
-                    PrivacyActivationLimitFieldV1::OrchardActionCount,
-                    statement.output_commitments.len(),
-                    limits.max_action_count,
-                )
-            }
+            ) => validate_activation_statement_len(
+                PrivacyActivationLimitFieldV1::OrchardActionCount,
+                statement.actions.len(),
+                limits.max_action_count,
+            ),
             (
                 Self::MoneroFcmpPlusPlusV1(limits),
                 PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement),
@@ -7431,6 +8340,10 @@ pub enum PrivacyTypedFieldV1 {
     IssuerPolicyRecordDigest,
     /// Certificate subject-key digest.
     CertificateKeyDigest,
+    /// Exact immutable X.509 trust-anchor record digest.
+    X509TrustAnchorRecordDigest,
+    /// Exact immutable X.509 certificate-policy record digest.
+    X509CertificatePolicyRecordDigest,
     /// Public Vega Figure 9 device-authentication digest `H_dev`.
     VegaDeviceAuthenticationDigest,
     /// ISO 18013-5 reader challenge.
@@ -7456,6 +8369,10 @@ pub enum PrivacyEpochFieldV1 {
     Root,
     /// X.509 certificate-authority membership epoch.
     CertificateAuthorityMembership,
+    /// Immutable X.509 trust-anchor revision epoch.
+    X509TrustAnchorRecord,
+    /// Immutable X.509 certificate-policy revision epoch.
+    X509CertificatePolicyRecord,
     /// Revocation-state epoch.
     Revocation,
     /// Committed issuer-policy record epoch.
@@ -7834,9 +8751,40 @@ pub enum PrivacyStatementValidationError {
     /// X.509 extended-key-usage vector is empty.
     #[error("X.509 statement requires at least one extended key usage")]
     MissingX509ExtendedKeyUsage,
+    /// X.509 extended-key-usage vector exceeds the closed profile.
+    #[error("X.509 statement has {actual} extended key usages; maximum is {max}")]
+    TooManyX509ExtendedKeyUsages {
+        /// Rejected count.
+        actual: usize,
+        /// Closed maximum.
+        max: usize,
+    },
     /// X.509 extended-key-usage values contain duplicates or are out of order.
     #[error("X.509 extended key usages must be strictly increasing")]
     X509ExtendedKeyUsagesNotStrictlyIncreasing,
+    /// X.509 selective-disclosure vector exceeds the closed profile.
+    #[error("X.509 statement has {actual} disclosed attributes; maximum is {max}")]
+    TooManyX509DisclosedAttributes {
+        /// Rejected count.
+        actual: usize,
+        /// Closed maximum.
+        max: usize,
+    },
+    /// A selective-disclosure index is outside the closed C/O/OU/CN set.
+    #[error("X.509 disclosed attribute index {index} is unsupported")]
+    UnsupportedX509DisclosedAttributeIndex {
+        /// Rejected index.
+        index: u8,
+    },
+    /// A public selective-disclosure digest is the all-zero sentinel.
+    #[error("X.509 disclosed attribute {index} digest must be non-zero")]
+    ZeroX509DisclosedAttributeDigest {
+        /// Attribute index.
+        index: u8,
+    },
+    /// Selective disclosures contain duplicate or reordered indices.
+    #[error("X.509 disclosed attributes must be strictly increasing by index")]
+    X509DisclosedAttributesNotStrictlyIncreasing,
     /// X.509 certificate chain depth is outside the approved profile.
     #[error("X.509 chain depth {depth} is outside 1..={max}")]
     InvalidX509ChainDepth {
@@ -7924,13 +8872,57 @@ pub enum PrivacyStatementValidationError {
     /// Bootle/Lantern disclosure indices contain a duplicate or are out of order.
     #[error("Bootle/Lantern disclosed attribute indices must be strictly increasing")]
     BootleLanternDisclosuresNotStrictlyIncreasing,
-    /// Orchard spend and output action counts differ.
-    #[error("Orchard spend count {spends} differs from output count {outputs}")]
-    OrchardSpendOutputCountMismatch {
-        /// Spent-note nullifier count.
-        spends: u32,
-        /// New-note commitment count.
-        outputs: u32,
+    /// Orchard action count is empty or exceeds the compiled/consensus bound.
+    #[error("Orchard action count {count} is outside 1..={max}")]
+    InvalidOrchardActionCount {
+        /// Observed action count.
+        count: u32,
+        /// Effective compiled and governed maximum.
+        max: u32,
+    },
+    /// An Orchard encrypted-note ciphertext does not have the exact V3 width.
+    #[error(
+        "Orchard action {index} encrypted-note ciphertext uses {bytes} bytes; expected exactly {expected}"
+    )]
+    InvalidOrchardEncryptedNoteSize {
+        /// Zero-based ordered action index.
+        index: u32,
+        /// Observed byte width.
+        bytes: u32,
+        /// Exact required byte width.
+        expected: u32,
+    },
+    /// An Orchard outgoing ciphertext does not have the exact V3 width.
+    #[error(
+        "Orchard action {index} outgoing ciphertext uses {bytes} bytes; expected exactly {expected}"
+    )]
+    InvalidOrchardOutgoingCiphertextSize {
+        /// Zero-based ordered action index.
+        index: u32,
+        /// Observed byte width.
+        bytes: u32,
+        /// Exact required byte width.
+        expected: u32,
+    },
+    /// Two Orchard actions use the same nullifier.
+    #[error("Orchard action {index} duplicates an earlier nullifier")]
+    DuplicateOrchardNullifier {
+        /// Zero-based duplicate action index.
+        index: u32,
+    },
+    /// Two Orchard actions use the same note commitment.
+    #[error("Orchard action {index} duplicates an earlier note commitment")]
+    DuplicateOrchardNoteCommitment {
+        /// Zero-based duplicate action index.
+        index: u32,
+    },
+    /// Orchard value balance is outside the signed native API range.
+    #[error("Orchard value balance magnitude {amount} exceeds {max}")]
+    OrchardValueBalanceOutOfRange {
+        /// Observed absolute magnitude.
+        amount: u128,
+        /// Exact inclusive maximum.
+        max: u128,
     },
     /// FCMP++ consumed-output and link-tag counts differ.
     #[error("FCMP++ input count {inputs} differs from link-tag count {link_tags}")]
@@ -8451,6 +9443,81 @@ mod tests {
         PrivacyCommitmentV1::new(raw(seed))
     }
 
+    fn zk_ace_allowlist() -> Vec<AccountId> {
+        let mut allowlist = vec![account(13), account(14), account(15)];
+        allowlist.sort_unstable();
+        allowlist
+    }
+
+    fn zk_ace_policy(
+        epoch: u64,
+        identity_seed: u8,
+        lifecycle: PrivacyZkAcePolicyLifecycleV1,
+    ) -> PrivacyZkAcePolicyRecordV1 {
+        PrivacyZkAcePolicyRecordV1::new(
+            PrivacyPolicyIdV1::new(raw(10)),
+            commitment(identity_seed),
+            PrivacyPolicyDigestV1::new(raw(12)),
+            epoch,
+            asset_definition_id(),
+            zk_ace_allowlist(),
+            lifecycle,
+        )
+        .expect("canonical ZK-ACE policy fixture")
+    }
+
+    fn redigest_zk_ace_policy(record: &mut PrivacyZkAcePolicyRecordV1) {
+        record.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
+        record.record_digest = record
+            .compute_record_digest()
+            .expect("canonical ZK-ACE policy digest material");
+    }
+
+    fn zk_x509_trust_anchor(
+        epoch: u64,
+        trust_store_seed: u8,
+        previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509TrustAnchorRecordV1 {
+        PrivacyZkX509TrustAnchorRecordV1::new(
+            PrivacyIssuerIdV1::new(raw(61)),
+            epoch,
+            PrivacyX509TrustStoreDigestV1::new(raw(trust_store_seed)),
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 trust-anchor fixture")
+    }
+
+    fn zk_x509_certificate_policy(
+        epoch: u64,
+        policy_seed: u8,
+        disclosures: Vec<u8>,
+        previous_record_digest: Option<PrivacyZkX509CertificatePolicyRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509CertificatePolicyRecordV1 {
+        PrivacyZkX509CertificatePolicyRecordV1::new(
+            PrivacyIssuerIdV1::new(raw(61)),
+            PrivacyPolicyIdV1::new(raw(62)),
+            epoch,
+            PrivacyPolicyDigestV1::new(raw(policy_seed)),
+            PrivacyX509KeyUsageV1 {
+                digital_signature: true,
+                content_commitment: false,
+                key_encipherment: false,
+                key_agreement: false,
+            },
+            vec![
+                PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+            ],
+            disclosures,
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 certificate-policy fixture")
+    }
+
     fn nullifier(seed: u8) -> PrivacyNullifierV1 {
         PrivacyNullifierV1::new(raw(seed))
     }
@@ -8504,6 +9571,18 @@ mod tests {
             ephemeral_public_key: PrivacyEncryptionKeyV1::new(raw(recipient_seed.wrapping_add(1))),
             commitment: commitment(commitment_seed),
             ciphertext: vec![recipient_seed, commitment_seed, 0xA5],
+        }
+    }
+
+    fn orchard_action(seed: u8) -> PrivacyOrchardActionV1 {
+        PrivacyOrchardActionV1 {
+            nullifier: raw(seed),
+            randomized_key: raw(seed.wrapping_add(1)),
+            note_commitment: raw(seed.wrapping_add(2)),
+            ephemeral_key: raw(seed.wrapping_add(3)),
+            encrypted_note: vec![seed.wrapping_add(4); ORCHARD_ENCRYPTED_NOTE_BYTES_V1],
+            outgoing_ciphertext: vec![seed.wrapping_add(5); ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1],
+            value_commitment: raw(seed.wrapping_add(6)),
         }
     }
 
@@ -8628,6 +9707,12 @@ mod tests {
                 context: context(),
                 trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
                 certificate_policy_id: PrivacyPolicyIdV1::new(raw(62)),
+                trust_anchor_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1::new(raw(69)),
+                trust_anchor_record_epoch: 3,
+                certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1::new(
+                    raw(70),
+                ),
+                certificate_policy_record_epoch: 4,
                 subject_public_key_digest: PrivacyCertificateKeyDigestV1::new(raw(63)),
                 ca_membership_root: PrivacyRootV1::new(raw(64)),
                 ca_membership_root_epoch: 10,
@@ -8642,6 +9727,16 @@ mod tests {
                 extended_key_usages: vec![
                     PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
                     PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+                ],
+                disclosed_attributes: vec![
+                    PrivacyZkX509DisclosedAttributeV1 {
+                        index: 0,
+                        attribute_digest: PrivacyAttributeDigestV1::new(raw(71)),
+                    },
+                    PrivacyZkX509DisclosedAttributeV1 {
+                        index: 3,
+                        attribute_digest: PrivacyAttributeDigestV1::new(raw(72)),
+                    },
                 ],
                 not_before_unix_seconds: 1_000,
                 not_after_unix_seconds: 2_000,
@@ -8690,11 +9785,7 @@ mod tests {
                 pool_id: PrivacyPoolIdV1::new(raw(81)),
                 anchor: PrivacyRootV1::new(raw(82)),
                 anchor_epoch: 13,
-                next_anchor: PrivacyRootV1::new(raw(86)),
-                next_anchor_epoch: 14,
-                spend_nullifiers: vec![nullifier(83)],
-                output_commitments: vec![commitment(84)],
-                encrypted_outputs: vec![encrypted_output(84, 85)],
+                actions: vec![orchard_action(83)],
                 value_balance: PrivacyValueBalanceV1::balanced(),
                 fee: 2,
                 expiry_height: 10_000,
@@ -8820,12 +9911,9 @@ mod tests {
                     batch.next_account_registry_root_epoch
                 )
             }
-            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => corrupt!(
-                statement.anchor,
-                statement.anchor_epoch,
-                statement.next_anchor,
-                statement.next_anchor_epoch
-            ),
+            PrivacyStatementV1::OrchardHalo2ActionsV1(_) => {
+                panic!("Orchard successor roots are derived from the authoritative node frontier")
+            }
             PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => corrupt!(
                 statement.output_set_root,
                 statement.root_epoch,
@@ -10300,7 +11388,6 @@ mod tests {
         let protocols = [
             PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyProtocolIdV1::IrohaZkAmsV1,
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             PrivacyProtocolIdV1::PqMaspStarkV0,
@@ -10937,12 +12024,104 @@ mod tests {
         assert!(mutate_x509(|statement| statement.ca_membership_root_epoch = 0).is_err());
         assert!(mutate_x509(|statement| statement.crl_nonmembership_root_epoch = 0).is_err());
         assert!(matches!(
+            mutate_x509(|statement| statement.trust_anchor_record_epoch = 0),
+            Err(PrivacyStatementValidationError::ZeroEpoch {
+                field: PrivacyEpochFieldV1::X509TrustAnchorRecord
+            })
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.trust_anchor_record_digest =
+                    PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::X509TrustAnchorRecordDigest
+            })
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| statement.certificate_policy_record_epoch = 0),
+            Err(PrivacyStatementValidationError::ZeroEpoch {
+                field: PrivacyEpochFieldV1::X509CertificatePolicyRecord
+            })
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.certificate_policy_record_digest =
+                    PrivacyZkX509CertificatePolicyRecordDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::X509CertificatePolicyRecordDigest
+            })
+        ));
+        assert!(matches!(
             mutate_x509(|statement| statement.key_usage.digital_signature = false),
             Err(PrivacyStatementValidationError::InvalidX509KeyUsage)
         ));
         assert!(matches!(
             mutate_x509(|statement| statement.extended_key_usages.clear()),
             Err(PrivacyStatementValidationError::MissingX509ExtendedKeyUsage)
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.extended_key_usages = vec![
+                    PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                    PrivacyX509ExtendedKeyUsageV1::DocumentSigning,
+                    PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+                    PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+                ]
+            }),
+            Err(
+                PrivacyStatementValidationError::TooManyX509ExtendedKeyUsages {
+                    actual: 4,
+                    max: ZK_X509_MAX_EXTENDED_KEY_USAGES_V1
+                }
+            )
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.extended_key_usages = vec![
+                    PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                    PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                ]
+            }),
+            Err(PrivacyStatementValidationError::X509ExtendedKeyUsagesNotStrictlyIncreasing)
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.disclosed_attributes[1].index = statement.disclosed_attributes[0].index
+            }),
+            Err(PrivacyStatementValidationError::X509DisclosedAttributesNotStrictlyIncreasing)
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| statement.disclosed_attributes[1].index = 4),
+            Err(
+                PrivacyStatementValidationError::UnsupportedX509DisclosedAttributeIndex {
+                    index: 4
+                }
+            )
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.disclosed_attributes[0].attribute_digest =
+                    PrivacyAttributeDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroX509DisclosedAttributeDigest { index: 0 })
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.disclosed_attributes = (0_u8..5)
+                    .map(|index| PrivacyZkX509DisclosedAttributeV1 {
+                        index,
+                        attribute_digest: PrivacyAttributeDigestV1::new(raw(index + 1)),
+                    })
+                    .collect()
+            }),
+            Err(
+                PrivacyStatementValidationError::TooManyX509DisclosedAttributes {
+                    actual: 5,
+                    max: ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1
+                }
+            )
         ));
         assert!(matches!(
             mutate_x509(|statement| statement.chain_depth = ZK_X509_MAX_CHAIN_DEPTH_V1 + 1),
@@ -10960,6 +12139,294 @@ mod tests {
             }),
             Err(PrivacyStatementValidationError::InvalidX509ChainSize { .. })
         ));
+    }
+
+    #[test]
+    fn zk_x509_governance_records_are_self_digested_strict_and_roundtrip() {
+        let trust_anchor = zk_x509_trust_anchor(
+            ZK_X509_INITIAL_RECORD_EPOCH_V1,
+            80,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        trust_anchor
+            .validate_initial()
+            .expect("canonical trust-anchor origin");
+        assert_eq!(
+            trust_anchor
+                .compute_record_digest()
+                .expect("recompute trust-anchor digest"),
+            trust_anchor.record_digest
+        );
+        let encoded = norito::to_bytes(&trust_anchor).expect("encode trust-anchor");
+        let decoded: PrivacyZkX509TrustAnchorRecordV1 =
+            norito::decode_from_bytes(&encoded).expect("decode trust-anchor");
+        assert_eq!(decoded, trust_anchor);
+        decoded
+            .validate_initial()
+            .expect("decoded trust-anchor validates");
+        let json = norito::json::to_json(&trust_anchor).expect("encode trust-anchor JSON");
+        let decoded_json: PrivacyZkX509TrustAnchorRecordV1 =
+            norito::json::from_json(&json).expect("decode trust-anchor JSON");
+        assert_eq!(decoded_json, trust_anchor);
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("trust-anchor JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyZkX509TrustAnchorRecordV1>(&format!(
+                "{object_prefix},\"legacy_anchor\":true}}"
+            ))
+            .is_err()
+        );
+
+        let certificate_policy = zk_x509_certificate_policy(
+            ZK_X509_INITIAL_RECORD_EPOCH_V1,
+            81,
+            vec![0, 3],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        certificate_policy
+            .validate_initial()
+            .expect("canonical certificate-policy origin");
+        assert_eq!(
+            certificate_policy
+                .compute_record_digest()
+                .expect("recompute certificate-policy digest"),
+            certificate_policy.record_digest
+        );
+        let encoded = norito::to_bytes(&certificate_policy).expect("encode certificate policy");
+        let decoded: PrivacyZkX509CertificatePolicyRecordV1 =
+            norito::decode_from_bytes(&encoded).expect("decode certificate policy");
+        assert_eq!(decoded, certificate_policy);
+        decoded
+            .validate_initial()
+            .expect("decoded certificate policy validates");
+        let json =
+            norito::json::to_json(&certificate_policy).expect("encode certificate-policy JSON");
+        let decoded_json: PrivacyZkX509CertificatePolicyRecordV1 =
+            norito::json::from_json(&json).expect("decode certificate-policy JSON");
+        assert_eq!(decoded_json, certificate_policy);
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("certificate-policy JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyZkX509CertificatePolicyRecordV1>(&format!(
+                "{object_prefix},\"legacy_policy\":true}}"
+            ))
+            .is_err()
+        );
+
+        let mut anchor_tamperings = Vec::new();
+        let mut tampered = trust_anchor;
+        tampered.trust_anchor_id = PrivacyIssuerIdV1::new(raw(82));
+        anchor_tamperings.push(tampered);
+        let mut tampered = trust_anchor;
+        tampered.trust_store_digest = PrivacyX509TrustStoreDigestV1::new(raw(83));
+        anchor_tamperings.push(tampered);
+        let mut tampered = trust_anchor;
+        tampered.lifecycle = PrivacyZkX509RecordLifecycleV1::Revoked;
+        anchor_tamperings.push(tampered);
+        for tampered in anchor_tamperings {
+            assert!(tampered.validate().is_err());
+        }
+        let mut zero_digest = trust_anchor;
+        zero_digest.record_digest = PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32]);
+        assert_eq!(
+            zero_digest.validate(),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest)
+        );
+
+        let mut policy_tamperings = Vec::new();
+        let mut tampered = certificate_policy.clone();
+        tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(84));
+        policy_tamperings.push(tampered);
+        let mut tampered = certificate_policy.clone();
+        tampered.required_key_usage.key_agreement = true;
+        policy_tamperings.push(tampered);
+        let mut tampered = certificate_policy.clone();
+        tampered.required_extended_key_usages.remove(0);
+        policy_tamperings.push(tampered);
+        let mut tampered = certificate_policy;
+        tampered.required_disclosed_attribute_indices = vec![0, 2];
+        policy_tamperings.push(tampered);
+        for tampered in policy_tamperings {
+            assert_eq!(
+                tampered.validate(),
+                Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn zk_x509_policy_caps_ordering_and_transition_adversaries_fail_closed() {
+        let key_usage = PrivacyX509KeyUsageV1 {
+            digital_signature: true,
+            content_commitment: false,
+            key_encipherment: false,
+            key_agreement: false,
+        };
+        let construct_policy = |extended_key_usages, disclosures| {
+            PrivacyZkX509CertificatePolicyRecordV1::new(
+                PrivacyIssuerIdV1::new(raw(61)),
+                PrivacyPolicyIdV1::new(raw(62)),
+                1,
+                PrivacyPolicyDigestV1::new(raw(90)),
+                key_usage,
+                extended_key_usages,
+                disclosures,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            )
+        };
+        construct_policy(
+            vec![
+                PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                PrivacyX509ExtendedKeyUsageV1::DocumentSigning,
+                PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+            ],
+            vec![0, 1, 2, 3],
+        )
+        .expect("exact EKU and disclosure caps are valid");
+        assert!(matches!(
+            construct_policy(
+                vec![
+                    PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                    PrivacyX509ExtendedKeyUsageV1::DocumentSigning,
+                    PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+                    PrivacyX509ExtendedKeyUsageV1::WalletIdentity,
+                ],
+                vec![]
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::TooManyExtendedKeyUsages {
+                    actual: 4,
+                    max: ZK_X509_MAX_EXTENDED_KEY_USAGES_V1
+                }
+            )
+        ));
+        assert!(matches!(
+            construct_policy(
+                vec![
+                    PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                    PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
+                ],
+                vec![]
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ExtendedKeyUsagesNotStrictlyIncreasing)
+        ));
+        assert!(matches!(
+            construct_policy(
+                vec![PrivacyX509ExtendedKeyUsageV1::ClientAuthentication],
+                vec![0, 1, 2, 3, 4]
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::TooManyDisclosedAttributes {
+                    actual: 5,
+                    max: ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1
+                }
+            )
+        ));
+        assert!(matches!(
+            construct_policy(
+                vec![PrivacyX509ExtendedKeyUsageV1::ClientAuthentication],
+                vec![0, 2, 2]
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::DisclosedAttributeIndicesNotStrictlyIncreasing
+            )
+        ));
+
+        let anchor_origin =
+            zk_x509_trust_anchor(1, 91, None, PrivacyZkX509RecordLifecycleV1::Active);
+        let anchor_rotation = zk_x509_trust_anchor(
+            2,
+            92,
+            Some(anchor_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &anchor_rotation)
+            .expect("canonical trust-anchor rotation");
+        let anchor_noop = zk_x509_trust_anchor(
+            2,
+            91,
+            Some(anchor_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &anchor_noop),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged)
+        );
+        let anchor_skipped = zk_x509_trust_anchor(
+            3,
+            92,
+            Some(anchor_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert!(matches!(
+            validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &anchor_skipped),
+            Err(
+                PrivacyZkX509TransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                    expected: 2,
+                    actual: 3
+                }
+            )
+        ));
+        let anchor_revoked = zk_x509_trust_anchor(
+            2,
+            91,
+            Some(anchor_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        validate_zk_x509_trust_anchor_revocation_v1(&anchor_origin, &anchor_revoked)
+            .expect("canonical trust-anchor revocation");
+        let after_terminal = zk_x509_trust_anchor(
+            3,
+            93,
+            Some(anchor_revoked.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_trust_anchor_rotation_v1(&anchor_revoked, &after_terminal),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CurrentNotActive)
+        );
+
+        let policy_origin = zk_x509_certificate_policy(
+            1,
+            94,
+            vec![0, 3],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        let policy_rotation = zk_x509_certificate_policy(
+            2,
+            95,
+            vec![0, 2, 3],
+            Some(policy_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        validate_zk_x509_certificate_policy_rotation_v1(&policy_origin, &policy_rotation)
+            .expect("canonical policy rotation");
+        let policy_revoked = zk_x509_certificate_policy(
+            2,
+            94,
+            vec![0, 3],
+            Some(policy_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        validate_zk_x509_certificate_policy_revocation_v1(&policy_origin, &policy_revoked)
+            .expect("canonical policy revocation");
+        let mutated_revocation = zk_x509_certificate_policy(
+            2,
+            96,
+            vec![0, 3],
+            Some(policy_origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        assert_eq!(
+            validate_zk_x509_certificate_policy_revocation_v1(&policy_origin, &mutated_revocation),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
+        );
     }
 
     #[test]
@@ -11040,6 +12507,372 @@ mod tests {
         all_boundaries
             .validate(&limits)
             .expect("all eight direct zero/maximum values are canonical");
+    }
+
+    #[test]
+    fn zk_ace_policy_record_is_canonical_self_digested_and_roundtrips() {
+        let record = zk_ace_policy(
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
+            11,
+            PrivacyZkAcePolicyLifecycleV1::Active,
+        );
+        record.validate_initial().expect("canonical initial policy");
+        assert_eq!(
+            record
+                .compute_record_digest()
+                .expect("recompute canonical policy digest"),
+            record.record_digest
+        );
+
+        let encoded = norito::to_bytes(&record).expect("encode ZK-ACE policy");
+        let decoded: PrivacyZkAcePolicyRecordV1 =
+            norito::decode_from_bytes(&encoded).expect("decode ZK-ACE policy");
+        assert_eq!(decoded, record);
+        decoded
+            .validate_initial()
+            .expect("decoded policy validates");
+
+        let json = norito::json::to_json(&record).expect("encode ZK-ACE policy JSON");
+        let decoded_json: PrivacyZkAcePolicyRecordV1 =
+            norito::json::from_json(&json).expect("decode ZK-ACE policy JSON");
+        assert_eq!(decoded_json, record);
+        decoded_json
+            .validate_initial()
+            .expect("JSON-decoded policy validates");
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("policy JSON is a top-level object");
+        let unknown_field = format!("{object_prefix},\"unexpected_policy_alias\":true}}");
+        assert!(
+            norito::json::from_json::<PrivacyZkAcePolicyRecordV1>(&unknown_field).is_err(),
+            "unknown JSON fields must not create an alternate first-release policy encoding"
+        );
+
+        let mut zero_digest = record.clone();
+        zero_digest.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
+        assert_eq!(
+            zero_digest.validate(),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroRecordDigest)
+        );
+
+        let mut tamperings = Vec::new();
+        let mut tampered = record.clone();
+        tampered.policy_id = PrivacyPolicyIdV1::new(raw(90));
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.identity_commitment = commitment(91);
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(92));
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.authorization_epoch = 2;
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("other_asset").expect("asset name"),
+        );
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.source_allowlist.push(account(99));
+        tampered.source_allowlist.sort_unstable();
+        tamperings.push(tampered);
+        let mut tampered = record;
+        tampered.lifecycle = PrivacyZkAcePolicyLifecycleV1::Revoked;
+        tamperings.push(tampered);
+        for tampered in tamperings {
+            assert_eq!(
+                tampered.validate(),
+                Err(PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn zk_ace_policy_registration_rejects_every_noncanonical_boundary() {
+        let policy_id = PrivacyPolicyIdV1::new(raw(10));
+        let identity = commitment(11);
+        let digest = PrivacyPolicyDigestV1::new(raw(12));
+        let asset = asset_definition_id();
+        let allowlist = zk_ace_allowlist();
+        let construct = |policy_id,
+                         identity_commitment,
+                         policy_digest,
+                         authorization_epoch,
+                         source_allowlist,
+                         lifecycle| {
+            PrivacyZkAcePolicyRecordV1::new(
+                policy_id,
+                identity_commitment,
+                policy_digest,
+                authorization_epoch,
+                asset.clone(),
+                source_allowlist,
+                lifecycle,
+            )
+        };
+
+        assert_eq!(
+            construct(
+                PrivacyPolicyIdV1::new([0; 32]),
+                identity,
+                digest,
+                1,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyId)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                PrivacyCommitmentV1::new([0; 32]),
+                digest,
+                1,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroIdentityCommitment)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                PrivacyPolicyDigestV1::new([0; 32]),
+                1,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroPolicyDigest)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                0,
+                allowlist.clone(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroAuthorizationEpoch)
+        );
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                Vec::new(),
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::EmptySourceAllowlist)
+        );
+
+        let over_limit = vec![account(20); PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1 + 1];
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                over_limit,
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(
+                PrivacyZkAcePolicyRecordValidationErrorV1::SourceAllowlistTooLarge {
+                    actual: PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1 + 1,
+                    max: PRIVACY_ZK_ACE_MAX_SOURCE_ACCOUNTS_V1,
+                }
+            )
+        );
+
+        let mut reversed = allowlist.clone();
+        reversed.reverse();
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                reversed,
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist)
+        );
+        let duplicate = vec![allowlist[0].clone(), allowlist[0].clone()];
+        assert_eq!(
+            construct(
+                policy_id,
+                identity,
+                digest,
+                1,
+                duplicate,
+                PrivacyZkAcePolicyLifecycleV1::Active,
+            ),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist)
+        );
+
+        let noncanonical_epoch = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            noncanonical_epoch.validate_initial(),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalInitialEpoch { actual: 2 })
+        );
+        let initially_revoked = zk_ace_policy(
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
+            11,
+            PrivacyZkAcePolicyLifecycleV1::Revoked,
+        );
+        assert_eq!(
+            initially_revoked.validate_initial(),
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::InitialPolicyNotActive)
+        );
+    }
+
+    #[test]
+    fn zk_ace_rotation_rejects_replays_skips_noops_and_terminal_policies() {
+        let current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let successor = zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Active);
+        validate_zk_ace_policy_rotation_v1(&current, &successor)
+            .expect("canonical one-epoch identity rotation");
+
+        let mut invalid_current = current.clone();
+        invalid_current.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(raw(90));
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&invalid_current, &successor),
+            Err(
+                PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidCurrent(
+                    PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch
+                )
+            )
+        );
+        let mut invalid_successor = successor.clone();
+        invalid_successor.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(raw(91));
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &invalid_successor),
+            Err(
+                PrivacyZkAcePolicyTransitionValidationErrorV1::InvalidSuccessor(
+                    PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch
+                )
+            )
+        );
+
+        let mut different_policy = successor.clone();
+        different_policy.policy_id = PrivacyPolicyIdV1::new(raw(92));
+        redigest_zk_ace_policy(&mut different_policy);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &different_policy),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch)
+        );
+
+        for epoch in [1, 3] {
+            let candidate = zk_ace_policy(epoch, 21, PrivacyZkAcePolicyLifecycleV1::Active);
+            assert!(matches!(
+                validate_zk_ace_policy_rotation_v1(&current, &candidate),
+                Err(
+                    PrivacyZkAcePolicyTransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                        expected: 2,
+                        actual
+                    }
+                ) if actual == epoch
+            ));
+        }
+
+        let revoked_successor = zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &revoked_successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive)
+        );
+        let no_op = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&current, &no_op),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged)
+        );
+
+        let revoked_current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&revoked_current, &successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive)
+        );
+        let max_epoch = zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let max_successor = zk_ace_policy(u64::MAX, 21, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            validate_zk_ace_policy_rotation_v1(&max_epoch, &max_successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)
+        );
+    }
+
+    #[test]
+    fn zk_ace_revocation_is_one_step_terminal_and_content_preserving() {
+        let current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let successor = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        validate_zk_ace_policy_revocation_v1(&current, &successor)
+            .expect("canonical one-epoch revocation");
+
+        let active_successor = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&current, &active_successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked)
+        );
+
+        let mut mutations = Vec::new();
+        let mut changed_identity = successor.clone();
+        changed_identity.identity_commitment = commitment(21);
+        redigest_zk_ace_policy(&mut changed_identity);
+        mutations.push(changed_identity);
+        let mut changed_policy_digest = successor.clone();
+        changed_policy_digest.policy_digest = PrivacyPolicyDigestV1::new(raw(22));
+        redigest_zk_ace_policy(&mut changed_policy_digest);
+        mutations.push(changed_policy_digest);
+        let mut changed_asset = successor.clone();
+        changed_asset.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("other_asset").expect("asset name"),
+        );
+        redigest_zk_ace_policy(&mut changed_asset);
+        mutations.push(changed_asset);
+        let mut changed_allowlist = successor.clone();
+        changed_allowlist.source_allowlist.push(account(99));
+        changed_allowlist.source_allowlist.sort_unstable();
+        redigest_zk_ace_policy(&mut changed_allowlist);
+        mutations.push(changed_allowlist);
+        for mutation in mutations {
+            assert_eq!(
+                validate_zk_ace_policy_revocation_v1(&current, &mutation),
+                Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged)
+            );
+        }
+
+        let mut different_policy = successor.clone();
+        different_policy.policy_id = PrivacyPolicyIdV1::new(raw(92));
+        redigest_zk_ace_policy(&mut different_policy);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&current, &different_policy),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch)
+        );
+        for epoch in [1, 3] {
+            let candidate = zk_ace_policy(epoch, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+            assert!(matches!(
+                validate_zk_ace_policy_revocation_v1(&current, &candidate),
+                Err(
+                    PrivacyZkAcePolicyTransitionValidationErrorV1::NonCanonicalSuccessorEpoch {
+                        expected: 2,
+                        actual
+                    }
+                ) if actual == epoch
+            ));
+        }
+        let revoked_current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&revoked_current, &successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive)
+        );
+        let max_epoch = zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let max_successor = zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        assert_eq!(
+            validate_zk_ace_policy_revocation_v1(&max_epoch, &max_successor),
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)
+        );
     }
 
     #[test]
@@ -11212,36 +13045,119 @@ mod tests {
         let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
             unreachable!()
         };
-        statement.output_commitments.push(commitment(110));
-        statement.encrypted_outputs.push(encrypted_output(110, 111));
+        statement.actions.clear();
         assert!(matches!(
             orchard.validate(&limits),
-            Err(
-                PrivacyStatementValidationError::OrchardSpendOutputCountMismatch {
-                    spends: 1,
-                    outputs: 2
-                }
-            )
+            Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count: 0, max: 2 })
         ));
 
         let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
         let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
             unreachable!()
         };
-        statement.spend_nullifiers = vec![nullifier(110), nullifier(111), nullifier(112)];
-        statement.output_commitments = vec![commitment(113), commitment(114), commitment(115)];
-        statement.encrypted_outputs = vec![
-            encrypted_output(113, 116),
-            encrypted_output(114, 118),
-            encrypted_output(115, 120),
+        statement.actions = vec![
+            orchard_action(110),
+            orchard_action(120),
+            orchard_action(130),
         ];
         assert!(matches!(
             orchard.validate(&limits),
-            Err(PrivacyStatementValidationError::TooManyNullifiers {
-                count: 3,
-                max: ORCHARD_MAX_ACTIONS_V1
-            })
+            Err(PrivacyStatementValidationError::InvalidOrchardActionCount { count: 3, max: 2 })
         ));
+
+        for malformed_len in [
+            ORCHARD_ENCRYPTED_NOTE_BYTES_V1 - 1,
+            ORCHARD_ENCRYPTED_NOTE_BYTES_V1 + 1,
+        ] {
+            let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+            let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+                unreachable!()
+            };
+            statement.actions[0]
+                .encrypted_note
+                .resize(malformed_len, 0xA5);
+            assert!(matches!(
+                orchard.validate(&limits),
+                Err(
+                    PrivacyStatementValidationError::InvalidOrchardEncryptedNoteSize {
+                        index: 0,
+                        ..
+                    }
+                )
+            ));
+        }
+        for malformed_len in [
+            ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1 - 1,
+            ORCHARD_OUTGOING_CIPHERTEXT_BYTES_V1 + 1,
+        ] {
+            let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+            let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+                unreachable!()
+            };
+            statement.actions[0]
+                .outgoing_ciphertext
+                .resize(malformed_len, 0xA5);
+            assert!(matches!(
+                orchard.validate(&limits),
+                Err(
+                    PrivacyStatementValidationError::InvalidOrchardOutgoingCiphertextSize {
+                        index: 0,
+                        ..
+                    }
+                )
+            ));
+        }
+
+        let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+            unreachable!()
+        };
+        statement.actions.push(orchard_action(120));
+        statement.actions[1].nullifier = statement.actions[0].nullifier;
+        assert_eq!(
+            orchard.validate(&limits),
+            Err(PrivacyStatementValidationError::DuplicateOrchardNullifier { index: 1 })
+        );
+
+        let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+            unreachable!()
+        };
+        statement.actions.push(orchard_action(120));
+        statement.actions[1].note_commitment = statement.actions[0].note_commitment;
+        assert_eq!(
+            orchard.validate(&limits),
+            Err(PrivacyStatementValidationError::DuplicateOrchardNoteCommitment { index: 1 })
+        );
+
+        let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+            unreachable!()
+        };
+        statement.value_balance = PrivacyValueBalanceV1 {
+            direction: PrivacyValueBalanceDirectionV1::OutOfPool,
+            amount: ORCHARD_MAX_VALUE_BALANCE_V1 + 1,
+        };
+        assert_eq!(
+            orchard.validate(&limits),
+            Err(
+                PrivacyStatementValidationError::OrchardValueBalanceOutOfRange {
+                    amount: ORCHARD_MAX_VALUE_BALANCE_V1 + 1,
+                    max: ORCHARD_MAX_VALUE_BALANCE_V1,
+                }
+            )
+        );
+
+        let mut orchard = statement_for(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut orchard else {
+            unreachable!()
+        };
+        statement.actions.push(orchard_action(120));
+        statement.actions[0].nullifier = [0; 32];
+        statement.actions[0].note_commitment = [0; 32];
+        orchard
+            .validate(&limits)
+            .expect("zero is a canonical Pallas field encoding, not a schema sentinel");
 
         let mut fcmp = statement_for(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1);
         let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &mut fcmp else {

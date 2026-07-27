@@ -672,7 +672,8 @@ THEOREM OverdueResponsivePacketStopsPostGstClock ==
     (gst
       /\ packet \in OverdueResponsivePackets)
       => ~AsyncTickEnabled
-BY SMT DEF AsyncTickEnabled, OverdueResponsivePackets
+BY SMT DEF AsyncTickEnabled, OverdueResponsivePackets,
+           AsyncPacketOwnsClockDeadline
 
 THEOREM CertifiedRecoveryNeverRequestsSelf ==
   \A node \in ValidatorIds:

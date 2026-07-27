@@ -2170,7 +2170,7 @@ impl BoundedIngress<AdapterCommand> {
             reservation.tag(),
             CommandClass::Completion,
             AdapterCommand::BodyAvailable {
-                manifest: reservation.manifest,
+                manifest: reservation.manifest.clone(),
             },
             Instant::now(),
         );

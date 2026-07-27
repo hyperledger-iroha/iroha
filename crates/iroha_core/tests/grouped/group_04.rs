@@ -44,6 +44,8 @@ mod sparse_block_bytes;
 mod sumeragi_doc_sync;
 #[path = "../validation_fee_admission.rs"]
 mod validation_fee_admission;
+#[path = "../validation_fee_plain_ballot_gates.rs"]
+mod validation_fee_plain_ballot_gates;
 #[path = "../zk_asset_stark_envelope.rs"]
 mod zk_asset_stark_envelope;
 #[path = "../zk_asset_vk_enforcement.rs"]

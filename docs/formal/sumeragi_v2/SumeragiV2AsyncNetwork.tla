@@ -1024,7 +1024,7 @@ selected highest-Prepare reference, but deliberately omits QC signer sets and
 TC timeout-vote/share composition.  Proposal and timeout-vote payloads apply
 the same projection to nested certificate evidence.  Exact wire
 authentication remains a delivery precondition; this projection is used only
-after that boundary to bound the durable serviced-owner table.
+after that boundary to bound the transient and terminal service-owner tables.
 
 Certified responses also normalize their relay hop to the
 aggregate-untrusted source used by the physical ingress owner.  Retried
@@ -3195,8 +3195,9 @@ GST.  It may strictly contain the positive-power roster, so the preferred
 signed archive fanout always includes zero-power/non-roster peers without
 granting them a vote.  The fanout identity is stable across availability
 changes; only the service proof relies on Responsive peers being online after
-GST.  The request's certified signer set is used solely when that static union
-would otherwise be empty.
+GST.  The old QC signer set does not restrict which authenticated applied
+archive may answer.  It is used only as a total-route fallback when the static
+responsive union is empty in a degenerate model instance.
 ***************************************************************************)
 CertifiedArchiveRoutes(node, qc) ==
   LET postGstRoutes ==
@@ -5318,8 +5319,8 @@ validator completion lanes remain admissible, and a fresh relay occurrence
 can be admitted after the recipient's request authority retires.  Chunk
 service has a separate durable stage marker: an already held receipt, a
 strictly advanced consumer view, or durable Decision rejects retry admission.
-This permits bounded candidate-tombstone reclamation without recreating the
-old route-neutral chunk stage.
+This permits bounded candidate lifecycle-record reclamation without recreating
+the old route-neutral chunk stage.
 ***************************************************************************)
 CertifiedResponsePacketPolicyRejected(item) ==
   /\ item.kind = "CertifiedResponse"
@@ -8133,6 +8134,20 @@ AsyncNetworkStep ==
     AdmitIngressPacket(recipient, source)
 
 (***************************************************************************
+An authorized exact-reply request which has no lifecycle and cannot yet be
+answered remains in transport, but it does not own the clock deadline.  The
+Serve transport gate deliberately excludes physical capacity and selector
+barriers: a serviceable request blocked only by those finite owners therefore
+still owns its deadline.  The retained packet keeps its original deadline;
+as soon as serviceability or lifecycle ownership opens the gate, it
+immediately re-enters the overdue corridor.
+***************************************************************************)
+AsyncDormantExactReplyRequestPacket(packet) ==
+  /\ packet \in asyncTransport
+  /\ ~AsyncServeTransportAdmissionGateAllows(
+       packet.item.envelope.recipient, packet.item)
+
+(***************************************************************************
 The clock waits for bounded post-GST work between timed responsive service
 nodes.  A certified response can use an independent relay lane, so its
 authenticated envelope occurrence—not the outer `item.source`—places it in
@@ -8140,15 +8155,43 @@ the same deadline corridor.  Commit-certificate responses retain their exact
 sent occurrence.  Unauthenticated aggregate-lane fault traffic cannot hold
 the clock indefinitely.
 ***************************************************************************)
+AsyncPacketOwnsClockDeadline(packet) ==
+  /\ packet \in asyncTransport
+  /\ AsyncServeTransportAdmissionGateAllows(
+       packet.item.envelope.recipient, packet.item)
+  /\ packet.item.envelope.recipient \in AsyncTimedServiceNodes
+  /\ \/ packet.item.source \in AsyncTimedServiceNodes
+     \/ /\ packet.item.kind
+              \in {"CertifiedResponse",
+                   "CommitCertificateResponse"}
+           /\ IngressItemHasAuthenticatedHistory(packet.item)
+  /\ packet.deadline <= asyncNow
+
 OverdueResponsivePackets ==
   {packet \in asyncTransport:
-     /\ packet.item.envelope.recipient \in AsyncTimedServiceNodes
-     /\ \/ packet.item.source \in AsyncTimedServiceNodes
-        \/ /\ packet.item.kind
-                 \in {"CertifiedResponse",
-                      "CommitCertificateResponse"}
-              /\ IngressItemHasAuthenticatedHistory(packet.item)
-     /\ packet.deadline <= asyncNow}
+     AsyncPacketOwnsClockDeadline(packet)}
+
+THEOREM AsyncDormantExactReplyRequestPacketIsRetained ==
+  \A packet:
+    AsyncDormantExactReplyRequestPacket(packet)
+      => packet \in asyncTransport
+BY DEF AsyncDormantExactReplyRequestPacket
+
+THEOREM AsyncGateOpenDueResponsivePacketReentersClockDeadline ==
+  \A packet:
+    /\ packet \in asyncTransport
+    /\ AsyncServeTransportAdmissionGateAllows(
+         packet.item.envelope.recipient, packet.item)
+    /\ packet.item.envelope.recipient \in AsyncTimedServiceNodes
+    /\ \/ packet.item.source \in AsyncTimedServiceNodes
+       \/ /\ packet.item.kind
+                \in {"CertifiedResponse",
+                     "CommitCertificateResponse"}
+             /\ IngressItemHasAuthenticatedHistory(packet.item)
+    /\ packet.deadline <= asyncNow
+    => /\ AsyncPacketOwnsClockDeadline(packet)
+       /\ packet \in OverdueResponsivePackets
+BY DEF AsyncPacketOwnsClockDeadline, OverdueResponsivePackets
 
 AsyncTickEnabled ==
   \/ ~gst
@@ -8219,9 +8262,11 @@ AsyncNonCrashStep ==
 
 (***************************************************************************
 One global frame owns the bounded control-slot table, the recipient-local
-certified-response claim metadata, and candidate service tombstones.  Durable
-external candidate markers are restart-stable; the three process-local
-signature-completion markers are retired when durable intents are replayed.
+certified-response claim metadata, transient candidate service markers, and
+terminal candidate tombstones.  Transient markers are generation-scoped and
+cleared by responsive replay; terminal tombstones alone are restart-stable.
+The three process-local signature-completion markers are reconstructed when
+their durable intents are replayed.
 
 Admission allocates or replaces one slot before the packet can enter the
 physical ingress lane.  The per-height ordinal is therefore frozen before
@@ -8366,8 +8411,9 @@ AsyncCertifiedResponseClaimStateAfterAdmission(state, item) ==
 Successful FIFO or Busy-deferred execution retires the exact candidate only
 after its final scheduler carrier is gone.  A nondispatchable candidate which
 the reducer classifies as terminal is retired at the same boundary.  The
-global transition writes the route-neutral tombstone in that AsyncNext step;
-a transfer into executor work remains scheduled and is not retired.
+global transition writes a transient marker for successful service or a
+durable tombstone for terminal discard in that AsyncNext step; a transfer into
+executor work remains scheduled and is not retired.
 ***************************************************************************)
 AsyncCandidateSuccessfullyServicedThisStep(candidate) ==
   /\ CandidateScheduled(candidate)
@@ -8646,6 +8692,7 @@ AsyncCandidateServiceLifecycleInvariant ==
        /\ record.context = context
        /\ record.height = height
        /\ record.episodeView >= nodeView[record.node]
+       /\ record.phase \notin AsyncRestartScopedCandidateServiceKinds
        /\ ~NodeHasDecision(record.node)
   /\ \A candidate \in
        QueuedCandidates \cup DeferredCandidates
@@ -9714,7 +9761,7 @@ THEOREM AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst ==
   \A identity \in AsyncCandidateAdmissionIdentitySet:
     /\ AsyncLogicalCandidateOwnershipInvariant
     /\ AsyncProgressOwnershipInvariant
-    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AsyncCandidateServiceLifecycleInvariant
     /\ identity.service.phase = "DeliverChunk"
     /\ identity \in AsyncScheduledCandidateAdmissionIdentities
     /\ gst

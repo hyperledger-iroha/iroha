@@ -7,9 +7,12 @@
 pub mod anonymous_pgc;
 pub mod bootle_lantern;
 pub mod jindo;
+pub(crate) mod orchard;
 pub mod p256;
 pub mod vega;
 pub mod verange;
 #[cfg(feature = "zk-stark")]
 pub mod zk_ace;
+#[cfg(feature = "zk-stark")]
+pub(crate) mod zk_ace_stark;
 pub mod zk_ams;

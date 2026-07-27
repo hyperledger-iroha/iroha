@@ -18,9 +18,11 @@ There are deliberately three inputs:
   * the finite identity-budget bridge closes that non-descent episode.
 
 The third input remains explicit until the candidate tombstone bridge proves
-that the source snapshot is contained in one finite frozen universe, every
-new identity consumes its complement budget, and a serviced identity cannot
-be resurrected before view/Decision/height exit.  Replenishment is never a
+that the source snapshot is contained in one finite frozen semantic universe,
+every new identity consumes its complement budget, and a serviced identity
+cannot be resurrected before view/Decision/height exit.  The global
+`AsyncCandidateSet` is deliberately not such a universe: production proofs
+run with `ViewDomain = Nat`.  Replenishment is never a
 progress goal here.  No fairness of an existential action union, current
 voter Decision convergence, rotating-leader convergence, application
 liveness, or clock shortcut is assumed.
@@ -68,6 +70,19 @@ HistoricalDiscoveryServeOwnerIdentity(node, job) ==
   [ownerKind |-> "Serve",
    identity |-> AsyncIoServeJobIdentity(node, job)]
 
+HistoricalDiscoveryPacketCandidateIdentityCarrier(packet) ==
+  {[ownerKind |-> "Candidate", identity |-> identity]:
+     identity \in
+       HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(packet)}
+
+HistoricalDiscoveryPacketServeIdentityCarrier(packet) ==
+  {[ownerKind |-> "Serve", identity |-> identity]:
+     identity \in HistoricalDiscoveryPacketServeIdentityCarrier(packet)}
+
+HistoricalDiscoveryPacketProducerIdentityCarrier(packet) ==
+  HistoricalDiscoveryPacketCandidateIdentityCarrier(packet)
+    \cup HistoricalDiscoveryPacketServeIdentityCarrier(packet)
+
 HistoricalDiscoveryPacketCandidateIdentitySet(packet) ==
   {HistoricalDiscoveryCandidateOwnerIdentity(candidate):
      candidate \in HistoricalDiscoveryPacketCandidateOwners(packet)}
@@ -80,6 +95,66 @@ HistoricalDiscoveryPacketServeIdentitySet(packet) ==
 HistoricalDiscoveryPacketProducerIdentitySet(packet) ==
   HistoricalDiscoveryPacketCandidateIdentitySet(packet)
     \cup HistoricalDiscoveryPacketServeIdentitySet(packet)
+
+HistoricalDiscoveryPacketCandidateCoveredIdentitySet(packet) ==
+  HistoricalDiscoveryPacketCandidateIdentitySet(packet)
+    \cup
+  {[ownerKind |-> "Candidate", identity |-> record.identity]:
+     record \in AsyncCandidateServiceTombstones,
+     record.identity
+       \in HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(packet)}
+
+HistoricalDiscoveryPacketServeCoveredIdentitySet(packet) ==
+  LET carrier == HistoricalDiscoveryPacketServeIdentityCarrier(packet)
+  IN HistoricalDiscoveryPacketServeIdentitySet(packet)
+       \cup
+     {[ownerKind |-> "Serve", identity |-> reservation.identity]:
+        reservation \in asyncServeReservations,
+        reservation.identity \in carrier}
+       \cup
+     {[ownerKind |-> "Serve", identity |-> tombstone.identity]:
+        tombstone \in asyncServeTombstones,
+        tombstone.identity \in carrier}
+       \cup
+     UNION {
+       {[ownerKind |-> "Serve", identity |-> tombstone.identity]:
+          tombstone \in reservation.rollbackTombstones,
+          tombstone.identity \in carrier}:
+       reservation \in asyncServeReservations}
+
+HistoricalDiscoveryPacketProducerCoveredIdentitySet(packet) ==
+  HistoricalDiscoveryPacketCandidateCoveredIdentitySet(packet)
+    \cup HistoricalDiscoveryPacketServeCoveredIdentitySet(packet)
+
+THEOREM HistoricalDiscoveryPacketProducerIdentityCarrierIsFinite ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => IsFiniteSet(
+           HistoricalDiscoveryPacketProducerIdentityCarrier(packet))
+BY HistoricalDiscoveryPacketCausalCarriersAreFinite,
+   FS_Image, FS_Union, Isa
+   DEF HistoricalDiscoveryPacketProducerIdentityCarrier,
+       HistoricalDiscoveryPacketCandidateIdentityCarrier,
+       HistoricalDiscoveryPacketServeIdentityCarrier
+
+THEOREM HistoricalDiscoveryPacketProducerCoverageStaysInFrozenCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    /\ HistoricalDiscoveryPacketProducerIdentitySet(packet)
+         \subseteq
+           HistoricalDiscoveryPacketProducerIdentityCarrier(packet)
+       /\ HistoricalDiscoveryPacketProducerCoveredIdentitySet(packet)
+         \subseteq
+           HistoricalDiscoveryPacketProducerIdentityCarrier(packet)
+BY HistoricalDiscoveryPacketOwnersStayInFrozenCausalCarrier, Isa
+   DEF HistoricalDiscoveryPacketProducerIdentitySet,
+       HistoricalDiscoveryPacketCandidateIdentitySet,
+       HistoricalDiscoveryPacketServeIdentitySet,
+       HistoricalDiscoveryPacketProducerCoveredIdentitySet,
+       HistoricalDiscoveryPacketCandidateCoveredIdentitySet,
+       HistoricalDiscoveryPacketServeCoveredIdentitySet,
+       HistoricalDiscoveryPacketProducerIdentityCarrier,
+       HistoricalDiscoveryPacketCandidateIdentityCarrier,
+       HistoricalDiscoveryPacketServeIdentityCarrier
 
 THEOREM HistoricalDiscoveryPacketProducerIdentitySetIsFinite ==
   \A packet \in OverdueResponsivePackets:
@@ -126,7 +201,11 @@ HistoricalDiscoveryCandidateServeEpisodeSource(
        node, clockValue, sourceRank)
   /\ OverdueResponsivePackets # {}
   /\ packet = HistoricalDiscoverySelectedOverduePacket
-  /\ known = HistoricalDiscoveryPacketProducerIdentitySet(packet)
+  /\ known =
+       HistoricalDiscoveryPacketProducerCoveredIdentitySet(packet)
+  /\ known
+       \subseteq
+         HistoricalDiscoveryPacketProducerIdentityCarrier(packet)
 
 HistoricalDiscoveryCandidateServeEpisodeResidual(
     node, clockValue, sourceRank, packet, known) ==
@@ -144,7 +223,7 @@ HistoricalDiscoveryCandidateServeEpisodeResidual(
           = HistoricalDiscoveryFixedClockProducerPrefix(sourceRank)
      /\ ~HistoricalDiscoveryFixedClockStrictRankGoal(
           node, clockValue, sourceRank)
-     /\ HistoricalDiscoveryPacketProducerIdentitySet(packet)
+     /\ HistoricalDiscoveryPacketProducerCoveredIdentitySet(packet)
           \ known # {}
 
 THEOREM HistoricalDiscoveryCandidateServeEpisodeSourceHasFiniteKnownSet ==
@@ -168,8 +247,9 @@ The packet-service property is source-snapshot indexed, so its episode target
 cannot hold trivially in the source state: `known` is exactly the then-live
 identity set, whereas the residual requires a live identity outside `known`.
 The candidate/Serve budget property is the one intentionally explicit input.
-It must be proved from the finite frozen universe and durable lifecycle
-markers; it cannot be replaced by fairness of replenishment.
+It must be proved from a finite frozen semantic universe and durable lifecycle
+markers; it cannot be replaced by fairness of replenishment or by the
+infinite global candidate type carrier.
 ***************************************************************************)
 
 HistoricalDiscoveryFixedClockNonPacketServiceProperty(specification) ==
@@ -307,6 +387,7 @@ PROOF
                  HistoricalDiscoveryFixedClockPending,
                  HistoricalDiscoverySelectedOverduePacket,
                  OverdueResponsivePackets,
+                 AsyncPacketOwnsClockDeadline,
                  AsyncStrongTypeInvariant,
                  AsyncTypeInvariant, AsyncTransportTypeInvariant,
                  AsyncPacketContentTypeInvariant

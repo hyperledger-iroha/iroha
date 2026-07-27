@@ -10,6 +10,8 @@ use crate::privacy::{
     PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
     PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1,
     PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsRegistryBootstrapV1,
+    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
+    PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
 };
 
 isi! {
@@ -309,6 +311,188 @@ impl RevokePrivacyZkAcePolicyV1 {
 }
 
 isi! {
+    /// Register one canonical authoritative X.509 trust-anchor lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RegisterPrivacyZkX509TrustAnchorV1 {
+        /// Complete active origin revision, including its canonical self-digest.
+        pub record: PrivacyZkX509TrustAnchorRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RegisterPrivacyZkX509TrustAnchorV1 {}
+
+impl RegisterPrivacyZkX509TrustAnchorV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.register_zk_x509_trust_anchor.v1";
+
+    /// Construct an authoritative trust-anchor registration.
+    #[must_use]
+    pub const fn new(record: PrivacyZkX509TrustAnchorRecordV1) -> Self {
+        Self { record }
+    }
+}
+
+isi! {
+    /// Rotate one active X.509 trust-anchor lineage by exactly one epoch.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RotatePrivacyZkX509TrustAnchorV1 {
+        /// Exact self-digest of the active revision being replaced.
+        pub expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+        /// Complete active successor revision.
+        pub successor: PrivacyZkX509TrustAnchorRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RotatePrivacyZkX509TrustAnchorV1 {}
+
+impl RotatePrivacyZkX509TrustAnchorV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.rotate_zk_x509_trust_anchor.v1";
+
+    /// Construct an exact trust-anchor rotation.
+    #[must_use]
+    pub const fn new(
+        expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+        successor: PrivacyZkX509TrustAnchorRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
+    /// Irreversibly revoke one active X.509 trust-anchor lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RevokePrivacyZkX509TrustAnchorV1 {
+        /// Exact self-digest of the active revision being revoked.
+        pub expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+        /// Complete terminal successor revision.
+        pub successor: PrivacyZkX509TrustAnchorRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RevokePrivacyZkX509TrustAnchorV1 {}
+
+impl RevokePrivacyZkX509TrustAnchorV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.revoke_zk_x509_trust_anchor.v1";
+
+    /// Construct an irreversible trust-anchor revocation.
+    #[must_use]
+    pub const fn new(
+        expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+        successor: PrivacyZkX509TrustAnchorRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
+    /// Register one canonical authoritative X.509 certificate-policy lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RegisterPrivacyZkX509CertificatePolicyV1 {
+        /// Complete active origin revision, including its canonical self-digest.
+        pub record: PrivacyZkX509CertificatePolicyRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RegisterPrivacyZkX509CertificatePolicyV1 {}
+
+impl RegisterPrivacyZkX509CertificatePolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.register_zk_x509_certificate_policy.v1";
+
+    /// Construct an authoritative certificate-policy registration.
+    #[must_use]
+    pub fn new(record: PrivacyZkX509CertificatePolicyRecordV1) -> Self {
+        Self { record }
+    }
+}
+
+isi! {
+    /// Rotate one active X.509 certificate-policy lineage by exactly one epoch.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RotatePrivacyZkX509CertificatePolicyV1 {
+        /// Exact self-digest of the active revision being replaced.
+        pub expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+        /// Complete active successor revision.
+        pub successor: PrivacyZkX509CertificatePolicyRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RotatePrivacyZkX509CertificatePolicyV1 {}
+
+impl RotatePrivacyZkX509CertificatePolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.rotate_zk_x509_certificate_policy.v1";
+
+    /// Construct an exact certificate-policy rotation.
+    #[must_use]
+    pub fn new(
+        expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+        successor: PrivacyZkX509CertificatePolicyRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
+    /// Irreversibly revoke one active X.509 certificate-policy lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RevokePrivacyZkX509CertificatePolicyV1 {
+        /// Exact self-digest of the active revision being revoked.
+        pub expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+        /// Complete terminal successor revision.
+        pub successor: PrivacyZkX509CertificatePolicyRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RevokePrivacyZkX509CertificatePolicyV1 {}
+
+impl RevokePrivacyZkX509CertificatePolicyV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.revoke_zk_x509_certificate_policy.v1";
+
+    /// Construct an irreversible certificate-policy revocation.
+    #[must_use]
+    pub fn new(
+        expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+        successor: PrivacyZkX509CertificatePolicyRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
     /// Verify and atomically apply one protocol-typed privacy proof action.
     #[cfg_attr(
         feature = "json",
@@ -399,6 +583,28 @@ impl_privacy_decode_from_slice!(RotatePrivacyZkAcePolicyV1 {
 impl_privacy_decode_from_slice!(RevokePrivacyZkAcePolicyV1 {
     expected_current_record_digest: PrivacyZkAcePolicyRecordDigestV1,
     successor: PrivacyZkAcePolicyRecordV1,
+});
+impl_privacy_decode_from_slice!(RegisterPrivacyZkX509TrustAnchorV1 {
+    record: PrivacyZkX509TrustAnchorRecordV1,
+});
+impl_privacy_decode_from_slice!(RotatePrivacyZkX509TrustAnchorV1 {
+    expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+    successor: PrivacyZkX509TrustAnchorRecordV1,
+});
+impl_privacy_decode_from_slice!(RevokePrivacyZkX509TrustAnchorV1 {
+    expected_current_record_digest: PrivacyZkX509TrustAnchorRecordDigestV1,
+    successor: PrivacyZkX509TrustAnchorRecordV1,
+});
+impl_privacy_decode_from_slice!(RegisterPrivacyZkX509CertificatePolicyV1 {
+    record: PrivacyZkX509CertificatePolicyRecordV1,
+});
+impl_privacy_decode_from_slice!(RotatePrivacyZkX509CertificatePolicyV1 {
+    expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+    successor: PrivacyZkX509CertificatePolicyRecordV1,
+});
+impl_privacy_decode_from_slice!(RevokePrivacyZkX509CertificatePolicyV1 {
+    expected_current_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
+    successor: PrivacyZkX509CertificatePolicyRecordV1,
 });
 impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
     envelope: PrivacyProofEnvelopeV1,
@@ -640,6 +846,16 @@ mod tests {
             TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
             PublishPrivacyRootV1::WIRE_ID,
             BootstrapPrivacyPgcAccountsV1::WIRE_ID,
+            BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
+            RegisterPrivacyZkAcePolicyV1::WIRE_ID,
+            RotatePrivacyZkAcePolicyV1::WIRE_ID,
+            RevokePrivacyZkAcePolicyV1::WIRE_ID,
+            RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
+            RotatePrivacyZkX509TrustAnchorV1::WIRE_ID,
+            RevokePrivacyZkX509TrustAnchorV1::WIRE_ID,
+            RegisterPrivacyZkX509CertificatePolicyV1::WIRE_ID,
+            RotatePrivacyZkX509CertificatePolicyV1::WIRE_ID,
+            RevokePrivacyZkX509CertificatePolicyV1::WIRE_ID,
             SubmitPrivacyProofV1::WIRE_ID,
         ] {
             assert!(wire_id.starts_with("iroha.privacy."));

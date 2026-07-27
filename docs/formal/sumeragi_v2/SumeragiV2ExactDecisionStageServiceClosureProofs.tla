@@ -10553,7 +10553,10 @@ BY ExactDecisionRequestHasResponsiveBodyHoldingAlias,
        ExactDecisionActiveRequestOwner,
        ExactDecisionServiceSource,
        ExactDecisionBodyHoldingAlias,
-       OverdueResponsivePackets, AsyncTickEnabled,
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+       AsyncServeTransportAdmissionGateAllows,
+       AsyncServeRequestAuthorized, AsyncServeRequestServiceable,
+       AsyncTickEnabled,
        AsyncTimedServiceNodes, AsyncAllVars
 
 THEOREM ExactDecisionTargetNeutralDueHeadStepLeavesClockOrGoals ==

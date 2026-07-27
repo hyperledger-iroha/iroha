@@ -197,8 +197,12 @@ MERGE_RUNTIME_CONFIG_FIELDS = (
 )
 
 ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
+# The retained-lock vocabulary moved below the shard chain to remove the
+# debt-to-proof-leaf cycle.  Its exact provider and bodies are independently
+# pinned by ``_acyclic_liveness_debt_topology_errors`` before this reviewed
+# mechanical shard seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "48aa2d4401adfcd3c02726b1850fb7f6b4382107d7b7f0d2174633678923ef76"
+    "a1913c421440af40605365596322aa344d07e634ad95cd47ddc24533b609920f"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -214,6 +218,8 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncServeIngressTargetOnlyTurnJumpsToIngress",
     "SameHeightRestartPreservesServeHighWatermarks",
     "SameHeightRestartReopensDurableCertifiedResponseFamily",
+    "AsyncDormantExactReplyRequestPacketIsRetained",
+    "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
     "AsyncCandidateCausalAdmissionTransfersSameOwner",
     "AsyncCandidateIoCompletionTransfersSameOwner",
     "AsyncCandidateProducerCompletionTransfersSameOwner",
@@ -382,6 +388,12 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
 )
 LIVENESS_OWNERSHIP_MUTATION_RUNNER = (
     "scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh"
+)
+_FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
+    "bash scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+    "bash scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh",
+    "bash scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh",
+    "bash scripts/formal/run_sumeragi_v2_reply_writer_deadline_mutations.sh",
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2ExactIngressTicketPriorityMutation.tla": (
@@ -6327,7 +6339,13 @@ _REPLY_WRITER_DEADLINE_FORMAL_SOURCE_SHA256 = {
 }
 
 _REPLY_WRITER_DEADLINE_MUTATION_RUNNER_SHA256 = (
-    "1391fa18d17424d8c0dc2b7d61f5027a55622880d725783f298fd7dcaf457a59"
+    "73795105423f27420fe13c19133a4853c2a6adbd2c50ba01b9e7f5ec43a918ee"
+)
+
+DORMANT_REPLY_CLOCK_MUTATION_ARTIFACTS = (
+    "SumeragiV2DormantReplyClockMutation.tla",
+    "dormant_reply_clock_fixed.cfg",
+    "dormant_reply_clock_all_due_bug.cfg",
 )
 
 _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
@@ -6774,9 +6792,18 @@ HISTORICAL_TEMPORAL_REVIEWED_EXTENDS = {
         "SumeragiV2ChainEpochRefinement",
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs": (
-        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2SuccessorActivationRefinementProofs",
         "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+    ),
+}
+
+HISTORICAL_TEMPORAL_FORBIDDEN_DIRECT_IMPORTS = {
+    "SumeragiV2HistoricalRecoveryTemporalClosureProofs": (
+        "SumeragiV2ChainEpochRefinement",
+        "SumeragiV2ChainLivenessProofs",
+        "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
     ),
 }
 
@@ -6964,6 +6991,56 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ): (
         "/\\ AdequateLeaderViewReachCompositionProperty(specification) "
         "/\\ AdequateLeaderTargetSemanticCompositionProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AsyncCandidateIdentityBudgetBridgeProperty",
+    ): (
+        "/\\ (specification => "
+        "[]AsyncCandidateServiceTombstoneLifecycleInvariant) /\\ "
+        "(specification => \\A carrier: IsFiniteSet(carrier) => []( "
+        "Cardinality( "
+        "AsyncCandidateServiceTombstonesInIdentityCarrier( "
+        "carrier)) <= Cardinality(carrier))) /\\ (specification => [](\\A "
+        "candidate \\in AsyncCandidateSet: /\\ "
+        "AsyncCandidateServiceActiveTombstone(candidate) /\\ "
+        "[AsyncNext]_AsyncAllVars /\\ "
+        "~AsyncCandidateServiceExitThisStep(candidate) => "
+        "AsyncCandidateServiceActiveTombstone(candidate)')) /\\ (specification "
+        "=> [](\\A left, right \\in AsyncCandidateSet: /\\ left.node = "
+        "right.node /\\ left.consumerContext = right.consumerContext /\\ "
+        "left.height = right.height /\\ left.view = right.view /\\ left.subject "
+        "= right.subject /\\ left.kind = right.kind /\\ left.class = "
+        "right.class /\\ left.item # NoAsyncItem /\\ right.item # NoAsyncItem "
+        "/\\ left.item.kind = \"CertifiedResponse\" /\\ right.item = [left.item "
+        "EXCEPT !.source = right.item.source] /\\ "
+        "AsyncRouteNeutralCandidateEvidence(left.evidence) = "
+        "AsyncRouteNeutralCandidateEvidence(right.evidence) /\\ "
+        "left.bodyIdentity = right.bodyIdentity /\\ left.manifestIdentity = "
+        "right.manifestIdentity /\\ left.commitmentIdentity = "
+        "right.commitmentIdentity => AsyncCandidateServiceIdentity(left) = "
+        "AsyncCandidateServiceIdentity(right))) /\\ (specification => [](\\A "
+        "identity \\in AsyncCandidateAdmissionIdentitySet: /\\ "
+        "AsyncCandidateAdmissionIdentityObsolete(identity) /\\ identity \\notin "
+        "AsyncScheduledCandidateAdmissionIdentities /\\ gst /\\ "
+        "[AsyncNext]_AsyncAllVars => /\\ "
+        "AsyncCandidateAdmissionIdentityObsolete(identity)' /\\ identity "
+        "\\notin AsyncScheduledCandidateAdmissionIdentities')) /\\ "
+        "(specification => [](\\A identity \\in "
+        "AsyncCandidateAdmissionIdentitySet: /\\ identity.service.phase = "
+        "\"DeliverChunk\" /\\ "
+        "AsyncCandidateAdmissionIdentityTerminallyCovered(identity) /\\ "
+        "identity \\notin AsyncScheduledCandidateAdmissionIdentities /\\ gst /\\ "
+        "[AsyncNext]_AsyncAllVars => /\\ "
+        "AsyncCandidateAdmissionIdentityTerminallyCovered( identity)' /\\ "
+        "identity \\notin AsyncScheduledCandidateAdmissionIdentities')) /\\ "
+        "(specification => [](\\A identity \\in "
+        "AsyncCandidateAdmissionIdentitySet: /\\ identity.service.phase = "
+        "\"DeliverChunk\" /\\ identity \\in "
+        "AsyncScheduledCandidateAdmissionIdentities /\\ gst /\\ "
+        "[AsyncNext]_AsyncAllVars /\\ identity \\notin "
+        "AsyncScheduledCandidateAdmissionIdentities' => "
+        "AsyncCandidateAdmissionIdentityLifecycleCovered( identity)'))"
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -9475,7 +9552,7 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
         "AsyncScheduledCandidateAdmissionIdentities /\\ gst /\\ "
         "[AsyncNext]_AsyncAllVars /\\ identity \\notin "
         "AsyncScheduledCandidateAdmissionIdentities' => "
-        "AsyncCandidateAdmissionIdentityTerminallyCovered( identity)'))"
+        "AsyncCandidateAdmissionIdentityLifecycleCovered( identity)'))"
     ),
     (
         "SumeragiV2AsyncHistoricalRecoveryTemporalSupportProofs",
@@ -10443,7 +10520,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "\\A snapshot, mode, node, qc, archive, "
         "request, response, packet: "
         "\\A clockValue \\in Nat: "
-        "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ ExactDecisionTargetNeutralFixedClockPending( "
         "snapshot, mode, node, qc, archive, request, response, "
         "packet, clockValue) "
@@ -10474,7 +10551,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "budget \\in Nat: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
-        "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ ExactDecisionTargetNeutralProducerEpisodeAtBudget( "
         "snapshot, mode, node, qc, archive, request, response, "
         "packet, clockValue, sourceRank, budget) "
@@ -10501,7 +10578,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "budget \\in Nat: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
-        "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ PostGstReplayQuarantineExcluded "
         "/\\ initialContext \\in ContextRecords "
         "/\\ AsyncCurrentResponsiveVoters = "
@@ -10811,7 +10888,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "budget \\in Nat: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
-        "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ PostGstReplayQuarantineExcluded "
         "/\\ initialContext \\in ContextRecords "
         "/\\ AsyncCurrentResponsiveVoters = "
@@ -10844,7 +10921,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ FinalProgressWitnessClosureInvariant "
         "/\\ ExactDecisionFanoutRetentionInvariant "
         "/\\ ExactDecisionRequestAuthorityIsolationInvariant "
-        "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ AsyncCurrentResponsiveVoters = "
         "AsyncVotersAt(initialContext) "
         "/\\ ExactDecisionTargetNeutralProducerEpisodeAtBudget( "
@@ -10876,7 +10953,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "budget \\in Nat: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ AsyncProgressOwnershipInvariant "
-        "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ PostGstReplayQuarantineExcluded "
         "/\\ initialContext \\in ContextRecords "
         "/\\ AsyncCurrentResponsiveVoters = "
@@ -11070,6 +11147,32 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2AsyncNetwork",
+        "AsyncDormantExactReplyRequestPacketIsRetained",
+    ): (
+        "\\A packet: "
+        "AsyncDormantExactReplyRequestPacket(packet) "
+        "=> packet \\in asyncTransport"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
+    ): (
+        "\\A packet: "
+        "/\\ packet \\in asyncTransport "
+        "/\\ AsyncServeTransportAdmissionGateAllows( "
+        "packet.item.envelope.recipient, packet.item) "
+        "/\\ packet.item.envelope.recipient "
+        "\\in AsyncTimedServiceNodes "
+        "/\\ \\/ packet.item.source \\in AsyncTimedServiceNodes "
+        "\\/ /\\ packet.item.kind "
+        '\\in {"CertifiedResponse", "CommitCertificateResponse"} '
+        "/\\ IngressItemHasAuthenticatedHistory(packet.item) "
+        "/\\ packet.deadline <= asyncNow "
+        "=> /\\ AsyncPacketOwnsClockDeadline(packet) "
+        "/\\ packet \\in OverdueResponsivePackets"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
         "AsyncServeQueuedIdentityDepartureInstallsTombstone",
     ): (
         "\\A node \\in ValidatorIds, "
@@ -11108,6 +11211,112 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "=> /\\ AsyncServeLogicalIdentityRetiredOrSuperseded( "
         "node, identity)' "
         "/\\ ~AsyncServeJobQueued(node, identity)'"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTransientMarkerCoalescesFreshCandidate",
+    ): (
+        "\\A candidate: "
+        "AsyncCandidateTransientServiceMarked(candidate) "
+        "=> /\\ CandidateAdmissionCoalesced(candidate) "
+        "/\\ FreshCandidateSequence(candidate) = <<>> "
+        "/\\ ~ENABLED EnqueueCandidate(candidate)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTerminalTombstoneCoalescesFreshCandidate",
+    ): (
+        "\\A candidate: "
+        "AsyncCandidateTerminalTombstoned(candidate) "
+        "=> /\\ CandidateAdmissionCoalesced(candidate) "
+        "/\\ FreshCandidateSequence(candidate) = <<>> "
+        "/\\ ~ENABLED EnqueueCandidate(candidate)"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSuccessfulServiceInstallsTransientMarker",
+    ): (
+        "\\A candidate \\in AsyncCandidateSet: "
+        "/\\ AsyncCandidateServicesThisStep = {candidate} "
+        "/\\ AsyncCandidateServiceEligibleAfterStep(candidate) "
+        "/\\ AsyncControlServiceSlotTransition "
+        "=> /\\ AsyncCandidateTransientServiceMarked(candidate)' "
+        "/\\ ~CandidateScheduled(candidate)' "
+        "/\\ AsyncCandidateTransientServiceActive(candidate)'"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSuccessfulServiceAllocatesExactOrdinal",
+    ): (
+        "\\A candidate \\in AsyncCandidateSet: "
+        "/\\ AsyncCandidateServicesThisStep = {candidate} "
+        "/\\ AsyncCandidateServiceEligibleAfterStep(candidate) "
+        "/\\ ~AsyncCandidateServiceCoalesced(candidate) "
+        "/\\ AsyncControlServiceSlotTransition "
+        "=> LET node == candidate.node "
+        "ordinal == AsyncNextCandidateServiceOrdinal(node) "
+        "IN /\\ AsyncCandidateServiceMarker( "
+        "candidate, nodeView[node], "
+        "candidate.consumerGeneration, ordinal) "
+        "\\in AsyncCandidateServiceMarkers' "
+        "/\\ AsyncNextCandidateServiceOrdinal(node)' = ordinal + 1"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTransientMarkerPersistsWithinGeneration",
+    ): (
+        "\\A candidate \\in AsyncCandidateSet: "
+        "/\\ AsyncCandidateTransientServiceActive(candidate) "
+        "/\\ AsyncControlServiceSlotTransition "
+        "/\\ ~AsyncCandidateTransientMarkerExitThisStep(candidate) "
+        "=> AsyncCandidateTransientServiceActive(candidate)'"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTerminalTombstonePersistsWithoutExit",
+    ): (
+        "\\A candidate \\in AsyncCandidateSet: "
+        "/\\ AsyncCandidateTerminalTombstoneActive(candidate) "
+        "/\\ AsyncControlServiceSlotTransition "
+        "/\\ ~AsyncCandidateTerminalTombstoneExitThisStep(candidate) "
+        "=> AsyncCandidateTerminalTombstoneActive(candidate)'"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSameHeightRestartPreservesServicedIdentity",
+    ): (
+        "\\A candidate \\in AsyncCandidateSet: "
+        "/\\ AsyncCandidateTransientServiceActive(candidate) "
+        "/\\ candidate.node = asyncRecoveryNode "
+        "/\\ PreGstResponsiveReplay "
+        "/\\ AsyncControlServiceSlotTransition "
+        "=> ~AsyncCandidateTransientServiceMarked(candidate)'"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSameHeightRestartPreservesTombstone",
+    ): (
+        "/\\ AsyncCandidateServiceLifecycleInvariant "
+        "/\\ PreGstResponsiveReplay "
+        "/\\ AsyncControlServiceSlotTransition "
+        "=> /\\ AsyncCandidateServiceMarkers' = "
+        "{record \\in AsyncCandidateServiceMarkers: "
+        "/\\ record.node # asyncRecoveryNode "
+        "/\\ AsyncCandidateServiceRecordRetainedAfterStep(record)} "
+        "/\\ AsyncCandidateTerminalTombstones' = "
+        "{record \\in AsyncCandidateTerminalTombstones: "
+        "AsyncCandidateServiceRecordRetainedAfterStep(record)} "
+        "/\\ asyncControlServiceState'.candidateServiceNextOrdinal "
+        "= asyncControlServiceState.candidateServiceNextOrdinal"
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay",
+    ): (
+        "\\A candidate \\in AsyncCandidateSet: "
+        "/\\ AsyncCandidateTransientServiceMarked(candidate) "
+        "/\\ ~AsyncCandidateTerminalTombstoned(candidate) "
+        "=> ~AsyncCandidateRestartReplayTombstoned(candidate)"
     ),
     (
         "SumeragiV2AsyncNetwork",
@@ -11425,6 +11634,83 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
 FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     (
         "SumeragiV2AsyncNetwork",
+        "AsyncDormantExactReplyRequestPacketIsRetained",
+    ): ("AsyncDormantExactReplyRequestPacket",),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncGateOpenDueResponsivePacketReentersClockDeadline",
+    ): (
+        "AsyncPacketOwnsClockDeadline",
+        "OverdueResponsivePackets",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTransientMarkerCoalescesFreshCandidate",
+    ): (
+        "AsyncCandidateServiceTombstoneCoalescesFreshCandidate",
+        "AsyncCandidateServiceCoalesced",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTerminalTombstoneCoalescesFreshCandidate",
+    ): (
+        "AsyncCandidateServiceTombstoneCoalescesFreshCandidate",
+        "AsyncCandidateServiceCoalesced",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSuccessfulServiceInstallsTransientMarker",
+    ): (
+        "AsyncCandidateServiceStateAfterSuccessfulService",
+        "AsyncCandidateServiceMarker",
+        "AsyncCandidateTransientServiceActive",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSuccessfulServiceAllocatesExactOrdinal",
+    ): (
+        "AsyncCandidateServiceStateAfterSuccessfulService",
+        "AsyncCandidateServiceMarker",
+        "AsyncNextCandidateServiceOrdinal",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTransientMarkerPersistsWithinGeneration",
+    ): (
+        "AsyncCandidateTransientMarkerExitThisStep",
+        "AsyncCandidateServiceStateAfterSuccessfulService",
+        "AsyncCandidateServiceMarkersAfterReset",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTerminalTombstonePersistsWithoutExit",
+    ): (
+        "AsyncCandidateTerminalTombstoneExitThisStep",
+        "AsyncCandidateServiceStateAfterTerminalRetirement",
+        "AsyncCandidateTerminalTombstones",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSameHeightRestartPreservesServicedIdentity",
+    ): (
+        "AsyncCandidateServiceMarkersAfterReset",
+        "AsyncCandidateRestartReplayTombstoned",
+        "FreshRestartCandidateSequence",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSameHeightRestartPreservesTombstone",
+    ): (
+        "AsyncCandidateServiceMarkersAfterReset",
+        "AsyncCandidateTerminalTombstones",
+        "ResetNodeSchedulerForRestart",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay",
+    ): ("AsyncCandidateRestartReplayTombstoned",),
+    (
+        "SumeragiV2AsyncNetwork",
         "AsyncServeQueuedIdentityDepartureInstallsTombstone",
     ): (
         "AsyncServeLifecyclePartitionInvariant",
@@ -11496,7 +11782,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "SumeragiV2AsyncNetwork",
         "AsyncCandidateTerminalIdentityCannotReactivateAtGst",
     ): (
-        "AsyncCandidateServiceTombstoneCoalescesFreshCandidate",
+        "AsyncCandidateTerminalTombstoneCoalescesFreshCandidate",
         "AsyncCandidateServiceTombstoneRejectsTransportReadmission",
         "AsyncCandidateAdmissionIdentityObsolescenceIsMonotoneAtGst",
         "AsyncCandidateObsoleteAdmissionIdentityCannotReappearAtGst",
@@ -11505,16 +11791,33 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "SumeragiV2AsyncNetwork",
         "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
     ): (
-        "AsyncCandidateSuccessfulServiceInstallsTombstone",
+        "AsyncCandidateSuccessfulServiceInstallsTransientMarker",
         "AsyncCandidateDiscardRetiresLogicalLifecycle",
         "AsyncCandidateTerminalRetirementsThisStepIsSingleton",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst",
+    ): (
+        "AsyncCandidateTransientMarkerPersistsWithinGeneration",
+        "AsyncCandidateTransientMarkerCoalescesFreshCandidate",
+        "AsyncCandidateServiceTombstoneRejectsTransportReadmission",
+    ),
+    (
+        "SumeragiV2AsyncNetwork",
+        "AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction",
+    ): (
+        "AsyncCandidateSameHeightRestartPreservesServicedIdentity",
+        "AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay",
+        "AsyncCandidateServicePacketRetired",
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionTargetNeutralFrozenLifecycleCoveragePersists",
     ): (
         "AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst",
-        "AsyncCandidateTerminalIdentityCannotReactivateAtGst",
+        "ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst",
+        "ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst",
         "AsyncServeQueuedIdentityDepartureInstallsTombstone",
         "AsyncServeRetiredIdentityCannotRequeueAtGst",
     ),
@@ -12083,20 +12386,22 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "AsyncInitAt",
         "AsyncBaseInitAt",
-        "AsyncCandidateServiceTombstoneLifecycleInvariant",
+        "AsyncCandidateServiceLifecycleInvariant",
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
         "ExactDecisionAsyncNextPreservesCandidateTombstones",
     ): (
         "AsyncNextPreservesControlServiceStateTypeInvariant",
-        "AsyncCandidateSuccessfulServiceInstallsTombstone",
+        "AsyncCandidateSuccessfulServiceInstallsTransientMarker",
         "AsyncCandidateTerminalRetirementsThisStepIsSingleton",
         "AsyncCandidateDiscardInstallsTerminalTombstone",
         "AsyncCandidateDiscardRetiresLogicalLifecycle",
-        "AsyncCandidateServiceTombstoneCoalescesFreshCandidate",
+        "AsyncCandidateTransientMarkerCoalescesFreshCandidate",
+        "AsyncCandidateTerminalTombstoneCoalescesFreshCandidate",
         "AsyncCandidateServiceTombstoneRejectsTransportReadmission",
-        "AsyncCandidateSameHeightRestartPreservesServicedIdentity",
+        "AsyncCandidateSameHeightRestartPreservesTombstone",
+        "AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction",
         "AsyncNext",
     ),
     (
@@ -12107,6 +12412,24 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionAsyncNextPreservesCandidateTombstones",
         "AsyncSpecAlwaysStrongTypeInvariant",
         "AsyncSpecAlwaysProgressOwnershipInvariant",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst",
+    ): (
+        "AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst",
+    ): (
+        "AsyncCandidateTerminalIdentityCannotReactivateAtGst",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponsiveRestartPermitsNonterminalCandidateReconstruction",
+    ): (
+        "AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction",
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -12179,9 +12502,11 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "AsyncServeIngressTicketExcludesLaterLocalWork",
         "AsyncServeIngressDuplicateDoesNotAllocateOrdinal",
         "SameHeightRestartPreservesServeHighWatermarks",
-        "AsyncCandidateServiceTombstoneCoalescesFreshCandidate",
+        "AsyncCandidateTransientMarkerCoalescesFreshCandidate",
+        "AsyncCandidateTerminalTombstoneCoalescesFreshCandidate",
         "AsyncCandidateServiceTombstoneRejectsTransportReadmission",
-        "AsyncCandidateServicedIdentityCannotReactivate",
+        "ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst",
+        "ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst",
         "ExactDecisionTargetNeutralFrozenLifecycleCoveragePersists",
         "ExactDecisionTargetNeutralFixedPredecessorSet",
     ),
@@ -12191,8 +12516,9 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "AsyncCandidateSuccessfulServiceAllocatesExactOrdinal",
         "AsyncCandidateTerminalDiscardAllocatesExactOrdinal",
-        "AsyncCandidateServicedIdentityCannotReactivate",
-        "AsyncCandidateServiceTombstoneCoalescesFreshCandidate",
+        "ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst",
+        "AsyncCandidateTransientMarkerCoalescesFreshCandidate",
+        "AsyncCandidateTerminalTombstoneCoalescesFreshCandidate",
         "AsyncServeIngressDuplicateDoesNotAllocateOrdinal",
         "ExactDecisionRequestLifecycleOrdinalCannotResurrect",
         "ExactDecisionServeTombstoneSurvivesSameHeightReplay",
@@ -12316,6 +12642,8 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionResponseRemainingHeadGateIsDeadlineOrShadow",
         "AsyncTickEnabled",
         "OverdueResponsivePackets",
+        "AsyncPacketOwnsClockDeadline",
+        "AsyncServeTransportAdmissionGateAllows",
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -12384,6 +12712,17 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "ExactDecisionTargetNeutralResidualReachesDeadlineOrGoal",
         "ExactDecisionTargetNeutralDueHeadReachesReadyGoal",
         "ExactDecisionTargetNeutralDeadline",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceObligation",
+    ): (
+        "ExactDecisionRequestClockOwnerConvergence",
+        "ExactDecisionRequestRuntimePrefixConvergence",
+        "ExactDecisionRequestHeadGateOwnerConvergence",
+        "ExactDecisionRequestAdmissionCoalescingOutcomeIsDischarged",
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergence",
+        "ExactDecisionOffSchedulerResidualConvergenceProperty",
     ),
     (
         "SumeragiV2AsyncTemporalClosureProofs",
@@ -23618,6 +23957,22 @@ def _proof_obligation_architecture_errors(
                     f"{list(expected_extends)!r}; "
                     f"found {list(actual_extends)!r}"
                 )
+            forbidden_imports = (
+                HISTORICAL_TEMPORAL_FORBIDDEN_DIRECT_IMPORTS.get(
+                    module, ()
+                )
+            )
+            present_forbidden = tuple(
+                imported
+                for imported in forbidden_imports
+                if imported in actual_extends
+            )
+            if present_forbidden:
+                errors.append(
+                    f"{module}.tla may not directly import circular "
+                    "historical/height proof modules "
+                    f"{list(present_forbidden)!r}"
+                )
 
         expected_mappings = tuple(
             f"{field} <- IndexedCore(initialContext, {index})"
@@ -24091,6 +24446,206 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
                 f"{proof_path}:{line}: deductive liveness proofs must use "
                 "unbounded AsyncSpec, not the finite TLC instance"
             )
+    return errors
+
+
+def _acyclic_liveness_debt_topology_errors(formal_dir: Path) -> list[str]:
+    """Keep retained-lock proof leaves strictly below the async debt shard."""
+
+    vocabulary_module = "SumeragiV2LivenessProofs"
+    lower_consumers = (
+        "SumeragiV2Stage2BusyRankScratch",
+        "SumeragiV2Stage3CursorKernelScratch",
+        "SumeragiV2Stage6CapacityScratch",
+        "SumeragiV2LockedBodyProposalActionProofs",
+    )
+    historical_kernel_module = "SumeragiV2AsyncHistoricalRecoveryLivenessProofs"
+    topology_modules = (
+        vocabulary_module,
+        *lower_consumers,
+        historical_kernel_module,
+        ASYNC_LIVENESS_DEBT_SHARD,
+    )
+    topology_present = any(
+        (formal_dir / f"{module}.tla").is_file()
+        for module in (
+            *lower_consumers,
+            historical_kernel_module,
+            ASYNC_LIVENESS_DEBT_SHARD,
+        )
+    )
+    if not topology_present and not (formal_dir / "proof_coverage.json").is_file():
+        return []
+
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for module in topology_modules:
+        module_path = formal_dir / f"{module}.tla"
+        if not module_path.is_file():
+            errors.append(
+                f"missing required acyclic liveness-debt topology module "
+                f"{module}.tla"
+            )
+            continue
+        sources[module] = module_path.read_text(encoding="utf-8")
+
+    expected_extends = {
+        vocabulary_module: (
+            "SumeragiV2AsyncNetwork",
+            "SumeragiV2Proofs",
+        ),
+        **{
+            module: ("SumeragiV2AsyncTimeoutOwnershipProofs",)
+            for module in lower_consumers
+        },
+        historical_kernel_module: (
+            "SumeragiV2AsyncTimeoutOwnershipProofs",
+            "TLAPS",
+        ),
+    }
+    forbidden_dependencies = (
+        ASYNC_LIVENESS_DEBT_SHARD,
+        ASYNC_LIVENESS_FACADE,
+    )
+    for module, expected in expected_extends.items():
+        source = sources.get(module)
+        if source is None:
+            continue
+        actual = _module_extends(source)
+        if actual != expected:
+            errors.append(
+                f"{module}.tla must EXTEND exactly {list(expected)} to remain "
+                f"below the proofless async liveness debt; found {list(actual)}"
+            )
+        stripped = strip_tla_comments(source)
+        for forbidden in forbidden_dependencies:
+            if re.search(rf"\b{re.escape(forbidden)}\b", stripped):
+                errors.append(
+                    f"{module}.tla must not depend on {forbidden}; retained-lock "
+                    "proof leaves must remain below their async debt consumers"
+                )
+
+    temporal_root = "SumeragiV2AsyncTemporalClosureProofs"
+    temporal_root_path = formal_dir / f"{temporal_root}.tla"
+    if temporal_root_path.is_file():
+        import_graph = {
+            path.stem: _module_extends(path.read_text(encoding="utf-8"))
+            for path in sorted(formal_dir.glob("*.tla"))
+        }
+        for forbidden in forbidden_dependencies:
+            queue: list[tuple[str, tuple[str, ...]]] = [
+                (temporal_root, (temporal_root,))
+            ]
+            visited = {temporal_root}
+            found_path: tuple[str, ...] | None = None
+            while queue and found_path is None:
+                module, module_path = queue.pop(0)
+                for dependency in import_graph.get(module, ()):
+                    dependency_path = (*module_path, dependency)
+                    if dependency == forbidden:
+                        found_path = dependency_path
+                        break
+                    if dependency in import_graph and dependency not in visited:
+                        visited.add(dependency)
+                        queue.append((dependency, dependency_path))
+            if found_path is not None:
+                errors.append(
+                    f"{temporal_root}.tla must not transitively depend on "
+                    f"{forbidden}; found import path {' -> '.join(found_path)}"
+                )
+
+    expected_operator_bodies = {
+        "StableAvailableRetainedLock": r"""
+            /\ gst
+            /\ node \in AsyncCurrentResponsiveVoters \cap up
+            /\ lockedRound \in Views
+            /\ subject \in Subjects
+            /\ lockRank[node] = lockedRound
+            /\ lockSubject[node] = subject
+            /\ BodyHeldBy(durableBodies, node, context, lockedRound, subject)
+            /\ RetainedLockedBodyHeldBy(
+                 retainedLockedBodies, node, context, subject)
+        """,
+        "LockedBodyCommittedInOldRound": r"""
+            \E qc \in commitQCs:
+              /\ qc.context = context
+              /\ qc.phase = "Commit"
+              /\ qc.view = lockedRound
+              /\ qc.subject = subject
+              /\ node \in qc.signers
+        """,
+        "LockedBodyReproposedUnchangedLater": r"""
+            \E envelope \in proposalNetwork:
+              /\ envelope.proposal.context = context
+              /\ envelope.proposal.view > lockedRound
+              /\ envelope.proposal.subject = subject
+        """,
+        "LockedBodyLegitimatelyDecidedOrSuperseded": r"""
+            \/ NodeHasDecision(node)
+            \/ /\ lockRank[node] > lockedRound
+               /\ \E qc \in prepareQCs:
+                    /\ qc.context = context
+                    /\ qc.phase = "Prepare"
+                    /\ qc.view = lockRank[node]
+                    /\ qc.subject = lockSubject[node]
+        """,
+        "LockedBodyReproposalOutcome": r"""
+            \/ LockedBodyCommittedInOldRound(node, lockedRound, subject)
+            \/ LockedBodyReproposedUnchangedLater(lockedRound, subject)
+            \/ LockedBodyLegitimatelyDecidedOrSuperseded(
+                 node, lockedRound, subject)
+        """,
+        "LockedBodyReproposalProgressProperty": r"""
+            specification
+              => \A node \in ValidatorIds, lockedRound \in Views,
+                    subject \in Subjects:
+                   StableAvailableRetainedLock(node, lockedRound, subject)
+                     ~> LockedBodyReproposalOutcome(node, lockedRound, subject)
+        """,
+    }
+    all_sources = {
+        path.stem: path.read_text(encoding="utf-8")
+        for path in sorted(formal_dir.glob("*.tla"))
+    }
+    vocabulary_source = sources.get(vocabulary_module)
+    for symbol, expected_body in expected_operator_bodies.items():
+        providers = sorted(
+            module
+            for module, source in all_sources.items()
+            if _top_level_operator_body(source, symbol) is not None
+        )
+        if providers != [vocabulary_module]:
+            errors.append(
+                f"acyclic liveness vocabulary operator {symbol} must have "
+                f"exactly one lower provider {vocabulary_module}.tla; found "
+                f"{[provider + '.tla' for provider in providers]}"
+            )
+        if vocabulary_source is None:
+            continue
+        extracted = _top_level_operator_body(
+            vocabulary_source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        expected_normalized = " ".join(expected_body.split())
+        if normalized != expected_normalized:
+            errors.append(
+                f"{vocabulary_module}.tla:{line}: {symbol} must equal only "
+                f"{expected_normalized!r}; found {normalized!r}"
+            )
+
+    debt_source = sources.get(ASYNC_LIVENESS_DEBT_SHARD)
+    if debt_source is not None:
+        for symbol in expected_operator_bodies:
+            if _top_level_operator_body(debt_source, symbol) is not None:
+                errors.append(
+                    f"{ASYNC_LIVENESS_DEBT_SHARD}.tla must not redeclare lower "
+                    f"liveness vocabulary operator {symbol}"
+                )
     return errors
 
 
@@ -25927,6 +26482,62 @@ def _historical_timeout_derivation_errors(formal_dir: Path) -> list[str]:
     return errors
 
 
+def _timeout_view_liveness_contract_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the GST and responsive-source boundaries of timeout liveness."""
+
+    path = formal_dir / "SumeragiV2TimeoutViewProgressProofs.tla"
+    if not path.is_file():
+        return []
+
+    source = path.read_text(encoding="utf-8")
+    property_contracts = {
+        "TimeoutDeadlineArmedOwner": (
+            "/\\ TimeoutRoundStable(node, roundView) "
+            "/\\ ~NodeTimedOut(node, roundView) "
+            "/\\ \\/ asyncNow >= asyncNodeDeadlines[node] "
+            '\\/ "TimeoutElapsed" \\in asyncOutstandingTags[node]'
+        ),
+        "TimeoutSemanticOwnerHandoffProperty": (
+            "specification => /\\ \\A source \\in "
+            "AsyncCurrentResponsiveVoters, sourceView \\in Views: "
+            "TimeoutDeadlineArmedOwner(source, sourceView) ~> "
+            "(TimeoutDirectGoal(source, sourceView) \\/ \\E vote \\in "
+            "TimeoutVoteRecordSet: TimeoutOrigin(source, sourceView, vote)) "
+            "/\\ \\A source \\in AsyncCurrentResponsiveVoters, "
+            "sourceView \\in Views, vote \\in TimeoutVoteRecordSet, "
+            "recipient \\in AsyncCurrentResponsiveVoters: "
+            "(/\\ gst /\\ TimeoutOrigin(source, sourceView, vote)) ~> "
+            "TimeoutOriginOutcome( source, sourceView, vote, recipient)"
+        ),
+        "TimeoutSourceIsolatedDeliveryConvergenceProperty": (
+            "specification => \\A vote \\in TimeoutVoteRecordSet, "
+            "recipient \\in AsyncCurrentResponsiveVoters: "
+            "(/\\ gst /\\ vote.signer \\in AsyncCurrentResponsiveVoters "
+            "/\\ TimeoutDelivery(vote, recipient)) ~> "
+            "TimeoutDeliveryOutcome(vote, recipient)"
+        ),
+    }
+    errors: list[str] = []
+    for symbol, exact_body in property_contracts.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing timeout liveness contract {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{path}:{line}: {symbol} must equal only the reviewed "
+                f"GST/responsive-source contract {exact_body!r}; "
+                f"found {normalized!r}"
+            )
+    return errors
+
+
 def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Pin executable progress witnesses and the post-Decision timeout boundary."""
 
@@ -27107,11 +27718,10 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "Effect::FetchBody { tag: self.current_tag(), round, subject, "
                 "manifest: self.body_work.get(&(round, subject))"
                 ".and_then(|work| work.manifest), "
-                "certified_sources: certificate.signatures().iter()"
-                ".map(SignatureShare::signer).collect(), "
+                "certified_sources: self.frozen_archive_sources(), "
                 "certificate: Some(certificate.clone()), }",
                 "FetchBody must carry the exact current tag, round, subject, "
-                "certified sources, and locked certificate",
+                "canonical frozen-roster archive sources, and locked certificate",
                 errors,
             )
             _require_rust_token_sequence(
@@ -29085,12 +29695,377 @@ def _causal_fifo_rank_mutation_runner_errors(repo_root: Path) -> list[str]:
     return errors
 
 
+def _dormant_reply_clock_mutation_contract_errors(
+    formal_dir: Path, repo_root: Path = ROOT_DIR
+) -> list[str]:
+    """Pin the retained-dormant reply clock repair and its red/green TLC pair."""
+
+    errors: list[str] = []
+    paths = {
+        name: formal_dir / name for name in DORMANT_REPLY_CLOCK_MUTATION_ARTIFACTS
+    }
+    for name, path in paths.items():
+        if not path.is_file() or path.is_symlink():
+            errors.append(
+                f"{path}: dormant reply clock mutation artifact must be a regular file"
+            )
+
+    expected_config_names = {
+        name
+        for name in DORMANT_REPLY_CLOCK_MUTATION_ARTIFACTS
+        if name.endswith(".cfg")
+    }
+    observed_config_names = {
+        path.name for path in formal_dir.glob("dormant_reply_clock*.cfg")
+    }
+    if observed_config_names != expected_config_names:
+        errors.append(
+            f"{formal_dir}: dormant reply clock configuration inventory must "
+            f"equal {sorted(expected_config_names)!r}; found "
+            f"{sorted(observed_config_names)!r}"
+        )
+
+    model_name = "SumeragiV2DormantReplyClockMutation.tla"
+    model_path = paths[model_name]
+    model_source = (
+        model_path.read_text(encoding="utf-8")
+        if model_path.is_file() and not model_path.is_symlink()
+        else ""
+    )
+    if model_source:
+        errors.extend(tla_shortcut_errors(model_path, model_source))
+
+    exact_operators = {
+        "MutationModes": '{"Fixed", "AllDuePacketsOwnClock"}',
+        "AsyncServeTransportAdmissionGateAllows": (
+            "requestServiceable \\/ lifecycleOwned"
+        ),
+        "AsyncPhysicalAdmissionGateAllows": (
+            "capacityOpen /\\ selectorOpen"
+        ),
+        "AsyncDormantExactReplyRequestPacket": (
+            "/\\ requestRetained "
+            "/\\ ~AsyncServeTransportAdmissionGateAllows"
+        ),
+        "AsyncReplyRequestPacketDue": (
+            "/\\ requestRetained /\\ RequestDeadline <= asyncNow"
+        ),
+        "AsyncPacketOwnsClockDeadline": (
+            "/\\ AsyncReplyRequestPacketDue "
+            "/\\ IF MutationMode = \"AllDuePacketsOwnClock\" "
+            "THEN TRUE ELSE ~AsyncDormantExactReplyRequestPacket"
+        ),
+        "AsyncTickEnabled": (
+            "/\\ asyncNow < NextViewTimeout "
+            "/\\ ~AsyncPacketOwnsClockDeadline"
+        ),
+        "Init": (
+            "/\\ MutationMode \\in MutationModes "
+            "/\\ asyncNow = RequestDeadline /\\ nodeView = 0 "
+            "/\\ tcInstalled = FALSE /\\ requestRetained = TRUE "
+            "/\\ requestServiceable = FALSE /\\ lifecycleOwned = FALSE "
+            "/\\ capacityOpen = FALSE /\\ selectorOpen = FALSE "
+            '/\\ served = FALSE /\\ lastTransition = "Init"'
+        ),
+        "InstallTimeoutCertificate": (
+            "/\\ nodeView = 0 /\\ nodeView' = 1 /\\ tcInstalled' = TRUE "
+            '/\\ lastTransition\' = "InstallTimeoutCertificate" '
+            "/\\ UNCHANGED <<asyncNow, requestRetained, "
+            "requestServiceable, lifecycleOwned, capacityOpen, "
+            "selectorOpen, served>>"
+        ),
+        "AsyncTick": (
+            "/\\ AsyncTickEnabled /\\ asyncNow' = asyncNow + 1 "
+            '/\\ lastTransition\' = "AsyncTick" '
+            "/\\ UNCHANGED <<nodeView, tcInstalled, requestRetained, "
+            "requestServiceable, lifecycleOwned, capacityOpen, "
+            "selectorOpen, served>>"
+        ),
+        "MakeRequestServiceable": (
+            "/\\ asyncNow = NextViewTimeout /\\ ~requestServiceable "
+            "/\\ requestServiceable' = TRUE "
+            '/\\ lastTransition\' = "MakeRequestServiceable" '
+            "/\\ UNCHANGED <<asyncNow, nodeView, tcInstalled, "
+            "requestRetained, lifecycleOwned, capacityOpen, selectorOpen, "
+            "served>>"
+        ),
+        "AcquireRequestLifecycle": (
+            "/\\ asyncNow = NextViewTimeout /\\ ~lifecycleOwned "
+            "/\\ lifecycleOwned' = TRUE "
+            '/\\ lastTransition\' = "AcquireRequestLifecycle" '
+            "/\\ UNCHANGED <<asyncNow, nodeView, tcInstalled, "
+            "requestRetained, requestServiceable, capacityOpen, "
+            "selectorOpen, served>>"
+        ),
+        "OpenCapacity": (
+            "/\\ asyncNow = NextViewTimeout /\\ ~capacityOpen "
+            "/\\ capacityOpen' = TRUE "
+            '/\\ lastTransition\' = "OpenCapacity" '
+            "/\\ UNCHANGED <<asyncNow, nodeView, tcInstalled, "
+            "requestRetained, requestServiceable, lifecycleOwned, "
+            "selectorOpen, served>>"
+        ),
+        "OpenSelector": (
+            "/\\ asyncNow = NextViewTimeout /\\ ~selectorOpen "
+            "/\\ selectorOpen' = TRUE "
+            '/\\ lastTransition\' = "OpenSelector" '
+            "/\\ UNCHANGED <<asyncNow, nodeView, tcInstalled, "
+            "requestRetained, requestServiceable, lifecycleOwned, "
+            "capacityOpen, served>>"
+        ),
+        "ServeRetainedRequest": (
+            "/\\ requestRetained "
+            "/\\ AsyncServeTransportAdmissionGateAllows "
+            "/\\ AsyncPhysicalAdmissionGateAllows "
+            "/\\ requestRetained' = FALSE /\\ served' = TRUE "
+            '/\\ lastTransition\' = "ServeRetainedRequest" '
+            "/\\ UNCHANGED <<asyncNow, nodeView, tcInstalled, "
+            "requestServiceable, lifecycleOwned, capacityOpen, selectorOpen>>"
+        ),
+        "Next": (
+            "\\/ InstallTimeoutCertificate \\/ AsyncTick "
+            "\\/ MakeRequestServiceable \\/ AcquireRequestLifecycle "
+            "\\/ OpenCapacity \\/ OpenSelector \\/ ServeRetainedRequest"
+        ),
+        "Spec": (
+            "/\\ Init /\\ [][Next]_dormantReplyClockVars "
+            "/\\ WF_dormantReplyClockVars(InstallTimeoutCertificate) "
+            "/\\ WF_dormantReplyClockVars(AsyncTick)"
+        ),
+        "TypeInvariant": (
+            "/\\ MutationMode \\in MutationModes "
+            "/\\ asyncNow \\in RequestDeadline..NextViewTimeout "
+            "/\\ nodeView \\in {0, 1} /\\ tcInstalled \\in BOOLEAN "
+            "/\\ requestRetained \\in BOOLEAN "
+            "/\\ requestServiceable \\in BOOLEAN "
+            "/\\ lifecycleOwned \\in BOOLEAN /\\ capacityOpen \\in BOOLEAN "
+            "/\\ selectorOpen \\in BOOLEAN /\\ served \\in BOOLEAN "
+            '/\\ lastTransition \\in {"Init", "InstallTimeoutCertificate", '
+            '"AsyncTick", "MakeRequestServiceable", '
+            '"AcquireRequestLifecycle", "OpenCapacity", "OpenSelector", '
+            '"ServeRetainedRequest"}'
+        ),
+        "DormantRequestRemainsRetained": (
+            "AsyncDormantExactReplyRequestPacket => requestRetained"
+        ),
+        "ServeGateExcludesPhysicalAdmission": (
+            "AsyncServeTransportAdmissionGateAllows "
+            "<=> (requestServiceable \\/ lifecycleOwned)"
+        ),
+        "GateOpenDuePacketOwnsClockImmediately": (
+            "/\\ AsyncReplyRequestPacketDue "
+            "/\\ AsyncServeTransportAdmissionGateAllows "
+            "=> AsyncPacketOwnsClockDeadline"
+        ),
+        "PhysicalAdmissionBlockDoesNotReleaseClock": (
+            "/\\ AsyncReplyRequestPacketDue "
+            "/\\ AsyncServeTransportAdmissionGateAllows "
+            "/\\ ~AsyncPhysicalAdmissionGateAllows "
+            "=> AsyncPacketOwnsClockDeadline"
+        ),
+        "FixedDormantPacketDoesNotOwnClock": (
+            "MutationMode = \"Fixed\" "
+            "=> (AsyncPacketOwnsClockDeadline "
+            "<=> /\\ AsyncReplyRequestPacketDue "
+            "/\\ ~AsyncDormantExactReplyRequestPacket)"
+        ),
+        "NextViewClockProgress": (
+            "(nodeView = 1) ~> (asyncNow = NextViewTimeout)"
+        ),
+    }
+    for symbol, expected in exact_operators.items():
+        extracted = _top_level_operator_body(
+            model_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{model_path}: missing dormant reply clock operator {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{model_path}:{line}: {symbol} must equal only "
+                f"{expected!r}; found {normalized!r}"
+            )
+
+    required_operator_fragments = {
+        "Init": (
+            "MutationMode \\in MutationModes",
+            "asyncNow = RequestDeadline",
+            "nodeView = 0",
+            "requestRetained = TRUE",
+            "requestServiceable = FALSE",
+            "lifecycleOwned = FALSE",
+            "capacityOpen = FALSE",
+            "selectorOpen = FALSE",
+        ),
+        "InstallTimeoutCertificate": (
+            "nodeView = 0",
+            "nodeView' = 1",
+            "tcInstalled' = TRUE",
+            "UNCHANGED <<asyncNow, requestRetained, requestServiceable, "
+            "lifecycleOwned, capacityOpen, selectorOpen, served>>",
+        ),
+        "MakeRequestServiceable": (
+            "asyncNow = NextViewTimeout",
+            "requestServiceable' = TRUE",
+            "UNCHANGED <<asyncNow, nodeView, tcInstalled, requestRetained, "
+            "lifecycleOwned, capacityOpen, selectorOpen, served>>",
+        ),
+        "AcquireRequestLifecycle": (
+            "asyncNow = NextViewTimeout",
+            "lifecycleOwned' = TRUE",
+            "UNCHANGED <<asyncNow, nodeView, tcInstalled, requestRetained, "
+            "requestServiceable, capacityOpen, selectorOpen, served>>",
+        ),
+        "Spec": (
+            "Init",
+            "[][Next]_dormantReplyClockVars",
+            "WF_dormantReplyClockVars(InstallTimeoutCertificate)",
+            "WF_dormantReplyClockVars(AsyncTick)",
+        ),
+    }
+    for symbol, required in required_operator_fragments.items():
+        extracted = _top_level_operator_body(
+            model_source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{model_path}: missing dormant reply clock operator {symbol}"
+            )
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        for fragment in required:
+            normalized_fragment = " ".join(fragment.split())
+            if normalized_fragment not in normalized:
+                errors.append(
+                    f"{model_path}:{line}: {symbol} must retain dormant reply "
+                    f"clock fragment {fragment!r}"
+                )
+
+    stripped_model = strip_tla_comments(
+        model_source, preserve_string_contents=True
+    )
+    if (
+        stripped_model.count(
+            'MutationMode = "AllDuePacketsOwnClock"'
+        )
+        != 1
+    ):
+        errors.append(
+            f"{model_path}: AllDuePacketsOwnClock may alter exactly the "
+            "AsyncPacketOwnsClockDeadline operator"
+        )
+
+    expected_configs = {
+        "dormant_reply_clock_fixed.cfg": (
+            'SPECIFICATION Spec CONSTANT MutationMode = "Fixed" '
+            "INVARIANT TypeInvariant "
+            "INVARIANT DormantRequestRemainsRetained "
+            "INVARIANT ServeGateExcludesPhysicalAdmission "
+            "INVARIANT GateOpenDuePacketOwnsClockImmediately "
+            "INVARIANT PhysicalAdmissionBlockDoesNotReleaseClock "
+            "INVARIANT FixedDormantPacketDoesNotOwnClock "
+            "PROPERTY NextViewClockProgress"
+        ),
+        "dormant_reply_clock_all_due_bug.cfg": (
+            "SPECIFICATION Spec "
+            'CONSTANT MutationMode = "AllDuePacketsOwnClock" '
+            "INVARIANT TypeInvariant "
+            "INVARIANT DormantRequestRemainsRetained "
+            "INVARIANT ServeGateExcludesPhysicalAdmission "
+            "INVARIANT GateOpenDuePacketOwnsClockImmediately "
+            "INVARIANT PhysicalAdmissionBlockDoesNotReleaseClock "
+            "PROPERTY NextViewClockProgress"
+        ),
+    }
+    for name, expected in expected_configs.items():
+        config_path = paths[name]
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        config_source = strip_tla_comments(
+            config_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        normalized = " ".join(config_source.split())
+        if normalized != expected:
+            errors.append(
+                f"{config_path}: dormant reply clock config must equal only "
+                f"{expected!r}; found {normalized!r}"
+            )
+
+    runner_path = (
+        repo_root
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_reply_writer_deadline_mutations.sh"
+    )
+    if not runner_path.is_file() or runner_path.is_symlink():
+        errors.append(
+            f"{runner_path}: dormant reply clock mutation runner must be a "
+            "regular file"
+        )
+        return errors
+    runner = re.sub(
+        r"[ \t]*\\\r?\n[ \t]*",
+        " ",
+        runner_path.read_text(encoding="utf-8"),
+    )
+    runner_contracts = (
+        (
+            "fixed",
+            r"\brun_case\s+dormant-reply-clock-fixed\s+"
+            r"SumeragiV2DormantReplyClockMutation\.tla\s+"
+            r"dormant_reply_clock_fixed\.cfg\s+0\s+"
+            r'"Model checking completed\. No error has been found\."',
+        ),
+        (
+            "failing all-due mutation",
+            r"\brun_case\s+all-due-reply-clock-freeze\s+"
+            r"SumeragiV2DormantReplyClockMutation\.tla\s+"
+            r"dormant_reply_clock_all_due_bug\.cfg\s+13\s+"
+            r'"Temporal properties were violated\."\s+"Stuttering"',
+        ),
+    )
+    positions: list[int] = []
+    for label, pattern in runner_contracts:
+        matches = tuple(re.finditer(pattern, runner))
+        if len(matches) != 1:
+            errors.append(
+                f"{runner_path}: dormant reply clock runner must invoke the "
+                f"{label} case exactly once with its reviewed status and markers"
+            )
+        else:
+            positions.append(matches[0].start())
+    if len(positions) == 2 and positions != sorted(positions):
+        errors.append(
+            f"{runner_path}: dormant reply clock fixed case must precede its "
+            "all-due liveness mutation"
+        )
+    if runner.count(
+        'readonly DORMANT_CLOCK_MODULE="SumeragiV2DormantReplyClockMutation"'
+    ) != 1:
+        errors.append(
+            f"{runner_path}: dormant reply clock model must be SANY-parsed "
+            "exactly once through its reviewed module binding"
+        )
+    return errors
+
+
 def _reply_writer_deadline_formal_source_fidelity_errors(
     formal_dir: Path, repo_root: Path = ROOT_DIR
 ) -> list[str]:
     """Pin the orthogonal deadline proof, its residual, and all TLC mutants."""
 
     errors: list[str] = []
+    errors.extend(
+        _dormant_reply_clock_mutation_contract_errors(
+            formal_dir, repo_root
+        )
+    )
     sources: dict[str, str] = {}
     for name, expected_sha256 in (
         _REPLY_WRITER_DEADLINE_FORMAL_SOURCE_SHA256.items()
@@ -29791,10 +30766,10 @@ def _reply_writer_deadline_formal_source_fidelity_errors(
                 f"{runner_path}: reply-writer deadline runner must SANY-parse "
                 "the proof module exactly once"
             )
-        if runner.count('"-DTLA-Library=${TLAPM_STDLIB}"') != 2:
+        if runner.count('"-DTLA-Library=${TLAPM_STDLIB}"') != 3:
             errors.append(
-                f"{runner_path}: reply-writer deadline SANY and TLC must both "
-                "use the pinned TLAPS standard library"
+                f"{runner_path}: both SANY calls and TLC must use the pinned "
+                "TLAPS standard library"
             )
         fixed_cases = (
             (
@@ -40473,6 +41448,77 @@ def _liveness_ownership_mutation_source_fidelity_errors(
     return errors
 
 
+def _formal_ci_new_mutation_runner_invocation_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Pin the new release mutation runners as exact fail-closed CI commands."""
+
+    ci_path = repo_root / "ci" / "check_sumeragi_formal.sh"
+    if not ci_path.is_file() or ci_path.is_symlink():
+        return [
+            f"{ci_path}: formal CI gate must be a regular file containing the "
+            "reviewed readiness/indexed-height/item-carrier/reply-writer runners"
+        ]
+
+    lines = ci_path.read_text(encoding="utf-8").splitlines()
+    errors: list[str] = []
+    positions: list[int] = []
+    for invocation in _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS:
+        basename = invocation.rsplit("/", 1)[-1]
+        if lines.count(invocation) != 1:
+            errors.append(
+                f"{ci_path}: formal release must invoke {invocation!r} "
+                "exactly once as an unguarded fail-closed command"
+            )
+        else:
+            positions.append(lines.index(invocation))
+        mentioning_lines = [line for line in lines if basename in line]
+        if mentioning_lines != [invocation]:
+            errors.append(
+                f"{ci_path}: {basename} must appear only as the exact "
+                f"fail-closed command {invocation!r}; found {mentioning_lines!r}"
+            )
+
+    if len(positions) == len(_FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS):
+        if positions != sorted(positions):
+            errors.append(
+                f"{ci_path}: readiness, indexed-height, item-carrier, and "
+                "reply-writer mutation runners must retain reviewed order"
+            )
+        elif positions != list(range(positions[0], positions[0] + len(positions))):
+            errors.append(
+                f"{ci_path}: the four reviewed mutation runners must remain "
+                "one contiguous fail-closed release block"
+            )
+
+        predecessor = (
+            "bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh"
+        )
+        successor = (
+            "bash scripts/formal/"
+            "run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh"
+        )
+        aggregate_tlc = "bash scripts/formal/run_sumeragi_v2_tlc.sh ci"
+        if (
+            lines.count(predecessor) != 1
+            or lines.count(successor) != 1
+            or lines.count(aggregate_tlc) != 1
+            or not (
+                lines.index(predecessor)
+                < positions[0]
+                <= positions[-1]
+                < lines.index(successor)
+                < lines.index(aggregate_tlc)
+            )
+        ):
+            errors.append(
+                f"{ci_path}: the reviewed mutation block must run after "
+                "liveness ownership and before historical discovery and "
+                "aggregate TLC"
+            )
+    return errors
+
+
 def _historical_discovery_occurrence_rank_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
@@ -43541,6 +44587,135 @@ if request.directive.locked_subject().is_some() {
     return errors
 
 
+def _adequate_leader_scheduler_readiness_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Keep exact-leader readiness closed under the real async transition."""
+
+    path = formal_dir / "SumeragiV2AdequateLeaderServiceClosureProofs.tla"
+    if not path.is_file() or path.is_symlink():
+        return [
+            f"{path}: adequate-leader scheduler-readiness source must be a "
+            "regular file"
+        ]
+    try:
+        source = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        return [f"{path}: cannot read adequate-leader readiness source: {error}"]
+
+    errors: list[str] = []
+    frame_symbol = "ExactLeaderSchedulerReadinessFrame"
+    frame = _top_level_operator_body(
+        source, frame_symbol, preserve_string_contents=True
+    )
+    expected_frame = (
+        "/\\ UNCHANGED vars /\\ UNCHANGED up /\\ UNCHANGED "
+        "<<asyncCommandQueues, asyncDeferredCompletionQueues, "
+        "asyncDeferredProgressQueues, asyncDeferredNormalQueues, "
+        "asyncCausalQueues, asyncOutstandingWork, asyncSentItems, "
+        "asyncHeldChunks, asyncControlServiceState>>"
+    )
+    if frame is None:
+        errors.append(f"{path}: missing reviewed readiness frame {frame_symbol}")
+    else:
+        body, line = frame
+        observed = " ".join(body.split())
+        if observed != expected_frame:
+            errors.append(
+                f"{path}:{line}: {frame_symbol} must freeze both `up` and "
+                "`asyncControlServiceState` with every reviewed scheduler "
+                f"carrier; expected {expected_frame!r}, found {observed!r}"
+            )
+
+    theorem_statements = {
+        "AsyncCandidateTerminalRetirementEligibilityIsRestartSafe": (
+            "\\A candidate: "
+            "AsyncCandidateTerminalRetirementEligibleAfterStep(candidate) "
+            "=> candidate.kind \\notin "
+            "AsyncRestartScopedCandidateServiceKinds"
+        ),
+        "AsyncCandidateTerminalTombstoneConstructorPreservesRestartSafety": (
+            "\\A candidate, episodeView, ordinal: candidate.kind \\notin "
+            "AsyncRestartScopedCandidateServiceKinds => "
+            "AsyncCandidateServiceTombstone( candidate, episodeView, "
+            "ordinal).phase \\notin AsyncRestartScopedCandidateServiceKinds"
+        ),
+        "AsyncNetworkReplacementRetiresReadyOccurrenceIntoAuthenticatedProvenance": (
+            "\\A candidate, rank: /\\ AsyncStrongTypeInvariant "
+            "/\\ ExactLeaderCandidateRank(candidate, rank) "
+            "/\\ ExecuteCoreDeliveryReady(candidate) "
+            "/\\ ExactLeaderControlOccurrenceRetiredByNetwork(candidate) "
+            "/\\ AsyncNext /\\ AsyncNetworkStep => "
+            "AuthenticatedLeaderDiscardProvenance(candidate)'"
+        ),
+        "AsyncNetworkStepPreservesExactLeaderSchedulerOriginReadiness": (
+            "/\\ AsyncStrongTypeInvariant "
+            "/\\ AsyncProgressOwnershipInvariant "
+            "/\\ ExactLeaderSchedulerOriginReadinessInvariant "
+            "/\\ AsyncNext /\\ AsyncNetworkStep => "
+            "ExactLeaderSchedulerOriginReadinessInvariant'"
+        ),
+        "AsyncNextPreservesExactLeaderSchedulerOriginReadiness": (
+            "/\\ ExactLeaderSchedulerOriginInductionContext "
+            "/\\ AsyncNext => ExactLeaderSchedulerOriginReadinessInvariant'"
+        ),
+        "AuthenticatedExactLeaderTerminalDiscardInstallsClosedTombstone": (
+            "\\A candidate \\in AsyncCandidateSet, rank \\in (1..5) \\X Nat: "
+            "/\\ AsyncStrongTypeInvariant "
+            "/\\ AsyncProgressOwnershipInvariant "
+            "/\\ AsyncCandidateServiceTombstoneLifecycleInvariant "
+            "/\\ ExactLeaderCandidateRank(candidate, rank) "
+            "/\\ AuthenticatedLeaderDiscardProvenance(candidate) "
+            "/\\ candidate.kind \\notin "
+            "AsyncRestartScopedCandidateServiceKinds "
+            "/\\ SameConsumerLeaderDiscard(candidate) /\\ AsyncNext => "
+            "/\\ ExactLeaderDiscardProvenanceAt(candidate, rank)' "
+            "/\\ ~CandidateScheduled(candidate)' "
+            "/\\ \\/ NodeHasDecision(candidate.node)' "
+            "\\/ /\\ AsyncCandidateTerminalTombstoned(candidate)' "
+            "/\\ CandidateAdmissionCoalesced(candidate)' "
+            "/\\ FreshCandidateSequence(candidate)' = <<>>"
+        ),
+        "AsyncSpecAlwaysExactLeaderSchedulerOriginReadiness": (
+            "\\A initialContext: ExactLeaderSchedulerOriginReadinessProperty( "
+            "AsyncSpecAt(initialContext))"
+        ),
+        "AsyncLiveExactLeaderSchedulerOriginReadiness": (
+            "\\A initialContext: ExactLeaderSchedulerOriginReadinessProperty( "
+            "AsyncLiveSpecAt(initialContext))"
+        ),
+        "AsyncLiveResponsiveExactLeaderSchedulerSourcesAreUp": (
+            "\\A initialContext: AsyncLiveSpecAt(initialContext) => "
+            "[](\\A candidate \\in AsyncCandidateSet, "
+            "rank \\in (1..5) \\X Nat: /\\ gst "
+            "/\\ ExactLeaderCandidateRank(candidate, rank) "
+            "=> candidate.node \\in up)"
+        ),
+    }
+    for symbol, expected in theorem_statements.items():
+        extracted = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed adequate-leader readiness theorem "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
+        observed = " ".join(statement.split())
+        if observed != expected:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the reviewed full "
+                "AsyncNext/readiness/tombstone contract; "
+                f"expected {expected!r}, found {observed!r}"
+            )
+    return errors
+
+
 def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Reject async-model shortcuts that previously made progress circular."""
 
@@ -44052,6 +45227,139 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncDeferredNormalQueues, asyncCausalQueues, "
             "asyncOutstandingWork)"
         ),
+        "AsyncCandidateServiceMarkers": (
+            "asyncControlServiceState.candidateServiceMarkers"
+        ),
+        "AsyncCandidateTerminalTombstones": (
+            "asyncControlServiceState.candidateTerminalTombstones"
+        ),
+        "AsyncCandidateServiceMarker": (
+            "[identity |-> AsyncCandidateServiceIdentity(candidate), "
+            "node |-> candidate.node, context |-> candidate.consumerContext, "
+            "height |-> candidate.height, view |-> candidate.view, "
+            "episodeView |-> episodeView, generation |-> episodeGeneration, "
+            "subject |-> candidate.subject, phase |-> candidate.kind, "
+            "ordinal |-> ordinal]"
+        ),
+        "AsyncCandidateServiceMarkerSet": (
+            "{AsyncCandidateServiceMarker( candidate, episodeView, "
+            "episodeGeneration, ordinal): candidate \\in AsyncCandidateSet, "
+            "episodeView \\in Views, episodeGeneration \\in Generations, "
+            "ordinal \\in Nat \\ {0}}"
+        ),
+        "AsyncCandidateServiceTombstone": (
+            "[identity |-> AsyncCandidateServiceIdentity(candidate), "
+            "node |-> candidate.node, context |-> candidate.consumerContext, "
+            "height |-> candidate.height, view |-> candidate.view, "
+            "episodeView |-> episodeView, subject |-> candidate.subject, "
+            "phase |-> candidate.kind, ordinal |-> ordinal]"
+        ),
+        "AsyncCandidateServiceTombstoneSet": (
+            "{AsyncCandidateServiceTombstone(candidate, episodeView, ordinal): "
+            "candidate \\in AsyncCandidateSet, episodeView \\in Views, "
+            "ordinal \\in Nat \\ {0}}"
+        ),
+        "AsyncCandidateServiceTombstones": (
+            "AsyncCandidateServiceMarkers "
+            "\\cup AsyncCandidateTerminalTombstones"
+        ),
+        "AsyncCandidateTransientServiceRecordsForIdentity": (
+            "{record \\in AsyncCandidateServiceMarkers: "
+            "record.identity = identity}"
+        ),
+        "AsyncCandidateTerminalRecordsForIdentity": (
+            "{record \\in AsyncCandidateTerminalTombstones: "
+            "record.identity = identity}"
+        ),
+        "AsyncCandidateTransientServiceIdentityMarked": (
+            "AsyncCandidateTransientServiceRecordsForIdentity(identity) # {}"
+        ),
+        "AsyncCandidateTerminalIdentityTombstoned": (
+            "AsyncCandidateTerminalRecordsForIdentity(identity) # {}"
+        ),
+        "AsyncCandidateServiceRecordsForIdentity": (
+            "AsyncCandidateTransientServiceRecordsForIdentity(identity) "
+            "\\cup AsyncCandidateTerminalRecordsForIdentity(identity)"
+        ),
+        "AsyncCandidateServiceIdentityTombstoned": (
+            "AsyncCandidateServiceRecordsForIdentity(identity) # {}"
+        ),
+        "AsyncCandidateTransientServiceRecordsFor": (
+            "AsyncCandidateTransientServiceRecordsForIdentity( "
+            "AsyncCandidateServiceIdentity(candidate))"
+        ),
+        "AsyncCandidateTerminalRecordsFor": (
+            "AsyncCandidateTerminalRecordsForIdentity( "
+            "AsyncCandidateServiceIdentity(candidate))"
+        ),
+        "AsyncCandidateServiceRecordsFor": (
+            "AsyncCandidateServiceRecordsForIdentity( "
+            "AsyncCandidateServiceIdentity(candidate))"
+        ),
+        "AsyncCandidateTransientServiceMarked": (
+            "AsyncCandidateTransientServiceRecordsFor(candidate) # {}"
+        ),
+        "AsyncCandidateTerminalTombstoned": (
+            "AsyncCandidateTerminalRecordsFor(candidate) # {}"
+        ),
+        "AsyncCandidateServiceCoalesced": (
+            "\\/ AsyncCandidateTransientServiceMarked(candidate) "
+            "\\/ AsyncCandidateTerminalTombstoned(candidate)"
+        ),
+        "AsyncCandidateServiceTombstoned": (
+            "AsyncCandidateServiceCoalesced(candidate)"
+        ),
+        "AsyncControlServiceStateTypeInvariant": (
+            "/\\ DOMAIN asyncControlServiceState = "
+            '{"nextOrdinal", "slots", "certifiedResponseNextOrdinal", '
+            '"certifiedResponseClaims", "candidateServiceNextOrdinal", '
+            '"candidateServiceMarkers", "candidateTerminalTombstones"} '
+            "/\\ asyncControlServiceState.nextOrdinal "
+            "\\in [ValidatorIds -> (Nat \\ {0})] "
+            "/\\ asyncControlServiceState.certifiedResponseNextOrdinal "
+            "\\in [ValidatorIds -> (Nat \\ {0})] "
+            "/\\ asyncControlServiceState.candidateServiceNextOrdinal "
+            "\\in [ValidatorIds -> (Nat \\ {0})] "
+            "/\\ IsFiniteSet(AsyncControlServiceSlots) "
+            "/\\ IsFiniteSet(AsyncCertifiedResponseClaimRecords) "
+            "/\\ IsFiniteSet(AsyncCandidateServiceMarkers) "
+            "/\\ IsFiniteSet(AsyncCandidateTerminalTombstones) "
+            "/\\ Cardinality(AsyncCertifiedResponseClaimRecords) "
+            "<= Cardinality(ValidatorIds) "
+            "/\\ AsyncControlServiceSlots "
+            "\\subseteq AsyncControlServiceRecordSet "
+            "/\\ AsyncCandidateServiceMarkers "
+            "\\subseteq AsyncCandidateServiceMarkerSet "
+            "/\\ AsyncCandidateTerminalTombstones "
+            "\\subseteq AsyncCandidateServiceTombstoneSet "
+            "/\\ \\A left, right \\in AsyncControlServiceSlots: "
+            "left.slot = right.slot => left = right "
+            "/\\ \\A record \\in AsyncControlServiceSlots: "
+            "/\\ record.slot \\in AsyncControlServiceSlotSet "
+            "/\\ record.ordinal < "
+            "AsyncNextControlServiceOrdinal(record.slot.recipient) "
+            "/\\ \\A record \\in AsyncCertifiedResponseClaimRecords: "
+            '/\\ DOMAIN record = {"recipient", "family", "identity", '
+            '"ordinal"} '
+            "/\\ record.recipient \\in ValidatorIds "
+            "/\\ record.family \\in AsyncCertifiedRequestHashes "
+            "/\\ record.ordinal \\in Nat \\ {0} "
+            "/\\ record.ordinal < "
+            "AsyncNextCertifiedResponseClaimOrdinal(record.recipient) "
+            "/\\ \\A left, right \\in AsyncCandidateServiceTombstones: "
+            "/\\ (left.identity = right.identity => left = right) "
+            "/\\ ((left.node = right.node /\\ left.ordinal = right.ordinal) "
+            "=> left = right) "
+            "/\\ \\A record \\in AsyncCandidateServiceMarkers: "
+            "/\\ record.generation \\in Generations "
+            "/\\ record.ordinal \\in Nat \\ {0} "
+            "/\\ record.ordinal < "
+            "AsyncNextCandidateServiceOrdinal(record.node) "
+            "/\\ \\A record \\in AsyncCandidateTerminalTombstones: "
+            "/\\ record.ordinal \\in Nat \\ {0} "
+            "/\\ record.ordinal < "
+            "AsyncNextCandidateServiceOrdinal(record.node)"
+        ),
         "AsyncCandidateAdmissionIdentity": (
             "[service |-> AsyncCandidateServiceIdentity(candidate), "
             "consumer |-> AsyncConsumerEventTag(candidate)]"
@@ -44071,8 +45379,12 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "/\\ NodeHasDecision(consumer.node)"
         ),
         "AsyncCandidateAdmissionIdentityTerminallyCovered": (
-            "\\/ AsyncCandidateServiceIdentityTombstoned(identity.service) "
+            "\\/ AsyncCandidateTerminalIdentityTombstoned(identity.service) "
             "\\/ AsyncCandidateAdmissionIdentityObsolete(identity)"
+        ),
+        "AsyncCandidateAdmissionIdentityLifecycleCovered": (
+            "\\/ AsyncCandidateTransientServiceIdentityMarked(identity.service) "
+            "\\/ AsyncCandidateAdmissionIdentityTerminallyCovered(identity)"
         ),
         "AsyncScheduledCandidateServiceIdentities": (
             "{AsyncCandidateServiceIdentity(candidate): "
@@ -44090,7 +45402,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "CandidateAdmissionCoalesced": (
             "AsyncCandidateServiceIdentityScheduled(candidate) "
-            "\\/ AsyncCandidateServiceTombstoned(candidate)"
+            "\\/ AsyncCandidateServiceCoalesced(candidate)"
+        ),
+        "AsyncCandidateServicePacketRetired": (
+            "AsyncCandidateServiceCoalesced(DeliveryCandidate(item))"
         ),
         "AsyncCandidateStageRetired": (
             "IF item.kind = \"Chunk\" "
@@ -44123,18 +45438,33 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "AsyncCandidateTerminallyDiscardedThisStep(candidate)}"
         ),
         "AsyncCandidateTerminalRetirementsThisStep": (
-            "AsyncCandidateServicesThisStep "
-            "\\cup AsyncCandidateTerminalDiscardsThisStep"
+            "AsyncCandidateTerminalDiscardsThisStep"
+        ),
+        "AsyncCandidateServiceRecordRetainedAfterStep": (
+            "/\\ record.context = context' "
+            "/\\ record.height = height' "
+            "/\\ record.episodeView >= nodeView'[record.node] "
+            "/\\ ~AsyncNodeHasDecisionAfter(record.node)"
+        ),
+        "AsyncCandidateServiceEligibleAfterStep": (
+            "/\\ candidate.consumerContext = context' "
+            "/\\ candidate.height = height' "
+            "/\\ nodeView[candidate.node] >= nodeView'[candidate.node] "
+            "/\\ candidate.consumerGeneration = generation'[candidate.node] "
+            "/\\ ~AsyncNodeHasDecisionAfter(candidate.node)"
         ),
         "AsyncCandidateTerminalRetirementEligibleAfterStep": (
             "/\\ candidate.consumerContext = context' "
             "/\\ candidate.height = height' "
             "/\\ nodeView[candidate.node] >= nodeView'[candidate.node] "
+            "/\\ candidate.kind "
+            "\\notin AsyncRestartScopedCandidateServiceKinds "
             "/\\ ~AsyncNodeHasDecisionAfter(candidate.node)"
         ),
         "AsyncCandidateServiceStateAfterTerminalRetirement": (
             "LET identity == AsyncCandidateServiceIdentity(candidate) "
-            "existing == {record \\in state.candidateServiceTombstones: "
+            "existing == {record \\in state.candidateServiceMarkers "
+            "\\cup state.candidateTerminalTombstones: "
             "record.identity = identity} "
             "node == candidate.node "
             "ordinal == state.candidateServiceNextOrdinal[node] "
@@ -44143,9 +45473,103 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "THEN state "
             "ELSE [state EXCEPT "
             "!.candidateServiceNextOrdinal[node] = @ + 1, "
-            "!.candidateServiceTombstones = @ \\cup "
+            "!.candidateTerminalTombstones = @ \\cup "
             "{AsyncCandidateServiceTombstone( "
             "candidate, nodeView[node], ordinal)}]"
+        ),
+        "AsyncCandidateServiceStateAfterSuccessfulService": (
+            "LET identity == AsyncCandidateServiceIdentity(candidate) "
+            "existing == {record \\in state.candidateServiceMarkers "
+            "\\cup state.candidateTerminalTombstones: "
+            "record.identity = identity} "
+            "node == candidate.node "
+            "ordinal == state.candidateServiceNextOrdinal[node] "
+            "IN IF ~AsyncCandidateServiceEligibleAfterStep(candidate) "
+            "\\/ existing # {} "
+            "THEN state "
+            "ELSE [state EXCEPT "
+            "!.candidateServiceNextOrdinal[node] = @ + 1, "
+            "!.candidateServiceMarkers = @ \\cup "
+            "{AsyncCandidateServiceMarker( "
+            "candidate, nodeView[node], "
+            "candidate.consumerGeneration, ordinal)}]"
+        ),
+        "AsyncCandidateServiceStateAfterReclamation": (
+            "[state EXCEPT "
+            "!.candidateServiceMarkers = "
+            "{record \\in state.candidateServiceMarkers: "
+            "AsyncCandidateServiceRecordRetainedAfterStep(record)}, "
+            "!.candidateTerminalTombstones = "
+            "{record \\in state.candidateTerminalTombstones: "
+            "AsyncCandidateServiceRecordRetainedAfterStep(record)}]"
+        ),
+        "AsyncCandidateServiceLifecycleInvariant": (
+            "/\\ AsyncControlServiceStateTypeInvariant "
+            "/\\ \\A record \\in AsyncCandidateServiceMarkers: "
+            "/\\ record.context = context "
+            "/\\ record.height = height "
+            "/\\ record.episodeView >= nodeView[record.node] "
+            "/\\ record.generation <= generation[record.node] "
+            "/\\ ~NodeHasDecision(record.node) "
+            "/\\ \\A record \\in AsyncCandidateTerminalTombstones: "
+            "/\\ record.context = context "
+            "/\\ record.height = height "
+            "/\\ record.episodeView >= nodeView[record.node] "
+            "/\\ record.phase \\notin AsyncRestartScopedCandidateServiceKinds "
+            "/\\ ~NodeHasDecision(record.node) "
+            "/\\ \\A candidate \\in "
+            "QueuedCandidates \\cup DeferredCandidates "
+            "\\cup CausalCandidates \\cup TrackedWorkCandidates: "
+            "~AsyncCandidateServiceCoalesced(candidate)"
+        ),
+        "AsyncCandidateServiceTombstoneLifecycleInvariant": (
+            "AsyncCandidateServiceLifecycleInvariant"
+        ),
+        "AsyncCandidateTransientServiceActive": (
+            "/\\ AsyncCandidateTransientServiceMarked(candidate) "
+            "/\\ candidate.consumerContext = context "
+            "/\\ candidate.height = height "
+            "/\\ candidate.consumerGeneration = generation[candidate.node] "
+            "/\\ \\A record \\in "
+            "AsyncCandidateTransientServiceRecordsFor(candidate): "
+            "record.episodeView >= nodeView[candidate.node] "
+            "/\\ \\A record \\in "
+            "AsyncCandidateTransientServiceRecordsFor(candidate): "
+            "record.generation = candidate.consumerGeneration "
+            "/\\ ~NodeHasDecision(candidate.node) "
+            "/\\ ~CandidateScheduled(candidate)"
+        ),
+        "AsyncCandidateTerminalTombstoneActive": (
+            "/\\ AsyncCandidateTerminalTombstoned(candidate) "
+            "/\\ candidate.consumerContext = context "
+            "/\\ candidate.height = height "
+            "/\\ \\A record \\in "
+            "AsyncCandidateTerminalRecordsFor(candidate): "
+            "record.episodeView >= nodeView[candidate.node] "
+            "/\\ ~NodeHasDecision(candidate.node) "
+            "/\\ ~CandidateScheduled(candidate)"
+        ),
+        "AsyncCandidateServiceActiveTombstone": (
+            "\\/ AsyncCandidateTransientServiceActive(candidate) "
+            "\\/ AsyncCandidateTerminalTombstoneActive(candidate)"
+        ),
+        "AsyncCandidateTransientMarkerExitThisStep": (
+            "\\/ candidate.consumerContext # context' "
+            "\\/ candidate.height # height' "
+            "\\/ nodeView'[candidate.node] > nodeView[candidate.node] "
+            "\\/ candidate.consumerGeneration # generation'[candidate.node] "
+            "\\/ AsyncNodeHasDecisionAfter(candidate.node) "
+            "\\/ /\\ PreGstResponsiveReplay "
+            "/\\ candidate.node = asyncRecoveryNode"
+        ),
+        "AsyncCandidateTerminalTombstoneExitThisStep": (
+            "\\/ candidate.consumerContext # context' "
+            "\\/ candidate.height # height' "
+            "\\/ nodeView'[candidate.node] > nodeView[candidate.node] "
+            "\\/ AsyncNodeHasDecisionAfter(candidate.node)"
+        ),
+        "AsyncCandidateServiceExitThisStep": (
+            "AsyncCandidateTransientMarkerExitThisStep(candidate)"
         ),
         "AsyncServeLogicalIdentityRetiredOrSuperseded": (
             "\\/ AsyncServeLifecycleTombstone(node, identity) "
@@ -44161,9 +45585,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             '{"SignProposal", "SignVote", "SignTimeout"}'
         ),
         "AsyncCandidateRestartReplayTombstoned": (
-            "/\\ candidate.kind "
-            "\\notin AsyncRestartScopedCandidateServiceKinds "
-            "/\\ AsyncCandidateServiceTombstoned(candidate)"
+            "AsyncCandidateTerminalTombstoned(candidate)"
         ),
         "CandidateScheduledIn": (
             "candidate \\in (UNION {SequenceSet(commandQueues[node]): "
@@ -44198,14 +45620,59 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "THEN <<>> ELSE <<replay[3]>>) "
             "[] OTHER -> <<>>"
         ),
+        "AsyncCandidateServiceMarkersAfterReset": (
+            "{record \\in state.candidateServiceMarkers: "
+            "record.node \\notin resetNodes}"
+        ),
         "AsyncCandidateServiceTombstonesAfterReset": (
-            "{record \\in state.candidateServiceTombstones: "
-            "\\/ record.node \\notin resetNodes "
-            "\\/ record.phase "
-            "\\notin AsyncRestartScopedCandidateServiceKinds}"
+            "AsyncCandidateServiceMarkersAfterReset(state, resetNodes) "
+            "\\cup state.candidateTerminalTombstones"
         ),
         "AsyncControlServiceResetNodesThisStep": (
             "IF PreGstResponsiveReplay THEN {asyncRecoveryNode} ELSE {}"
+        ),
+        "AsyncControlServiceStateAfterReset": (
+            "[nextOrdinal |-> state.nextOrdinal, slots |-> "
+            "{IF record.slot.recipient \\in resetNodes "
+            "THEN [record EXCEPT !.consumed = TRUE] ELSE record: "
+            "record \\in state.slots}, certifiedResponseNextOrdinal |-> "
+            "state.certifiedResponseNextOrdinal, certifiedResponseClaims |-> "
+            "state.certifiedResponseClaims, candidateServiceNextOrdinal |-> "
+            "state.candidateServiceNextOrdinal, candidateServiceMarkers |-> "
+            "AsyncCandidateServiceMarkersAfterReset(state, resetNodes), "
+            "candidateTerminalTombstones |-> "
+            "state.candidateTerminalTombstones]"
+        ),
+        "AsyncControlServiceSlotTransition": (
+            "LET resetState == AsyncControlServiceStateAfterReset( "
+            "asyncControlServiceState, AsyncControlServiceResetNodesThisStep) "
+            "admittedState == IF AsyncControlServiceAdmissionsThisStep = {} "
+            "THEN resetState ELSE AsyncControlServiceStateAfterAdmission( "
+            "resetState, CHOOSE item \\in "
+            "AsyncControlServiceAdmissionsThisStep: TRUE) "
+            "servicedState == IF AsyncControlServicesThisStep = {} "
+            "THEN admittedState ELSE AsyncControlServiceStateAfterService( "
+            "admittedState, CHOOSE item \\in AsyncControlServicesThisStep: "
+            "TRUE) responseRetirementState == "
+            "AsyncCertifiedResponseClaimStateAfterRetirement(servicedState) "
+            "responseState == IF "
+            "AsyncCertifiedResponseClaimAdmissionsThisStep = {} "
+            "THEN responseRetirementState ELSE "
+            "AsyncCertifiedResponseClaimStateAfterAdmission( "
+            "responseRetirementState, CHOOSE item \\in "
+            "AsyncCertifiedResponseClaimAdmissionsThisStep: TRUE) "
+            "candidateReclamationState == "
+            "AsyncCandidateServiceStateAfterReclamation(responseState) "
+            "IN asyncControlServiceState' = "
+            "IF AsyncCandidateServicesThisStep # {} "
+            "THEN AsyncCandidateServiceStateAfterSuccessfulService( "
+            "candidateReclamationState, CHOOSE candidate \\in "
+            "AsyncCandidateServicesThisStep: TRUE) "
+            "ELSE IF AsyncCandidateTerminalDiscardsThisStep # {} "
+            "THEN AsyncCandidateServiceStateAfterTerminalRetirement( "
+            "candidateReclamationState, CHOOSE candidate \\in "
+            "AsyncCandidateTerminalDiscardsThisStep: TRUE) "
+            "ELSE candidateReclamationState"
         ),
         "CausalSuccessorParentKinds": (
             '{"AssembleBody", "BeginProposal", "PersistProposal", '
@@ -44479,6 +45946,27 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "\\/ AsyncServeLifecycleSuperseded(node, item) "
                 "\\/ AsyncServeLifecycleConflict(node, item) "
                 "ELSE TRUE"
+            ),
+            "AsyncDormantExactReplyRequestPacket": (
+                "/\\ packet \\in asyncTransport "
+                "/\\ ~AsyncServeTransportAdmissionGateAllows( "
+                "packet.item.envelope.recipient, packet.item)"
+            ),
+            "AsyncPacketOwnsClockDeadline": (
+                "/\\ packet \\in asyncTransport "
+                "/\\ AsyncServeTransportAdmissionGateAllows( "
+                "packet.item.envelope.recipient, packet.item) "
+                "/\\ packet.item.envelope.recipient "
+                "\\in AsyncTimedServiceNodes "
+                "/\\ \\/ packet.item.source \\in AsyncTimedServiceNodes "
+                "\\/ /\\ packet.item.kind "
+                '\\in {"CertifiedResponse", "CommitCertificateResponse"} '
+                "/\\ IngressItemHasAuthenticatedHistory(packet.item) "
+                "/\\ packet.deadline <= asyncNow"
+            ),
+            "OverdueResponsivePackets": (
+                "{packet \\in asyncTransport: "
+                "AsyncPacketOwnsClockDeadline(packet)}"
             ),
             "AsyncServeEarlierLiveReservationIdentities": (
                 "IF AsyncServeLifecycleOwned(node, identity) "
@@ -45916,6 +47404,54 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             'kind |-> "Candidate", '
             "payload |-> AsyncCandidateServicePayload(candidate)]"
         ),
+        "AsyncCandidateServiceMarker": (
+            "identity |-> AsyncCandidateServiceIdentity(candidate)",
+            "generation |-> episodeGeneration",
+            "ordinal |-> ordinal",
+        ),
+        "AsyncCandidateServiceMarkerSet": (
+            "episodeGeneration \\in Generations",
+            "AsyncCandidateServiceMarker(",
+        ),
+        "AsyncControlServiceStateTypeInvariant": (
+            '"candidateServiceMarkers"',
+            '"candidateTerminalTombstones"',
+            "AsyncCandidateServiceMarkers "
+            "\\subseteq AsyncCandidateServiceMarkerSet",
+            "AsyncCandidateTerminalTombstones "
+            "\\subseteq AsyncCandidateServiceTombstoneSet",
+            "\\A left, right \\in AsyncCandidateServiceTombstones",
+            "record.generation \\in Generations",
+            "record.ordinal < AsyncNextCandidateServiceOrdinal(record.node)",
+        ),
+        "AsyncCandidateServiceLifecycleInvariant": (
+            "record \\in AsyncCandidateServiceMarkers",
+            "record.generation <= generation[record.node]",
+            "record \\in AsyncCandidateTerminalTombstones",
+            "record.phase \\notin AsyncRestartScopedCandidateServiceKinds",
+            "~AsyncCandidateServiceCoalesced(candidate)",
+        ),
+        "AsyncCandidateServiceStateAfterReclamation": (
+            "!.candidateServiceMarkers =",
+            "record \\in state.candidateServiceMarkers",
+            "!.candidateTerminalTombstones =",
+            "record \\in state.candidateTerminalTombstones",
+            "AsyncCandidateServiceRecordRetainedAfterStep(record)",
+        ),
+        "AsyncCandidateServiceEligibleAfterStep": (
+            "candidate.consumerGeneration = generation'[candidate.node]",
+        ),
+        "AsyncCandidateTransientMarkerExitThisStep": (
+            "candidate.consumerGeneration # generation'[candidate.node]",
+            "PreGstResponsiveReplay",
+            "candidate.node = asyncRecoveryNode",
+        ),
+        "AsyncCandidateTerminalTombstoneExitThisStep": (
+            "candidate.consumerContext # context'",
+            "candidate.height # height'",
+            "nodeView'[candidate.node] > nodeView[candidate.node]",
+            "AsyncNodeHasDecisionAfter(candidate.node)",
+        ),
         "FifoRuntimeStep": (
             "NextNodeCommand(node)",
             "RemoveNextNodeCommand(node)",
@@ -46379,16 +47915,20 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "certifiedResponseNextOrdinal |-> state.certifiedResponseNextOrdinal",
             "certifiedResponseClaims |-> state.certifiedResponseClaims",
             "candidateServiceNextOrdinal |-> state.candidateServiceNextOrdinal",
-            "candidateServiceTombstones |-> AsyncCandidateServiceTombstonesAfterReset(state, resetNodes)",
+            "candidateServiceMarkers |-> "
+            "AsyncCandidateServiceMarkersAfterReset(state, resetNodes)",
+            "candidateTerminalTombstones |-> "
+            "state.candidateTerminalTombstones",
         ),
         "AsyncControlServiceSlotTransition": (
             "AsyncControlServiceStateAfterReset( asyncControlServiceState, AsyncControlServiceResetNodesThisStep)",
             "AsyncCandidateServiceStateAfterReclamation(responseState)",
             "asyncControlServiceState' =",
+            "AsyncCandidateServiceStateAfterSuccessfulService(",
             "AsyncCandidateServiceStateAfterTerminalRetirement(",
             "AsyncCandidateTerminalDiscardsThisStep",
             "IF AsyncCandidateServicesThisStep # {} "
-            "THEN AsyncCandidateServiceStateAfterTerminalRetirement( "
+            "THEN AsyncCandidateServiceStateAfterSuccessfulService( "
             "candidateReclamationState, "
             "CHOOSE candidate \\in AsyncCandidateServicesThisStep: TRUE) "
             "ELSE IF AsyncCandidateTerminalDiscardsThisStep # {} "
@@ -46410,7 +47950,11 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncIngressLanes' =",
         ),
         "CoalesceHiddenPacket": ("~ResponsiveReplayQuarantined(recipient)",),
-        "AsyncTransportInit": ("asyncHistoricalRecoveryTargets = {}",),
+        "AsyncTransportInit": (
+            "asyncHistoricalRecoveryTargets = {}",
+            "candidateServiceMarkers |-> {}",
+            "candidateTerminalTombstones |-> {}",
+        ),
         "AsyncSchedulerTypeInvariant": (
             "AsyncHistoricalRecoveryTypeInvariant",
         ),
@@ -48411,7 +49955,7 @@ fn ensure_server_stream_slot(&self, sender: &PeerId) -> Result<(), MergeSidecarE
         "MergeSidecarTransport",
         "admit_server_request",
         errors,
-        "compaction-aware responder Request admission",
+        "capacity-first non-rolling responder Request admission",
     )
     _require_rust_token_sequence(
         merge_path,
@@ -64293,7 +65837,7 @@ def _async_historical_recovery_source_fidelity_errors(
     errors: list[str] = []
 
     extends = re.search(r"(?m)^EXTENDS\s+([^\n]+)$", source)
-    exact_extends = "SumeragiV2AsyncLivenessProofs, TLAPS"
+    exact_extends = "SumeragiV2AsyncTimeoutOwnershipProofs, TLAPS"
     if extends is None or " ".join(extends.group(1).split()) != exact_extends:
         errors.append(
             f"{path}: Async historical-recovery child must extend exactly "
@@ -64607,7 +66151,17 @@ def _async_historical_recovery_source_fidelity_errors(
             "/\\ HistoricalCommitCertificateConcreteLeafProperties(specification) "
             "/\\ HistoricalDecisionFrontierAvailabilityProperty(specification) "
             "/\\ HistoricalDecisionConcreteLeafProperties(specification) "
-            "/\\ ResponsiveDecisionServiceOwnershipProperty(specification)"
+            "/\\ ResponsiveDecisionServiceOwnershipProperty(specification) "
+            "/\\ ApplicationCompletionProgressProperty(specification)"
+        ),
+        "HistoricalRecoveryAsyncRemainingCorridorPremises": (
+            "/\\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification) "
+            "/\\ HistoricalProtectedServiceRankLeafProperties(specification) "
+            "/\\ HistoricalCommitCertificateConcreteLeafProperties(specification) "
+            "/\\ HistoricalDecisionFrontierAvailabilityProperty(specification) "
+            "/\\ HistoricalDecisionConcreteLeafProperties(specification) "
+            "/\\ ResponsiveDecisionServiceOwnershipProperty(specification) "
+            "/\\ ApplicationCompletionProgressProperty(specification)"
         ),
         "HistoricalLockedBodyRecoveryOutcome": (
             "\\/ HistoricalLockedBodySourceRetired(node, qc) "
@@ -64924,7 +66478,7 @@ def _async_historical_recovery_source_fidelity_errors(
             "AsyncSpecAt(initialContext))",
             (
                 "HistoricalTargetDecisionReachesApplicationFromConcreteLeaves",
-                "ApplicationCompletionProgressObligation",
+                "ApplicationCompletionProgressProperty",
                 "ResponsiveDecisionServiceOwnershipProperty",
                 "AsyncSpecAlwaysUsesFixedResponsiveVoters",
             ),
@@ -67134,13 +68688,12 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "Chain!CanonicalCommitForSlot(",
                 "initialContext.height = MaxHeight",
                 "Chain!ReceiptOutsideChainHorizon(source)",
-                "server \\in source.qc.signers \\cap Honest",
                 "server \\in IndexedAsync(initialContext)! AsyncCurrentResponsiveVoters",
                 "server \\in IndexedCore(initialContext, 6)",
                 "server \\in joinedByContext[initialContext]",
                 "BodyHeldBy(IndexedCore(initialContext, 9), server,",
             ),
-            forbidden=("VotingRoster",),
+            forbidden=("VotingRoster", "source.qc.signers"),
         )
         require_chain_operator(
             "IndexedHistoricalRecoveryReady",
@@ -72124,7 +73677,11 @@ def validate_ledger(
     errors.extend(_generalized_context_init_errors(formal_dir))
     errors.extend(_safety_property_source_fidelity_errors(formal_dir))
     errors.extend(_historical_timeout_derivation_errors(formal_dir))
+    errors.extend(
+        _timeout_view_liveness_contract_source_fidelity_errors(formal_dir)
+    )
     errors.extend(_async_spec_shape_errors(formal_dir))
+    errors.extend(_acyclic_liveness_debt_topology_errors(formal_dir))
     errors.extend(_async_proof_architecture_errors(formal_dir))
     errors.extend(_application_completion_source_fidelity_errors(formal_dir))
     errors.extend(_progress_witness_source_fidelity_errors(formal_dir))
@@ -72153,6 +73710,7 @@ def validate_ledger(
             formal_dir, ROOT_DIR
         )
     )
+    errors.extend(_formal_ci_new_mutation_runner_invocation_errors(ROOT_DIR))
     errors.extend(
         _historical_discovery_occurrence_rank_mutation_source_fidelity_errors(
             formal_dir, ROOT_DIR
@@ -72188,6 +73746,9 @@ def validate_ledger(
     )
     errors.extend(
         _locked_body_reproposal_mutation_runner_errors(formal_dir, ROOT_DIR)
+    )
+    errors.extend(
+        _adequate_leader_scheduler_readiness_source_fidelity_errors(formal_dir)
     )
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_serve_lifecycle_temporal_contract_errors(formal_dir))

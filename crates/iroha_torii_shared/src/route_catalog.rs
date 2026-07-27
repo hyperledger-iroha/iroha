@@ -2757,6 +2757,9 @@ pub mod runtime_governance {
         "/v1/validation-fee/proposals/{proposal_id}";
     /// Strict native validation-fee proposal draft path.
     pub const VALIDATION_FEE_PROPOSAL_DRAFT_PATH: &str = "/v1/validation-fee/proposals/draft";
+    /// Typed proposal-bound validation-fee PLAIN ballot draft path.
+    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH: &str =
+        "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft";
     /// Fetch a finality-bound current validation-fee registry.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF: RouteDescriptor = app_post(
         "validation_fee.policy.current_proof",
@@ -2776,6 +2779,11 @@ pub mod runtime_governance {
     pub const VALIDATION_FEE_PROPOSAL_DRAFT: RouteDescriptor = app_post(
         "validation_fee.proposal.draft",
         VALIDATION_FEE_PROPOSAL_DRAFT_PATH,
+    );
+    /// Draft one exact proposal-bound validation-fee PLAIN ballot.
+    pub const VALIDATION_FEE_PLAIN_BALLOT_DRAFT: RouteDescriptor = app_post(
+        "validation_fee.proposal.plain_ballot.draft",
+        VALIDATION_FEE_PLAIN_BALLOT_DRAFT_PATH,
     );
     /// Read one governance proposal.
     pub const GOV_PROPOSAL_GET: RouteDescriptor =
@@ -2907,6 +2915,7 @@ pub mod runtime_governance {
         VALIDATION_FEE_PROPOSALS,
         VALIDATION_FEE_PROPOSAL_DETAIL,
         VALIDATION_FEE_PROPOSAL_DRAFT,
+        VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
         GOV_PROPOSAL_GET,
         GOV_LOCKS_GET,
         GOV_REFERENDUM_GET,
@@ -3965,7 +3974,18 @@ pub mod contracts_and_verification_keys {
     }
 
     const fn app_unprojected_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_projections(RouteProjections::NONE)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::Unauthenticated)
+            .with_projections(RouteProjections::NONE)
+    }
+
+    const fn app_unprojected_static_asset_get(
+        id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        app_unprojected_get(id, path).with_path_policy(PathPolicy::ProtocolException {
+            reason: "browser static asset filename requires a media-type extension",
+        })
     }
 
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -4144,8 +4164,8 @@ pub mod contracts_and_verification_keys {
         EVIDENCE_RETENTION_POST => app_signed_post("contracts.evidence_retention_post", "/v1/evidence/retention");
         EVIDENCE_ERASURE_POST => app_signed_post("contracts.evidence_erasure_post", "/v1/evidence/erasure");
         EVIDENCE_VIEWER_GET => app_unprojected_get("contracts.evidence_viewer_get", "/v1/evidence/viewer");
-        EVIDENCE_VIEWER_CSS_GET => app_unprojected_get("contracts.evidence_viewer_css_get", "/v1/evidence/viewer/app.css");
-        EVIDENCE_VIEWER_JS_GET => app_unprojected_get("contracts.evidence_viewer_js_get", "/v1/evidence/viewer/app.js");
+        EVIDENCE_VIEWER_CSS_GET => app_unprojected_static_asset_get("contracts.evidence_viewer_css_get", "/v1/evidence/viewer/app.css");
+        EVIDENCE_VIEWER_JS_GET => app_unprojected_static_asset_get("contracts.evidence_viewer_js_get", "/v1/evidence/viewer/app.js");
         SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_post", "/v1/sorafs/moderation/viewer-audit-reports");
         SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_PUBLISH_DUE_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_publish_due_post", "/v1/sorafs/moderation/viewer-audit-reports/publish-due");
         SORAFS_AUDIT_REPAIR_REPORT_POST => app_post("contracts.sorafs_audit_repair_report_post", "/v1/sorafs/audit/repair/report");
@@ -4472,6 +4492,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::VALIDATION_FEE_PROPOSALS,
     runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,
     runtime_governance::VALIDATION_FEE_PROPOSAL_DRAFT,
+    runtime_governance::VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
     runtime_governance::GOV_PROPOSAL_GET,
     runtime_governance::GOV_LOCKS_GET,
     runtime_governance::GOV_REFERENDUM_GET,
@@ -5009,7 +5030,7 @@ mod tests {
     fn canonical_catalog_exposes_only_the_authoritative_privacy_snapshot_route() {
         let privacy_routes = CATALOGED_ROUTES
             .iter()
-            .filter(|route| route.path().contains("/privacy/"))
+            .filter(|route| route.path().starts_with("/v1/privacy/"))
             .collect::<Vec<_>>();
         assert_eq!(
             privacy_routes,
@@ -5040,7 +5061,7 @@ mod tests {
         assert!(
             CATALOGED_ROUTES
                 .iter()
-                .all(|route| route.id() != "sorafs.storage.pin"),
+                .all(|route| route.stable_route_id() != "sorafs.storage.pin"),
             "the retired direct storage-ingest route id must not be reusable"
         );
     }
@@ -5554,6 +5575,20 @@ mod tests {
                 "{}",
                 route.stable_route_id()
             );
+        }
+
+        for route in [
+            contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
+        ] {
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.projections(), RouteProjections::NONE);
+            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
         }
 
         for route in [
@@ -6135,17 +6170,20 @@ mod tests {
 
     #[test]
     fn reputation_surface_is_committed_projection_read_only() {
-        let matching = ALL_ROUTES
+        let matching = CATALOGED_ROUTES
             .iter()
             .filter(|route| route.path() == "/v1/sorafs/reputation/latest")
             .collect::<Vec<_>>();
         assert_eq!(matching.len(), 1);
         assert_eq!(matching[0].method(), HttpMethod::Get);
-        assert_eq!(matching[0].id(), "sorafs.reputation_snapshot.latest");
+        assert_eq!(
+            matching[0].stable_route_id(),
+            "sorafs.reputation_snapshot.latest"
+        );
         assert!(
-            !ALL_ROUTES
+            !CATALOGED_ROUTES
                 .iter()
-                .any(|route| route.id() == "sorafs.reputation_snapshot.publish")
+                .any(|route| route.stable_route_id() == "sorafs.reputation_snapshot.publish")
         );
     }
 }

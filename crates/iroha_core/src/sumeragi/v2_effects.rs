@@ -882,7 +882,7 @@ impl BodyFetchTask {
             && self.certified_request == previous.certified_request
     }
 
-    /// Certified signers selected as fetch sources.
+    /// Canonically ordered frozen-roster archive fetch sources.
     pub(crate) fn sources(&self) -> &[PeerId] {
         &self.sources
     }
@@ -2604,24 +2604,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                     .to_owned(),
             ));
         }
-        let expected_sources = certificate
-            .signers
-            .iter()
-            .map(|signer| {
-                usize::try_from(*signer)
-                    .ok()
-                    .and_then(|index| self.context.roster.get(index))
-                    .map(|entry| entry.validator.clone())
-                    .ok_or_else(|| {
-                        EffectExecutorError::PendingApplyRecoveryMismatch(
-                            "replayed CommitQC signer is outside the frozen roster".to_owned(),
-                        )
-                    })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let expected_sources = self.frozen_archive_sources();
         if certified_sources != &expected_sources {
             return Err(EffectExecutorError::PendingApplyRecoveryMismatch(
-                "replayed certified FetchBody changed the canonical CommitQC signer sources"
+                "replayed certified FetchBody changed the canonical frozen-roster archive sources"
                     .to_owned(),
             ));
         }
@@ -2822,6 +2808,15 @@ impl V2EffectExecutor<SerializedV2Runtime> {
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Return the immutable archive fanout in frozen roster order.
+    fn frozen_archive_sources(&self) -> Vec<PeerId> {
+        self.context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect()
+    }
+
     /// Borrow the complete process-local evidence for interrupted-tip replay.
     pub(crate) const fn pending_kura_apply_recovery_evidence(
         &self,
@@ -5670,29 +5665,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         if let Some(certificate) = &certificate {
-            let expected_sources = certificate
-                .signers
-                .iter()
-                .map(|signer| {
-                    usize::try_from(*signer)
-                        .ok()
-                        .and_then(|index| self.context.roster.get(index))
-                        .map(|entry| entry.validator.clone())
-                        .ok_or_else(|| {
-                            EffectExecutorError::Contract(
-                                "certified FetchBody signer is outside the frozen roster"
-                                    .to_owned(),
-                            )
-                        })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let expected_sources = self.frozen_archive_sources();
             if sources != expected_sources
                 || certificate.validate(&self.context).is_err()
                 || certificate.proposal_round != round
                 || certificate.subject != subject
             {
                 return Err(EffectExecutorError::Contract(
-                    "certified FetchBody origin is not authorized by the canonical QC signer sequence"
+                    "certified FetchBody origin is not authorized by the verified QC and canonical frozen-roster archive sequence"
                         .to_owned(),
                 ));
             }
@@ -10050,16 +10030,11 @@ mod tests {
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(vote))
         }
 
-        fn certified_sources(&self, certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
-            certificate
-                .signers
+        fn certified_sources(&self, _certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
+            self.context
+                .roster
                 .iter()
-                .map(|signer| {
-                    self.context.roster
-                        [usize::try_from(*signer).expect("small certified signer index")]
-                    .validator
-                    .clone()
-                })
+                .map(|entry| entry.validator.clone())
                 .collect()
         }
 
@@ -10345,11 +10320,12 @@ mod tests {
         }
     }
 
-    fn certified_sources(fixture: &Fixture, certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
-        certificate
-            .signers
+    fn certified_sources(fixture: &Fixture, _certificate: &wire::QuorumCertificate) -> Vec<PeerId> {
+        fixture
+            .context
+            .roster
             .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
+            .map(|entry| entry.validator.clone())
             .collect()
     }
 
@@ -11581,15 +11557,7 @@ mod tests {
 
         let certificate_a =
             fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
-        let sources_a = certificate_a
-            .signers
-            .iter()
-            .map(|signer| {
-                fixture.context.roster[usize::try_from(*signer).expect("small signer index")]
-                    .validator
-                    .clone()
-            })
-            .collect();
+        let sources_a = fixture.certified_sources(&certificate_a);
         fixture
             .executor
             .consume_effects(
@@ -11647,15 +11615,7 @@ mod tests {
             wire::GlobalPhase::Prepare,
             commitment_b,
         );
-        let sources_b = certificate_b
-            .signers
-            .iter()
-            .map(|signer| {
-                fixture.context.roster[usize::try_from(*signer).expect("small signer index")]
-                    .validator
-                    .clone()
-            })
-            .collect();
+        let sources_b = fixture.certified_sources(&certificate_b);
         let fetch_b = AdapterEffect::FetchBody {
             tag: tag(1),
             round: round_b,
@@ -13808,11 +13768,7 @@ mod tests {
         assert!(executor.retained_locked_body.is_some());
         assert_eq!(executor.ready_body_bytes, body_len);
 
-        let sources = replacement
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &replacement);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -13928,11 +13884,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let certified_sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -13981,11 +13933,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let certified_sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -14029,11 +13977,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let certified_sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -14818,11 +14762,7 @@ mod tests {
         high_prepare.round = round;
         high_prepare.proposal_round = round;
         high_prepare.subject = subject;
-        let sources = high_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &high_prepare);
 
         for entering_view in [round.view + 1, round.view + 2] {
             let mut timeout = timeout_at_view(&fixture, entering_view - 1);
@@ -14936,11 +14876,7 @@ mod tests {
         let work_id = services.validation_tasks[0].id();
 
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         let mut timeout = timeout_certificate(&fixture);
         timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
         executor
@@ -15080,11 +15016,7 @@ mod tests {
             assert!(executor.runtime.completions.is_empty());
             assert!(executor.pending_validations.is_empty());
 
-            let sources = prepare
-                .signers
-                .iter()
-                .map(|index| fixture.context.roster[*index as usize].validator.clone())
-                .collect();
+            let sources = certified_sources(&fixture, &prepare);
             executor
                 .consume_effects(
                     vec![
@@ -15266,11 +15198,7 @@ mod tests {
         }
 
         let current_tag = EventTag::new(1, 2, Generation::new(62));
-        let sources = high_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &high_prepare);
         executor
             .consume_effects(
                 vec![
@@ -15330,11 +15258,7 @@ mod tests {
         services.inflight_stores.insert(store_id);
 
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         let mut timeout = timeout_certificate(&fixture);
         timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
         executor
@@ -15445,11 +15369,7 @@ mod tests {
         services.inflight_stores.insert(store_id);
 
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         let mut timeout = timeout_certificate(&fixture);
         timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
         executor
@@ -15566,11 +15486,7 @@ mod tests {
             assert!(executor.body_pipeline_owners.is_empty());
 
             let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-            let sources = prepare
-                .signers
-                .iter()
-                .map(|index| fixture.context.roster[*index as usize].validator.clone())
-                .collect();
+            let sources = certified_sources(&fixture, &prepare);
             executor
                 .consume_effects(
                     vec![AdapterEffect::FetchBody {
@@ -15721,11 +15637,7 @@ mod tests {
             .expect("retire unprotected alternate store");
 
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -15931,11 +15843,7 @@ mod tests {
         };
         let mut high_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         high_prepare.subject = high_subject;
-        let sources = high_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &high_prepare);
         let mut timeout = timeout_certificate(&fixture);
         timeout.groups[0].highest_prepare_qc = Some(high_prepare.clone());
         executor
@@ -16485,11 +16393,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let certified_sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -16543,11 +16447,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let certified_sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -16594,11 +16494,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let first_prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let first_sources = first_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let first_sources = certified_sources(&fixture, &first_prepare);
         let (second_subject, second_body) = distinct_body(&fixture);
         let second_manifest = wire::PayloadManifest::derive(
             &fixture.context,
@@ -16610,11 +16506,7 @@ mod tests {
         .expect("second manifest");
         let mut second_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         second_prepare.subject = second_manifest.subject;
-        let second_sources = second_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let second_sources = certified_sources(&fixture, &second_prepare);
         executor
             .consume_effects(
                 vec![
@@ -16944,11 +16836,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17065,11 +16953,7 @@ mod tests {
             let mut executor = fixture.executor(EffectQueueConfig::default());
             let mut services = fixture.services();
             let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-            let sources = prepare
-                .signers
-                .iter()
-                .map(|index| fixture.context.roster[*index as usize].validator.clone())
-                .collect::<Vec<_>>();
+            let sources = certified_sources(&fixture, &prepare);
 
             if proposal_first {
                 executor
@@ -17190,7 +17074,7 @@ mod tests {
                         &fixture.context.roster[1].validator,
                         &mut services,
                     )
-                    .expect("another certified signer supplies the authoritative manifest"),
+                    .expect("another frozen-roster archive supplies the authoritative manifest"),
                 CompletionDisposition::Accepted
             );
             assert!(executor.pending_fetches.is_empty());
@@ -17211,11 +17095,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17299,7 +17179,7 @@ mod tests {
                     &fixture.context.roster[1].validator,
                     &mut services,
                 )
-                .expect("another certified signer supplies the canonical manifest"),
+                .expect("another frozen-roster archive supplies the canonical manifest"),
             CompletionDisposition::Accepted
         );
         assert!(executor.pending_fetches.is_empty());
@@ -17314,11 +17194,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17386,11 +17262,7 @@ mod tests {
         let losing_lock = (losing_manifest.round, losing_manifest.subject);
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = losing_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &losing_prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17414,11 +17286,7 @@ mod tests {
             commit.subject,
             commit.execution_commitment,
         ));
-        let certified_sources = commit
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &commit);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17517,11 +17385,7 @@ mod tests {
         let losing_commit_message = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::QuorumCertificate(losing_commit),
         );
-        let certified_sources = commit
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &commit);
         executor.runtime.decision_on_next_step = Some(decision);
         executor
             .runtime
@@ -17585,11 +17449,7 @@ mod tests {
         .expect("losing manifest");
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = losing_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &losing_prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17656,11 +17516,7 @@ mod tests {
         .expect("losing manifest");
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = losing_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &losing_prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17718,11 +17574,7 @@ mod tests {
         .expect("losing manifest");
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = losing_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &losing_prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17793,11 +17645,7 @@ mod tests {
             commit.subject,
             commit.execution_commitment,
         ));
-        let certified_sources = commit
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &commit);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -17937,11 +17785,7 @@ mod tests {
             commit.subject,
             commit.execution_commitment,
         ));
-        let certified_sources = commit
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &commit);
 
         executor
             .consume_effects(
@@ -17999,11 +17843,7 @@ mod tests {
             commit.subject,
             commit.execution_commitment,
         ));
-        let certified_sources = commit
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let certified_sources = certified_sources(&fixture, &commit);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -18587,15 +18427,7 @@ mod tests {
                 if reason.contains("aliases conflict")
         ));
 
-        let later_sources = later_certificate
-            .signers
-            .iter()
-            .map(|index| {
-                fixture.context.roster[usize::try_from(*index).expect("signer index")]
-                    .validator
-                    .clone()
-            })
-            .collect();
+        let later_sources = certified_sources(&fixture, &later_certificate);
         assert_eq!(
             later_finality_evidence
                 .transition_for_effect(&AdapterEffect::FetchBody {
@@ -18651,15 +18483,7 @@ mod tests {
             subject: fixture.manifest.subject,
             certificate: certificate.clone(),
         };
-        let certified_sources = certificate
-            .signers
-            .iter()
-            .map(|index| {
-                fixture.context.roster[usize::try_from(*index).expect("signer index")]
-                    .validator
-                    .clone()
-            })
-            .collect();
+        let certified_sources = certified_sources(&fixture, &certificate);
         let recovery_sequence = [
             AdapterEffect::FetchBody {
                 tag: tag(0),
@@ -19010,11 +18834,7 @@ mod tests {
         ));
 
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -19085,11 +18905,7 @@ mod tests {
     fn body_fetch_authority_upgrades_monotonically_in_both_orders() {
         let fixture = Fixture::new();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &prepare);
 
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
@@ -19207,11 +19023,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -19334,11 +19146,7 @@ mod tests {
             .expect("retain authenticated staged genesis");
 
         let certificate = fixture.qc(wire::GlobalPhase::Commit);
-        let sources = certificate
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &certificate);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -19530,17 +19338,24 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
         let mut services = fixture.services();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
+        let sources = certified_sources(&fixture, &prepare);
+        let expected_sources = fixture
+            .context
+            .roster
             .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
+            .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
+        assert_eq!(sources, expected_sources);
+        assert!(
+            !prepare.signers.contains(&3) && sources.contains(&fixture.context.roster[3].validator),
+            "the immutable archive fanout includes a frozen-roster non-QC signer"
+        );
         let effect = AdapterEffect::FetchBody {
             tag: tag(0),
             round: fixture.manifest.round,
             subject: fixture.manifest.subject,
             manifest: None,
-            certified_sources: sources,
+            certified_sources: sources.clone(),
             certificate: Some(prepare),
         };
         for _ in 0..8 {
@@ -19557,7 +19372,9 @@ mod tests {
             .expect("certified request")
             .clone();
         assert!(services.fetch_tasks.iter().all(|task| {
-            task.id() == first_id && task.certified_request() == Some(&first_request)
+            task.id() == first_id
+                && task.certified_request() == Some(&first_request)
+                && task.sources() == sources.as_slice()
         }));
     }
 
@@ -19632,11 +19449,7 @@ mod tests {
         let mut services = fixture.services();
         let high_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let consumer_tag = |view| EventTag::new(1, view, Generation::new(7 + view));
-        let sources = high_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &high_prepare);
         let fetch = |view| AdapterEffect::FetchBody {
             tag: consumer_tag(view),
             round: high_prepare.round,
@@ -19744,11 +19557,7 @@ mod tests {
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let original_tag = EventTag::new(1, 0, Generation::new(70));
         let rebound_tag = EventTag::new(1, 1, Generation::new(71));
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &prepare);
 
         executor
             .consume_effects(
@@ -19850,11 +19659,7 @@ mod tests {
         local_lock.round = manifest.round;
         local_lock.proposal_round = manifest.round;
         local_lock.subject = manifest.subject;
-        let sources = local_lock
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &local_lock);
         let consumer_tag = |view| EventTag::new(1, view, Generation::new(20 + view));
         let fetch = |view| AdapterEffect::FetchBody {
             tag: consumer_tag(view),
@@ -19950,11 +19755,7 @@ mod tests {
         let mut services = fixture.services();
         let high_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         let consumer_tag = |view| EventTag::new(1, view, Generation::new(7 + view));
-        let sources = high_prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &high_prepare);
         let fetch = |view| AdapterEffect::FetchBody {
             tag: consumer_tag(view),
             round: high_prepare.round,
@@ -20016,11 +19817,7 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 1, 1_048_576, 1));
         let mut services = fixture.services();
         let original = fixture.qc(wire::GlobalPhase::Prepare);
-        let original_sources = original
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let original_sources = certified_sources(&fixture, &original);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -20069,11 +19866,7 @@ mod tests {
         assert_eq!(executor.ready_body_bytes, 0);
         assert!(executor.body_pipeline_owners.is_empty());
 
-        let replacement_sources = replacement
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let replacement_sources = certified_sources(&fixture, &replacement);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -20330,11 +20123,7 @@ mod tests {
         let mut services = fixture.services();
         let consumer_tag = |view| EventTag::new(1, view, Generation::new(7 + view));
         let original = fixture.qc(wire::GlobalPhase::Prepare);
-        let original_sources = original
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let original_sources = certified_sources(&fixture, &original);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -20396,11 +20185,7 @@ mod tests {
         assert!(executor.outstanding_requests.is_empty());
         assert_eq!(services.cancelled_fetches, vec![original_id]);
 
-        let replacement_sources = replacement
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let replacement_sources = certified_sources(&fixture, &replacement);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -20435,11 +20220,7 @@ mod tests {
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![1],
             };
-            let sources = certificate
-                .signers
-                .iter()
-                .map(|index| fixture.context.roster[*index as usize].validator.clone())
-                .collect();
+            let sources = certified_sources(&fixture, &certificate);
             executor
                 .consume_effects(
                     vec![AdapterEffect::FetchBody {
@@ -20534,26 +20315,20 @@ mod tests {
     }
 
     #[test]
-    fn certified_sources_must_exactly_match_canonical_qc_signers() {
+    fn certified_sources_must_exactly_match_canonical_frozen_roster() {
         let fixture = Fixture::new();
         let certificate = fixture.qc(wire::GlobalPhase::Prepare);
-        let canonical = certificate
+        let canonical = certified_sources(&fixture, &certificate);
+        let signer_only = certificate
             .signers
             .iter()
             .map(|index| fixture.context.roster[*index as usize].validator.clone())
             .collect::<Vec<_>>();
-        for bad_sources in [
-            vec![
-                canonical[0].clone(),
-                canonical[0].clone(),
-                canonical[2].clone(),
-            ],
-            vec![
-                canonical[1].clone(),
-                canonical[0].clone(),
-                canonical[2].clone(),
-            ],
-        ] {
+        let mut duplicate = canonical.clone();
+        duplicate[3] = duplicate[0].clone();
+        let mut reordered = canonical.clone();
+        reordered.swap(0, 1);
+        for bad_sources in [signer_only, duplicate, reordered] {
             let mut executor = fixture.executor(EffectQueueConfig::default());
             let mut services = fixture.services();
             assert!(matches!(
@@ -20736,11 +20511,7 @@ mod tests {
                 round: fixture.manifest.round,
                 subject: fixture.manifest.subject,
                 manifest: None,
-                certified_sources: commit
-                    .signers
-                    .iter()
-                    .map(|index| fixture.context.roster[*index as usize].validator.clone())
-                    .collect(),
+                certified_sources: certified_sources(&fixture, &commit),
                 certificate: Some(commit.clone()),
             }])));
         runtime
@@ -21070,11 +20841,7 @@ mod tests {
     fn failed_new_certified_fetch_admission_preserves_request_indexes() {
         let fixture = Fixture::new();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let before = executor.body_ownership_projection();
@@ -21107,11 +20874,7 @@ mod tests {
     fn failed_existing_certified_fetch_retransmission_preserves_exact_projection() {
         let fixture = Fixture::new();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect::<Vec<_>>();
+        let sources = certified_sources(&fixture, &prepare);
         let effect = AdapterEffect::FetchBody {
             tag: tag(0),
             round: fixture.manifest.round,
@@ -21160,11 +20923,7 @@ mod tests {
             )
             .expect("admit ordinary fetch");
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         let before = executor.body_ownership_projection();
         services.fail_on = Some("fetch");
 
@@ -21423,11 +21182,7 @@ mod tests {
     fn successful_new_certified_fetch_commits_exact_task_and_request_once() {
         let fixture = Fixture::new();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
 
@@ -21477,11 +21232,7 @@ mod tests {
             .expect("admit ordinary fetch");
         let id = services.fetch_tasks[0].id();
         let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-        let sources = prepare
-            .signers
-            .iter()
-            .map(|index| fixture.context.roster[*index as usize].validator.clone())
-            .collect();
+        let sources = certified_sources(&fixture, &prepare);
 
         executor
             .consume_effects(

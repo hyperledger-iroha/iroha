@@ -640,7 +640,11 @@ impl OutstandingCertifiedBodyRequests {
     /// # Errors
     ///
     /// Returns an error for unsolicited/replayed responses, malformed bodies
-    /// or manifests, uncertified/spoofed responders, and invalid signatures.
+    /// or manifests, out-of-roster/spoofed responders, and invalid signatures.
+    /// A frozen-roster historical archive peer does not have to be a signer of
+    /// the old request QC: the verified QC authenticates the exact subject,
+    /// while the response signature authenticates the peer serving the
+    /// hash-bound canonical body.
     /// The outstanding request is retained on both success and error until the
     /// serialized executor explicitly completes or cancels it.
     pub(crate) fn authenticate_response(
@@ -661,14 +665,6 @@ impl OutstandingCertifiedBodyRequests {
             claimed_responder,
             authenticated_responder,
         )?;
-        if request
-            .certificate
-            .signers
-            .binary_search(&response.responder)
-            .is_err()
-        {
-            return Err(wire::ValidationError::ResponderNotCertified.into());
-        }
         response.validate_against(context, request, authenticated_responder)?;
         verify_signature(
             TransportSignatureKind::CertifiedBodyResponse,
@@ -1378,18 +1374,31 @@ mod tests {
         ));
         assert!(tracker.contains(request_hash));
 
-        let uncertified = fixture.signed_response(&request, 3);
-        let uncertified_sender = Fixture::peer(&fixture.validators[3]);
+        let archive_response = fixture.signed_response(&request, 3);
+        let archive_sender = Fixture::peer(&fixture.validators[3]);
+        let authenticated_archive = tracker
+            .authenticate_response(&fixture.context, archive_response.clone(), &archive_sender)
+            .expect("frozen-roster archive need not have signed the old QC");
+        assert_eq!(authenticated_archive.response(), &archive_response);
+        let mut outside_roster = archive_response;
+        outside_roster.responder =
+            u32::try_from(fixture.context.roster.len()).expect("small fixture roster");
+        outside_roster.signature = Signature::new(
+            fixture.validators[3].private_key(),
+            &outside_roster.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
         assert!(matches!(
-            tracker.authenticate_response(&fixture.context, uncertified, &uncertified_sender),
+            tracker.authenticate_response(&fixture.context, outside_roster, &archive_sender,),
             Err(V2TransportError::Wire(
-                wire::ValidationError::ResponderNotCertified
+                wire::ValidationError::SignerOutOfRange
             ))
         ));
         assert!(tracker.contains(request_hash));
         assert!(
             tracker.response_claims.is_empty(),
-            "invalid, spoofed, and cross-request responses cannot pin the occurrence slot"
+            "authentication alone cannot pin the occurrence slot"
         );
 
         let admitted = tracker

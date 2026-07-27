@@ -40,9 +40,7 @@ use iroha_data_model::{
         },
         zk::{
             AssetHiddenZkTransfer, CancelConfidentialPolicyTransition, RegisterAssetHiddenZkPool,
-            RegisterZkAceIdentityCommitment, RegisterZkAsset, RevokeZkAceIdentityCommitment,
-            RotateZkAceIdentityCommitment, ScheduleConfidentialPolicyTransition, Shield,
-            SubmitZkAceAuthorizedTransfer, Unshield, ZkTransfer,
+            RegisterZkAsset, ScheduleConfidentialPolicyTransition, Shield, Unshield, ZkTransfer,
         },
     },
     metadata::Metadata,
@@ -2750,24 +2748,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         return Ok(());
     }
 
-    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
-        collect_asset_balance_native_amx_participants(
-            dataspaces,
-            asset_balance_definition_route_target_with_world(
-                &transfer.asset,
-                Some(dataspace_catalog),
-                world,
-                ledger_time_ms,
-            ),
-            None,
-            [
-                account_dataspace_target(Some(world), &transfer.from, ledger_time_ms),
-                account_dataspace_target(Some(world), &transfer.to, ledger_time_ms),
-            ],
-        );
-        return Ok(());
-    }
-
     insert_native_amx_participant(
         dataspaces,
         instruction_transaction_dataspace_target_with_world(
@@ -3207,50 +3187,6 @@ fn instruction_transaction_dataspace_target(
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target(
             &cancel_transition.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
-        return asset_balance_definition_dataspace_target(
-            &register_identity.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
-        return asset_balance_definition_dataspace_target(
-            &rotate_identity.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
-        return asset_balance_definition_dataspace_target(
-            &revoke_identity.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
-        return zk_asset_operation_dataspace_target(
-            &transfer.asset,
-            [
-                account_dataspace_target(
-                    state_view.map(StateView::world),
-                    &transfer.from,
-                    state_view.map(state_view_ledger_time_ms),
-                ),
-                account_dataspace_target(
-                    state_view.map(StateView::world),
-                    &transfer.to,
-                    state_view.map(state_view_ledger_time_ms),
-                ),
-            ],
             dataspace_catalog,
             state_view,
         );
@@ -3699,46 +3635,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target_with_world(
             &cancel_transition.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
-        return asset_balance_definition_dataspace_target_with_world(
-            &register_identity.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
-        return asset_balance_definition_dataspace_target_with_world(
-            &rotate_identity.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
-        return asset_balance_definition_dataspace_target_with_world(
-            &revoke_identity.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
-        return zk_asset_operation_dataspace_target_with_world(
-            &transfer.asset,
-            [
-                account_dataspace_target(Some(world), &transfer.from, ledger_time_ms),
-                account_dataspace_target(Some(world), &transfer.to, ledger_time_ms),
-            ],
             dataspace_catalog,
             world,
             ledger_time_ms,
@@ -4435,18 +4331,6 @@ fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
     if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
         return Some(&register_pool.storage_asset);
     }
-    if let Some(register) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
-        return Some(&register.asset);
-    }
-    if let Some(rotate) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
-        return Some(&rotate.asset);
-    }
-    if let Some(revoke) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
-        return Some(&revoke.asset);
-    }
-    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
-        return Some(&transfer.asset);
-    }
     None
 }
 
@@ -4711,38 +4595,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
         );
     }
 
-    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
-        return asset_definition_requires_universal_coordinator(
-            &register_identity.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
-        return asset_definition_requires_universal_coordinator(
-            &rotate_identity.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
-        return asset_definition_requires_universal_coordinator(
-            &revoke_identity.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
-        return asset_definition_requires_universal_coordinator(
-            &transfer.asset,
-            dataspace_catalog,
-            state_view,
-        );
-    }
-
     if let Some(shield) = any.downcast_ref::<Shield>() {
         return asset_definition_requires_universal_coordinator(
             &shield.asset,
@@ -4914,42 +4766,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator_with_world(
             &cancel_transition.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &register_identity.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &rotate_identity.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &revoke_identity.asset,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        );
-    }
-
-    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
-        return asset_definition_requires_universal_coordinator_with_world(
-            &transfer.asset,
             dataspace_catalog,
             world,
             ledger_time_ms,
@@ -5427,18 +5243,6 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             .is_some()
         || any
             .downcast_ref::<CancelConfidentialPolicyTransition>()
-            .is_some()
-        || any
-            .downcast_ref::<RegisterZkAceIdentityCommitment>()
-            .is_some()
-        || any
-            .downcast_ref::<RotateZkAceIdentityCommitment>()
-            .is_some()
-        || any
-            .downcast_ref::<RevokeZkAceIdentityCommitment>()
-            .is_some()
-        || any
-            .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
             .is_some()
         || any.downcast_ref::<Shield>().is_some()
         || any.downcast_ref::<ZkTransfer>().is_some()
@@ -11394,7 +11198,6 @@ mod tests {
     #[test]
     fn native_zk_asset_instruction_routes_to_asset_definition_dataspace_without_explicit_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let (bob_id, _) = gen_account_in("builderland");
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(10);
         let asset_definition = AssetDefinitionId::new(
@@ -11465,60 +11268,6 @@ mod tests {
                     asset_definition.clone(),
                     [0xAA; 32],
                     VerifyingKeyId::new("halo2/ipa", "asset-hidden-vk"),
-                )
-                .into(),
-            ),
-            (
-                "register_zk_ace_identity_commitment",
-                RegisterZkAceIdentityCommitment::new(
-                    asset_definition.clone(),
-                    [0x11; 32],
-                    [0x22; 32],
-                    vec![alice_id.clone()],
-                    "transfer".to_owned(),
-                    "zk-ace-route-test".to_owned(),
-                    VerifyingKeyId::new("stark/fri", "zk-ace-vk"),
-                )
-                .into(),
-            ),
-            (
-                "rotate_zk_ace_identity_commitment",
-                RotateZkAceIdentityCommitment::new(
-                    asset_definition.clone(),
-                    [0x11; 32],
-                    [0x12; 32],
-                    [0x22; 32],
-                    vec![alice_id.clone()],
-                    "transfer".to_owned(),
-                    "zk-ace-route-test".to_owned(),
-                    VerifyingKeyId::new("stark/fri", "zk-ace-vk"),
-                )
-                .into(),
-            ),
-            (
-                "revoke_zk_ace_identity_commitment",
-                RevokeZkAceIdentityCommitment::new(
-                    asset_definition.clone(),
-                    [0x11; 32],
-                    Some([0x33; 32]),
-                )
-                .into(),
-            ),
-            (
-                "submit_zk_ace_authorized_transfer",
-                SubmitZkAceAuthorizedTransfer::new(
-                    alice_id.clone(),
-                    bob_id,
-                    asset_definition,
-                    7_u128,
-                    [0x11; 32],
-                    [0x33; 32],
-                    ChainId::from("chain"),
-                    "zk-ace-route-test".to_owned(),
-                    "transfer".to_owned(),
-                    [0x44; 32],
-                    [0x22; 32],
-                    proof(),
                 )
                 .into(),
             ),
@@ -14443,23 +14192,6 @@ mod tests {
                     vec![[0x31; 32]],
                     dummy_zk_proof_attachment(),
                     Some([0x32; 32]),
-                )),
-            ),
-            (
-                "zk_ace_authorized_transfer",
-                InstructionBox::from(SubmitZkAceAuthorizedTransfer::new(
-                    alice_id.clone(),
-                    bob_id,
-                    asset_definition.clone(),
-                    1_u128,
-                    [0x41; 32],
-                    [0x42; 32],
-                    ChainId::from("chain"),
-                    "iroha:zk-ace:pq-authorization:v0".to_owned(),
-                    "transparent_asset_transfer".to_owned(),
-                    [0x43; 32],
-                    [0x44; 32],
-                    dummy_zk_proof_attachment(),
                 )),
             ),
         ];

@@ -544,7 +544,8 @@ PROOF
     <2>1. /\ packet \in asyncTransport
            /\ AsyncPacketTyped(packet)
       BY <1>1
-         DEF OverdueResponsivePackets, AsyncTypeInvariant,
+         DEF OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+             AsyncTypeInvariant,
              AsyncSchedulerTypeInvariant, AsyncTransportTypeInvariant,
              AsyncTransportContentTypeInvariant,
              AsyncPacketContentTypeInvariant
@@ -555,13 +556,15 @@ PROOF
               /\ packet \in DueSourcePackets(recipient, source)
       BY <1>1, <2>1, SMT
          DEF AsyncPacketTyped, AsyncItemTyped,
-             OverdueResponsivePackets, DueSourcePackets
+             OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+             DueSourcePackets
     <2>3. LET recipient == packet.item.envelope.recipient
                source == packet.item.source
            IN ResponsivePacketPairAt(
                 initialContext, recipient, source)
       BY <1>1, SMT
-         DEF OverdueResponsivePackets, ResponsivePacketPairAt,
+         DEF OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+             ResponsivePacketPairAt,
              HistoricalRecoveryPacketCorridor,
              HistoricalRecoveryTarget
     <2> QED BY <2>2, <2>3
@@ -2904,6 +2907,7 @@ PROOF
       BY <1>1, <2>1, <2>2,
          OverdueResponsivePacketUsesFairIngressPair, Isa
          DEF Recipient, Source, OverdueResponsivePackets,
+             AsyncPacketOwnsClockDeadline,
              HistoricalRecoveryTarget
     <2>4. /\ AsyncItemTyped(Item)
            /\ Item.envelope.recipient = Recipient

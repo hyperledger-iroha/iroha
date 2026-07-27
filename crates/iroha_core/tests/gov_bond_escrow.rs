@@ -7,7 +7,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World},
+    state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{
     Registrable,
@@ -20,6 +20,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
+use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 #[test]
@@ -64,6 +65,7 @@ fn plain_ballot_locks_bond_into_escrow() {
     gov_cfg.voting_asset_id = def_id.clone();
     gov_cfg.min_bond_amount = 10_u64.into();
     gov_cfg.bond_escrow_account = BOB_ID.clone();
+    gov_cfg.slash_receiver_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
 
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -116,4 +118,40 @@ fn plain_ballot_locks_bond_into_escrow() {
 
     assert_eq!(alice_balance.into_inner(), Quantity::from(990_u64));
     assert_eq!(escrow_balance.into_inner(), Quantity::from(10_u64));
+
+    let escrow_perm: Permission = CanSubmitGovernanceBallot {
+        referendum_id: "rid-bond-lock".to_string(),
+    }
+    .into();
+    Grant::account_permission(escrow_perm, BOB_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant escrow ballot permission for the negative case");
+    let self_custodied = iroha_data_model::isi::governance::CastPlainBallot {
+        referendum_id: "rid-bond-lock".to_string(),
+        owner: BOB_ID.clone(),
+        amount: 10_u64.into(),
+        duration_blocks: 200,
+        direction: 0,
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("the configured custody account must not create a nominal self-lock");
+    assert!(
+        self_custodied
+            .to_string()
+            .contains("custody accounts cannot cast bonded ballots")
+    );
+    assert!(
+        !stx.world
+            .governance_locks()
+            .get("rid-bond-lock")
+            .is_some_and(|locks| locks.locks.contains_key(&BOB_ID))
+    );
+    assert_eq!(
+        stx.world
+            .asset_mut(&escrow_asset_id)
+            .expect("escrow asset after rejected self-lock")
+            .clone()
+            .into_inner(),
+        Quantity::from(10_u64)
+    );
 }

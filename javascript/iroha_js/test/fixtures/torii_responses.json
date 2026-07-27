@@ -40,7 +40,13 @@
           "slashed": "0",
           "expiry_height": 55,
           "direction": 1,
-          "duration_blocks": 5
+          "duration_blocks": 5,
+          "custody": {
+            "escrowed": true,
+            "asset_definition_id": "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+            "bond_escrow_account": "bond-escrow-account",
+            "slash_receiver_account": "slash-receiver-account"
+          }
         }
       }
     },

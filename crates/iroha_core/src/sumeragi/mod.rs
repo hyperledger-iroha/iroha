@@ -26,7 +26,7 @@ use iroha_config::parameters::{
 use iroha_crypto::{Algorithm, Hash as CryptoHash, PublicKey};
 use iroha_data_model::{
     ChainId,
-    block::consensus_v2::ConsensusMode,
+    block::consensus_v2::{ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode},
     consensus::VrfEpochRecord,
     merge::{
         MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
@@ -2891,8 +2891,8 @@ impl FairV2Ingress {
                 .collect::<Vec<_>>();
             if let Some(gate) = state.certified_serve_gate.as_ref() {
                 debug_assert!(certified_entries.iter().all(|entry| {
-                    let BlockMessage::V2(wire::ConsensusMessageV2 {
-                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                    let BlockMessage::V2(ConsensusMessageV2 {
+                        payload: ConsensusMessageV2Payload::CertifiedBodyRequest(request),
                         ..
                     }) = entry.inbound.message()
                     else {
@@ -3935,8 +3935,8 @@ impl FairV2Ingress {
             return Err(FairV2IngressPushError::Closed(inbound));
         };
         let certified_request = match inbound.message() {
-            BlockMessage::V2(wire::ConsensusMessageV2 {
-                payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+            BlockMessage::V2(ConsensusMessageV2 {
+                payload: ConsensusMessageV2Payload::CertifiedBodyRequest(request),
                 ..
             }) => Some(request.clone()),
             _ => None,

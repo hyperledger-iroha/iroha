@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2HistoricalRecoveryTemporalClosureProofs ----
-EXTENDS SumeragiV2ChainEpochRefinement,
+EXTENDS SumeragiV2SuccessorActivationRefinementProofs,
         SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs,
         SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs
 
@@ -130,6 +130,8 @@ IndexedDecisionWitnessSupportAt(initialContext) ==
        ResponsiveRecoveryValidationClearedInvariant
   /\ IndexedDecisionWitness(initialContext)!
        FinalProgressWitnessClosureInvariant
+  /\ IndexedDecisionWitness(initialContext)!
+       CurrentAppliedArchiveBodyRetentionInvariant
 
 IndexedDecisionWitnessSupport ==
   \A initialContext \in AdmissibleContextRecords:
@@ -251,7 +253,12 @@ PROOF
       BY <2>1,
          IndexedDecisionWitness(initialContext)!
            AsyncInitEstablishesFinalProgressWitnessClosure
-    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8
+    <2>9. IndexedDecisionWitness(initialContext)!
+             CurrentAppliedArchiveBodyRetentionInvariant
+      BY <2>1,
+         IndexedDecisionWitness(initialContext)!
+           AsyncInitEstablishesCurrentAppliedArchiveBodyRetention
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9
          DEF IndexedDecisionWitnessSupportAt
   <1> QED BY <1>1 DEF IndexedDecisionWitnessSupport
 
@@ -310,7 +317,14 @@ PROOF
          IndexedDecisionWitness(initialContext)!
            AsyncBracketNextPreservesFinalProgressWitnessClosure
          DEF IndexedDecisionWitnessSupportAt
-    <2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9
+    <2>10. (IndexedDecisionWitness(initialContext)!
+              CurrentAppliedArchiveBodyRetentionInvariant)'
+      BY <2>1, <2>2,
+         IndexedDecisionWitness(initialContext)!
+           AsyncBracketPreservesCurrentAppliedArchiveBodyRetention
+         DEF IndexedDecisionWitnessSupportAt
+    <2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9,
+                 <2>10
          DEF IndexedDecisionWitnessSupportAt
   <1> QED BY <1>1 DEF IndexedDecisionWitnessSupport
 
@@ -1681,12 +1695,14 @@ responsive validator in the frozen instance.  The existing arbitrary-context
 join theorems consume `IndexedExactHistoricalRecoveryProgress`, so using them
 here would be circular.
 
-Even after activation, `AsyncAllResponsiveAppliedAt` supplies only an
-application at every current responsive voter.  The indexed Open guard is
-strictly stronger: its exact archival record must be owned by a server which
-is itself one of that record's CommitQC signers.  No current theorem preserves
-the locally formed CommitQC origin through Decision and Apply to expose that
-self-signed applied archive.
+After activation, `AsyncAllResponsiveAppliedAt` supplies an application at
+every current responsive voter.  The indexed Open guard now selects any such
+joined frozen-roster archive which durably holds the exact body certified by
+the source CommitQC.  It does not conflate that response-signature owner with
+one of the old QC signers: the QC authorizes the immutable subject and the
+archive authenticates the exact hash-bound response.  The remaining prefix
+work is therefore source selection and retention, not preservation of a
+self-signed CommitQC origin through Decision and Apply.
 
 The three properties below make those boundaries machine-inspectable without
 adding fairness or changing the release statement:
@@ -1825,6 +1841,505 @@ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty ==
     /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
          initialContext, node)
       ~> IndexedHistoricalRecoveryEntryGoal(initialContext, node)
+
+(***************************************************************************
+Strict-height authority induction.
+
+The target-height activation prefix must not assume recovery at its own
+height.  The operators below expose the exact induction interface:
+
+  * entry ownership completes through the already-separated historical
+    certificate and Decision service kernels;
+  * authority progress below a frozen target ranges only over strict
+    ancestors in that target's immutable lineage; and
+  * progress through a numeric height is the finite induction accumulator.
+
+The chain refinement's `IndexedStrictAncestorRecoveryAdvance` kernel turns
+strict-ancestor completion into responsive target membership using the typed
+successor lifecycle.  The current target residual is framed until one of its
+entry arms appears, so joining the remaining responsive nodes cannot silently
+discard the admitted target.
+***************************************************************************)
+
+IndexedHistoricalRecoveryEntryCompletionProperty ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    IndexedHistoricalRecoveryEntryGoal(initialContext, node)
+      ~> HistoricalRecoveryComplete(initialContext, node)
+
+IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext) ==
+  \A blockHeight \in 0..targetContext.height:
+    blockHeight < targetContext.height
+      => \A node \in Responsive:
+           IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+             IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> IndexedHistoricalRecoveryEntryGoal(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+
+IndexedHistoricalRecoveryAuthorityProgressThroughHeight(limit) ==
+  \A initialContext \in AdmissibleContextRecords:
+    initialContext.height <= limit
+      => \A node \in Responsive:
+           IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+             initialContext, node)
+             ~> IndexedHistoricalRecoveryEntryGoal(
+                  initialContext, node)
+
+THEOREM IndexedHistoricalAuthorityResidualPersistsOrEnters ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    /\ IndexedCompositionInvariant
+    /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+         initialContext, node)
+    /\ [IndexedChainNext]_IndexedChainVars
+    => \/ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+             initialContext, node)'
+       \/ IndexedHistoricalRecoveryEntryGoal(initialContext, node)'
+BY IndexedStepPreservesCompositionInvariant,
+   IndexedBracketStepKeepsNodeHeightsMonotone,
+   IndexedNodeJoinIsStable, Isa
+   DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidual,
+       IndexedHistoricalRecoveryEntryGoal,
+       IndexedHistoricalRecoveryOpenable,
+       IndexedHistoricalExactApplication,
+       IndexedHistoricalDecisionOwned,
+       IndexedHistoricalRecoveryRunnerOwned,
+       IndexedHistoricalRecoveryTargetOwned,
+       IndexedHistoricalRecoveryTargetReady,
+       IndexedHistoricalRecoverySourceReady,
+       HistoricalRecoveryOutstanding,
+       ExactNodeLocationAt,
+       IndexedCurrentDecisions, IndexedCurrentApplications,
+       IndexedDecisionEvidence, IndexedApplicationEvidence,
+       IndexedCompositionInvariant,
+       IndexedEveryInstanceStrongInvariant,
+       IndexedTotalReceiptProjection,
+       IndexedDecisionReceiptProjection,
+       IndexedApplicationReceiptProjection,
+       IndexedChainNext, IndexedChainVars,
+       IndexedProductActionAt, IndexedReceiptClassification,
+       IndexedReceiptFreeChainStutter,
+       IndexedDecisionReceiptHandoff,
+       IndexedApplicationReceiptHandoff,
+       NewIndexedDecisionReceipt, NewIndexedApplicationReceipt,
+       NoNewIndexedDurableReceipt,
+       IndexedAsync!StrongInductiveInvariant,
+       IndexedAsync!Safety, IndexedAsync!TypeInvariant,
+       IndexedAsync!AsyncHistoricalRecoveryTypeInvariant,
+       IndexedAsync!NodeHasDecision,
+       IndexedAsync!NodeHasApplication,
+       IndexedAsync!HistoricalRecoveryTarget,
+       IndexedAsync!AsyncCurrentResponsiveVoters,
+       IndexedAsync!BodyHeldBy,
+       IndexedAsync!AsyncNext,
+       IndexedAsync!AsyncNonCrashStep,
+       IndexedAsync!AsyncSetGST,
+       IndexedAsync!PreGstCrash,
+       IndexedAsync!PreGstResponsiveCrash,
+       IndexedAsync!PreGstResponsiveRestart,
+       IndexedAsync!PreGstResponsiveReplay,
+       IndexedAsync!Crash,
+       IndexedAsync!Restart,
+       IndexedAsync!ApplyDecision,
+       Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
+       Chain!RecordAppliedNext, Chain!RecordKnownApplication
+
+THEOREM IndexedHistoricalServiceKernelsDischargeEntryCompletion ==
+  /\ IndexedChainSpec
+  /\ IndexedHistoricalCertificateRankProgressResidualProperty
+  /\ IndexedHistoricalDecisionRankProgressResidualProperty
+  => IndexedHistoricalRecoveryEntryCompletionProperty
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedHistoricalCertificateRankProgressResidualProperty,
+              IndexedHistoricalDecisionRankProgressResidualProperty,
+              NEW initialContext \in AdmissibleContextRecords,
+              NEW node \in Responsive
+         PROVE IndexedHistoricalRecoveryEntryGoal(initialContext, node)
+                 ~> HistoricalRecoveryComplete(initialContext, node)
+    <2>1. IndexedHistoricalRecoveryAuthorityReady(initialContext, node)
+             ~> HistoricalRecoveryComplete(initialContext, node)
+      BY <1>1,
+         IndexedHistoricalServiceKernelsDischargeAuthorityReadyProgress
+         DEF IndexedExactHistoricalRecoveryFromAuthorityProgress
+    <2>2. IndexedHistoricalExactApplication(initialContext, node)
+             ~> HistoricalRecoveryComplete(initialContext, node)
+      BY <1>1, IndexedChainSpecClosesHistoricalApplicationReceiptHandoff
+         DEF IndexedHistoricalApplicationReceiptHandoffProperty
+    <2>3. \A rank \in Nat:
+             IndexedHistoricalDecisionStageAt(
+               initialContext, node, rank)
+               ~> IndexedHistoricalExactApplication(
+                    initialContext, node)
+      BY <1>1, IndexedHistoricalDecisionRankConvergence
+    <2>4. IndexedHistoricalDecisionOwned(initialContext, node)
+             => (IndexedHistoricalDecisionStageGoal(
+                   initialContext, node)
+                  \/ IndexedHistoricalDecisionStageOwnershipResidual(
+                       initialContext, node))
+      BY DEF IndexedHistoricalDecisionStageOwnershipResidual
+    <2>5. IndexedHistoricalDecisionStageOwnershipResidual(
+             initialContext, node)
+             ~> IndexedHistoricalDecisionStageGoal(
+                  initialContext, node)
+      BY <1>1, IndexedHistoricalDecisionStageOwnershipResidualObligation
+         DEF IndexedHistoricalDecisionStageOwnershipResidualProperty
+    <2>6. (\E rank \in 1..6:
+             IndexedHistoricalDecisionStageAt(
+               initialContext, node, rank))
+             ~> IndexedHistoricalExactApplication(
+                  initialContext, node)
+      BY <2>3, PTL
+    <2>7. IndexedHistoricalDecisionStageGoal(initialContext, node)
+             ~> IndexedHistoricalExactApplication(initialContext, node)
+      BY <2>6, PTL DEF IndexedHistoricalDecisionStageGoal
+    <2>8. IndexedHistoricalDecisionOwned(initialContext, node)
+             ~> IndexedHistoricalExactApplication(initialContext, node)
+      BY <2>4, <2>5, <2>7, PTL
+    <2>9. IndexedHistoricalRecoveryEntryGoal(initialContext, node)
+             ~> (IndexedHistoricalExactApplication(initialContext, node)
+                  \/ IndexedHistoricalRecoveryAuthorityReady(
+                       initialContext, node))
+      BY <2>8, PTL
+         DEF IndexedHistoricalRecoveryEntryGoal,
+             IndexedHistoricalRecoveryAuthorityReady
+    <2> QED BY <2>1, <2>2, <2>9, PTL
+  <1> QED BY <1>1
+       DEF IndexedHistoricalRecoveryEntryCompletionProperty
+
+THEOREM IndexedHistoricalLowerAuthorityProgressGivesStrictAncestorAdvance ==
+  /\ targetContext \in AdmissibleContextRecords
+  /\ IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext)
+  /\ IndexedHistoricalRecoveryEntryCompletionProperty
+  => IndexedStrictAncestorRecoveryAdvance(targetContext)
+PROOF
+  <1>1. ASSUME targetContext \in AdmissibleContextRecords,
+              IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext),
+              IndexedHistoricalRecoveryEntryCompletionProperty,
+              NEW blockHeight \in 0..targetContext.height,
+              blockHeight < targetContext.height,
+              NEW node \in Responsive
+         PROVE HistoricalRecoveryOutstanding(
+                   IndexedAncestorContext(targetContext, blockHeight), node)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      node)
+    <2>1. HistoricalRecoveryOutstanding(
+             IndexedAncestorContext(targetContext, blockHeight), node)
+             => (IndexedHistoricalRecoveryEntryGoal(
+                   IndexedAncestorContext(targetContext, blockHeight), node)
+                  \/ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                       IndexedAncestorContext(
+                         targetContext, blockHeight), node))
+      BY DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidual
+    <2>2. IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+             IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> IndexedHistoricalRecoveryEntryGoal(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+      BY <1>1
+         DEF IndexedHistoricalRecoveryAuthorityProgressBelow
+    <2>3. IndexedAncestorContext(targetContext, blockHeight)
+             \in AdmissibleContextRecords
+      BY <1>1, IndexedAdmissibleTargetHasAdmissibleAncestors
+    <2>4. IndexedHistoricalRecoveryEntryGoal(
+             IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> HistoricalRecoveryComplete(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+      BY <1>1, <2>3
+         DEF IndexedHistoricalRecoveryEntryCompletionProperty
+    <2>5. IndexedAncestorContext(targetContext, blockHeight).height
+             < MaxHeight
+      BY <1>1, <2>3, Isa
+         DEF IndexedAncestorContext,
+             AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights
+    <2>6. HistoricalRecoveryComplete(
+             IndexedAncestorContext(targetContext, blockHeight), node)
+             => IndexedNodePastContext(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+      BY <2>5
+         DEF HistoricalRecoveryComplete, IndexedNodePastContext
+    <2> QED BY <2>1, <2>2, <2>4, <2>6, PTL
+  <1> QED BY <1>1
+       DEF IndexedStrictAncestorRecoveryAdvance
+
+(***************************************************************************
+The successor module is imported in the non-circular direction.  Its proved
+starvation result is definitionally the exact chain progress property consumed
+by the strict-height induction below; no chain-liveness wrapper is imported.
+***************************************************************************)
+
+THEOREM IndexedChainSpecClosesSuccessorActivationForHistoricalInduction ==
+  IndexedChainSpec => IndexedSuccessorActivationProgress
+PROOF
+  <1>1. IndexedChainSpec
+           => SuccessorActivationStarvationFreedomProperty
+    BY SuccessorActivationStarvationFreedomObligation
+  <1>2. SuccessorActivationStarvationFreedomProperty
+           <=> IndexedSuccessorActivationProgress
+    BY SuccessorActivationStarvationMatchesChainProgress
+  <1> QED BY <1>1, <1>2
+
+THEOREM IndexedHistoricalStrictAncestorRecoveryClosesActivationAt ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       IndexedStrictAncestorRecoveryAdvance(targetContext)
+         => \A node \in Responsive:
+              IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                targetContext, node)
+                ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
+                     \/ /\ IndexedAllResponsiveJoined(targetContext)
+                        /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                             targetContext, node))
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW targetContext \in AdmissibleContextRecords,
+              IndexedStrictAncestorRecoveryAdvance(targetContext),
+              NEW node \in Responsive
+         PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                   targetContext, node)
+                 ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
+                      \/ /\ IndexedAllResponsiveJoined(targetContext)
+                         /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                              targetContext, node))
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. [][IndexedChainNext]_IndexedChainVars
+      BY <1>1, PTL DEF IndexedChainSpec
+    <2>3. IndexedCompositionInvariant
+             /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                  targetContext, node)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => \/ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                      targetContext, node)'
+                \/ IndexedHistoricalRecoveryEntryGoal(
+                     targetContext, node)'
+      BY <1>1, IndexedHistoricalAuthorityResidualPersistsOrEnters
+    <2>4. IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+             targetContext, node)
+             => IndexedTargetJoined(targetContext)
+      BY Isa
+         DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidual,
+             HistoricalRecoveryOutstanding,
+             IndexedTargetJoined, JoinedContexts
+    <2>5. IndexedTargetJoined(targetContext)
+             ~> IndexedAllResponsiveJoined(targetContext)
+      BY <1>1, IndexedStrictAncestorRecoveryEventuallyJoinsTarget
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedHistoricalAuthorityProgressAtHeightFromStrictAncestors ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  /\ IndexedHistoricalRecoveryEntryCompletionProperty
+  /\ IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
+  /\ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+  => \A targetContext \in AdmissibleContextRecords:
+       IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext)
+         => \A node \in Responsive:
+              IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                targetContext, node)
+                ~> IndexedHistoricalRecoveryEntryGoal(targetContext, node)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              IndexedHistoricalRecoveryEntryCompletionProperty,
+              IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty,
+              IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty,
+              NEW targetContext \in AdmissibleContextRecords,
+              IndexedHistoricalRecoveryAuthorityProgressBelow(targetContext),
+              NEW node \in Responsive
+         PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                   targetContext, node)
+                 ~> IndexedHistoricalRecoveryEntryGoal(
+                      targetContext, node)
+    <2>1. IndexedStrictAncestorRecoveryAdvance(targetContext)
+      BY <1>1,
+         IndexedHistoricalLowerAuthorityProgressGivesStrictAncestorAdvance
+    <2>2. IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+             targetContext, node)
+             ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
+                  \/ /\ IndexedAllResponsiveJoined(targetContext)
+                     /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                          targetContext, node))
+      BY <1>1, <2>1,
+         IndexedHistoricalStrictAncestorRecoveryClosesActivationAt
+    <2>3. /\ IndexedAllResponsiveJoined(targetContext)
+           /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                targetContext, node)
+             ~> (IndexedHistoricalRecoveryEntryGoal(targetContext, node)
+                  \/ /\ IndexedHistoricalRecoveryTypedArchiveAuthority(
+                           targetContext)
+                     /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                          targetContext, node))
+      BY <1>1
+         DEF IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
+    <2>4. /\ IndexedHistoricalRecoveryTypedArchiveAuthority(targetContext)
+           /\ IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                targetContext, node)
+             ~> IndexedHistoricalRecoveryEntryGoal(targetContext, node)
+      BY <1>1
+         DEF IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+    <2> QED BY <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedHistoricalAuthorityProgressStartsAtHeightZero ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  /\ IndexedHistoricalRecoveryEntryCompletionProperty
+  /\ IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
+  /\ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+  => IndexedHistoricalRecoveryAuthorityProgressThroughHeight(0)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              IndexedHistoricalRecoveryEntryCompletionProperty,
+              IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty,
+              IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty,
+              NEW initialContext \in AdmissibleContextRecords,
+              initialContext.height <= 0,
+              NEW node \in Responsive
+         PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                   initialContext, node)
+                 ~> IndexedHistoricalRecoveryEntryGoal(
+                      initialContext, node)
+    <2>1. initialContext.height = 0
+      BY <1>1, Isa
+         DEF AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights
+    <2>2. IndexedHistoricalRecoveryAuthorityProgressBelow(initialContext)
+      BY <1>1, <2>1, Isa
+         DEF IndexedHistoricalRecoveryAuthorityProgressBelow
+    <2> QED BY <1>1, <2>2,
+         IndexedHistoricalAuthorityProgressAtHeightFromStrictAncestors
+  <1> QED BY <1>1
+       DEF IndexedHistoricalRecoveryAuthorityProgressThroughHeight
+
+THEOREM IndexedHistoricalAuthorityProgressAdvancesOneHeight ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  /\ IndexedHistoricalRecoveryEntryCompletionProperty
+  /\ IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
+  /\ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+  => \A limit \in Nat:
+       IndexedHistoricalRecoveryAuthorityProgressThroughHeight(limit)
+         => IndexedHistoricalRecoveryAuthorityProgressThroughHeight(limit + 1)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              IndexedHistoricalRecoveryEntryCompletionProperty,
+              IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty,
+              IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty,
+              NEW limit \in Nat,
+              IndexedHistoricalRecoveryAuthorityProgressThroughHeight(limit),
+              NEW initialContext \in AdmissibleContextRecords,
+              initialContext.height <= limit + 1,
+              NEW node \in Responsive
+         PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                   initialContext, node)
+                 ~> IndexedHistoricalRecoveryEntryGoal(
+                      initialContext, node)
+    <2>1. CASE initialContext.height <= limit
+      BY <1>1, <2>1
+         DEF IndexedHistoricalRecoveryAuthorityProgressThroughHeight
+    <2>2. CASE initialContext.height > limit
+      <3>1. initialContext.height = limit + 1
+        BY <1>1, <2>2, SMT
+      <3>2. IndexedHistoricalRecoveryAuthorityProgressBelow(initialContext)
+        PROOF
+          <4>1. ASSUME NEW blockHeight \in 0..initialContext.height,
+                        blockHeight < initialContext.height,
+                        NEW currentNode \in Responsive
+                 PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                           IndexedAncestorContext(
+                             initialContext, blockHeight), currentNode)
+                         ~> IndexedHistoricalRecoveryEntryGoal(
+                              IndexedAncestorContext(
+                                initialContext, blockHeight), currentNode)
+            <5>1. IndexedAncestorContext(initialContext, blockHeight)
+                     \in AdmissibleContextRecords
+              BY <1>1, <4>1,
+                 IndexedAdmissibleTargetHasAdmissibleAncestors
+            <5>2. IndexedAncestorContext(
+                     initialContext, blockHeight).height <= limit
+              BY <3>1, <4>1, SMT DEF IndexedAncestorContext
+            <5> QED BY <1>1, <5>1, <5>2
+                 DEF IndexedHistoricalRecoveryAuthorityProgressThroughHeight
+          <4> QED BY <4>1
+               DEF IndexedHistoricalRecoveryAuthorityProgressBelow
+      <3> QED BY <1>1, <3>2,
+           IndexedHistoricalAuthorityProgressAtHeightFromStrictAncestors
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+       DEF IndexedHistoricalRecoveryAuthorityProgressThroughHeight
+
+THEOREM IndexedHistoricalStrictHeightInductionClosesAuthorityAcquisition ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  /\ IndexedHistoricalRecoveryEntryCompletionProperty
+  /\ IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
+  /\ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+  => IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              IndexedHistoricalRecoveryEntryCompletionProperty,
+              IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty,
+              IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+         PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
+    <2> DEFINE P(limit) ==
+           IndexedHistoricalRecoveryAuthorityProgressThroughHeight(limit)
+    <2>1. P(0)
+      BY <1>1, IndexedHistoricalAuthorityProgressStartsAtHeightZero
+         DEF P
+    <2>2. \A limit \in Nat: P(limit) => P(limit + 1)
+      BY <1>1, IndexedHistoricalAuthorityProgressAdvancesOneHeight
+         DEF P
+    <2>3. \A limit \in Nat: P(limit)
+      BY <2>1, <2>2, NatInduction
+    <2>4. P(MaxHeight)
+      BY <2>3, Isa DEF ModelConfiguration
+    <2>5. ASSUME NEW initialContext \in AdmissibleContextRecords,
+                  NEW node \in Responsive
+           PROVE IndexedHistoricalRecoveryAuthorityAcquisitionResidual(
+                     initialContext, node)
+                   ~> IndexedHistoricalRecoveryEntryGoal(
+                        initialContext, node)
+      <3>1. initialContext.height <= MaxHeight
+        BY <2>5, Isa
+           DEF AdmissibleContextRecords, FrozenContextAdmissible,
+               ContextRecords, Heights
+      <3> QED BY <2>4, <3>1
+           DEF P,
+               IndexedHistoricalRecoveryAuthorityProgressThroughHeight
+    <2> QED BY <2>5
+         DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
+  <1> QED BY <1>1
+
+THEOREM IndexedHistoricalStrictHeightServiceCompositionClosesAuthority ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  /\ IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
+  /\ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+  /\ IndexedHistoricalCertificateRankProgressResidualProperty
+  /\ IndexedHistoricalDecisionRankProgressResidualProperty
+  => IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty
+BY IndexedHistoricalServiceKernelsDischargeEntryCompletion,
+   IndexedHistoricalStrictHeightInductionClosesAuthorityAcquisition
+
+THEOREM IndexedHistoricalStrictHeightServiceCompositionClosesActivationPrefix ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  /\ IndexedHistoricalRecoveryActivatedArchiveProducerResidualProperty
+  /\ IndexedHistoricalRecoveryTypedArchiveEntryResidualProperty
+  /\ IndexedHistoricalCertificateRankProgressResidualProperty
+  /\ IndexedHistoricalDecisionRankProgressResidualProperty
+  => IndexedHistoricalRecoveryActivationPrefixResidualProperty
+BY IndexedHistoricalStrictHeightServiceCompositionClosesAuthority, PTL
+   DEF IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty,
+       IndexedHistoricalRecoveryActivationPrefixResidualProperty
 
 IndexedHistoricalRecoveryOrdinaryAuthorityResidualProperties ==
   /\ IndexedHistoricalRecoveryActivationPrefixResidualProperty
