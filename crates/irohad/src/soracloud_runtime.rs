@@ -273,7 +273,7 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             )
         }
         .map_err(|error| {
-            eyre::eyre!("quote internal Soracloud runtime mutation at `{endpoint}`: {error}")
+            eyre::eyre!("quote internal Soracloud runtime mutation at `{endpoint}`: {error:?}")
         })?;
         payload.fee_payment = quote.recommended_intent;
         let tx = sign_soracloud_runtime_submission_payload(payload, &self.key_pair, endpoint)?;
@@ -17133,14 +17133,29 @@ mod tests {
                         issued_epoch: fixture.issued_epoch,
                         deadline_epoch: fixture.issued_epoch + 600,
                         canonical_order: fixture.canonical_order.clone(),
+                        assignment_revision: 1,
                         provider_completions: vec![
                             iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
                                 provider_id:
                                     iroha_data_model::sorafs::capacity::ProviderId::new(
                                         fixture.provider_id,
-                                    ),
+                                ),
                                 completed_by: (*ALICE_ID).clone(),
                                 completion_epoch: fixture.issued_epoch + 1,
+                                assignment_revision: 1,
+                                completion_authority: iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                                    (*ALICE_ID).clone(),
+                                    iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                                        policy_id: [0xA1; 32],
+                                        revision: 1,
+                                        predecessor_digest: None,
+                                        policy_digest: [0xA2; 32],
+                                    },
+                                ),
+                                finalized_anchor: iroha_data_model::sorafs::pin_registry::ProviderIngestFinalizedAnchorV1 {
+                                    height: fixture.issued_epoch,
+                                    block_hash: [0xA3; 32],
+                                },
                             },
                         ],
                         status: ReplicationOrderStatus::Completed(fixture.issued_epoch + 1),

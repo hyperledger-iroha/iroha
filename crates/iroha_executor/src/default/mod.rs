@@ -53,8 +53,9 @@ use iroha_smart_contract::data_model::{
         RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
         RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
         RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-        ResolveSorafsModerationChallenge, RetirePinManifest, SetAssetKeyValue,
-        SetLaneRelayEmergencyValidators, SetPricingSchedule, SetSorafsModerationPolicy,
+        ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+        RevokeProviderIngestCompletionAuthority, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
+        SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
         SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
         SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
         SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
@@ -1163,6 +1164,10 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_complete_replication_order(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ReviseReplicationOrderAssignments>() {
+            sorafs::visit_revise_replication_order_assignments(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<ExpireReplicationOrder>() {
             sorafs::visit_expire_replication_order(executor, isi);
             return;
@@ -1213,6 +1218,14 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<UnregisterProviderOwner>() {
             sorafs::visit_unregister_provider_owner(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetProviderIngestCompletionAuthority>() {
+            sorafs::visit_set_provider_ingest_completion_authority(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RevokeProviderIngestCompletionAuthority>() {
+            sorafs::visit_revoke_provider_ingest_completion_authority(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetPricingSchedule>() {
@@ -2516,6 +2529,26 @@ pub mod sorafs {
         deny!(executor, "Can't complete SoraFS replication order");
     }
 
+    /// Revise a pending replication order's assignments when permitted.
+    pub fn visit_revise_replication_order_assignments<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ReviseReplicationOrderAssignments,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanIssueSorafsReplicationOrder
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't revise SoraFS replication order assignments"
+        );
+    }
+
     /// Expire a replication order when permitted.
     pub fn visit_expire_replication_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2565,6 +2598,46 @@ pub mod sorafs {
         }
 
         deny!(executor, "Can't unregister SoraFS provider owner binding");
+    }
+
+    /// Set a provider-ingest completion authority when permitted.
+    pub fn visit_set_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetProviderIngestCompletionAuthority,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanRegisterSorafsProviderOwner
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't set SoraFS provider-ingest completion authority"
+        );
+    }
+
+    /// Revoke a provider-ingest completion authority when permitted.
+    pub fn visit_revoke_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RevokeProviderIngestCompletionAuthority,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanUnregisterSorafsProviderOwner
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't revoke SoraFS provider-ingest completion authority"
+        );
     }
 
     /// Update the `SoraFS` pricing schedule when permitted.
@@ -3189,9 +3262,6 @@ pub mod domain {
             AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
-            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
-                asset_definition_matches_domain(&permission.asset)
-            }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
@@ -3489,9 +3559,6 @@ pub mod account {
             AnyPermission::CanTransferAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.account() == account_id
-            }
-            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
-                permission.account == *account_id
             }
             AnyPermission::CanManageFeeSponsorProgram(permission) => {
                 permission.sponsor == *account_id
@@ -3809,9 +3876,6 @@ pub mod asset_definition {
             }
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.definition() == asset_definition_id
-            }
-            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
-                &permission.asset == asset_definition_id
             }
             AnyPermission::CanSetAssetTransferFreeze(permission) => {
                 &permission.asset_definition == asset_definition_id
@@ -5315,7 +5379,6 @@ pub mod trigger {
             | AnyPermission::CanTransferAsset(_)
             | AnyPermission::CanSetAssetTransferFreeze(_)
             | AnyPermission::CanSetAssetTransferDailyLimit(_)
-            | AnyPermission::CanManageZkAceIdentityForAccount(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
@@ -5699,10 +5762,12 @@ mod sorafs_permission_tests {
             IssueReplicationOrder, PublishSorafsPopRevocationList, RecordCapacityTelemetry,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsCapacityDispute, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SetSorafsPopIssuerPolicy,
-            SetSorafsReputationJournalAuthorityPolicy, SubmitSorafsModerationAppeal,
-            SubmitSorafsModerationCommit, UnregisterProviderOwner, UpsertProviderCredit,
+            ResolveSorafsCapacityDispute, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            SetSorafsPopIssuerPolicy, SetSorafsReputationJournalAuthorityPolicy,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, UnregisterProviderOwner,
+            UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -5731,7 +5796,11 @@ mod sorafs_permission_tests {
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
                 ModerationAppealIntakeV1, ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
             },
-            pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
+            pin_registry::{
+                ManifestAliasBinding, ManifestDigest, ProviderIngestCompletionAuthorityV1,
+                ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+                ReplicationOrderId,
+            },
             pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
             reputation::{
@@ -5756,6 +5825,7 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
     };
+    use sorafs_manifest::capacity::ReplicationAssignmentV1;
 
     use super::*;
     use crate::{Iroha, prelude, tests::with_mock_permissions};
@@ -6084,11 +6154,57 @@ mod sorafs_permission_tests {
         IssueReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), vec![0x22], 1, 2)
     }
 
+    fn provider_ingest_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
+        ProviderIngestCompletionAuthorityV1::new(
+            owner_account_id(),
+            ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0x13; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0x14; 32],
+            },
+        )
+    }
+
     fn complete_replication_order() -> CompleteReplicationOrder {
         CompleteReplicationOrder::new(
             ReplicationOrderId::new([0x11; 32]),
             ProviderId::new([0x12; 32]),
             3,
+            provider_ingest_completion_authority(),
+            1,
+            ProviderIngestFinalizedAnchorV1 {
+                height: 2,
+                block_hash: [0x15; 32],
+            },
+        )
+    }
+
+    fn revise_replication_order_assignments() -> ReviseReplicationOrderAssignments {
+        ReviseReplicationOrderAssignments::new(
+            ReplicationOrderId::new([0x11; 32]),
+            1,
+            2,
+            vec![ReplicationAssignmentV1 {
+                provider_id: [0x12; 32],
+                slice_gib: 1,
+                lane: None,
+            }],
+        )
+    }
+
+    fn set_provider_ingest_completion_authority() -> SetProviderIngestCompletionAuthority {
+        SetProviderIngestCompletionAuthority::new(
+            ProviderId::new([0x12; 32]),
+            None,
+            provider_ingest_completion_authority(),
+        )
+    }
+
+    fn revoke_provider_ingest_completion_authority() -> RevokeProviderIngestCompletionAuthority {
+        RevokeProviderIngestCompletionAuthority::new(
+            ProviderId::new([0x12; 32]),
+            provider_ingest_completion_authority(),
         )
     }
 
@@ -6274,6 +6390,13 @@ mod sorafs_permission_tests {
     );
 
     sorafs_permission_case!(
+        revise_replication_order_assignments_requires_permission,
+        revise_replication_order_assignments(),
+        CanIssueSorafsReplicationOrder,
+        sorafs::visit_revise_replication_order_assignments
+    );
+
+    sorafs_permission_case!(
         expire_replication_order_requires_permission,
         expire_replication_order(),
         CanIssueSorafsReplicationOrder,
@@ -6292,6 +6415,20 @@ mod sorafs_permission_tests {
         unregister_provider_owner(),
         CanUnregisterSorafsProviderOwner,
         sorafs::visit_unregister_provider_owner
+    );
+
+    sorafs_permission_case!(
+        set_provider_ingest_completion_authority_requires_permission,
+        set_provider_ingest_completion_authority(),
+        CanRegisterSorafsProviderOwner,
+        sorafs::visit_set_provider_ingest_completion_authority
+    );
+
+    sorafs_permission_case!(
+        revoke_provider_ingest_completion_authority_requires_permission,
+        revoke_provider_ingest_completion_authority(),
+        CanUnregisterSorafsProviderOwner,
+        sorafs::visit_revoke_provider_ingest_completion_authority
     );
 
     sorafs_permission_case!(

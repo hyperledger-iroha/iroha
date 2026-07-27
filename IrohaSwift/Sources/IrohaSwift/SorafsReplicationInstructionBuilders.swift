@@ -357,13 +357,152 @@ public struct SorafsIssueReplicationOrderInstruction: Equatable, Sendable {
     }
 }
 
+/// Exact governed signer-policy identity expected at completion commit.
+public struct SorafsProviderIngestCompletionSignerPolicyV1: Equatable, Sendable {
+    public let policyId: String
+    public let revision: UInt64
+    public let predecessorDigest: String?
+    public let policyDigest: String
+
+    public init(
+        policyId: String,
+        revision: UInt64,
+        predecessorDigest: String?,
+        policyDigest: String
+    ) throws {
+        guard revision > 0 else {
+            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                reason: "signer_policy.revision must be greater than zero"
+            )
+        }
+        if revision == 1, predecessorDigest != nil {
+            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                reason: "signer_policy.predecessor_digest must be absent at revision one"
+            )
+        }
+        if revision > 1, predecessorDigest == nil {
+            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                reason: "signer_policy.predecessor_digest is required after revision one"
+            )
+        }
+        self.policyId = try SorafsReplicationOrderV1.canonicalIdentifier(
+            policyId,
+            field: "signer_policy.policy_id"
+        )
+        self.revision = revision
+        self.predecessorDigest = try predecessorDigest.map {
+            try SorafsReplicationOrderV1.canonicalIdentifier(
+                $0,
+                field: "signer_policy.predecessor_digest"
+            )
+        }
+        self.policyDigest = try SorafsReplicationOrderV1.canonicalIdentifier(
+            policyDigest,
+            field: "signer_policy.policy_digest"
+        )
+    }
+
+    fileprivate var jsonObject: [String: Any] {
+        [
+            "policy_id": policyId,
+            "revision": NSNumber(value: revision),
+            "predecessor_digest": predecessorDigest.map { $0 as Any } ?? NSNull(),
+            "policy_digest": policyDigest,
+        ]
+    }
+}
+
+/// Exact provider owner and signer policy expected at completion commit.
+public struct SorafsProviderIngestCompletionAuthorityV1: Equatable, Sendable {
+    public let providerOwner: String
+    public let signerPolicy: SorafsProviderIngestCompletionSignerPolicyV1
+
+    public init(
+        providerOwner: String,
+        signerPolicy: SorafsProviderIngestCompletionSignerPolicyV1
+    ) throws {
+        guard providerOwner == providerOwner.trimmingCharacters(in: .whitespacesAndNewlines),
+              providerOwner.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              !providerOwner.contains("@"),
+              !providerOwner.contains("#"),
+              !providerOwner.contains("$")
+        else {
+            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                reason: "provider_owner must be an exact canonical I105 account id"
+            )
+        }
+        do {
+            let prefix = try AccountAddress
+                .inspectI105NetworkPrefix(providerOwner).chainDiscriminant
+            let address = try AccountAddress.parseEncodedSwiftOnly(
+                providerOwner,
+                expectedPrefix: prefix
+            )
+            guard try address.toI105(networkPrefix: prefix) == providerOwner else {
+                throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                    reason: "provider_owner must be an exact canonical I105 account id"
+                )
+            }
+        } catch {
+            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                reason: "provider_owner must be an exact canonical I105 account id"
+            )
+        }
+        self.providerOwner = providerOwner
+        self.signerPolicy = signerPolicy
+    }
+
+    fileprivate var jsonObject: [String: Any] {
+        [
+            "provider_owner": providerOwner,
+            "signer_policy": signerPolicy.jsonObject,
+        ]
+    }
+}
+
+/// Exact finalized committed-chain prefix used to prepare a completion.
+public struct SorafsProviderIngestFinalizedAnchorV1: Equatable, Sendable {
+    public let height: UInt64
+    public let blockHash: String
+
+    public init(height: UInt64, blockHash: String) throws {
+        guard height > 0 else {
+            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                reason: "finalized_anchor.height must be greater than zero"
+            )
+        }
+        self.height = height
+        self.blockHash = try SorafsReplicationOrderV1.canonicalIdentifier(
+            blockHash,
+            field: "finalized_anchor.block_hash"
+        )
+    }
+
+    fileprivate var jsonObject: [String: Any] {
+        [
+            "height": NSNumber(value: height),
+            "block_hash": blockHash,
+        ]
+    }
+}
+
 /// Canonical provider-specific `CompleteReplicationOrder` instruction fields.
 public struct SorafsCompleteReplicationOrderInstruction: Equatable, Sendable {
     public let orderId: String
     public let providerId: String
     public let completionEpoch: UInt64
+    public let expectedAuthority: SorafsProviderIngestCompletionAuthorityV1
+    public let expectedAssignmentRevision: UInt64
+    public let finalizedAnchor: SorafsProviderIngestFinalizedAnchorV1
 
-    public init(orderId: String, providerId: String, completionEpoch: UInt64) throws {
+    public init(
+        orderId: String,
+        providerId: String,
+        completionEpoch: UInt64,
+        expectedAuthority: SorafsProviderIngestCompletionAuthorityV1,
+        expectedAssignmentRevision: UInt64,
+        finalizedAnchor: SorafsProviderIngestFinalizedAnchorV1
+    ) throws {
         self.orderId = try SorafsReplicationOrderV1.canonicalIdentifier(
             orderId,
             field: "order_id"
@@ -373,6 +512,14 @@ public struct SorafsCompleteReplicationOrderInstruction: Equatable, Sendable {
             field: "provider_id"
         )
         self.completionEpoch = completionEpoch
+        guard expectedAssignmentRevision > 0 else {
+            throw SorafsReplicationInstructionBuilderError.invalidInstruction(
+                reason: "expected_assignment_revision must be greater than zero"
+            )
+        }
+        self.expectedAuthority = expectedAuthority
+        self.expectedAssignmentRevision = expectedAssignmentRevision
+        self.finalizedAnchor = finalizedAnchor
     }
 
     public func noritoJSON() throws -> NoritoJSON {
@@ -381,6 +528,11 @@ public struct SorafsCompleteReplicationOrderInstruction: Equatable, Sendable {
                 "order_id": orderId,
                 "provider_id": providerId,
                 "completion_epoch": NSNumber(value: completionEpoch),
+                "expected_authority": expectedAuthority.jsonObject,
+                "expected_assignment_revision": NSNumber(
+                    value: expectedAssignmentRevision
+                ),
+                "finalized_anchor": finalizedAnchor.jsonObject,
             ],
         ])
     }
@@ -464,12 +616,18 @@ public enum SorafsReplicationInstructionBuilders {
     public static func completeReplicationOrder(
         orderId: String,
         providerId: String,
-        completionEpoch: UInt64
+        completionEpoch: UInt64,
+        expectedAuthority: SorafsProviderIngestCompletionAuthorityV1,
+        expectedAssignmentRevision: UInt64,
+        finalizedAnchor: SorafsProviderIngestFinalizedAnchorV1
     ) throws -> NoritoJSON {
         try SorafsCompleteReplicationOrderInstruction(
             orderId: orderId,
             providerId: providerId,
-            completionEpoch: completionEpoch
+            completionEpoch: completionEpoch,
+            expectedAuthority: expectedAuthority,
+            expectedAssignmentRevision: expectedAssignmentRevision,
+            finalizedAnchor: finalizedAnchor
         ).noritoJSON()
     }
 
@@ -510,13 +668,72 @@ public enum SorafsReplicationInstructionBuilders {
         case "CompleteReplicationOrder":
             let body = try exactBody(
                 outer[variant],
-                fields: ["order_id", "provider_id", "completion_epoch"],
+                fields: [
+                    "order_id",
+                    "provider_id",
+                    "completion_epoch",
+                    "expected_authority",
+                    "expected_assignment_revision",
+                    "finalized_anchor",
+                ],
                 variant: variant
+            )
+            let authority = try exactBody(
+                body["expected_authority"],
+                fields: ["provider_owner", "signer_policy"],
+                variant: "ProviderIngestCompletionAuthorityV1"
+            )
+            let signerPolicy = try exactBody(
+                authority["signer_policy"],
+                fields: [
+                    "policy_id",
+                    "revision",
+                    "predecessor_digest",
+                    "policy_digest",
+                ],
+                variant: "ProviderIngestCompletionSignerPolicyV1"
+            )
+            let anchor = try exactBody(
+                body["finalized_anchor"],
+                fields: ["height", "block_hash"],
+                variant: "ProviderIngestFinalizedAnchorV1"
             )
             return .complete(try SorafsCompleteReplicationOrderInstruction(
                 orderId: try string(body["order_id"], field: "order_id"),
                 providerId: try string(body["provider_id"], field: "provider_id"),
-                completionEpoch: try epoch(body["completion_epoch"], field: "completion_epoch")
+                completionEpoch: try epoch(body["completion_epoch"], field: "completion_epoch"),
+                expectedAuthority: try SorafsProviderIngestCompletionAuthorityV1(
+                    providerOwner: try string(
+                        authority["provider_owner"],
+                        field: "provider_owner"
+                    ),
+                    signerPolicy: try SorafsProviderIngestCompletionSignerPolicyV1(
+                        policyId: try string(
+                            signerPolicy["policy_id"],
+                            field: "policy_id"
+                        ),
+                        revision: try epoch(
+                            signerPolicy["revision"],
+                            field: "revision"
+                        ),
+                        predecessorDigest: try optionalString(
+                            signerPolicy["predecessor_digest"],
+                            field: "predecessor_digest"
+                        ),
+                        policyDigest: try string(
+                            signerPolicy["policy_digest"],
+                            field: "policy_digest"
+                        )
+                    )
+                ),
+                expectedAssignmentRevision: try epoch(
+                    body["expected_assignment_revision"],
+                    field: "expected_assignment_revision"
+                ),
+                finalizedAnchor: try SorafsProviderIngestFinalizedAnchorV1(
+                    height: try epoch(anchor["height"], field: "height"),
+                    blockHash: try string(anchor["block_hash"], field: "block_hash")
+                )
             ))
         case "ExpireReplicationOrder":
             let body = try exactBody(
@@ -551,6 +768,16 @@ public enum SorafsReplicationInstructionBuilders {
             throw invalidInstruction("\(field) must be a string")
         }
         return value
+    }
+
+    private static func optionalString(
+        _ value: Any?,
+        field: String
+    ) throws -> String? {
+        if value is NSNull {
+            return nil
+        }
+        return try string(value, field: field)
     }
 
     private static func epoch(_ value: Any?, field: String) throws -> UInt64 {
@@ -606,12 +833,18 @@ public extension IrohaSDK {
     func buildCompleteReplicationOrder(
         orderId: String,
         providerId: String,
-        completionEpoch: UInt64
+        completionEpoch: UInt64,
+        expectedAuthority: SorafsProviderIngestCompletionAuthorityV1,
+        expectedAssignmentRevision: UInt64,
+        finalizedAnchor: SorafsProviderIngestFinalizedAnchorV1
     ) throws -> NoritoJSON {
         try SorafsReplicationInstructionBuilders.completeReplicationOrder(
             orderId: orderId,
             providerId: providerId,
-            completionEpoch: completionEpoch
+            completionEpoch: completionEpoch,
+            expectedAuthority: expectedAuthority,
+            expectedAssignmentRevision: expectedAssignmentRevision,
+            finalizedAnchor: finalizedAnchor
         )
     }
 

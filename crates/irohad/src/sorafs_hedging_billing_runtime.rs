@@ -29,8 +29,9 @@ use sorafs_node::hedging_billing_service::{
     HedgingBillingExposurePageV1, HedgingBillingFinalizedCursorV1, HedgingBillingFinalizedQuery,
     HedgingBillingJournalVerifier, HedgingBillingProjectionAnchorV1,
     HedgingBillingProjectionPageRequestV1, HedgingBillingReconciliationStatusV1,
-    HedgingBillingRuntimeApiErrorV1, HedgingBillingRuntimeApiV1, HedgingBillingService,
-    HedgingBillingServicePolicyV1,
+    HedgingBillingRuntimeApiErrorV1, HedgingBillingRuntimeApiV1,
+    HedgingBillingRuntimeProviderQualificationV1, HedgingBillingRuntimeProviderV1,
+    HedgingBillingService, HedgingBillingServicePolicyV1, QualifiedHedgingBillingRuntimeProviderV1,
 };
 
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
@@ -561,6 +562,7 @@ fn assemble(
     if config.epoch_witness_store_handle != policy.epoch_witness_store_handle {
         bail!("sealed billing epoch store handle does not match service policy");
     }
+    let dependencies = qualify_dependencies(&config, dependencies)?;
     let startup_finalized_head = probe_dependencies(&config, &policy, &dependencies)?;
 
     let service = Arc::new(
@@ -595,6 +597,94 @@ fn assemble(
         latest_finalized_head: Arc::new(Mutex::new(Some(startup_finalized_head))),
         tick_lock: Arc::new(Mutex::new(())),
         delivery_scan_sequence: Arc::new(AtomicU64::new(0)),
+    })
+}
+
+fn qualify_dependencies(
+    config: &SorafsHedgingBillingRuntime,
+    dependencies: HedgingBillingRuntimeDependenciesV1,
+) -> Result<HedgingBillingRuntimeDependenciesV1> {
+    let HedgingBillingRuntimeDependenciesV1 {
+        finalized_query,
+        journal_verifier,
+        statement_signer,
+        statement_publisher,
+        acknowledgement_authority,
+        epoch_witness_store,
+    } = dependencies;
+    let finalized_query: Arc<dyn HedgingBillingFinalizedQuery> = Arc::new(
+        QualifiedHedgingBillingRuntimeProviderV1::try_new(
+            &config.finalized_query_handle,
+            HedgingBillingRuntimeProviderQualificationV1::new(
+                config.finalized_query_revision,
+                config.finalized_query_policy_digest,
+            ),
+            finalized_query,
+        )
+        .wrap_err("qualify finalized billing query provider")?,
+    );
+    let journal_verifier: Arc<dyn HedgingBillingJournalVerifier> = Arc::new(
+        QualifiedHedgingBillingRuntimeProviderV1::try_new(
+            &config.journal_verifier_handle,
+            HedgingBillingRuntimeProviderQualificationV1::new(
+                config.journal_verifier_revision,
+                config.journal_verifier_policy_digest,
+            ),
+            journal_verifier,
+        )
+        .wrap_err("qualify consensus billing journal verifier")?,
+    );
+    let statement_signer: Arc<dyn BillingStatementRuntimeSigner> = Arc::new(
+        QualifiedHedgingBillingRuntimeProviderV1::try_new(
+            &config.statement_signer_handle,
+            HedgingBillingRuntimeProviderQualificationV1::new(
+                config.statement_signer_revision,
+                config.statement_signer_policy_digest,
+            ),
+            statement_signer,
+        )
+        .wrap_err("qualify billing statement HSM/KMS signer")?,
+    );
+    let statement_publisher: Arc<dyn BillingStatementPublisher> = Arc::new(
+        QualifiedHedgingBillingRuntimeProviderV1::try_new(
+            &config.statement_publisher_handle,
+            HedgingBillingRuntimeProviderQualificationV1::new(
+                config.statement_publisher_revision,
+                config.statement_publisher_policy_digest,
+            ),
+            statement_publisher,
+        )
+        .wrap_err("qualify immutable billing statement publisher")?,
+    );
+    let acknowledgement_authority: Arc<dyn BillingStatementAcknowledgementAuthority> = Arc::new(
+        QualifiedHedgingBillingRuntimeProviderV1::try_new(
+            &config.acknowledgement_authority_handle,
+            HedgingBillingRuntimeProviderQualificationV1::new(
+                config.acknowledgement_authority_revision,
+                config.acknowledgement_authority_policy_digest,
+            ),
+            acknowledgement_authority,
+        )
+        .wrap_err("qualify billing acknowledgement authority")?,
+    );
+    let epoch_witness_store: Arc<dyn HedgingBillingEpochWitnessStore> = Arc::new(
+        QualifiedHedgingBillingRuntimeProviderV1::try_new(
+            &config.epoch_witness_store_handle,
+            HedgingBillingRuntimeProviderQualificationV1::new(
+                config.epoch_witness_store_revision,
+                config.epoch_witness_store_policy_digest,
+            ),
+            epoch_witness_store,
+        )
+        .wrap_err("qualify sealed billing epoch witness store")?,
+    );
+    Ok(HedgingBillingRuntimeDependenciesV1 {
+        finalized_query,
+        journal_verifier,
+        statement_signer,
+        statement_publisher,
+        acknowledgement_authority,
+        epoch_witness_store,
     })
 }
 
@@ -868,6 +958,36 @@ fn validate_actual_config(config: &SorafsHedgingBillingRuntime) -> Result<()> {
             bail!("committed hedging/billing runtime dependency handle is not production-safe");
         }
     }
+    for (revision, policy_digest) in [
+        (
+            config.finalized_query_revision,
+            config.finalized_query_policy_digest,
+        ),
+        (
+            config.journal_verifier_revision,
+            config.journal_verifier_policy_digest,
+        ),
+        (
+            config.statement_signer_revision,
+            config.statement_signer_policy_digest,
+        ),
+        (
+            config.statement_publisher_revision,
+            config.statement_publisher_policy_digest,
+        ),
+        (
+            config.acknowledgement_authority_revision,
+            config.acknowledgement_authority_policy_digest,
+        ),
+        (
+            config.epoch_witness_store_revision,
+            config.epoch_witness_store_policy_digest,
+        ),
+    ] {
+        if revision == 0 || policy_digest == [0; 32] {
+            bail!("committed hedging/billing provider qualification is invalid");
+        }
+    }
     Ok(())
 }
 
@@ -983,7 +1103,8 @@ mod tests {
         HedgingBillingExternalError, HedgingBillingFinalizedEventPageV1,
         HedgingBillingFinalizedPeriodCloseV1, HedgingBillingJournalCommitmentV1,
         HedgingBillingQueryPositionV1, HedgingBillingRuntimeAdapterIdentityV1,
-        HedgingBillingTransitionAuthorityV1, SignedGovernedBillingStatementV1,
+        HedgingBillingRuntimeProviderReadinessErrorV1, HedgingBillingTransitionAuthorityV1,
+        SignedGovernedBillingStatementV1,
     };
     use tempfile::TempDir;
 
@@ -996,6 +1117,18 @@ mod tests {
     const PUBLISHER_HANDLE: &str = "billing.publisher.primary";
     const ACKNOWLEDGEMENT_HANDLE: &str = "billing.acknowledgement.primary";
     const WITNESS_HANDLE: &str = "sealed.billing.epoch.primary";
+    const QUERY_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
+        HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
+    const VERIFIER_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
+        HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
+    const SIGNER_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
+        HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
+    const PUBLISHER_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
+        HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
+    const ACKNOWLEDGEMENT_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
+        HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA5; 32]);
+    const WITNESS_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
+        HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA6; 32]);
 
     #[derive(Debug)]
     struct EmptyFinalizedQuery {
@@ -1003,6 +1136,21 @@ mod tests {
         ready: Arc<AtomicBool>,
         supplies_period_closes: bool,
         head: Arc<Mutex<HedgingBillingFinalizedCursorV1>>,
+    }
+
+    impl HedgingBillingRuntimeProviderV1 for EmptyFinalizedQuery {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(QUERY_QUALIFICATION)
+        }
     }
 
     impl HedgingBillingFinalizedQuery for EmptyFinalizedQuery {
@@ -1059,6 +1207,21 @@ mod tests {
         handle: String,
     }
 
+    impl HedgingBillingRuntimeProviderV1 for ReadyJournalVerifier {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(VERIFIER_QUALIFICATION)
+        }
+    }
+
     impl HedgingBillingJournalVerifier for ReadyJournalVerifier {
         fn identity(
             &self,
@@ -1103,6 +1266,21 @@ mod tests {
         identity: BillingStatementSignerIdentityV1,
     }
 
+    impl HedgingBillingRuntimeProviderV1 for PendingStatementSigner {
+        fn handle(&self) -> &str {
+            &self.identity.provider_handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(SIGNER_QUALIFICATION)
+        }
+    }
+
     impl BillingStatementRuntimeSigner for PendingStatementSigner {
         fn identity(
             &self,
@@ -1122,6 +1300,21 @@ mod tests {
     #[derive(Debug)]
     struct EmptyStatementPublisher {
         identity: BillingStatementPublisherIdentityV1,
+    }
+
+    impl HedgingBillingRuntimeProviderV1 for EmptyStatementPublisher {
+        fn handle(&self) -> &str {
+            &self.identity.provider_handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(PUBLISHER_QUALIFICATION)
+        }
     }
 
     impl BillingStatementPublisher for EmptyStatementPublisher {
@@ -1156,6 +1349,21 @@ mod tests {
     #[derive(Debug)]
     struct EmptyAcknowledgementAuthority {
         handle: String,
+    }
+
+    impl HedgingBillingRuntimeProviderV1 for EmptyAcknowledgementAuthority {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(ACKNOWLEDGEMENT_QUALIFICATION)
+        }
     }
 
     impl BillingStatementAcknowledgementAuthority for EmptyAcknowledgementAuthority {
@@ -1202,11 +1410,22 @@ mod tests {
         handle: String,
     }
 
-    impl HedgingBillingEpochWitnessStore for EmptyEpochWitnessStore {
+    impl HedgingBillingRuntimeProviderV1 for EmptyEpochWitnessStore {
         fn handle(&self) -> &str {
             &self.handle
         }
 
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(WITNESS_QUALIFICATION)
+        }
+    }
+
+    impl HedgingBillingEpochWitnessStore for EmptyEpochWitnessStore {
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
@@ -1335,6 +1554,18 @@ mod tests {
             statement_publisher_handle: PUBLISHER_HANDLE.to_owned(),
             acknowledgement_authority_handle: ACKNOWLEDGEMENT_HANDLE.to_owned(),
             epoch_witness_store_handle: WITNESS_HANDLE.to_owned(),
+            finalized_query_revision: QUERY_QUALIFICATION.revision(),
+            finalized_query_policy_digest: QUERY_QUALIFICATION.policy_digest(),
+            journal_verifier_revision: VERIFIER_QUALIFICATION.revision(),
+            journal_verifier_policy_digest: VERIFIER_QUALIFICATION.policy_digest(),
+            statement_signer_revision: SIGNER_QUALIFICATION.revision(),
+            statement_signer_policy_digest: SIGNER_QUALIFICATION.policy_digest(),
+            statement_publisher_revision: PUBLISHER_QUALIFICATION.revision(),
+            statement_publisher_policy_digest: PUBLISHER_QUALIFICATION.policy_digest(),
+            acknowledgement_authority_revision: ACKNOWLEDGEMENT_QUALIFICATION.revision(),
+            acknowledgement_authority_policy_digest: ACKNOWLEDGEMENT_QUALIFICATION.policy_digest(),
+            epoch_witness_store_revision: WITNESS_QUALIFICATION.revision(),
+            epoch_witness_store_policy_digest: WITNESS_QUALIFICATION.policy_digest(),
             poll_interval: Duration::from_secs(1),
             max_pages_per_tick: 256,
             max_period_closes_per_tick: 32,
@@ -1497,11 +1728,77 @@ mod tests {
         )
         .expect_err("substituted query identity must fail startup");
 
-        assert!(error.to_string().contains("identity"));
+        assert!(error.to_string().contains("qualify finalized"));
         assert!(
             !state_dir.exists(),
-            "identity checks must run before private state is opened"
+            "provider qualification must run before private state is opened"
         );
+    }
+
+    #[test]
+    fn assembly_rejects_all_six_provider_qualification_mismatches_before_state_open() {
+        let temp = TempDir::new().expect("tempdir");
+        let feed_policy = feed_policy();
+        let policy = service_policy(&feed_policy);
+        for (provider, expected_context) in [
+            ("finalized-query", "qualify finalized"),
+            ("journal-verifier", "qualify consensus"),
+            ("statement-signer", "qualify billing statement HSM/KMS"),
+            ("statement-publisher", "qualify immutable"),
+            (
+                "acknowledgement-authority",
+                "qualify billing acknowledgement",
+            ),
+            ("epoch-witness-store", "qualify sealed"),
+        ] {
+            let state_dir = temp.path().join(provider);
+            let mut config = config(state_dir.clone(), &policy);
+            match provider {
+                "finalized-query" => {
+                    config.finalized_query_revision =
+                        QUERY_QUALIFICATION.revision().saturating_add(1);
+                }
+                "journal-verifier" => {
+                    config.journal_verifier_revision =
+                        VERIFIER_QUALIFICATION.revision().saturating_add(1);
+                }
+                "statement-signer" => {
+                    config.statement_signer_revision =
+                        SIGNER_QUALIFICATION.revision().saturating_add(1);
+                }
+                "statement-publisher" => {
+                    config.statement_publisher_revision =
+                        PUBLISHER_QUALIFICATION.revision().saturating_add(1);
+                }
+                "acknowledgement-authority" => {
+                    config.acknowledgement_authority_revision =
+                        ACKNOWLEDGEMENT_QUALIFICATION.revision().saturating_add(1);
+                }
+                "epoch-witness-store" => {
+                    config.epoch_witness_store_revision =
+                        WITNESS_QUALIFICATION.revision().saturating_add(1);
+                }
+                _ => unreachable!("all table entries are explicit"),
+            }
+
+            let error = assemble(
+                config,
+                ChainId::from(CHAIN_ID),
+                policy.clone(),
+                Arc::new(feed_policy.clone()),
+                dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
+            )
+            .expect_err("stale provider qualification must fail startup");
+
+            assert!(
+                error.to_string().contains(expected_context),
+                "{provider} returned an unexpected startup error: {error:#}"
+            );
+            assert!(
+                !state_dir.exists(),
+                "{provider} qualification must run before private state is opened"
+            );
+        }
     }
 
     #[test]

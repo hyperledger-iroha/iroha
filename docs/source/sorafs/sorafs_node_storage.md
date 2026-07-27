@@ -172,14 +172,19 @@ adverts:
   Enabling it requires storage, absolute private state and canonical public
   service-policy paths, the exact lowercase non-zero service-policy digest, an
   absolute `hedging_feed_trust_policy_path`, bounded poll/work settings, and
-  production opaque handles for the finalized query, consensus verifier,
+  a production opaque handle, non-zero revision, and exact lowercase non-zero
+  public-policy digest for each of the finalized query, consensus verifier,
   statement HSM/KMS signer, immutable publisher, acknowledgement authority,
-  and sealed epoch-witness store. The standard launcher supplies none of these
-  adapters; an embedding must inject all six through `IrohaRuntimeDeps`.
-  Startup authenticates every adapter identity and readiness state, requires
-  typed finalized period-close support, and fails before opening private state
-  on substitution. Configuration accepts no credentials or key material, and
-  the V1 worker exposes no automatic hedge-execution adapter. Payload-free
+  and sealed epoch-witness store. The fields use the common
+  `<provider>_{handle,revision,policy_digest_hex}` naming pattern. The standard
+  launcher supplies none of these adapters; an embedding must inject all six
+  through `IrohaRuntimeDeps`. Startup authenticates every adapter identity,
+  revision, policy, and readiness state before opening private state. Every
+  operation is fenced by a fresh pre/post qualification; read or signing
+  results are discarded on drift, while a possibly committed publication,
+  acknowledgement, or monotonic-CAS write enters immutable reconciliation.
+  Configuration accepts no credentials or key material, and the V1 worker
+  exposes no automatic hedge-execution adapter. Payload-free
   supervision is exported through the
   `sorafs_hedging_billing_runtime_{live,ready,dependencies_ready}` gauges,
   bounded delivery-state gauges, and
@@ -187,9 +192,15 @@ adverts:
 - `moderation_screening_enabled`: enables authenticated moderation screening
   admission. This requires storage plus both authority-bundle settings below;
   startup fails instead of accepting unsigned or process-local authority. It
-  also requires a runtime-injected `ModerationQuarantineKeyWrapper`; neither
-  provider credentials nor a software/file key can be supplied through
-  `iroha_config`.
+  also requires
+  `moderation_quarantine_key_provider_handle`,
+  `moderation_quarantine_key_provider_revision`, and
+  `moderation_quarantine_key_provider_policy_digest_hex` together with a
+  runtime-injected `ModerationQuarantineKeyWrapper`. The public binding may be
+  configured without enabling screening when quarantine-object storage alone
+  needs the wrapper, but binding and wrapper must still appear together at
+  startup. Neither provider credentials nor a software/file key can be
+  supplied through `iroha_config`.
 - `moderation_screening_authority_bundle_path`: absolute path to the canonical
   Norito `ModerationScreeningAuthorityBundleV1`. The bundle contains the signed
   model manifest, signed policy chain, sorted governance trust anchors, and
@@ -212,9 +223,11 @@ populate it fail closed.
 
 `ToriiRuntimeDeps` and `IrohaRuntimeDeps` expose the PKCS#11/managed-KMS
 adapter boundary and validate the injected node's screening enablement,
-authority digest, and non-secret active key handle. The standard `irohad`
-launcher still supplies no concrete provider adapter, so a screening-enabled
-reference deployment intentionally fails startup until
+authority digest, and exact non-secret quarantine provider handle, revision,
+and public-policy digest. The node requalifies the wrapper around every
+wrap/unwrap operation and discards recovered key material on drift. The
+standard `irohad` launcher still supplies no concrete provider adapter, so a
+screening-enabled reference deployment intentionally fails startup until
 `V1-BLOCK-AI-QUARANTINE-KMS-01` is resolved.
 - `runtime.event_history_limit`: per-stream replay ceiling. Repair, reputation,
   orderbook, and moderation histories retain the newest events while keeping a
@@ -402,6 +415,54 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   `NodeHandle::ingest_manifest` and `sorafs-node ingest`, while orchestration can
   use the `sorafs_cli storage prepare`/`storage pin` sequence; call the
   completion hook after those ingestion steps succeed.【crates/iroha_torii/src/routing.rs:34922】【crates/sorafs_node/src/capacity.rs:87】【crates/sorafs_node/src/lib.rs:2168】【crates/sorafs_orchestrator/src/bin/sorafs_cli.rs:6160】
+  This local release hook does not mark the chain replication order complete.
+- Chain completion is a V1 hard cut. Every assigned provider must have both a
+  registered owner and a chain-authoritative
+  `ProviderIngestCompletionAuthorityV1`. Its signer-policy identity is the
+  exact `(policy_id, revision, predecessor_digest, policy_digest)` tuple:
+  revision one has no predecessor, same-identity rotation advances exactly one
+  revision and names the prior leaf digest, and a replacement identity restarts
+  at revision one. Orders begin at assignment revision one; a governed
+  reassignment is an exact compare-and-set successor and is forbidden after
+  completion processing starts.
+- The supervised provider-ingest runtime reads one bounded immutable finalized
+  snapshot, stores verified content, and builds `CompleteReplicationOrder` with
+  the exact expected owner/policy, order assignment revision, and one-based
+  committed block height/hash anchor. The native payload builder rereads the
+  same committed head and rejects a changed owner, policy, assignment, order,
+  or manifest before signing. Ledger execution repeats all of those comparisons
+  atomically in the transaction that records completion. The retained
+  completion stores the full context for audit; an exact replay remains
+  idempotent after a later owner or signer-policy rotation, while an old
+  uncommitted completion fails.
+- The production completion outbox treats the injected external sealed
+  checkpoint store as authoritative. Configuration binds that provider by the
+  exact stable `checkpoint_store_handle`, non-zero
+  `checkpoint_store_revision`, and non-zero
+  `checkpoint_store_policy_digest_hex`; it contains no credential or private
+  key. Each canonical sealed record binds its namespace and version, monotonic
+  sequence, predecessor CAS revision and checkpoint digest, exact bounded
+  checkpoint bytes and their digest, and deterministic content-addressed CAS
+  revision.
+- Every sealed-head load and CAS is fenced by authoritative pre/post provider
+  identity and qualification checks. After either a reported-success or
+  ambiguous CAS, the outbox rereads the authority: the exact successor proves
+  success, while the exact unchanged predecessor returns the explicit
+  `CheckpointCasUnchanged` safe-retry result. Any other head, failed readback,
+  or post-CAS provider drift is ambiguous and fails closed rather than guessing
+  which checkpoint committed.
+- `provider_ingest_outbox_v1.to` is a no-follow, atomically replaced,
+  revalidated cache only. It may be absent, match the sealed head, or be exactly
+  one predecessor behind that head; it can never seed, replace, or override
+  external state. Enabled startup requires the configured authenticated-source,
+  governed-signer-resolver, and sealed-checkpoint providers and rejects
+  missing, substituted, stale, or test-marked providers. This checkpoint
+  boundary does not supply the still-open production authenticated
+  multi-provider transport, governance-aware HSM/KMS signer resolver, or
+  provider-indexed committed query/archive.
+- Manual completion tooling must supply that complete context through
+  `sorafs_tx_stdin_builder complete-order`; the retired three-field completion
+  form and offline Izanami completion recipe are not accepted.
 - The embedded `TelemetryAccumulator` can be mutated through
   `NodeHandle::update_telemetry`, letting background workers record PoR/uptime samples
   and eventually derive canonical `CapacityTelemetryV1` payloads without touching the

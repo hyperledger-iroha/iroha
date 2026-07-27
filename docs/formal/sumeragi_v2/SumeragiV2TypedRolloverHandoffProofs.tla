@@ -2,61 +2,484 @@
 EXTENDS SumeragiV2TypedRolloverHandoff, TLAPS
 
 (***************************************************************************
-Proof obligations for the sole-V2 typed rollover model.
+Deductive obligations for the authority-gated, root-anchored V3 typed
+rollover model.
 
-This module deliberately contains declarations, not proof commands.  The old
-proof script described a separate generation high-water followed by a second
-lifecycle write and allowed typed handoff authority to clear active responder
-ownership.  Neither behavior exists in the first-release design.
+The declarations separate move-only durable exact-output authority from
+validated restart authority.  They also expose both filesystem layers used by
+the model: replacement writes visible to the process and parent-directory
+synchronization.  A crash can roll a replacement back to the last synchronized
+state/root pair, and cleanup cannot remove the inactive slot until validation
+and ordered resynchronization have completed.
 
-The replacement obligations bind:
-
-* terminal server-stream, request-gate, transfer, and flush ownership before
-  any generation advance;
-* one atomic LifecycleSnapshotV2 write containing the checked successor
-  generation and both empty responder tables;
-* memory publication only from that durable V2 postimage;
-* fail-atomic Capacity on active-state and generation/epoch overflow;
-* durable-before-use requester epoch allocation and crash-time non-reuse;
-* exact move-only handoff identity and late-callback isolation.
-
-All declarations below remain `specified_unproved`.  In particular this module
-does not prove changed-roster progress, crash recovery liveness, network/writer
-progress, rotating-leader progress, repeated rollover, or Rust-to-TLA
-refinement.  Bounded TLC mutation results do not promote these obligations.
+The direct action and invariant consequences below carry deductive TLAPS proof
+bodies.  Declarations without proof bodies remain specified_unproved: bounded
+mutation evidence does not discharge them, and neither liveness declaration
+is a Rust-to-TLA refinement or an unbounded distributed-progress claim.
 ***************************************************************************)
 
 THEOREM TypedRolloverInitEstablishesSafetyObligation ==
   Init => TypedRolloverSafetyInvariant
 
-THEOREM TerminalCompactionPersistsAtomicSoleV2SnapshotObligation ==
-  /\ TypedRolloverSafetyInvariant
-  /\ PersistSuccessorLifecycleSnapshotV2
+THEOREM BootstrapRootHasExactGenerationZeroShapeObligation ==
+  /\ Init
+  /\ state.startupMode = "BootstrapStart"
   =>
-    /\ AllOldLifecycleTerminal
-    /\ state'.durableLifecycleSnapshotV2 =
-         LifecycleSnapshotV2(
-           state.serviceGeneration + 1,
-           state.nextStreamEpoch,
-           "Empty",
-           "Empty")
-    /\ LifecycleMemory(state') = LifecycleMemory(state)
+    /\ state.durableLifecycleRootV3 = BootstrapLifecycleRootV3
+    /\ state.syncedLifecycleRootV3 = BootstrapLifecycleRootV3
+    /\ \A slot \in StateSlots:
+         state.durableLifecycleStateSlotsV3[slot] =
+           NoLifecycleSnapshot
+    /\ state.durableLifecycleStateSlotsV3 =
+         state.syncedLifecycleStateSlotsV3
+    /\ state.lifecycleCommitPhase = "Bootstrap"
+PROOF
+  BY Isa DEF Init, BootstrapLifecycleRootV3
 
-THEOREM ActiveLifecycleCompactionReturnsCapacityAtomicallyObligation ==
+THEOREM FreshBootstrapUsesTargetGeometryEpochZeroObligation ==
   /\ TypedRolloverSafetyInvariant
-  /\ RejectActiveLifecycleCompaction
+  /\ PublishInitialLifecycleStateSlotV3
+  =>
+    /\ state'.candidateLifecycleSnapshotV3 =
+         InitialLifecycleSnapshotV3(state.targetRoster)
+    /\ state'.candidateLifecycleSnapshotV3.roster =
+         state.targetRoster
+    /\ state'.candidateLifecycleSnapshotV3.serviceGeneration =
+         InitialServiceGeneration
+    /\ state'.candidateLifecycleSnapshotV3.nextStreamEpoch = 0
+    /\ state'.candidateLifecycleSnapshotV3.requesterStreamEpoch = 0
+    /\ state'.candidateLifecycleSnapshotV3.serverStreams = "Empty"
+    /\ state'.candidateLifecycleSnapshotV3.requestGates = "Empty"
+    /\ state'.candidateLifecycleSnapshotV3.serverClosePrefix = 0
+PROOF
+  BY Isa DEF PublishInitialLifecycleStateSlotV3,
+                 InitialLifecycleSnapshotV3, LifecycleSnapshotV3
+
+THEOREM BootstrapStateReplacementRequiresDirectorySyncObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ ReplaceInitialLifecycleRootV3
+  =>
+    /\ LifecycleStateDirectoryIsSynced(state)
+    /\ state.candidateSemanticallyValidated
+    /\ state'.durableLifecycleRootV3 =
+         LifecycleRootV3(state.candidateLifecycleSnapshotV3)
+    /\ state'.syncedLifecycleRootV3 =
+         state.syncedLifecycleRootV3
+PROOF
+  BY Isa DEF ReplaceInitialLifecycleRootV3
+
+THEOREM BootstrapCrashRecoveryObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ (CrashAfterBootstrapStateReplacement
+       \/ CrashAfterBootstrapStatePublication
+       \/ CrashAfterBootstrapRootReplacement)
+  =>
+    /\ state'.restartRequired
+    /\ ~state'.durableJournalValidated
+    /\ state'.bootstrapCrashObserved
+    /\ ~state'.candidatePresent
+    /\ state'.serviceOwnerNonce = NoIdentity
+    /\ state'.transportOwnerNonce = NoIdentity
+    /\ state'.receiptStage \in {"Absent", "Lost"}
+PROOF
+  BY Isa DEF CrashAfterBootstrapStateReplacement,
+                 CrashAfterBootstrapStatePublication,
+                 CrashAfterBootstrapRootReplacement,
+                 CrashClearedProcessLocalRolloverState
+
+THEOREM BootstrapFirstCommitSelectsExactInitialPairObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ CommitInitialLifecycleRootV3
+  =>
+    /\ state'.durableLifecycleRootV3 =
+         LifecycleRootV3(
+           InitialLifecycleSnapshotV3(state.targetRoster))
+    /\ state'.syncedLifecycleRootV3 =
+         state'.durableLifecycleRootV3
+    /\ SelectedLifecycleStateSlot(state') =
+         LifecycleStateSlot(InitialRootGeneration)
+    /\ SelectedLifecycleSnapshotV3(state') =
+         InitialLifecycleSnapshotV3(state.targetRoster)
+    /\ RootSelectedLifecyclePairMatches(state')
+    /\ LifecycleMemory(state') = LifecycleMemory(state)
+PROOF
+  BY Isa DEF CommitInitialLifecycleRootV3,
+                 TypedRolloverSafetyInvariant,
+                 LifecycleCommitPhaseInvariant,
+                 RootAnchoredLifecycleV3Invariant,
+                 RootSelectedLifecyclePairMatches,
+                 RootSelectedLifecyclePairIsPresent,
+                 DurableSnapshot, SelectedLifecycleStateSlot,
+                 SelectedLifecycleSnapshotV3, LifecycleStateSlot,
+                 LifecycleRootV3, LifecycleSnapshotDigest,
+                 InitialLifecycleSnapshotV3, LifecycleSnapshotV3,
+                 LifecycleMemory
+
+THEOREM ExactOwnerPairRequiredForRetainedHandoffObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ RetainExactHandoffReceipt
+  =>
+    /\ state.serviceOwnerNonce # NoIdentity
+    /\ state.serviceOwnerNonce = state.transportOwnerNonce
+    /\ state'.receiptOwnerNonce = state.serviceOwnerNonce
+    /\ state'.receiptStage = "Retained"
+PROOF
+  BY Isa DEF RetainExactHandoffReceipt, ExactPredecessorReceipt,
+                 ExactServiceTransportOwnerPair
+
+THEOREM EveryCrashDropsProcessLocalAuthorityObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ Next
+  /\ state.durableJournalValidated
+  /\ ~state'.durableJournalValidated
+  /\ state'.restartRequired
+  =>
+    /\ ~state'.finalityValidated
+    /\ ~state'.workerIngressClosed
+    /\ state'.workerOutstanding = InitialWorkerOutstanding
+    /\ ~state'.ownerSealed
+    /\ state'.serviceOwnerNonce = NoIdentity
+    /\ state'.transportOwnerNonce = NoIdentity
+    /\ state'.constructionParent = NoIdentity
+    /\ state'.constructionSuccessor = NoIdentity
+    /\ state'.presentedHandoffCandidate = "None"
+    /\ state'.receiptStage \in {"Absent", "Lost"}
+    /\ state'.receiptOwnerNonce = NoIdentity
+    /\ state'.receiptContext = NoIdentity
+    /\ state'.receiptArtifact = NoIdentity
+    /\ state'.retainedSuccessor = NoIdentity
+    /\ ~state'.candidatePresent
+    /\ state'.pendingRolloverAuthority = "None"
+    /\ state'.transitionAuthority = "None"
+    /\ ~state'.restartFenceAuthorized
+
+THEOREM OnlyValidatedRestartMayFenceAfterCrashObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ Next
+  /\ ~state.restartFenceAuthorized
+  /\ state'.restartFenceAuthorized
+  =>
+    /\ state.durableJournalValidated
+    /\ state.cleanupPerformed
+    /\ state.restartStateDirectoryResynced
+    /\ state.restartRootDirectoryResynced
+    /\ state'.validatedRestartObserved
+    /\ state'.targetRoster # state'.currentRoster
+
+THEOREM StateReplacementRequiresDirectorySyncBeforeRootReplacementObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ ReplaceSuccessorLifecycleRootV3
+  =>
+    /\ state.lifecycleCommitPhase = "StateSlotPublished"
+    /\ LifecycleStateDirectoryIsSynced(state)
+    /\ state.candidateSemanticallyValidated
+    /\ state'.durableLifecycleRootV3 =
+         LifecycleRootV3(state.candidateLifecycleSnapshotV3)
+    /\ state'.syncedLifecycleRootV3 =
+         state.syncedLifecycleRootV3
+    /\ LifecycleMemory(state') = LifecycleMemory(state)
+PROOF
+  BY Isa DEF ReplaceSuccessorLifecycleRootV3, LifecycleMemory
+
+THEOREM RootReplacementRequiresStoreSyncBeforeMemoryPublicationObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ PublishCommittedLifecycleV3ToMemory
+  =>
+    /\ state.lifecycleCommitPhase = "RootCommitted"
+    /\ LifecycleStateDirectoryIsSynced(state)
+    /\ LifecycleRootDirectoryIsSynced(state)
+    /\ RootSelectedLifecyclePairMatches(state)
+    /\ state'.serviceGeneration =
+         DurableSnapshot(state).serviceGeneration
+    /\ state'.lifecycleCommitPhase = "Published"
+PROOF
+  BY Isa DEF PublishCommittedLifecycleV3ToMemory,
+                 RootCommittedSuccessorAheadOfMemory
+
+THEOREM RootSelectedPairBindsGenerationAndDigestObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ state.durableLifecycleRootV3.shape = "Committed"
+  =>
+    /\ RootSelectedLifecyclePairIsPresent(state)
+    /\ SelectedLifecycleSnapshotV3(state).rootGeneration =
+         state.durableLifecycleRootV3.rootGeneration
+    /\ state.durableLifecycleRootV3.snapshotDigest =
+         LifecycleSnapshotDigest(
+           SelectedLifecycleSnapshotV3(state))
+    /\ LifecycleSnapshotSemanticallyValid(
+         SelectedLifecycleSnapshotV3(state))
+PROOF
+  BY SMT DEF TypedRolloverSafetyInvariant,
+                 RootAnchoredLifecycleV3Invariant,
+                 RootSelectedLifecyclePairMatches
+
+THEOREM MissingRootSelectedStateCannotValidateOrCleanupObligation ==
+  /\ ~RootSelectedLifecyclePairIsPresent(state)
+  /\ (ValidateRootSelectedLifecycleV3
+       \/ CleanupValidatedLifecycleArtifactsV3)
+  =>
+    FALSE
+PROOF
+  BY SMT DEF ValidateRootSelectedLifecycleV3,
+                 CleanupValidatedLifecycleArtifactsV3,
+                 RootSelectedLifecyclePairMatches,
+                 RootSelectedLifecyclePairIsPresent
+
+THEOREM ValidationFailurePreservesArtifactsObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ ~state.validationFailureObserved
+  /\ state'.validationFailureObserved
+  /\ Next
+  =>
+    /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ CandidateLifecycle(state') = CandidateLifecycle(state)
+    /\ state'.crashArtifactsPresent
+    /\ ~state'.cleanupPerformed
+    /\ ~state'.durableJournalValidated
+    /\ ~state'.successorActive
+PROOF
+  BY Isa DEF TypedRolloverSafetyInvariant, FailureLatchInvariant, Next,
+                 CreateServiceTransportOwnerPair, ValidateFinality,
+                 CloseWorkerIngress, ClearOneWorkerExactOutput,
+                 BuildImmediateSuccessor, SealAppliedHeightOutputHandoff,
+                 RejectLateExactOutputEnqueue,
+                 PresentForeignOwnerReceiptCandidate,
+                 PresentPredecessorContextMismatchCandidate,
+                 PresentPredecessorArtifactMismatchCandidate,
+                 PresentWrongImmediateSuccessorCandidate,
+                 RejectForeignOwnerReceipt,
+                 RejectPredecessorContextMismatch,
+                 RejectPredecessorArtifactMismatch,
+                 RejectWrongImmediateSuccessor, RetainExactHandoffReceipt,
+                 PublishInitialLifecycleStateSlotV3,
+                 SyncInitialLifecycleStateDirectoryV3,
+                 CrashAfterBootstrapStateReplacement,
+                 CrashAfterBootstrapStatePublication,
+                 ValidateBootstrapLifecycleCandidateV3,
+                 ValidateBootstrapLifecycleWithoutCandidateV3,
+                 ReplaceInitialLifecycleRootV3,
+                 CrashAfterBootstrapRootReplacement,
+                 CommitInitialLifecycleRootV3,
+                 ValidateRootSelectedLifecycleV3,
+                 RejectLifecycleRootShapeMismatchV3,
+                 RejectLifecycleSelectedStateMissingV3,
+                 RejectLifecycleGenerationHashMismatchV3,
+                 RejectLifecycleSemanticValidationFailureV3,
+                 RejectInvalidLifecycleStartupV3,
+                 ResyncValidatedLifecycleStateDirectoryV3,
+                 ResyncValidatedLifecycleRootDirectoryV3,
+                 CrashDuringValidatedRestartBeforeRootResyncV3,
+                 CleanupValidatedLifecycleArtifactsV3,
+                 CompleteBootstrapRestartWithoutCandidateV3,
+                 PersistFreshRequesterEpoch, PublishFreshRequesterEpoch,
+                 CompleteRequesterEpoch, ReopenRequesterEpochAllocator,
+                 CrashAfterRequesterEpochPersistence,
+                 RestoreRequesterEpochCounterAfterCrash,
+                 RejectRequesterEpochOverflow,
+                 RejectActiveOrdinaryRollover, RejectSameRosterFullTable,
+                 AuthenticateServerClosePrefix, TerminalizeRequestGate,
+                 TerminalizeTransfer, TerminalizeFlush,
+                 PublishSuccessorLifecycleStateSlotV3,
+                 PublishSuccessorLifecycleStateSlotV3WithAuthority,
+                 FailSuccessorLifecycleStateSlotV3Persistence,
+                 CrashBeforeLifecycleStateSlotV3Publication,
+                 CrashAfterLifecycleStateReplacement,
+                 SyncSuccessorLifecycleStateDirectoryV3,
+                 CrashAfterLifecycleStateSlotV3Publication,
+                 FailSuccessorLifecycleRootV3Persistence,
+                 ReplaceSuccessorLifecycleRootV3,
+                 CrashAfterLifecycleRootReplacement,
+                 RecoverPredecessorLifecycleV3,
+                 CommitSuccessorLifecycleRootV3,
+                 CleanupCommittedLifecyclePredecessorV3,
+                 CrashAfterLifecycleRootV3Commit,
+                 RestoreSuccessorLifecycleV3AfterCrash,
+                 PublishCommittedLifecycleV3ToMemory,
+                 ActivateRestoredLifecycleV3Successor,
+                 ActivateSameRosterSuccessor,
+                 RejectServiceGenerationOverflow,
+                 FailLifecycleRootGenerationExhaustion,
+                 ObserveLateOldWriterCallback,
+                 CrashClearedProcessLocalRolloverState,
+                 DurableLifecycle, CandidateLifecycle
+
+THEOREM SemanticValidationPrecedesArtifactCleanupObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ CleanupValidatedLifecycleArtifactsV3
+  =>
+    /\ state.durableJournalValidated
+    /\ RootSelectedLifecyclePairMatches(state)
+    /\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))
+    /\ state.restartStateDirectoryResynced
+    /\ state.restartRootDirectoryResynced
+    /\ state'.cleanupPerformed
+    /\ ~state'.crashArtifactsPresent
+PROOF
+  BY Isa DEF CleanupValidatedLifecycleArtifactsV3
+
+THEOREM ValidatedCleanupRemovesInactiveSlotObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ CleanupValidatedLifecycleArtifactsV3
+  =>
+    /\ state'.durableLifecycleStateSlotsV3[
+         InactiveLifecycleStateSlot(state')] =
+         NoLifecycleSnapshot
+    /\ state'.syncedLifecycleStateSlotsV3[
+         InactiveLifecycleStateSlot(state')] =
+         NoLifecycleSnapshot
+    /\ LifecycleStateDirectoryIsSynced(state')
+    /\ LifecycleRootDirectoryIsSynced(state')
+PROOF
+  BY Isa DEF CleanupValidatedLifecycleArtifactsV3,
+                 InactiveLifecycleStateSlot,
+                 SelectedLifecycleStateSlot,
+                 LifecycleStateDirectoryIsSynced,
+                 LifecycleRootDirectoryIsSynced
+
+THEOREM SecondCrashBeforeRootResyncPreservesPredecessorObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ CrashDuringValidatedRestartBeforeRootResyncV3
+  =>
+    /\ state'.durableLifecycleRootV3 =
+         state.syncedLifecycleRootV3
+    /\ state'.durableLifecycleStateSlotsV3 =
+         state.syncedLifecycleStateSlotsV3
+    /\ state'.durableLifecycleRootV3 =
+         state'.syncedLifecycleRootV3
+    /\ state'.durableLifecycleStateSlotsV3 =
+         state'.syncedLifecycleStateSlotsV3
+    /\ state'.restartRequired
+    /\ ~state'.durableJournalValidated
+    /\ state'.secondCrashObserved
+    /\ ~state'.cleanupPerformed
+PROOF
+  BY Isa DEF CrashDuringValidatedRestartBeforeRootResyncV3,
+                 CrashClearedProcessLocalRolloverState
+
+THEOREM RootGenerationAdvancesExactlyOnceAndAlternatesSlotObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ Next
+  /\ state'.syncedLifecycleRootV3.rootGeneration >
+       state.syncedLifecycleRootV3.rootGeneration
+  =>
+    /\ state'.syncedLifecycleRootV3.rootGeneration =
+         state.syncedLifecycleRootV3.rootGeneration + 1
+    /\ SyncedSelectedLifecycleStateSlot(state') =
+         LifecycleStateSlot(
+           state'.syncedLifecycleRootV3.rootGeneration)
+    /\ SyncedSelectedLifecycleStateSlot(state') #
+         SyncedSelectedLifecycleStateSlot(state)
+    /\ state'.syncedLifecycleRootV3.snapshotDigest =
+         LifecycleSnapshotDigest(
+           SyncedSelectedLifecycleSnapshotV3(state'))
+
+THEOREM MemoryPublicationRequiresCommittedV3RootObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ PublishCommittedLifecycleV3ToMemory
+  =>
+    /\ DurableSnapshot(state).version = 3
+    /\ DurableSnapshot(state).serverStreams = "Empty"
+    /\ DurableSnapshot(state).requestGates = "Empty"
+    /\ DurableSnapshot(state).serverClosePrefix = 0
+    /\ state'.serviceGeneration =
+         DurableSnapshot(state).serviceGeneration
+    /\ state'.lifecycleCommitPhase = "Published"
+PROOF
+  BY Isa DEF PublishCommittedLifecycleV3ToMemory,
+                 RootCommittedSuccessorAheadOfMemory,
+                 LifecycleSnapshotSemanticallyValid
+
+THEOREM OrdinaryRolloverRequiresAuthenticatedTerminalityObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ PublishSuccessorLifecycleStateSlotV3
+  /\ state'.pendingRolloverAuthority = "AuthenticatedTerminal"
+  =>
+    AllOldLifecycleTerminal
+PROOF
+  BY Isa DEF PublishSuccessorLifecycleStateSlotV3,
+                 PublishSuccessorLifecycleStateSlotV3WithAuthority,
+                 ChangedRosterAuthorityAvailable
+
+THEOREM DurableExactOutputAuthorityMayFenceActiveStateObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ PublishDurableExactOutputSuccessorLifecycleStateSlotV3
+  /\ ~AllOldLifecycleTerminal
+  =>
+    /\ ExactRetainedMergeSidecars
+    /\ state.durableJournalValidated
+    /\ state'.candidateLifecycleSnapshotV3.serverStreams = "Empty"
+    /\ state'.candidateLifecycleSnapshotV3.requestGates = "Empty"
+    /\ state'.candidateLifecycleSnapshotV3.serverClosePrefix = 0
+PROOF
+  BY Isa DEF PublishDurableExactOutputSuccessorLifecycleStateSlotV3,
+                 PublishSuccessorLifecycleStateSlotV3WithAuthority,
+                 ChangedRosterAuthorityAvailable, LifecycleSnapshotV3
+
+THEOREM ValidatedRestartAuthorityMayFenceActiveStateObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ PublishRestartRestoreSuccessorLifecycleStateSlotV3
+  /\ ~AllOldLifecycleTerminal
+  =>
+    /\ state.durableJournalValidated
+    /\ state.validatedRestartObserved
+    /\ state.restartFenceAuthorized
+    /\ state.receiptStage \in {"Absent", "Lost"}
+PROOF
+  BY Isa DEF PublishRestartRestoreSuccessorLifecycleStateSlotV3,
+                 PublishSuccessorLifecycleStateSlotV3WithAuthority,
+                 ChangedRosterAuthorityAvailable
+
+THEOREM ActiveOrdinaryRolloverReturnsCapacityAtomicallyObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ RejectActiveOrdinaryRollover
   =>
     /\ state'.capacityRejected
     /\ LifecycleMemory(state') = LifecycleMemory(state)
     /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ CandidateLifecycle(state') = CandidateLifecycle(state)
+PROOF
+  BY Isa DEF RejectActiveOrdinaryRollover, LifecycleMemory,
+                 DurableLifecycle, CandidateLifecycle
 
-THEOREM GenerationOverflowReturnsCapacityAtomicallyObligation ==
+THEOREM SameRosterFullTableReturnsCapacityAtomicallyObligation ==
   /\ TypedRolloverSafetyInvariant
-  /\ RejectGenerationOverflow
+  /\ RejectSameRosterFullTable
   =>
     /\ state'.capacityRejected
     /\ LifecycleMemory(state') = LifecycleMemory(state)
     /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ CandidateLifecycle(state') = CandidateLifecycle(state)
+PROOF
+  BY Isa DEF RejectSameRosterFullTable, LifecycleMemory,
+                 DurableLifecycle, CandidateLifecycle
+
+THEOREM ServiceGenerationOverflowReturnsCapacityAtomicallyObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ RejectServiceGenerationOverflow
+  =>
+    /\ state'.capacityRejected
+    /\ LifecycleMemory(state') = LifecycleMemory(state)
+    /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ CandidateLifecycle(state') = CandidateLifecycle(state)
+PROOF
+  BY Isa DEF RejectServiceGenerationOverflow, LifecycleMemory,
+                 DurableLifecycle, CandidateLifecycle
+
+THEOREM RootGenerationExhaustionPoisonsJournalFailAtomicallyObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ FailLifecycleRootGenerationExhaustion
+  =>
+    /\ state'.restartRequired
+    /\ state'.failureReason = "LifecycleRootGenerationOverflow"
+    /\ state'.capacityRejected = state.capacityRejected
+    /\ LifecycleMemory(state') = LifecycleMemory(state)
+    /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ ~state'.durableJournalValidated
+    /\ ~state'.successorActive
+PROOF
+  BY Isa DEF FailLifecycleRootGenerationExhaustion,
+                 CrashClearedProcessLocalRolloverState,
+                 LifecycleMemory, DurableLifecycle
 
 THEOREM EpochOverflowReturnsCapacityAtomicallyObligation ==
   /\ TypedRolloverSafetyInvariant
@@ -65,60 +488,101 @@ THEOREM EpochOverflowReturnsCapacityAtomicallyObligation ==
     /\ state'.capacityRejected
     /\ LifecycleMemory(state') = LifecycleMemory(state)
     /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ CandidateLifecycle(state') = CandidateLifecycle(state)
+PROOF
+  BY Isa DEF RejectRequesterEpochOverflow, LifecycleMemory,
+                 DurableLifecycle, CandidateLifecycle
 
-THEOREM SnapshotPublicationRequiresDurableV2PreimageObligation ==
+THEOREM CrashBeforeRootCommitRestoresPredecessorObligation ==
   /\ TypedRolloverSafetyInvariant
-  /\ PublishPersistedLifecycleSnapshotV2
+  /\ RecoverPredecessorLifecycleV3
   =>
-    /\ state.durableLifecycleSnapshotV2.version = 2
-    /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-    /\ state.durableLifecycleSnapshotV2.requestGates = "Empty"
+    /\ state'.currentRoster = DurableSnapshot(state).roster
     /\ state'.serviceGeneration =
-         state.durableLifecycleSnapshotV2.generation
-    /\ state'.lifecycleSnapshotPhase = "Published"
+         DurableSnapshot(state).serviceGeneration
+    /\ ~state'.candidatePresent
+    /\ state'.lifecycleCommitPhase = "Current"
+    /\ state'.validatedRestartObserved
+    /\ (state'.targetRoster # state'.currentRoster =>
+          state'.restartFenceAuthorized)
+PROOF
+  BY Isa DEF RecoverPredecessorLifecycleV3,
+                 LifecycleMemoryMatchesDurableSnapshotV3,
+                 PersistentLifecycleMemoryMatchesSnapshot
 
-THEOREM CrashBeforeSnapshotPersistencePreservesPredecessorObligation ==
+THEOREM CrashAfterRootCommitRestoresSuccessorObligation ==
   /\ TypedRolloverSafetyInvariant
-  /\ CrashBeforeLifecycleSnapshotV2Persistence
+  /\ RestoreSuccessorLifecycleV3AfterCrash
   =>
-    /\ state'.restartRequired
-    /\ LifecycleMemory(state') = LifecycleMemory(state)
-    /\ DurableLifecycle(state') = DurableLifecycle(state)
-
-THEOREM CrashAfterSnapshotPersistenceRestoresSuccessorObligation ==
-  /\ TypedRolloverSafetyInvariant
-  /\ RestoreSuccessorLifecycleSnapshotV2AfterCrash
-  =>
-    /\ LifecycleMemoryMatchesDurableSnapshotV2'
-    /\ state'.lifecycleSnapshotPhase = "Restored"
+    /\ state'.currentRoster = DurableSnapshot(state).roster
+    /\ state'.serviceGeneration =
+         DurableSnapshot(state).serviceGeneration
+    /\ state'.nextStreamEpoch =
+         DurableSnapshot(state).nextStreamEpoch
+    /\ state'.lifecycleCommitPhase = "Restored"
+    /\ state'.transitionAuthority = "RestartRestore"
     /\ ~state'.successorActive
+PROOF
+  BY Isa DEF RestoreSuccessorLifecycleV3AfterCrash
 
-THEOREM FreshEpochPersistencePrecedesUseObligation ==
+THEOREM FreshEpochPersistencePrecedesExactUseObligation ==
   /\ TypedRolloverSafetyInvariant
   /\ PublishFreshRequesterEpoch
   =>
     /\ state.requesterEpochPhase = "Persisted"
-    /\ state.durableLifecycleSnapshotV2.nextStreamEpoch >
-         state'.activeStreamEpoch
-    /\ state'.activeStreamEpoch # state.skippedStreamEpoch
+    /\ state.pendingStreamEpoch =
+         DurableSnapshot(state).nextStreamEpoch
+    /\ DurableSnapshot(state).requesterStreamEpoch =
+         DurableSnapshot(state).nextStreamEpoch
+    /\ state'.activeStreamEpoch =
+         DurableSnapshot(state).requesterStreamEpoch
+    /\ state'.nextStreamEpoch = state'.activeStreamEpoch
+PROOF
+  BY Isa DEF PublishFreshRequesterEpoch,
+                 RequesterEpochPersistenceAheadOfMemory
 
-THEOREM CrashAfterEpochPersistenceSkipsEpochObligation ==
+THEOREM CrashRestoresExactRequesterIncarnationObligation ==
   /\ TypedRolloverSafetyInvariant
   /\ RestoreRequesterEpochCounterAfterCrash
   =>
     /\ state'.nextStreamEpoch =
-         state.durableLifecycleSnapshotV2.nextStreamEpoch
-    /\ state'.activeStreamEpoch = 0
+         DurableSnapshot(state).nextStreamEpoch
+    /\ state'.activeStreamEpoch =
+         DurableSnapshot(state).requesterStreamEpoch
+    /\ state'.activeStreamEpoch = state'.nextStreamEpoch
     /\ state'.pendingStreamEpoch = 0
-    /\ state'.skippedStreamEpoch # 0
+    /\ state'.requesterEpochReplacementRestored
+PROOF
+  BY Isa DEF RestoreRequesterEpochCounterAfterCrash
 
-THEOREM SameRosterPreservesTransportWithoutCompactionObligation ==
+THEOREM SameRosterPreservesTransportWithoutGenerationRollObligation ==
   /\ TypedRolloverSafetyInvariant
   /\ ActivateSameRosterSuccessor
   =>
     /\ LifecycleMemory(state') = LifecycleMemory(state)
     /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ CandidateLifecycle(state') = CandidateLifecycle(state)
+    /\ state'.serviceGeneration = state.serviceGeneration
     /\ state'.retryableChunk = 1
+PROOF
+  BY Isa DEF ActivateSameRosterSuccessor,
+                 PredecessorTransportOwnershipOpen,
+                 TypedRolloverSafetyInvariant,
+                 LifecycleCommitPhaseInvariant,
+                 SameRosterTransportPreservationInvariant,
+                 LifecycleMemory, DurableLifecycle, CandidateLifecycle
+
+THEOREM ForcedFenceCannotForgeAuthenticatedClosePrefixObligation ==
+  /\ TypedRolloverSafetyInvariant
+  /\ (PublishCommittedLifecycleV3ToMemory
+       \/ RestoreSuccessorLifecycleV3AfterCrash)
+  /\ state'.transitionAuthority \in
+       {"DurableExactOutput", "RestartRestore"}
+  =>
+    /\ state'.recordedRetiredClosePrefix =
+         state.recordedRetiredClosePrefix
+    /\ state'.recordedRetiredClosePrefix <=
+         state'.authenticatedCloseHistory
 
 THEOREM LateOldCallbackCannotMutateSuccessorObligation ==
   /\ TypedRolloverSafetyInvariant
@@ -126,6 +590,10 @@ THEOREM LateOldCallbackCannotMutateSuccessorObligation ==
   =>
     /\ LifecycleMemory(state') = LifecycleMemory(state)
     /\ DurableLifecycle(state') = DurableLifecycle(state)
+    /\ CandidateLifecycle(state') = CandidateLifecycle(state)
+PROOF
+  BY Isa DEF ObserveLateOldWriterCallback, LifecycleMemory,
+                 DurableLifecycle, CandidateLifecycle
 
 THEOREM TypedRolloverNextPreservesSafetyObligation ==
   /\ TypedRolloverSafetyInvariant
@@ -137,10 +605,15 @@ THEOREM TypedRolloverSpecAlwaysSafeObligation ==
   TypedRolloverSpec => []TypedRolloverSafetyInvariant
 
 (***************************************************************************
-The temporal target is repeated here without a proof.  It stays explicit debt
-and cannot be used as a dependency for rotating-leader or application progress.
+These are separate temporal debts.  The first is the healthy process-local
+durable exact-output corridor.  The second begins with no process-local
+receipt and requires validated restart, ordered resynchronization, cleanup,
+and the distinct RestartRestore authority.
 ***************************************************************************)
-THEOREM ResponsiveChangedRosterRolloverLivenessObligation ==
-  ResponsiveChangedRosterRolloverLiveness
+THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==
+  ResponsiveDurableExactOutputRolloverLiveness
+
+THEOREM ResponsiveRestartRestoreRolloverLivenessObligation ==
+  ResponsiveRestartRestoreRolloverLiveness
 
 =============================================================================

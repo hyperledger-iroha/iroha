@@ -785,12 +785,17 @@ test("native publication rejects dirty or stale source provenance", async (t) =>
 
 test(
   "required-export probe loads a real addon through the recovery-compatible private suffix",
-  { skip: !existsSync(path.resolve("native", NATIVE_FILENAME)) },
   (t) => {
+    const nativePath = path.resolve("native", NATIVE_FILENAME);
+    assert.equal(
+      existsSync(nativePath),
+      true,
+      `native addon is required at ${nativePath}; run \`npm run build:native\``,
+    );
     const root = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-dlopen-probe-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     const staged = path.join(root, `${NATIVE_FILENAME}.next`);
-    copyFileSync(path.resolve("native", NATIVE_FILENAME), staged);
+    copyFileSync(nativePath, staged);
     // This test isolates the loader path from the release export contract so a
     // locally cached addon from an older compatible build cannot make the
     // focused unit suite ambient-state dependent.

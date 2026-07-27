@@ -31,7 +31,7 @@ hex-literal = { workspace = true }
 default = []
 bench = []
 # Mirror Norito derive cfgs so the derive macro can see destination-crate features
-schema-structural = ["dep:iroha_schema"]
+schema-structural = ["dep:iroha_schema", "norito/schema-structural"]
 parallel = ["dep:rayon"]
 goldilocks_backend = []
 

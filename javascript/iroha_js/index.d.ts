@@ -11195,28 +11195,60 @@ export interface SorafsOrderbookEventsResponse {
   events: SorafsOrderbookFinalizedEventPage;
 }
 
-export interface SorafsReputationCacheOptions {
+export interface SorafsReputationWitnessHeaders
+  extends Record<string, string> {
+  /**
+   * Exact canonical Norito witness. Reputation requests carrying a static
+   * witness are single-attempt and are never transparently retried.
+   */
+  "X-Iroha-Witness": string;
+  "X-Iroha-Account"?: string;
+}
+
+export type SorafsReputationAuthenticationOptions =
+  | {
+      canonicalAuth: CanonicalRequestAuth;
+      headers?: Record<string, string>;
+    }
+  | {
+      canonicalAuth?: never;
+      headers: SorafsReputationWitnessHeaders;
+    };
+
+export type SorafsReputationCacheOptions =
+  SorafsReputationAuthenticationOptions & {
   ifNoneMatch?: string;
-  etag?: string;
-  headers?: Record<string, string>;
   signal?: AbortSignal;
-}
+};
 
-export interface SorafsReputationEventsOptions
-  extends SorafsReputationCacheOptions {
+export type SorafsReputationEventsOptions =
+  SorafsReputationCacheOptions & {
   since?: NumericLike;
   limit?: NumericLike;
-}
+};
 
-export interface SorafsReputationEventStreamOptions {
+export type SorafsReputationEventStreamOptions =
+  SorafsReputationAuthenticationOptions & {
   since?: NumericLike;
   limit?: NumericLike;
-  lastEventId?: string;
   signal?: AbortSignal;
+};
+
+export type SorafsReputationU64 = number | bigint;
+
+export interface SorafsReputationWeights {
+  version: 1;
+  por_success_bps: number;
+  pdp_success_bps: number;
+  potr_success_bps: number;
+  latency_bps: number;
+  dispute_bps: number;
+  token_violation_bps: number;
+  repair_breach_bps: number;
 }
 
 export interface SorafsReputationProviderMetrics {
-  version: number;
+  version: 1;
   por_success_bps: number;
   pdp_success_bps: number;
   potr_success_bps: number;
@@ -11226,35 +11258,55 @@ export interface SorafsReputationProviderMetrics {
   repair_breach_rate_bps: number;
 }
 
+export type SorafsReputationDegradationFlagName =
+  | "reserve_warning"
+  | "reserve_grace"
+  | "reserve_delinquent"
+  | "reserve_default"
+  | "proof_success_below90"
+  | "proof_success_below80"
+  | "active_dispute"
+  | "slashing_event"
+  | "low_score";
+
+export interface SorafsReputationDegradationFlag {
+  flag: SorafsReputationDegradationFlagName;
+  value: null;
+}
+
 export interface SorafsReputationProvider {
   provider_id: string;
   score_bps: number;
-  degradation_flags: ReadonlyArray<string>;
-  raw_metrics: SorafsReputationProviderMetrics | Record<string, unknown>;
+  degradation_flags: ReadonlyArray<SorafsReputationDegradationFlag>;
+  raw_metrics: SorafsReputationProviderMetrics;
   raw_metrics_hash_hex: string;
 }
 
 export interface SorafsReputationSnapshotSummary {
   snapshot_id_hex: string;
-  generated_at_unix: number;
+  generated_at_unix: SorafsReputationU64;
+  previous_snapshot_id_hex: string | null;
   merkle_root_hex: string;
   provider_count: number;
-  alpha_bps: number;
-  current_score_weight_bps: number;
-  weights: Record<string, unknown>;
+  returned_provider_count: number;
+  limit: number;
+  truncated_providers: boolean;
+  alpha_bps: 8500;
+  current_score_weight_bps: 7000;
+  weights: SorafsReputationWeights;
   providers: ReadonlyArray<SorafsReputationProvider>;
-  previous_snapshot_id_hex: string | null;
 }
 
 export interface SorafsReputationProviderProof {
   provider_id: string;
   leaf_index: number;
+  leaf_count: number;
   siblings_hex: ReadonlyArray<string>;
 }
 
 export interface SorafsReputationProviderResponse {
   snapshot_id_hex: string;
-  generated_at_unix: number;
+  generated_at_unix: SorafsReputationU64;
   merkle_root_hex: string;
   provider: SorafsReputationProvider;
   proof: SorafsReputationProviderProof;
@@ -11262,29 +11314,49 @@ export interface SorafsReputationProviderResponse {
 
 export interface SorafsReputationWeightsResponse {
   snapshot_id_hex: string;
-  generated_at_unix: number;
-  alpha_bps: number;
-  current_score_weight_bps: number;
-  weights: Record<string, unknown>;
+  generated_at_unix: SorafsReputationU64;
+  alpha_bps: 8500;
+  current_score_weight_bps: 7000;
+  weights: SorafsReputationWeights;
 }
 
 export interface SorafsReputationSnapshotEvent {
-  version: number;
-  sequence: number;
+  version: 1;
+  sequence: SorafsReputationU64;
   snapshot_id_hex: string;
-  generated_at_unix: number;
+  generated_at_unix: SorafsReputationU64;
   merkle_root_hex: string;
   provider_count: number;
   previous_snapshot_id_hex: string | null;
 }
 
 export interface SorafsReputationEventsResponse {
-  since: number | null;
+  since: SorafsReputationU64 | null;
   limit: number;
   count: number;
-  next_since: number | null;
+  next_since: SorafsReputationU64 | null;
   events: ReadonlyArray<SorafsReputationSnapshotEvent>;
 }
+
+export interface SorafsReputationSnapshotSseEvent {
+  event: "reputation_snapshot";
+  data: SorafsReputationSnapshotEvent;
+  id: string;
+  retry: null;
+  raw: string;
+}
+
+export interface SorafsReputationLaggedSseEvent {
+  event: "lagged";
+  data: SorafsReputationU64;
+  id: null;
+  retry: null;
+  raw: string;
+}
+
+export type SorafsReputationSseEvent =
+  | SorafsReputationSnapshotSseEvent
+  | SorafsReputationLaggedSseEvent;
 
 export interface UaidPortfolioTotals {
   accounts: number;
@@ -12839,29 +12911,25 @@ export declare class ToriiClient {
     options?: SorafsOrderbookEventsWebSocketStreamOptions<T>,
   ): AsyncGenerator<ToriiWebSocketEvent<SorafsOrderbookFinalizedEvent>, void, unknown>;
   getSorafsReputationLatest(
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationSnapshotSummary | null>;
   getSorafsReputationProvider(
     providerId: string,
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationProviderResponse | null>;
   getSorafsReputationSnapshot(
     snapshotIdHex: string,
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationSnapshotSummary | null>;
   getSorafsReputationWeights(
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationWeightsResponse | null>;
   listSorafsReputationEvents(
-    options?: SorafsReputationEventsOptions,
+    options: SorafsReputationEventsOptions,
   ): Promise<SorafsReputationEventsResponse | null>;
   streamSorafsReputationEvents(
-    options?: SorafsReputationEventStreamOptions,
-  ): AsyncGenerator<
-    ToriiSseEvent<SorafsReputationSnapshotEvent>,
-    void,
-    unknown
-  >;
+    options: SorafsReputationEventStreamOptions,
+  ): AsyncGenerator<SorafsReputationSseEvent, void, unknown>;
   getSorafsPinManifest(
     digestHex: string,
     options?: { headers?: Record<string, string>; signal?: AbortSignal },
@@ -14045,14 +14113,52 @@ export function inspectSubscriptionTriggerAction(
 ): SubscriptionTriggerActionSummary;
 
 /**
+ * Exact first-release PLAIN eligibility rule bound into validation-fee proposals.
+ */
+export interface ValidationFeePlainEligibilityRuleV1 {
+  readonly rule: "proposal_operator_at_or_before_gate_others_after_gate";
+  readonly value: null;
+}
+
+/**
+ * Exact first-release PLAIN electorate contract bound into a proposal fingerprint.
+ */
+export interface ValidationFeePlainElectorateRulesV1 {
+  readonly voting_asset_id: string;
+  readonly ballot_amount: string;
+  readonly ballot_duration_blocks: string;
+  readonly citizenship_amount: string;
+  readonly max_members: string;
+  readonly conviction_step_blocks: string;
+  readonly max_conviction: string;
+  readonly min_turnout: string;
+  readonly approval_threshold_numerator: string;
+  readonly approval_threshold_denominator: string;
+  readonly eligibility_rule: Readonly<ValidationFeePlainEligibilityRuleV1>;
+}
+
+/**
  * Compute the exact native Parliament fingerprint for a validation-fee policy.
  *
  * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
+ * contract. The electorate rules must use the exact first-release PLAIN
  * contract. Missing, unknown, and legacy fields are rejected natively.
  */
 export function computeValidationFeePolicyProposalFingerprintV1(
   policy: Readonly<Record<string, JsonValue>>,
-  payoutLifecycleProposalId?: string | null,
+  payoutLifecycleProposalId: string | null,
+  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
+): string;
+
+/**
+ * Compute the exact native Parliament fingerprint for a validation-fee payout lifecycle.
+ *
+ * Both arguments must use their exact native snake-case JSON contracts.
+ * Missing, unknown, legacy, and non-canonical fields are rejected natively.
+ */
+export function computeValidationFeePayoutLifecycleProposalFingerprintV1(
+  payoutBinding: Readonly<Record<string, JsonValue>>,
+  plainElectorateRules: Readonly<ValidationFeePlainElectorateRulesV1>,
 ): string;
 
 export interface LaneRelaySample {
@@ -14610,7 +14716,27 @@ export interface CompleteReplicationOrderInstruction {
     order_id: string;
     provider_id: string;
     completion_epoch: number;
+    expected_authority: ProviderIngestCompletionAuthorityV1;
+    expected_assignment_revision: number;
+    finalized_anchor: ProviderIngestFinalizedAnchorV1;
   };
+}
+
+export interface ProviderIngestCompletionSignerPolicyV1 {
+  policy_id: string;
+  revision: number;
+  predecessor_digest: string | null;
+  policy_digest: string;
+}
+
+export interface ProviderIngestCompletionAuthorityV1 {
+  provider_owner: string;
+  signer_policy: ProviderIngestCompletionSignerPolicyV1;
+}
+
+export interface ProviderIngestFinalizedAnchorV1 {
+  height: number;
+  block_hash: string;
 }
 
 export interface ExpireReplicationOrderInstruction {
@@ -14648,12 +14774,28 @@ export function buildIssueReplicationOrderInstruction(options: {
 }): IssueReplicationOrderInstruction;
 
 /**
- * Build the provider-specific three-field completion instruction.
+ * Build the provider-specific six-field completion instruction. The authority,
+ * assignment revision, and finalized anchor are mandatory commit-time
+ * compare-and-set inputs.
  */
 export function buildCompleteReplicationOrderInstruction(options: {
   orderId: string;
   providerId: string;
   completionEpoch: NumericLike;
+  expectedAuthority: {
+    providerOwner: string;
+    signerPolicy: {
+      policyId: string;
+      revision: NumericLike;
+      predecessorDigest: string | null;
+      policyDigest: string;
+    };
+  };
+  expectedAssignmentRevision: NumericLike;
+  finalizedAnchor: {
+    height: NumericLike;
+    blockHash: string;
+  };
 }): CompleteReplicationOrderInstruction;
 
 export function buildExpireReplicationOrderInstruction(options: {

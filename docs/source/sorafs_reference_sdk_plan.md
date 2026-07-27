@@ -21,8 +21,8 @@ Remaining SF-11 work is release evidence and SDK distribution: per-target
 published archives, signed release manifests, published downstream binding
 packages, and live operator smoke records.
 The published and sealed cross-domain fixture inventory binds 82 payload
-artifacts, 30 `ValidationOutcomeV1` outcomes, and 38 negative payload vectors
-across ten exact parity profiles. All eight generated `CancelAssetLock`
+artifacts, 32 `ValidationOutcomeV1` outcomes, and 38 negative payload vectors
+across twelve exact parity profiles. All eight generated `CancelAssetLock`
 positive/negative files are checked in under
 `fixtures/sorafs_manifest/appeal_finance/`, are mandatory inputs to the
 offline checker and SDK suites, and are covered by the inventory signature.
@@ -68,12 +68,13 @@ share the deterministic
 schema-closed release-wide inventory for appeal finance, routing/provider
 admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. It binds the exact
 sorted path set, byte lengths, SHA-256 digests, and canonical JSON/Norito bytes
-for 82 payload artifacts, including 38 negative payload vectors, and 30
+for 82 payload artifacts, including 38 negative payload vectors, and 32
 `ValidationOutcomeV1` files. Its offline checker verifies the trusted
 fingerprint and signature and rejects duplicate or nonfinite JSON, path
 traversal, missing/extra/substituted files, symlinks, hardlinks, and parent
-directory replacement. The ten cross-SDK profiles comprise nine fixture-bundle
-outcomes plus a dedicated moderation governance-log-node outcome. JavaScript/TypeScript,
+directory replacement. The twelve cross-SDK profiles comprise nine
+fixture-bundle outcomes, a dedicated moderation governance-log-node outcome,
+and positive plus negative appeal-finance cancellation outcomes. JavaScript/TypeScript,
 Python, Swift, Kotlin/JVM, mirrored Java Android, and C# expose the native
 bundle and governance-log-node validation
 surfaces with byte-exact fixture tests checked in. Those source and fixture
@@ -404,7 +405,7 @@ convert decoded or raw Norito payloads into the shared validation functions.
 - **Cross-SDK canonical fixtures:** `generate_por_fixtures` deterministically
   regenerates the release-wide signed inventory under
   `fixtures/sorafs_manifest/`. The published inventory binds 82 payload
-  artifacts, 30 exact outcome files, and 38 negative payload vectors. The typed
+  artifacts, 32 exact outcome files, and 38 negative payload vectors. The typed
   `cancel_asset_lock_fixtures` generator and SDK tests freeze the appeal-finance
   `CancelAssetLock { escrow_id, expected_remaining_amount }` hard cut and its
   missing-field, retired nested-identifier, zero, and noncanonical-quantity
@@ -419,8 +420,10 @@ convert decoded or raw Norito payloads into the shared validation functions.
   capability skip.
   Nine fixture-bundle profiles cover routing/provider admission, orderbook,
   PDP, PoR, PoTR, and repair; a tenth profile exercises moderation through the
-  dedicated governance-log-node validator. The Governance DAG block/head
-  vectors are bound by the same closed inventory.
+  dedicated governance-log-node validator; and the eleventh and twelfth
+  profiles exercise the positive and zero-quantity-negative appeal-finance
+  cancellation outcomes. The Governance DAG block/head vectors are bound by
+  the same closed inventory.
   `scripts/check_sorafs_reference_sdk_fixtures.py` verifies the inventory
   without network access. JavaScript/TypeScript, Python, Swift, Kotlin/JVM,
   mirrored Java Android, and C# have native wrapper and byte-exact fixture test
@@ -460,8 +463,9 @@ convert decoded or raw Norito payloads into the shared validation functions.
   SDK inventory covers routing/provider admission, orderbook, PDP, PoR, PoTR,
   repair, Governance DAG, and moderation, while its strict offline checker and
   deterministic-regeneration test bind every artifact and outcome byte.
-- Cross-SDK fixture tests compare nine bundle profiles and the dedicated
-  moderation governance-log-node outcome against exact
+- Cross-SDK fixture tests compare nine bundle profiles, the dedicated
+  moderation governance-log-node outcome, and positive plus negative
+  appeal-finance cancellation outcomes against exact
   `ValidationOutcomeV1` bytes. Release completion still requires running the
   Rust regeneration test and every native-dependent SDK parity suite against
   rebuilt current-ABI artifacts without capability skips.
@@ -675,7 +679,7 @@ Implemented locally:
   and `ci/check_sorafs_reference_ffi_header.sh` providing the local binding
   contract guard.
 - The test-only signed, schema-closed reference SDK inventory with 82 payload
-  artifacts, 30 outcomes, 38 negative payload vectors, and ten exact profiles,
+  artifacts, 32 outcomes, 38 negative payload vectors, and twelve exact profiles,
   including the dedicated moderation governance-log-node validator and
   source-level coverage across JavaScript/TypeScript, Python, Swift,
   Kotlin/JVM, mirrored Java Android, and C#.

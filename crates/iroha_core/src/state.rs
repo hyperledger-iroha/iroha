@@ -160,7 +160,7 @@ use iroha_data_model::{
         },
         pin_registry::{
             ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinManifestRecord,
-            ReplicationOrderId, ReplicationOrderRecord,
+            ProviderIngestCompletionAuthorityV1, ReplicationOrderId, ReplicationOrderRecord,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
@@ -637,8 +637,10 @@ macro_rules! build_world_block {
             pedersen_params: $state.pedersen_params.$method(),
             poseidon_params: $state.poseidon_params.$method(),
             runtime_upgrades: $state.runtime_upgrades.$method(),
+            privacy_consensus_policy: $state.privacy_consensus_policy.$method(),
             privacy_activations: $state.privacy_activations.$method(),
             privacy_pgc_accounts: $state.privacy_pgc_accounts.$method(),
+            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.$method(),
             privacy_nullifiers: $state.privacy_nullifiers.$method(),
             privacy_commitments: $state.privacy_commitments.$method(),
             privacy_roots: $state.privacy_roots.$method(),
@@ -710,6 +712,9 @@ macro_rules! build_world_block {
             sorafs_pricing: $state.sorafs_pricing.$method(),
             provider_credit_ledger: $state.provider_credit_ledger.$method(),
             provider_owners: $state.provider_owners.$method(),
+            provider_ingest_completion_authorities: $state
+                .provider_ingest_completion_authorities
+                .$method(),
             da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.$method(),
             da_pin_intents_by_alias: $state.da_pin_intents_by_alias.$method(),
             da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.$method(),
@@ -874,8 +879,10 @@ macro_rules! build_world_transaction {
             pedersen_params: $state.pedersen_params.transaction(),
             poseidon_params: $state.poseidon_params.transaction(),
             runtime_upgrades: $state.runtime_upgrades.transaction(),
+            privacy_consensus_policy: $state.privacy_consensus_policy.transaction(),
             privacy_activations: $state.privacy_activations.transaction(),
             privacy_pgc_accounts: $state.privacy_pgc_accounts.transaction(),
+            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.transaction(),
             privacy_nullifiers: $state.privacy_nullifiers.transaction(),
             privacy_commitments: $state.privacy_commitments.transaction(),
             privacy_roots: $state.privacy_roots.transaction(),
@@ -955,6 +962,9 @@ macro_rules! build_world_transaction {
             sorafs_pricing: $state.sorafs_pricing.transaction(),
             provider_credit_ledger: $state.provider_credit_ledger.transaction(),
             provider_owners: $state.provider_owners.transaction(),
+            provider_ingest_completion_authorities: $state
+                .provider_ingest_completion_authorities
+                .transaction(),
             da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.transaction(),
             da_pin_intents_by_alias: $state.da_pin_intents_by_alias.transaction(),
             da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.transaction(),
@@ -3837,6 +3847,8 @@ pub struct World {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy and pending tightening.
+    pub(crate) privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: Storage<
         crate::privacy_state::PrivacyActivationKeyV1,
@@ -3846,6 +3858,11 @@ pub struct World {
     pub(crate) privacy_pgc_accounts: Storage<
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: Storage<
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
     >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: Storage<
@@ -4006,8 +4023,10 @@ pub struct World {
     #[norito(skip)]
     pub(crate) provider_credit_ledger: Storage<ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
-    #[norito(skip)]
     pub(crate) provider_owners: Storage<ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     #[norito(skip)]
     pub(crate) da_pin_intents_by_ticket: Storage<StorageTicketId, DaPinIntentWithLocation>,
@@ -4409,6 +4428,9 @@ pub struct WorldBlock<'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy for this block scope.
+    pub(crate) privacy_consensus_policy:
+        CellBlock<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: StorageBlock<
         'world,
@@ -4420,6 +4442,12 @@ pub struct WorldBlock<'world> {
         'world,
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
     >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: StorageBlock<
@@ -4598,6 +4626,10 @@ pub struct WorldBlock<'world> {
     /// Owner bindings for `SoraFS` providers.
     #[norito(skip)]
     pub(crate) provider_owners: StorageBlock<'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    #[norito(skip)]
+    pub(crate) provider_ingest_completion_authorities:
+        StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     #[norito(skip)]
     pub(crate) da_pin_intents_by_ticket:
@@ -4821,6 +4853,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
         collect_reverts!(self.privacy_activations, PrivacyActivation);
         collect_reverts!(self.privacy_pgc_accounts, PrivacyPgcAccount);
+        collect_reverts!(self.privacy_pgc_pool_invariants, PrivacyPgcPoolInvariant);
         collect_reverts!(self.privacy_nullifiers, PrivacyNullifier);
         collect_reverts!(self.privacy_commitments, PrivacyCommitment);
         collect_reverts!(self.privacy_roots, PrivacyRoot);
@@ -4901,6 +4934,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
         collect_payload!(self.privacy_activations, PrivacyActivation);
         collect_payload!(self.privacy_pgc_accounts, PrivacyPgcAccount);
+        collect_payload!(self.privacy_pgc_pool_invariants, PrivacyPgcPoolInvariant);
         collect_payload!(self.privacy_nullifiers, PrivacyNullifier);
         collect_payload!(self.privacy_commitments, PrivacyCommitment);
         collect_payload!(self.privacy_roots, PrivacyRoot);
@@ -4969,6 +5003,7 @@ impl<'world> WorldBlock<'world> {
             governance_last_unlock_sweep_height,
             sccp_registry,
             sccp_outbound_pending_usage,
+            privacy_consensus_policy,
             merge_hint_roots,
             merge_global_state_root,
         );
@@ -5063,6 +5098,7 @@ impl<'world> WorldBlock<'world> {
             runtime_upgrades,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -5117,6 +5153,7 @@ impl<'world> WorldBlock<'world> {
             capacity_disputes,
             provider_credit_ledger,
             provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket,
             da_pin_intents_by_alias,
             da_pin_intents_by_manifest,
@@ -5457,6 +5494,9 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy for this transaction.
+    pub(crate) privacy_consensus_policy:
+        CellTransaction<'block, 'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: StorageTransaction<
         'block,
@@ -5470,6 +5510,13 @@ pub struct WorldTransaction<'block, 'world> {
         'world,
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
     >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: StorageTransaction<
@@ -5675,6 +5722,9 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
     pub(crate) provider_owners: StorageTransaction<'block, 'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     pub(crate) da_pin_intents_by_ticket:
         StorageTransaction<'block, 'world, StorageTicketId, DaPinIntentWithLocation>,
@@ -7062,6 +7112,9 @@ pub struct WorldView<'world> {
         iroha_data_model::runtime::RuntimeUpgradeId,
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     >,
+    /// Singleton chain-wide privacy admission policy view.
+    pub(crate) privacy_consensus_policy:
+        CellView<'world, iroha_data_model::privacy::PrivacyConsensusPolicyV1>,
     /// Immutable governed privacy activations keyed by closed protocol identity.
     pub(crate) privacy_activations: StorageView<
         'world,
@@ -7073,6 +7126,12 @@ pub struct WorldView<'world> {
         'world,
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: StorageView<
+        'world,
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
     >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: StorageView<
@@ -7236,6 +7295,9 @@ pub struct WorldView<'world> {
     pub(crate) provider_credit_ledger: StorageView<'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
     pub(crate) provider_owners: StorageView<'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageView<'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     pub(crate) da_pin_intents_by_ticket:
         StorageView<'world, StorageTicketId, DaPinIntentWithLocation>,
@@ -7351,153 +7413,6 @@ pub struct ZkAssetVerifierBinding {
     pub commitment: [u8; 32],
 }
 
-/// Lifecycle status of a ZK-ACE identity commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub enum ZkAceIdentityStatus {
-    /// Identity commitment may authorize protected actions.
-    Active,
-    /// Identity commitment was superseded by a replacement commitment.
-    Rotated,
-    /// Identity commitment was explicitly revoked.
-    Revoked,
-}
-
-impl json::FastJsonWrite for ZkAceIdentityStatus {
-    fn write_json(&self, out: &mut String) {
-        let label = match self {
-            ZkAceIdentityStatus::Active => "Active",
-            ZkAceIdentityStatus::Rotated => "Rotated",
-            ZkAceIdentityStatus::Revoked => "Revoked",
-        };
-        json::write_json_string(label, out);
-    }
-}
-
-impl json::JsonDeserialize for ZkAceIdentityStatus {
-    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Active" => Ok(ZkAceIdentityStatus::Active),
-            "Rotated" => Ok(ZkAceIdentityStatus::Rotated),
-            "Revoked" => Ok(ZkAceIdentityStatus::Revoked),
-            other => Err(json::Error::UnknownField {
-                field: other.to_owned(),
-            }),
-        }
-    }
-}
-
-/// On-chain ZK-ACE identity commitment record.
-#[derive(
-    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
-)]
-pub struct ZkAceIdentityRecord {
-    /// Policy hash bound by the authorization proof.
-    pub policy_hash: [u8; 32],
-    /// Canonical sorted source-account allowlist authorized by this commitment.
-    pub allowed_accounts: Vec<iroha_data_model::account::AccountId>,
-    /// Action class authorized by this record.
-    pub action_class: String,
-    /// Domain separation tag used by the prover.
-    pub domain_tag: String,
-    /// Verifier binding required for authorization proofs.
-    pub verifier: ZkAssetVerifierBinding,
-    /// Current lifecycle status.
-    pub status: ZkAceIdentityStatus,
-    /// Replacement commitment when this record has been rotated.
-    pub successor: Option<[u8; 32]>,
-}
-
-#[cfg(test)]
-mod zk_ace_identity_record_tests {
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{account::AccountId, proof::VerifyingKeyId};
-
-    use super::*;
-
-    fn account(seed: u8) -> AccountId {
-        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("derive ZK-ACE identity account fixture key");
-        AccountId::new(key_pair.public_key().clone())
-    }
-
-    fn record(status: ZkAceIdentityStatus) -> ZkAceIdentityRecord {
-        ZkAceIdentityRecord {
-            policy_hash: [0xA1; 32],
-            allowed_accounts: vec![account(1), account(2)],
-            action_class: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
-                .to_owned(),
-            domain_tag: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
-            verifier: ZkAssetVerifierBinding {
-                id: VerifyingKeyId::new(
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-                ),
-                commitment: [0xB2; 32],
-            },
-            status,
-            successor: Some([0xC3; 32]),
-        }
-    }
-
-    #[test]
-    fn zk_ace_identity_record_norito_roundtrip_preserves_allowlist() {
-        let expected = record(ZkAceIdentityStatus::Rotated);
-        let bytes = norito::to_bytes(&expected).expect("serialize ZK-ACE identity record");
-        let decoded: ZkAceIdentityRecord =
-            norito::decode_from_bytes(&bytes).expect("deserialize ZK-ACE identity record");
-
-        assert_eq!(decoded, expected);
-        assert_eq!(decoded.allowed_accounts, vec![account(1), account(2)]);
-        assert_eq!(decoded.successor, Some([0xC3; 32]));
-    }
-
-    #[test]
-    fn zk_ace_identity_record_json_roundtrip_preserves_allowlist() {
-        let expected = record(ZkAceIdentityStatus::Active);
-        let json = norito::json::to_json(&expected).expect("serialize ZK-ACE record to JSON");
-        assert!(json.contains("allowed_accounts"));
-        assert!(json.contains("zk_ace_pq_authorization_v0"));
-
-        let decoded: ZkAceIdentityRecord =
-            norito::json::from_json(&json).expect("deserialize ZK-ACE record from JSON");
-        assert_eq!(decoded, expected);
-        assert_eq!(decoded.allowed_accounts, vec![account(1), account(2)]);
-    }
-
-    #[test]
-    fn zk_ace_identity_status_json_rejects_unknown_status() {
-        let err = norito::json::from_json::<ZkAceIdentityStatus>("\"Suspended\"")
-            .expect_err("unknown ZK-ACE identity status must fail");
-        assert!(err.to_string().contains("Suspended"));
-    }
-
-    #[test]
-    fn zk_ace_identity_record_binding_supports_equality_for_roundtrip_guards() {
-        let lhs = ZkAssetVerifierBinding {
-            id: VerifyingKeyId::new("stark/fri/sha256-goldilocks", "zk-ace"),
-            commitment: [0xD4; 32],
-        };
-        let rhs = ZkAssetVerifierBinding {
-            id: VerifyingKeyId::new("stark/fri/sha256-goldilocks", "zk-ace"),
-            commitment: [0xD4; 32],
-        };
-        assert_eq!(lhs, rhs);
-    }
-
-    #[test]
-    fn zk_ace_identity_record_distinguishes_allowlist_order_after_storage() {
-        let mut first = record(ZkAceIdentityStatus::Active);
-        let mut second = first.clone();
-        second.allowed_accounts.reverse();
-
-        assert_ne!(first, second);
-        first.allowed_accounts.sort_unstable();
-        second.allowed_accounts.sort_unstable();
-        assert_eq!(first, second);
-    }
-}
-
 /// Policy and state for a shielded asset.
 #[derive(
     Copy, Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
@@ -7547,12 +7462,6 @@ pub struct ZkAssetState {
     /// Optional asset-set root that the asset-hidden pool verifier is bound to.
     #[norito(default)]
     pub asset_hidden_asset_set_root: Option<[u8; 32]>,
-    /// ZK-ACE identity records keyed by identity commitment.
-    #[norito(default)]
-    pub zk_ace_identities: std::collections::BTreeMap<[u8; 32], ZkAceIdentityRecord>,
-    /// Consumed ZK-ACE replay nullifiers for protected transparent transfers.
-    #[norito(default)]
-    pub zk_ace_replay_nullifiers: std::collections::BTreeSet<[u8; 32]>,
     /// Rolling set of frontier checkpoints (height, commitment count, root).
     pub frontier_checkpoints: Vec<FrontierCheckpoint>,
     #[norito(skip)]
@@ -7573,8 +7482,6 @@ impl Default for ZkAssetState {
             vk_shield: None,
             asset_hidden_pool_id: None,
             asset_hidden_asset_set_root: None,
-            zk_ace_identities: std::collections::BTreeMap::new(),
-            zk_ace_replay_nullifiers: std::collections::BTreeSet::new(),
             frontier_checkpoints: Vec::new(),
             tree: CanonMerkleTree::default(),
         }
@@ -7781,8 +7688,6 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut vk_shield = None;
         let mut asset_hidden_pool_id = None;
         let mut asset_hidden_asset_set_root = None;
-        let mut zk_ace_identities = None;
-        let mut zk_ace_replay_nullifiers = None;
         let mut frontier_checkpoints = None;
 
         while let Some(key) = visitor.next_key()? {
@@ -7799,10 +7704,6 @@ impl json::JsonDeserialize for ZkAssetState {
                 "asset_hidden_pool_id" => asset_hidden_pool_id = Some(visitor.parse_value()?),
                 "asset_hidden_asset_set_root" => {
                     asset_hidden_asset_set_root = Some(visitor.parse_value()?);
-                }
-                "zk_ace_identities" => zk_ace_identities = Some(visitor.parse_value()?),
-                "zk_ace_replay_nullifiers" => {
-                    zk_ace_replay_nullifiers = Some(visitor.parse_value()?);
                 }
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
                 other => {
@@ -7836,8 +7737,6 @@ impl json::JsonDeserialize for ZkAssetState {
             vk_shield: vk_shield.unwrap_or(None),
             asset_hidden_pool_id: asset_hidden_pool_id.unwrap_or(None),
             asset_hidden_asset_set_root: asset_hidden_asset_set_root.unwrap_or(None),
-            zk_ace_identities: zk_ace_identities.unwrap_or_default(),
-            zk_ace_replay_nullifiers: zk_ace_replay_nullifiers.unwrap_or_default(),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
             tree,
         })
@@ -8946,6 +8845,12 @@ pub struct GovernanceStageApprovals {
     /// Recorded approvals per parliament body.
     #[norito(default)]
     pub stages: BTreeMap<ParliamentBody, GovernanceStageApproval>,
+    /// First height at which every required Parliament body reached approval quorum.
+    ///
+    /// This immutable gate is retained so proposal-bound electorate eligibility
+    /// never depends on mutable configuration or reconstructed event history.
+    #[norito(default)]
+    pub approval_gate_height: Option<u64>,
 }
 
 impl GovernanceStageApprovals {
@@ -10910,16 +10815,106 @@ impl<'state> StateBlock<'state> {
         &self.axt_envelopes
     }
 
+    fn apply_due_privacy_consensus_policy(&mut self) {
+        let incoming_height = self._curr_block.height().get();
+        let policy = *self.world.privacy_consensus_policy.get();
+        policy.validate().unwrap_or_else(|error| {
+            panic!(
+                "persisted privacy consensus policy is invalid at incoming block height \
+                 {incoming_height}: {error}"
+            )
+        });
+        let Some(pending) = policy.pending_tightening else {
+            return;
+        };
+        if pending.effective_at_height < incoming_height {
+            panic!(
+                "privacy consensus policy missed effective height {} before incoming block \
+                 height {incoming_height}",
+                pending.effective_at_height
+            );
+        }
+        if pending.effective_at_height > incoming_height {
+            return;
+        }
+
+        crate::privacy_state::validate_non_pgc_privacy_root_retention_v1(
+            &self.world.privacy_roots,
+            pending.next_limits.retained_root_count,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "scheduled privacy retention tightening is invalid at incoming block height \
+                 {incoming_height}: {error}"
+            )
+        });
+        let plans = crate::privacy_state::plan_privacy_root_retention_reduction_v1(
+            &self.world.privacy_roots,
+            iroha_data_model::privacy::PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            pending.next_limits.retained_root_count,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "scheduled Anonymous PGC retention tightening failed at incoming block height \
+                 {incoming_height}: {error}"
+            )
+        });
+        let mut head_updates = Vec::with_capacity(plans.len());
+        for plan in &plans {
+            let head = self
+                .world
+                .privacy_root_heads
+                .get(&plan.head_key)
+                .copied()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Anonymous PGC retention plan has no head at incoming block height \
+                         {incoming_height}"
+                    )
+                });
+            let next_head = crate::privacy_state::PrivacyRootHeadRecordV1::new(
+                head.epoch(),
+                head.root(),
+                head.provenance(),
+                Some(plan.new_anchor),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Anonymous PGC retention anchor is invalid at incoming block height \
+                     {incoming_height}: {error}"
+                )
+            });
+            head_updates.push((plan.head_key, next_head));
+        }
+
+        for plan in plans {
+            for key in plan.removal_keys {
+                self.world.privacy_roots.remove(key);
+            }
+        }
+        for (key, head) in head_updates {
+            self.world.privacy_root_heads.insert(key, head);
+        }
+        *self.world.privacy_consensus_policy.get_mut() =
+            iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
+                current_limits: pending.next_limits,
+                pending_tightening: None,
+            };
+        self.privacy_budget_in_block =
+            crate::privacy::PrivacyBlockBudgetV1::new(pending.next_limits)
+                .expect("validated scheduled privacy limits construct a block budget");
+    }
+
     fn promote_due_privacy_activations(&mut self) {
-        let current_height = self._curr_block.height().get();
+        let incoming_height = self._curr_block.height().get();
         let promotions = crate::privacy_state::plan_due_privacy_activation_promotions_v1(
             &self.world.privacy_activations,
-            current_height,
+            incoming_height,
         )
         .unwrap_or_else(|error| {
             panic!(
                 "persisted privacy activation registry is invalid at block height \
-                     {current_height}: {error}"
+                     {incoming_height}: {error}"
             )
         });
         for (key, record) in promotions {
@@ -11230,6 +11225,51 @@ pub(crate) struct SccpIvmProvedExecutionBindingV1 {
     pub(crate) gas_used: u64,
 }
 
+/// Exact signed-transaction privacy submission authorized for this state transaction.
+///
+/// The binding is installed from the canonical signed payload before any executor
+/// effect.  Child execution paths may inspect it only through
+/// [`StateTransaction::consume_privacy_transaction_intent_v1`], which makes the
+/// authorization one-shot and prevents contracts, triggers, or IVM overlays from
+/// replaying a signed direct submission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyTransactionIntentBindingV1 {
+    digest: iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+    submission_hash: Hash,
+    consumed: bool,
+}
+
+impl PrivacyTransactionIntentBindingV1 {
+    #[must_use]
+    const fn new(
+        digest: iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+        submission_hash: Hash,
+    ) -> Self {
+        Self {
+            digest,
+            submission_hash,
+            consumed: false,
+        }
+    }
+}
+
+/// Failure while consuming a transaction-scoped privacy intent binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ThisError)]
+pub(crate) enum PrivacyTransactionIntentConsumptionErrorV1 {
+    /// No direct privacy submission was bound from the signed payload.
+    #[error("the current signed transaction has no bound direct privacy submission")]
+    MissingBinding,
+    /// The executing statement carries a stale or foreign transaction-intent digest.
+    #[error("privacy statement transaction-intent digest differs from the signed payload")]
+    DigestMismatch,
+    /// The executing instruction is not the exact direct submission signed by the authority.
+    #[error("privacy submission differs from the exact direct instruction in the signed payload")]
+    SubmissionMismatch,
+    /// The exact direct submission was already consumed in this state transaction.
+    #[error("the signed privacy submission has already been consumed")]
+    AlreadyConsumed,
+}
+
 /// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
@@ -11396,6 +11436,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash:
         Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// One-shot binding to the exact direct privacy submission in the signed payload.
+    pub(crate) privacy_transaction_intent_binding: Option<PrivacyTransactionIntentBindingV1>,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
     /// True while rebuilding state from already committed Kura blocks.
@@ -17891,6 +17933,14 @@ impl World {
         &mut self.provider_owners
     }
 
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
+    }
+
     /// Provides mutable access to the Space Directory manifest registry for tests and API scaffolding.
     pub fn space_directory_manifests_mut_for_testing(
         &mut self,
@@ -18236,6 +18286,7 @@ impl World {
             sorafs_pricing: Cell::default(),
             provider_credit_ledger: Storage::default(),
             provider_owners: Storage::default(),
+            provider_ingest_completion_authorities: Storage::default(),
             da_pin_intents_by_ticket: Storage::default(),
             da_pin_intents_by_alias: Storage::default(),
             da_pin_intents_by_manifest: Storage::default(),
@@ -19058,8 +19109,10 @@ impl World {
             pedersen_params: self.pedersen_params.view(),
             poseidon_params: self.poseidon_params.view(),
             runtime_upgrades: self.runtime_upgrades.view(),
+            privacy_consensus_policy: self.privacy_consensus_policy.view(),
             privacy_activations: self.privacy_activations.view(),
             privacy_pgc_accounts: self.privacy_pgc_accounts.view(),
+            privacy_pgc_pool_invariants: self.privacy_pgc_pool_invariants.view(),
             privacy_nullifiers: self.privacy_nullifiers.view(),
             privacy_commitments: self.privacy_commitments.view(),
             privacy_roots: self.privacy_roots.view(),
@@ -19125,6 +19178,9 @@ impl World {
             sorafs_pricing: self.sorafs_pricing.view(),
             provider_credit_ledger: self.provider_credit_ledger.view(),
             provider_owners: self.provider_owners.view(),
+            provider_ingest_completion_authorities: self
+                .provider_ingest_completion_authorities
+                .view(),
             da_pin_intents_by_ticket: self.da_pin_intents_by_ticket.view(),
             da_pin_intents_by_alias: self.da_pin_intents_by_alias.view(),
             da_pin_intents_by_manifest: self.da_pin_intents_by_manifest.view(),
@@ -19962,6 +20018,10 @@ pub trait WorldReadOnly {
     fn provider_credit_ledger(&self) -> &impl StorageReadOnly<ProviderId, ProviderCreditRecord>;
     /// Owner bindings for registered `SoraFS` providers (read-only).
     fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId>;
+    /// Provider-ingest completion-owner and signer-policy bindings (read-only).
+    fn provider_ingest_completion_authorities(
+        &self,
+    ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1>;
     /// DA pin intents keyed by storage ticket (read-only).
     fn da_pin_intents_by_ticket(
         &self,
@@ -20012,6 +20072,16 @@ pub trait WorldReadOnly {
     fn soradns_last_publish_ms(&self) -> &Option<u64>;
     /// Rotation history length counter (read-only).
     fn soradns_history_len(&self) -> &u64;
+
+    /// Authoritative singleton privacy policy (read-only).
+    fn privacy_consensus_policy(&self) -> &iroha_data_model::privacy::PrivacyConsensusPolicyV1;
+    /// Authoritative governed privacy activations (read-only).
+    fn privacy_activations(
+        &self,
+    ) -> &impl StorageReadOnly<
+        crate::privacy_state::PrivacyActivationKeyV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+    >;
 
     /// ZK shielded ledger state (read-only) per asset definition.
     fn zk_assets(&self) -> &impl StorageReadOnly<AssetDefinitionId, ZkAssetState>;
@@ -21468,6 +21538,11 @@ macro_rules! impl_world_ro {
             fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId> {
                 &self.provider_owners
             }
+            fn provider_ingest_completion_authorities(
+                &self,
+            ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1> {
+                &self.provider_ingest_completion_authorities
+            }
             fn da_pin_intents_by_ticket(
                 &self,
             ) -> &impl StorageReadOnly<StorageTicketId, DaPinIntentWithLocation> {
@@ -21548,6 +21623,19 @@ macro_rules! impl_world_ro {
             }
             fn soradns_history_len(&self) -> &u64 {
                 &self.soradns_history_len
+            }
+            fn privacy_consensus_policy(
+                &self,
+            ) -> &iroha_data_model::privacy::PrivacyConsensusPolicyV1 {
+                self.privacy_consensus_policy.get()
+            }
+            fn privacy_activations(
+                &self,
+            ) -> &impl StorageReadOnly<
+                crate::privacy_state::PrivacyActivationKeyV1,
+                iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
+            > {
+                &self.privacy_activations
             }
             fn commit_qcs(&self) -> &impl StorageReadOnly<HashOf<BlockHeader>, Qc> {
                 &self.commit_qcs
@@ -21669,6 +21757,14 @@ impl<'world> WorldBlock<'world> {
         &mut self,
     ) -> &mut StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord> {
         &mut self.replication_orders
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable provider-ingest completion-authority registry accessor for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
     }
 
     #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
@@ -21846,8 +21942,10 @@ impl<'world> WorldBlock<'world> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_consensus_policy,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -21903,6 +22001,7 @@ impl<'world> WorldBlock<'world> {
             sorafs_pricing,
             provider_credit_ledger,
             provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket,
             da_pin_intents_by_alias,
             da_pin_intents_by_manifest,
@@ -21963,8 +22062,10 @@ impl<'world> WorldBlock<'world> {
         pedersen_params.commit();
         poseidon_params.commit();
         runtime_upgrades.commit();
+        privacy_consensus_policy.commit();
         privacy_activations.commit();
         privacy_pgc_accounts.commit();
+        privacy_pgc_pool_invariants.commit();
         privacy_nullifiers.commit();
         privacy_commitments.commit();
         privacy_roots.commit();
@@ -22020,6 +22121,7 @@ impl<'world> WorldBlock<'world> {
         sorafs_pricing.commit();
         provider_credit_ledger.commit();
         provider_owners.commit();
+        provider_ingest_completion_authorities.commit();
         da_pin_intents_by_ticket.commit();
         da_pin_intents_by_alias.commit();
         da_pin_intents_by_manifest.commit();
@@ -22895,6 +22997,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>
+    {
+        &mut self.provider_ingest_completion_authorities
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to resolver directory records for deterministic tests.
     pub fn soradns_directory_records_mut_for_testing(
         &mut self,
@@ -23234,8 +23345,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_consensus_policy,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -23337,8 +23450,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         pedersen_params.apply();
         poseidon_params.apply();
         runtime_upgrades.apply();
+        privacy_consensus_policy.apply();
         privacy_activations.apply();
         privacy_pgc_accounts.apply();
+        privacy_pgc_pool_invariants.apply();
         privacy_nullifiers.apply();
         privacy_commitments.apply();
         privacy_roots.apply();
@@ -27897,6 +28012,10 @@ impl State {
             drop(world);
             std::thread::yield_now();
         };
+        let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
+            world.privacy_consensus_policy.get().current_limits,
+        )
+        .expect("persisted privacy consensus policy was validated before block construction");
         let mut sb = StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
@@ -27956,7 +28075,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
+            privacy_budget_in_block,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -27978,6 +28097,9 @@ impl State {
             trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
+        // Chain-wide privacy policy changes take effect at the start of their
+        // exact incoming height, before protocol promotions or transactions.
+        sb.apply_due_privacy_consensus_policy();
         // Privacy lifecycle is persisted state, not a verifier-time projection.
         // Plan every due promotion before applying any of them so malformed
         // restored state cannot leave the block overlay partially promoted.
@@ -28248,7 +28370,20 @@ impl State {
                     super::state::GovernanceReferendumStatus::Open
                         if rec.h_end.checked_add(1) == Some(now_h) =>
                     {
-                        Some((rid.clone(), rec.h_end))
+                        let validation_fee = hex::decode(rid)
+                            .ok()
+                            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+                            .and_then(|proposal_id| {
+                                wtx.governance_proposals.get(&proposal_id)
+                            })
+                            .is_some_and(|proposal| {
+                                matches!(
+                                    proposal.kind,
+                                    iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
+                                )
+                            });
+                        (!validation_fee).then(|| (rid.clone(), rec.h_end))
                     }
                     _ => None,
                 })
@@ -28562,6 +28697,10 @@ impl State {
             drop(world);
             std::thread::yield_now();
         };
+        let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
+            world.privacy_consensus_policy.get().current_limits,
+        )
+        .expect("persisted privacy consensus policy was validated before block construction");
         StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
@@ -28621,7 +28760,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
+            privacy_budget_in_block,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -28664,6 +28803,10 @@ impl State {
         let block_hashes = self.block_hashes.block_and_revert();
         let world = self.world.block_and_revert();
         let sccp_registry = self.sccp_registry_snapshot_from_world(world.sccp_registry.get());
+        let privacy_budget_in_block = crate::privacy::PrivacyBlockBudgetV1::new(
+            world.privacy_consensus_policy.get().current_limits,
+        )
+        .expect("persisted privacy consensus policy was validated before block construction");
         let mut autoscale_sample_history = self.autoscale_sample_history_snapshot();
         autoscale_sample_history.retain(|record| record.block_height <= target_height);
         StateBlock {
@@ -28726,7 +28869,7 @@ impl State {
             zk_verify_calls_in_block: 0,
             zk_proof_bytes_in_block: 0,
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
-            privacy_budget_in_block: crate::privacy::PrivacyBlockBudgetV1::default(),
+            privacy_budget_in_block,
             implicit_account_creations_in_block: 0,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
@@ -44438,6 +44581,35 @@ pub trait StateReadOnly: WorldStateSnapshot {
         self.block_hashes().len()
     }
 
+    /// Build the exact privacy capability snapshot from this committed view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a deterministic validation error if persisted privacy state is
+    /// inconsistent with this view's committed height or compiled profiles.
+    fn privacy_capability_snapshot_v1(
+        &self,
+    ) -> core::result::Result<
+        iroha_data_model::privacy::PrivacyCapabilitySnapshotV1,
+        iroha_data_model::privacy::PrivacyCapabilitySnapshotValidationErrorV1,
+    > {
+        let committed_height = u64::try_from(self.height())
+            .expect("supported target pointer widths always fit a state height into u64");
+        let world = self.world();
+        crate::privacy_profiles::committed_privacy_capability_snapshot_v1(
+            committed_height,
+            *world.privacy_consensus_policy(),
+            |protocol_id| {
+                world
+                    .privacy_activations()
+                    .get(&crate::privacy_state::PrivacyActivationKeyV1::new(
+                        protocol_id,
+                    ))
+                    .copied()
+            },
+        )
+    }
+
     /// Latest committed block hash (if any).
     fn latest_block_hash(&self) -> Option<HashOf<BlockHeader>> {
         self.block_hashes().iter().nth_back(0).copied()
@@ -47745,6 +47917,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
             current_tx_hash: None,
+            privacy_transaction_intent_binding: None,
             current_entrypoint_index: None,
             rwa_generated_id_ordinal: 0,
             contract_lifecycle_transition_ordinal: 0,
@@ -50944,10 +51117,10 @@ impl StateTransaction<'_, '_> {
     ) -> crate::zk::PreverifyResult {
         // Backend tag acceptance against node policy (curve allow-list via config)
         let backend = proof.backend.as_str();
-        // Only apply curve gating after production backend admission; unsupported
+        // Only apply curve gating after verifier-registry admission; unsupported
         // Halo2-looking labels must fail as UnsupportedBackend in the pre-verifier.
         if matches!(
-            crate::zk::production_verify_backend_tag(backend),
+            crate::zk::verifier_backend_registry_tag_v1(backend),
             Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
         ) {
             // Extract curve segment (e.g., "pasta" or "bn254") if present
@@ -53014,6 +53187,68 @@ mod tiered_snapshot_diff_tests {
                 "missing required {field} produced unexpected error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn provider_ingest_completion_authority_snapshot_is_required_and_owner_bound() {
+        let owner = AccountId::new(checked_keypair().public_key().clone());
+        let provider_id = ProviderId::new([0xA1; 32]);
+        let authority = ProviderIngestCompletionAuthorityV1::new(
+            owner.clone(),
+            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0xA2; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0xA3; 32],
+            },
+        );
+        let mut world = World::default();
+        let (owner_id, owner_value) = iroha_data_model::account::Account::new(owner.clone())
+            .build(&owner)
+            .into_key_value();
+        world.accounts.insert(owner_id, owner_value);
+        world.provider_owners.insert(provider_id, owner);
+        world
+            .provider_ingest_completion_authorities
+            .insert(provider_id, authority.clone());
+
+        let decoded =
+            decode_sccp_world_snapshot(world).expect("decode completion-authority snapshot");
+        assert_eq!(
+            decoded
+                .view()
+                .world
+                .provider_ingest_completion_authorities
+                .get(&provider_id),
+            Some(&authority)
+        );
+
+        for field in ["provider_owners", "provider_ingest_completion_authorities"] {
+            let mut snapshot = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
+            state_snapshot_world_mut(&mut snapshot).remove(field);
+            let error = decode_state_snapshot_value(snapshot)
+                .err()
+                .unwrap_or_else(|| panic!("snapshot missing {field} must fail"));
+            assert!(
+                error.to_string().contains(field),
+                "missing required {field} produced unexpected error: {error}"
+            );
+        }
+
+        let mut mismatched = World::default();
+        mismatched
+            .provider_ingest_completion_authorities
+            .insert(provider_id, authority);
+        let error = match decode_sccp_world_snapshot(mismatched) {
+            Ok(_) => panic!("completion authority without its registered owner must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("provider_ingest_completion_authorities"),
+            "owner mismatch produced unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -60490,6 +60725,83 @@ impl StateTransaction<'_, '_> {
         self.register_confidential_usage(proof_bytes, 1)
     }
 
+    /// Return the exact index required by the next privacy proof in this transaction.
+    #[must_use]
+    pub(crate) const fn next_privacy_action_index(&self) -> u32 {
+        self.privacy_actions_in_tx
+    }
+
+    /// Install the exact direct privacy submission derived from a new signed payload.
+    ///
+    /// Passing `None` explicitly clears any previous transaction's binding. This
+    /// reset belongs at signed-transaction admission boundaries; child contract,
+    /// trigger, and IVM execution must never call it.
+    pub(crate) fn bind_privacy_transaction_intent_v1(
+        &mut self,
+        binding: Option<(
+            iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+            Hash,
+        )>,
+    ) {
+        self.privacy_transaction_intent_binding = binding.map(|(digest, submission_hash)| {
+            PrivacyTransactionIntentBindingV1::new(digest, submission_hash)
+        });
+    }
+
+    /// Consume the exact signed direct privacy submission once.
+    ///
+    /// Validation is completed before flipping the one-shot bit, so a missing,
+    /// stale, or dynamically substituted instruction cannot poison the binding.
+    /// A later verifier failure still rolls the bit back because it lives only in
+    /// this transaction overlay.
+    ///
+    /// # Errors
+    ///
+    /// Returns a closed failure when the binding is missing, stale, substituted,
+    /// or already consumed.
+    pub(crate) fn consume_privacy_transaction_intent_v1(
+        &mut self,
+        actual_digest: iroha_data_model::privacy::PrivacyTransactionIntentDigestV1,
+        actual_submission_hash: Hash,
+    ) -> Result<(), PrivacyTransactionIntentConsumptionErrorV1> {
+        let binding = self
+            .privacy_transaction_intent_binding
+            .as_mut()
+            .ok_or(PrivacyTransactionIntentConsumptionErrorV1::MissingBinding)?;
+        if binding.digest != actual_digest {
+            return Err(PrivacyTransactionIntentConsumptionErrorV1::DigestMismatch);
+        }
+        if binding.submission_hash != actual_submission_hash {
+            return Err(PrivacyTransactionIntentConsumptionErrorV1::SubmissionMismatch);
+        }
+        if binding.consumed {
+            return Err(PrivacyTransactionIntentConsumptionErrorV1::AlreadyConsumed);
+        }
+        binding.consumed = true;
+        Ok(())
+    }
+
+    /// Check whether one canonical privacy action can be reserved without
+    /// changing transaction or block accounting.
+    ///
+    /// Runtime handlers call this before invoking a native verifier so an
+    /// already-exhausted consensus budget cannot trigger expensive
+    /// cryptography.  [`Self::reserve_privacy_action`] delegates to the same
+    /// validator, preventing preflight and final reservation from drifting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] under the same conditions as
+    /// [`Self::reserve_privacy_action`].
+    pub(crate) fn preflight_privacy_action(
+        &self,
+        action_index: u32,
+        encoded_action_bytes: u64,
+    ) -> Result<(), Error> {
+        self.validate_privacy_action_reservation(action_index, encoded_action_bytes)
+            .map(|_| ())
+    }
+
     /// Reserve one canonically encoded first-release privacy action.
     ///
     /// The reservation is staged in this transaction. The parent block budget
@@ -60507,6 +60819,19 @@ impl StateTransaction<'_, '_> {
         action_index: u32,
         encoded_action_bytes: u64,
     ) -> Result<(), Error> {
+        let (next_actions, next_bytes, next_block_budget) =
+            self.validate_privacy_action_reservation(action_index, encoded_action_bytes)?;
+        self.privacy_actions_in_tx = next_actions;
+        self.privacy_bytes_in_tx = next_bytes;
+        self.privacy_budget_after_block = next_block_budget;
+        Ok(())
+    }
+
+    fn validate_privacy_action_reservation(
+        &self,
+        action_index: u32,
+        encoded_action_bytes: u64,
+    ) -> Result<(u32, u64, crate::privacy::PrivacyBlockBudgetV1), Error> {
         if action_index != self.privacy_actions_in_tx {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -60519,7 +60844,7 @@ impl StateTransaction<'_, '_> {
             ));
         }
 
-        let limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
+        let limits = *self.privacy_budget_after_block.limits();
         let next_actions = self
             .privacy_actions_in_tx
             .checked_add(1)
@@ -60543,7 +60868,8 @@ impl StateTransaction<'_, '_> {
             ));
         }
 
-        let mut reservation = self.privacy_budget_after_block.begin_transaction();
+        let mut next_block_budget = self.privacy_budget_after_block;
+        let mut reservation = next_block_budget.begin_transaction();
         reservation
             .reserve(0, encoded_action_bytes)
             .map_err(|error| {
@@ -60552,9 +60878,7 @@ impl StateTransaction<'_, '_> {
                 ))
             })?;
         reservation.commit();
-        self.privacy_actions_in_tx = next_actions;
-        self.privacy_bytes_in_tx = next_bytes;
-        Ok(())
+        Ok((next_actions, next_bytes, next_block_budget))
     }
 
     #[cfg(test)]
@@ -63428,6 +63752,28 @@ pub(crate) mod deserialize {
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
                 take_required(&mut map, "block_hashes")?;
+            let committed_height =
+                u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: "committed height does not fit u64".to_owned(),
+                })?;
+            world
+                .privacy_consensus_policy
+                .view()
+                .get()
+                .validate_at_committed_height(committed_height)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "state.world.privacy_consensus_policy".to_owned(),
+                    message: error.to_string(),
+                })?;
+            crate::privacy_state::validate_privacy_activation_schedules_at_committed_height_v1(
+                &world.privacy_activations.view(),
+                committed_height,
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "state.world.privacy_activations".to_owned(),
+                message,
+            })?;
             let (
                 restored_nexus,
                 lane_incarnations,
@@ -64025,6 +64371,25 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn validate_provider_ingest_completion_authorities(
+        provider_owners: &Storage<ProviderId, AccountId>,
+        authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
+    ) -> Result<(), json::Error> {
+        let owners = provider_owners.view();
+        for (provider_id, authority) in authorities.view().iter() {
+            if !authority.is_valid() || owners.get(provider_id) != Some(&authority.provider_owner) {
+                return Err(json::Error::InvalidField {
+                    field: "provider_ingest_completion_authorities".to_owned(),
+                    message: format!(
+                        "provider {} has a noncanonical or owner-mismatched completion authority",
+                        hex::encode(provider_id.as_bytes())
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_ram_lfe_program_policies(
         policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     ) -> Result<(), json::Error> {
@@ -64443,6 +64808,8 @@ pub(crate) mod deserialize {
         let pedersen_params = take_optional_default(&mut map, "pedersen_params")?;
         let poseidon_params = take_optional_default(&mut map, "poseidon_params")?;
         let runtime_upgrades = take_optional_default(&mut map, "runtime_upgrades")?;
+        let privacy_consensus_policy: Cell<iroha_data_model::privacy::PrivacyConsensusPolicyV1> =
+            take_required(&mut map, "privacy_consensus_policy")?;
         let privacy_activations: Storage<
             crate::privacy_state::PrivacyActivationKeyV1,
             iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
@@ -64451,6 +64818,10 @@ pub(crate) mod deserialize {
             crate::privacy_state::PrivacyPgcAccountKeyV1,
             crate::privacy_state::PrivacyPgcAccountStateV1,
         > = take_required(&mut map, "privacy_pgc_accounts")?;
+        let privacy_pgc_pool_invariants: Storage<
+            crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+            crate::privacy_state::PrivacyPgcPoolInvariantV1,
+        > = take_required(&mut map, "privacy_pgc_pool_invariants")?;
         let privacy_nullifiers: Storage<
             crate::privacy_state::PrivacyNullifierKeyV1,
             crate::privacy_state::PrivacyStateItemRecordV1,
@@ -64468,8 +64839,10 @@ pub(crate) mod deserialize {
             crate::privacy_state::PrivacyRootHeadRecordV1,
         > = take_required(&mut map, "privacy_root_heads")?;
         crate::privacy_state::validate_privacy_persisted_state_v1(
+            privacy_consensus_policy.view().get(),
             &privacy_activations.view(),
             &privacy_pgc_accounts.view(),
+            &privacy_pgc_pool_invariants.view(),
             &privacy_nullifiers.view(),
             &privacy_commitments.view(),
             &privacy_roots.view(),
@@ -64550,6 +64923,13 @@ pub(crate) mod deserialize {
         let soracloud_private_uploaded_model_execution_receipts = take_optional_default(
             &mut map,
             "soracloud_private_uploaded_model_execution_receipts",
+        )?;
+        let provider_owners = take_required(&mut map, "provider_owners")?;
+        let provider_ingest_completion_authorities =
+            take_required(&mut map, "provider_ingest_completion_authorities")?;
+        validate_provider_ingest_completion_authorities(
+            &provider_owners,
+            &provider_ingest_completion_authorities,
         )?;
         let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
@@ -64680,8 +65060,10 @@ pub(crate) mod deserialize {
             pedersen_params,
             poseidon_params,
             runtime_upgrades,
+            privacy_consensus_policy,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -64733,7 +65115,8 @@ pub(crate) mod deserialize {
             capacity_declarations: Storage::default(),
             capacity_fee_ledger: Storage::default(),
             capacity_disputes: Storage::default(),
-            provider_owners: Storage::default(),
+            provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket: Storage::default(),
             da_pin_intents_by_alias: Storage::default(),
             da_pin_intents_by_manifest: Storage::default(),
@@ -65640,6 +66023,166 @@ mod tests {
             .expect("default test lane must be present in the manifest registry");
     }
 
+    fn world_with_privacy_tightenings(
+        protocol_scheduled_at_height: u64,
+        protocol_effective_at_height: u64,
+    ) -> (
+        World,
+        iroha_data_model::privacy::PrivacyConsensusLimitsV1,
+        iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1,
+    ) {
+        use iroha_data_model::privacy::{
+            PrivacyConsensusPolicyTighteningV1, PrivacyConsensusPolicyV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+            PrivacyProtocolLimitsTighteningV1,
+        };
+
+        let mut world = World::default();
+        let current_limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
+        let mut next_limits = current_limits;
+        next_limits.max_actions_per_block -= 1;
+        next_limits.retained_root_count -= 1;
+        world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
+            current_limits,
+            pending_tightening: Some(PrivacyConsensusPolicyTighteningV1 {
+                scheduled_at_height: 100,
+                effective_at_height: 400,
+                next_limits,
+            }),
+        });
+
+        let mut activation = crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        )
+        .expect("compiled VeRange profile")
+        .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+            PrivacyProposedLifecycleV1 {
+                proposed_at_height: 100,
+                activate_at_height: 400,
+            },
+        ));
+        let mut next_protocol_limits = activation.protocol_limits;
+        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            ref mut limits,
+        ) = next_protocol_limits
+        else {
+            unreachable!("VeRange compiled profile")
+        };
+        limits.max_aggregation_count -= 1;
+        activation.pending_protocol_limits_tightening = Some(PrivacyProtocolLimitsTighteningV1 {
+            scheduled_at_height: protocol_scheduled_at_height,
+            effective_at_height: protocol_effective_at_height,
+            next_limits: next_protocol_limits,
+        });
+        world.privacy_activations.insert(
+            crate::privacy_state::PrivacyActivationKeyV1::new(
+                PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            ),
+            activation,
+        );
+        (world, next_limits, next_protocol_limits)
+    }
+
+    #[test]
+    fn privacy_policy_and_protocol_tightenings_apply_atomically_at_block_start() {
+        use iroha_data_model::privacy::{
+            PrivacyProtocolActivationLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        };
+
+        let (world, next_limits, next_protocol_limits) = world_with_privacy_tightenings(100, 400);
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(400_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let policy = *block.world.privacy_consensus_policy.get();
+        assert_eq!(policy.current_limits, next_limits);
+        assert_eq!(policy.pending_tightening, None);
+        assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
+        assert_eq!(block.privacy_budget_in_block.actions(), 0);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 0);
+
+        let key = crate::privacy_state::PrivacyActivationKeyV1::new(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        );
+        let activation = *block
+            .world
+            .privacy_activations
+            .get(&key)
+            .expect("promoted activation");
+        assert_eq!(activation.protocol_limits, next_protocol_limits);
+        assert_eq!(activation.pending_protocol_limits_tightening, None);
+        assert!(matches!(
+            activation.lifecycle,
+            PrivacyProtocolLifecycleV1::Active(_)
+        ));
+        assert!(matches!(
+            activation.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(_)
+        ));
+
+        {
+            let mut transaction = block.transaction();
+            transaction
+                .reserve_privacy_action(0, 1)
+                .expect("one action under tightened block budget");
+            transaction.apply();
+        }
+        let transaction = block.transaction();
+        assert!(
+            transaction.preflight_privacy_action(0, 1).is_err(),
+            "the due max-actions-per-block tightening must govern this exact block"
+        );
+    }
+
+    #[test]
+    fn missed_protocol_schedule_rolls_back_a_due_policy_start_hook() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        use iroha_data_model::privacy::PrivacyProtocolIdV1;
+
+        let (world, _, _) = world_with_privacy_tightenings(99, 399);
+        let original_policy = *world.privacy_consensus_policy.view().get();
+        let activation_key = crate::privacy_state::PrivacyActivationKeyV1::new(
+            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        );
+        let original_activation = *world
+            .privacy_activations
+            .view()
+            .get(&activation_key)
+            .expect("scheduled activation");
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(400_u64), None, None, None, 0, 0);
+
+        let error = catch_unwind(AssertUnwindSafe(|| {
+            let _block = state.block(header);
+        }))
+        .expect_err("missed protocol schedule must abort block construction");
+        let panic_text = error
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| error.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        assert!(panic_text.contains("missed"), "{panic_text}");
+        assert_eq!(
+            state.world.privacy_consensus_policy.view().get(),
+            &original_policy,
+            "a failed later start hook must not publish the earlier due policy write"
+        );
+        assert_eq!(
+            state.world.privacy_activations.view().get(&activation_key),
+            Some(&original_activation),
+            "a failed start hook must leave the base activation unchanged"
+        );
+    }
+
     #[test]
     fn privacy_action_budget_is_transactional_contiguous_and_fail_closed() {
         let state = State::new(
@@ -65654,34 +66197,73 @@ mod tests {
         {
             let mut transaction = block.transaction();
             assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
-            assert!(transaction.reserve_privacy_action(1, 64).is_err());
-            assert!(transaction.reserve_privacy_action(0, 0).is_err());
-            assert!(
-                transaction
-                    .reserve_privacy_action(0, u64::from(limits.max_action_bytes) + 1)
-                    .is_err()
+            assert_eq!(transaction.next_privacy_action_index(), 0);
+            let skipped_preflight = transaction
+                .preflight_privacy_action(1, 64)
+                .expect_err("skipped index preflight");
+            let skipped_reservation = transaction
+                .reserve_privacy_action(1, 64)
+                .expect_err("skipped index reservation");
+            assert_eq!(
+                skipped_preflight.to_string(),
+                skipped_reservation.to_string(),
+                "preflight and reservation must share the exact rejection path"
+            );
+            let zero_preflight = transaction
+                .preflight_privacy_action(0, 0)
+                .expect_err("zero-byte preflight");
+            let zero_reservation = transaction
+                .reserve_privacy_action(0, 0)
+                .expect_err("zero-byte reservation");
+            assert_eq!(zero_preflight.to_string(), zero_reservation.to_string());
+            let oversized_bytes = u64::from(limits.max_action_bytes) + 1;
+            let oversized_preflight = transaction
+                .preflight_privacy_action(0, oversized_bytes)
+                .expect_err("oversized preflight");
+            let oversized_reservation = transaction
+                .reserve_privacy_action(0, oversized_bytes)
+                .expect_err("oversized reservation");
+            assert_eq!(
+                oversized_preflight.to_string(),
+                oversized_reservation.to_string()
             );
             assert_eq!(
                 transaction.privacy_budget_for_testing(),
                 (0, 0, 0, 0),
-                "rejected reservations must not consume local or staged block budget"
+                "rejected preflights and reservations must not consume local or staged block budget"
             );
 
             transaction
+                .preflight_privacy_action(0, 64)
+                .expect("first contiguous action preflight");
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 0, 0),
+                "successful preflight must remain non-mutating"
+            );
+            transaction
                 .reserve_privacy_action(0, 64)
-                .expect("first contiguous action");
+                .expect("unchanged state must make reservation agree with preflight");
+            assert_eq!(transaction.next_privacy_action_index(), 1);
             assert_eq!(transaction.privacy_budget_for_testing(), (1, 64, 1, 64));
-            assert!(transaction.reserve_privacy_action(0, 32).is_err());
-            assert!(transaction.reserve_privacy_action(2, 32).is_err());
+            assert!(transaction.preflight_privacy_action(0, 32).is_err());
+            assert!(transaction.preflight_privacy_action(2, 32).is_err());
+            let exhausted_preflight = transaction.preflight_privacy_action(1, 32).expect_err(
+                "the compiled first release permits one privacy action per transaction",
+            );
+            let exhausted_reservation = transaction.reserve_privacy_action(1, 32).expect_err(
+                "the compiled first release permits one privacy action per transaction",
+            );
+            assert_eq!(
+                exhausted_preflight.to_string(),
+                exhausted_reservation.to_string(),
+                "the compiled first release permits one privacy action per transaction"
+            );
             assert_eq!(
                 transaction.privacy_budget_for_testing(),
                 (1, 64, 1, 64),
-                "duplicate and skipped indexes must not consume budget"
+                "duplicate, skipped, and over-limit actions must not consume budget"
             );
-            transaction
-                .reserve_privacy_action(1, 32)
-                .expect("second contiguous action");
-            assert_eq!(transaction.privacy_budget_for_testing(), (2, 96, 2, 96));
             // Dropping the transaction exercises rollback of the entire
             // staged reservation set.
         }
@@ -65690,6 +66272,7 @@ mod tests {
 
         {
             let mut transaction = block.transaction();
+            assert_eq!(transaction.next_privacy_action_index(), 0);
             transaction
                 .reserve_privacy_action(0, 48)
                 .expect("fresh transaction restarts its action index");
@@ -65712,6 +66295,145 @@ mod tests {
         }
         assert_eq!(block.privacy_budget_in_block.actions(), 2);
         assert_eq!(block.privacy_budget_in_block.bytes(), 64);
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 2, 64),
+                "the third transaction sees the complete committed block budget"
+            );
+            let exhausted_preflight = transaction
+                .preflight_privacy_action(0, 16)
+                .expect_err("the compiled first release permits two privacy actions per block");
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 2, 64),
+                "block-limit preflight must not consume transaction or block budget"
+            );
+            let exhausted_reservation = transaction
+                .reserve_privacy_action(0, 16)
+                .expect_err("the compiled first release permits two privacy actions per block");
+            assert_eq!(
+                exhausted_preflight.to_string(),
+                exhausted_reservation.to_string(),
+                "preflight and final reservation must not diverge at the block boundary"
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 2, 64),
+                "a block-limit rejection must not consume transaction or block budget"
+            );
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 2);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 64);
+    }
+
+    #[test]
+    fn privacy_transaction_intent_binding_is_exact_one_shot_and_transaction_scoped() {
+        use iroha_data_model::privacy::PrivacyTransactionIntentDigestV1;
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let digest_a = PrivacyTransactionIntentDigestV1::new([0xA1; 32]);
+        let digest_b = PrivacyTransactionIntentDigestV1::new([0xB2; 32]);
+        let submission_a = Hash::new(b"signed privacy submission A");
+        let submission_b = Hash::new(b"signed privacy submission B");
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+                    .expect_err("ad-hoc or child execution has no signed direct binding"),
+                PrivacyTransactionIntentConsumptionErrorV1::MissingBinding
+            );
+            transaction.bind_privacy_transaction_intent_v1(Some((digest_a, submission_a)));
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_b, submission_a)
+                    .expect_err("stale digest"),
+                PrivacyTransactionIntentConsumptionErrorV1::DigestMismatch
+            );
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_a, submission_b)
+                    .expect_err("dynamic child substitution"),
+                PrivacyTransactionIntentConsumptionErrorV1::SubmissionMismatch
+            );
+            transaction
+                .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+                .expect("the exact signed submission consumes once");
+            assert_eq!(
+                transaction
+                    .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+                    .expect_err("child-overlay replay"),
+                PrivacyTransactionIntentConsumptionErrorV1::AlreadyConsumed
+            );
+
+            transaction.bind_privacy_transaction_intent_v1(Some((digest_b, submission_b)));
+            transaction
+                .consume_privacy_transaction_intent_v1(digest_b, submission_b)
+                .expect("a new signed payload reset clears the prior consumed bit");
+            // Dropping the overlay exercises rollback of the consumed bit.
+        }
+
+        let mut next_transaction = block.transaction();
+        assert_eq!(
+            next_transaction
+                .consume_privacy_transaction_intent_v1(digest_b, submission_b)
+                .expect_err("a new transaction never inherits a dropped binding"),
+            PrivacyTransactionIntentConsumptionErrorV1::MissingBinding
+        );
+        next_transaction.bind_privacy_transaction_intent_v1(Some((digest_a, submission_a)));
+        next_transaction
+            .consume_privacy_transaction_intent_v1(digest_a, submission_a)
+            .expect("rollback does not leak a consumed bit into the next transaction");
+    }
+
+    #[test]
+    fn privacy_action_budget_accepts_exact_byte_boundary_and_rejects_one_byte_over() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let max = u64::from(
+            iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default().max_action_bytes,
+        );
+        let mut transaction = block.transaction();
+
+        let overflow_preflight = transaction
+            .preflight_privacy_action(0, max + 1)
+            .expect_err("one byte above the action cap");
+        let overflow_reservation = transaction
+            .reserve_privacy_action(0, max + 1)
+            .expect_err("one byte above the action cap");
+        assert_eq!(
+            overflow_preflight.to_string(),
+            overflow_reservation.to_string()
+        );
+        assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
+
+        transaction
+            .preflight_privacy_action(0, max)
+            .expect("exact inclusive action-byte boundary");
+        assert_eq!(
+            transaction.privacy_budget_for_testing(),
+            (0, 0, 0, 0),
+            "boundary preflight is read-only"
+        );
+        transaction
+            .reserve_privacy_action(0, max)
+            .expect("reservation must agree with successful boundary preflight");
+        assert_eq!(transaction.privacy_budget_for_testing(), (1, max, 1, max));
     }
 
     #[test]

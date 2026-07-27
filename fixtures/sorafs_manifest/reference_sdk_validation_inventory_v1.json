@@ -933,6 +933,24 @@
       "sha256": "e1c0d230cc935d528d642e376394f23a3572fe4eabce994d5fc56f96d15c4123"
     },
     {
+      "path": "reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+      "domain": "appeal_finance",
+      "scenario": "appeal_finance_cancel_asset_lock_positive",
+      "status": "Ok",
+      "code": "SFS-OK-000",
+      "byte_length": 823,
+      "sha256": "5071a8b5222e70a9f170955c624dc0751dcc6c8259eab991afc23305f6342b5f"
+    },
+    {
+      "path": "reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+      "domain": "appeal_finance",
+      "scenario": "appeal_finance_cancel_asset_lock_zero_expected_negative",
+      "status": "Error",
+      "code": "SFS-VAL-001",
+      "byte_length": 938,
+      "sha256": "41b126546306eccb9cc92553a033950df2fa742011999b8051254abd93032930"
+    },
+    {
       "path": "reference_sdk/bundle_heterogeneous_positive_validation_outcome_v1.json",
       "domain": "reference_sdk",
       "scenario": "bundle_heterogeneous_positive",
@@ -1019,6 +1037,6 @@
     "key_usage": "test_only_reference_sdk_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "40a3700e7d938f4df1b29e725de9d9ff3dbd0696fa0d6673c7d6c85e31025f828a657849d793d4ffda03a422e3f04355527ddf135cfc61272db6e797c1ffaf0e"
+    "signature_hex": "44007f760898c66baf80cfc093c6f4fe7cc4a7e2d646d2d58787c6ecc56676d3ab0f5db8cd713f68dbcdfb47685f417d3f64f145f291f8046242af759bec2802"
   }
 }

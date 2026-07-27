@@ -81,6 +81,31 @@ invariants together.
    layout has an explicit version. Consensus never implicitly decodes a legacy
    shape or runs mixed old/new layouts.
 
+## In-flight first-release formal boundary
+
+**Implementation:** In flight; V3 payload/execution-input symbols are not yet
+total-source-projected into a formal semantics.
+**Closure:** Open.
+**Evidence:** Open.
+
+`SumeragiV2InFlightFirstRelease.tla` is a finite three-validator safety model
+for `LaneExecutablePayloadV3` carrying an exact
+`QueuePlanAdmissionBindingV2` preimage. Its fixed and mutation configurations
+cover producer-selected versus replicated-carrier ownership, QueuePlan V5
+`PutBatch` then V9 reservation fsync then Kura Active then execution-input
+durability then READY, missing/late bodies, producer death after fanout,
+crash-prefix durable recovery, exact Commit/Release scope, duplicate carrier
+application, conflicting/ABA bindings, and the 4096 entry limit.
+
+This row is deliberately **not** a production-refinement claim. TLC exhausts
+the stated finite model and Apalache typechecks/bounds its abstract actions;
+neither checker proves that Rust filesystem/restart traces refine those
+actions. The open theorem is a total Rust pre/post-state forward simulation
+and reverse terminal-owner projection over QueuePlan V5, reservation V9,
+Kura, recovery, Commit, and Release. Token-order/source-presence checks are
+insufficient and must not promote this row or a release status. See
+`docs/formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md`.
+
 ## Native AMX application closure
 
 ### ML-NAT-01 — shared participant-application predicate
@@ -975,7 +1000,7 @@ accept/reject mismatch.
 `crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` and its
 `native_amx_grouped` module generate
 `fixtures/sumeragi_v2/native_amx_v2_grouped.json`, including grouped golden
-data, application evidence, and 34 negative controls.
+data, application evidence, and 50 negative controls.
 `NativeAmxAttestationBodyV2::computed_grouped_participant_settlement` is the
 explicit production builder; single-source construction is labelled as a test
 fixture.
@@ -1067,11 +1092,12 @@ identical temporary), reservation duplication, base-state mismatch, bounded
 fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 123 exact, non-ignored multilane focus
-tests: 54 core multilane tests, 38 core queue-journal tests, seven in
-`iroha_data_model`, 22 in Torii, and two in the integration support library.
-That source inventory is not a passing test transcript; the full focused rerun
-and archived receipt remain required.
+The release runner now inventories 277 exact, non-ignored multilane focus
+tests: 101 core multilane tests, 119 core queue-journal tests, seven
+configuration tests, eight in `iroha_data_model`, 39 in Torii, one in
+Torii-shared, and two in the integration support library. That source
+inventory is not a passing test transcript; the full focused rerun and
+archived receipt remain required.
 
 ### G-FORMAL — source-bound models and expected mutations
 
@@ -1158,7 +1184,7 @@ Swift, Kotlin core-jvm, and mirrored Java suites against the same Rust-owned
 grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
-The Rust generator, 34-control grouped corpus, six-surface parity harness, and
+The Rust generator, 50-control grouped corpus, six-surface parity harness, and
 fixture/suite source-hash binding are present. Standalone OpenAPI, JavaScript,
 Kotlin, Java, and Python runs are fresh and passing; Swift remains open because
 the materialized XCFramework is ABI 19 and must be rebuilt at ABI 21 after the

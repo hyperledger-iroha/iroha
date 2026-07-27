@@ -144,7 +144,10 @@ public final class CancelAssetLockInstructionTests {
           " " + FIXTURE_LOCK_ID,
           FIXTURE_LOCK_ID + " ",
           "\uFEFF" + FIXTURE_LOCK_ID,
-          FIXTURE_LOCK_ID + "\uFEFF"
+          FIXTURE_LOCK_ID + "\uFEFF",
+          "\uD800",
+          "\uDC00",
+          "lock\uD800id"
         }) {
       expectIllegalArgument(
           () ->

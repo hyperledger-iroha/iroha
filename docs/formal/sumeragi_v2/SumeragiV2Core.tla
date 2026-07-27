@@ -2136,7 +2136,10 @@ AcceptCertifiedResponseCapability(node, roundView, subject) ==
 
 ApplyDecision(node, qc) ==
   LET application == [node |-> node, qc |-> qc]
-  IN /\ [node |-> node, qc |-> qc] \in decisions
+  \* Applying retires the node's historical-recovery clock ownership, so the
+  \* durable Decision must be the exact current-context Commit authority.
+  \* Command evidence remains causal provenance and is intentionally separate.
+  IN /\ DecisionCertifiedBodyRecoveryAuthority(node, qc)
      /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ \E validation \in validatedBodies:
            /\ validation.node = node

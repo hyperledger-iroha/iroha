@@ -5727,6 +5727,10 @@ impl Executor {
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
         trace!("Running transaction execution");
+        state_transaction.bind_privacy_transaction_intent_v1(None);
+        let privacy_intent_binding =
+            crate::privacy::signed_privacy_transaction_intent_binding_v1(&transaction)?;
+        state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
         let tx_bytes_len = to_bytes(transaction.payload())
             .map(|bytes| bytes.len())
             .map_err(|err| {
@@ -5916,9 +5920,9 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
-                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
+                    if crate::zk::is_verifier_readiness_claim_label(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
-                            "production-claim proof backends are not supported".to_owned(),
+                            "readiness-claim proof backends are not supported".to_owned(),
                         ));
                     }
                     if crate::zk::is_trusted_setup_backend_label(backend.as_str()) {
@@ -5931,7 +5935,7 @@ impl Executor {
                             "developer-only proof backends are not supported".to_owned(),
                         ));
                     }
-                    if !crate::zk::is_production_verify_backend_label(backend.as_str()) {
+                    if !crate::zk::is_verifier_backend_registry_label_v1(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "unsupported proof backends are not supported".to_owned(),
                         ));
@@ -8735,10 +8739,6 @@ fn initial_permission_resource_authority(
             let token = decode!(executor_permission::account::CanReplaceAccountController);
             token.account == *authority
         }
-        "CanManageZkAceIdentityForAccount" => {
-            let token = decode!(executor_permission::zk_ace::CanManageZkAceIdentityForAccount);
-            token.account == *authority
-        }
         "CanResolveAccountAlias" => {
             let token = decode!(executor_permission::account::CanResolveAccountAlias);
             let delegation: Permission =
@@ -10569,7 +10569,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanModifyAssetMetadata",
     "CanSetAssetTransferFreeze",
     "CanSetAssetTransferDailyLimit",
-    "CanManageZkAceIdentityForAccount",
     "CanRegisterNft",
     "CanUnregisterNft",
     "CanTransferNft",
@@ -15995,7 +15994,7 @@ mod tests {
         for (idx, (backend, expected_msg)) in [
             (
                 "halo2/ipa:production-ready",
-                "production-claim proof backends",
+                "readiness-claim proof backends",
             ),
             ("halo2/ipa:kzg", "trusted-setup proof backends"),
             ("halo2/ipa:dev-fixture", "developer-only proof backends"),

@@ -65,9 +65,10 @@ use norito::{
 };
 use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_LOG_VERSION_V1, GovernanceDagBlockV1,
-    GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
+    GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
     ReputationSnapshotEventV1, ReputationSnapshotV1,
     reputation::signed::{ReputationSnapshotTrustPolicyV1, SignedReputationSnapshotV1},
+    validate_governance_dag_chain_v1,
 };
 use thiserror::Error;
 
@@ -90,6 +91,11 @@ pub const REPUTATION_JOURNAL_DELIVERY_POLICY_VERSION_V1: u8 = 1;
 pub const REPUTATION_PUBLICATION_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Governance DAG acknowledgement version.
 pub const REPUTATION_GOVERNANCE_DAG_ACKNOWLEDGEMENT_VERSION_V1: u8 = 1;
+/// Governance DAG signed-head inclusion readback version.
+pub const REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1: u8 = 1;
+/// Maximum signed Governance DAG blocks accepted in one inclusion readback.
+pub const REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1: usize =
+    sorafs_manifest::GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1;
 /// Committed reputation read-projection version.
 pub const REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1: u8 = 1;
 /// Maximum authoritative snapshots and matching events retained by the read projection.
@@ -203,7 +209,7 @@ impl ReputationRuntimeProviderQualificationV1 {
         self.policy_digest
     }
 
-    const fn is_valid(self) -> bool {
+    fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
@@ -218,6 +224,11 @@ pub trait ReputationRuntimeProviderV1: Send + Sync + fmt::Debug {
     fn handle(&self) -> &str;
 
     /// Observe the active public provider revision and policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free receipt when the provider is unavailable,
+    /// revoked, stale, or otherwise cannot prove the active qualification.
     fn qualification(
         &self,
     ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1>;
@@ -636,6 +647,7 @@ impl ReputationCommittedProjectorRuntimeV1 {
             return Ok(ReputationFinalizedPollOutcomeV1::Complete);
         }
 
+        self.ensure_query_binding()?;
         let anchor_result = self
             .query
             .finalized_at_or_before(&self.policy.chain_id, self.policy.window_end_height);
@@ -2944,6 +2956,11 @@ impl ReputationJournalDeliveryPolicyV1 {
     }
 
     /// Qualify or revalidate the exact finalized-query provider.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a provider whose handle, revision, or public policy does not
+    /// match the independently constructed delivery policy.
     pub fn revalidate_query_provider(
         &self,
         query: &dyn ReputationFinalizedQueryV1,
@@ -2956,6 +2973,11 @@ impl ReputationJournalDeliveryPolicyV1 {
     }
 
     /// Qualify or revalidate the exact native transaction submitter.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a provider whose handle, revision, or public policy does not
+    /// match the independently constructed delivery policy.
     pub fn revalidate_submitter_provider(
         &self,
         submitter: &dyn ReputationJournalTransactionSubmitterV1,
@@ -2973,6 +2995,11 @@ impl ReputationJournalDeliveryPolicyV1 {
 /// The handle remains an independently configured identity; including its
 /// digest here prevents the same qualification from authorizing a substituted
 /// submitter role.
+///
+/// # Errors
+///
+/// Rejects an invalid chain or malformed/test-marked runtime handle, or a
+/// canonical digest failure.
 pub fn reputation_journal_submitter_policy_digest_v1(
     chain_id: &ChainId,
     handle: &str,
@@ -3672,18 +3699,34 @@ pub struct ReputationGovernanceDagPublicationRequestV1 {
     pub canonical_signed_result: Vec<u8>,
 }
 
+/// Authenticated bounded proof that one publication is included below a signed
+/// Governance DAG head.
+///
+/// `inclusion_path` is in ascending block order, contains the exact requested
+/// snapshot exactly once, and ends at `head.head_block_cid`. After the first
+/// acknowledgement, its first block must be the immediate successor of the
+/// previously authenticated head.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ReputationGovernanceDagReadbackV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Pinned-publisher signed head manifest.
+    pub head: GovernanceDagHeadV1,
+    /// Bounded contiguous block suffix containing the requested snapshot.
+    pub inclusion_path: Vec<GovernanceDagBlockV1>,
+}
+
 /// Identity-pinned Governance DAG publication and readback client.
 ///
-/// A successful acknowledgement is the exact signed DAG block read back from
-/// the governed publication service. A submitter-side success without this
-/// block remains pending.
+/// A submitter-side success without a verified signed head and bounded
+/// inclusion path remains pending.
 pub trait ReputationGovernanceDagClientV1: ReputationRuntimeProviderV1 {
-    /// Publish or reconcile the exact snapshot, returning its signed DAG block
-    /// only after authenticated readback.
+    /// Publish or reconcile the exact snapshot, returning an authenticated
+    /// signed-head inclusion receipt only after readback.
     fn reconcile_publication(
         &self,
         request: &ReputationGovernanceDagPublicationRequestV1,
-    ) -> Result<Option<GovernanceDagBlockV1>, ReputationExternalFailureV1>;
+    ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>;
 }
 
 /// Payload-free proof that the exact threshold result is in the Governance DAG.
@@ -3728,14 +3771,9 @@ impl ReputationGovernanceDagAcknowledgementV1 {
     }
 }
 
-/// Compact durable form of the authenticated Governance DAG readback.
-///
-/// The signed reputation payload is already retained by the publication
-/// checkpoint, so persisting the full block would duplicate its potentially
-/// large provider inventory. These fields are sufficient to reconstruct the
-/// exact block and re-run both node and block signature verification.
+/// Compact durable form of the exact target block in a Governance DAG path.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct StoredReputationGovernanceDagReadbackV1 {
+struct StoredReputationGovernanceDagTargetBlockV1 {
     block_cid: Vec<u8>,
     prev_block_cid: Option<Vec<u8>>,
     sequence: u64,
@@ -3748,7 +3786,7 @@ struct StoredReputationGovernanceDagReadbackV1 {
     block_signature: GovernanceLogSignatureV1,
 }
 
-impl StoredReputationGovernanceDagReadbackV1 {
+impl StoredReputationGovernanceDagTargetBlockV1 {
     fn from_block(block: &GovernanceDagBlockV1) -> Self {
         Self {
             block_cid: block.block_cid.clone(),
@@ -3786,6 +3824,66 @@ impl StoredReputationGovernanceDagReadbackV1 {
             },
             block_signature: self.block_signature.clone(),
         }
+    }
+}
+
+/// Durable signed-head readback with the exact target payload stored once.
+///
+/// Non-target path blocks and the signed head are retained verbatim. The
+/// target block is reconstructed from the checkpoint's separately retained
+/// signed reputation snapshot before every validation, including restart.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredReputationGovernanceDagReadbackV1 {
+    version: u8,
+    head: GovernanceDagHeadV1,
+    path_before_target: Vec<GovernanceDagBlockV1>,
+    target: StoredReputationGovernanceDagTargetBlockV1,
+    path_after_target: Vec<GovernanceDagBlockV1>,
+}
+
+impl StoredReputationGovernanceDagReadbackV1 {
+    fn from_readback(
+        readback: &ReputationGovernanceDagReadbackV1,
+        target_index: usize,
+    ) -> Result<Self, ReputationRuntimeError> {
+        let target = readback
+            .inclusion_path
+            .get(target_index)
+            .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+        Ok(Self {
+            version: readback.version,
+            head: readback.head.clone(),
+            path_before_target: readback.inclusion_path[..target_index].to_vec(),
+            target: StoredReputationGovernanceDagTargetBlockV1::from_block(target),
+            path_after_target: readback.inclusion_path[target_index + 1..].to_vec(),
+        })
+    }
+
+    fn reconstruct_readback(
+        &self,
+        signed_result: &SignedReputationSnapshotV1,
+    ) -> Result<ReputationGovernanceDagReadbackV1, ReputationRuntimeError> {
+        let path_len = self
+            .path_before_target
+            .len()
+            .checked_add(1)
+            .and_then(|len| len.checked_add(self.path_after_target.len()))
+            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        if path_len > REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 {
+            return Err(ReputationRuntimeError::GovernanceReadbackPathTooLong {
+                found: path_len,
+                maximum: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1,
+            });
+        }
+        let mut inclusion_path = Vec::with_capacity(path_len);
+        inclusion_path.extend(self.path_before_target.iter().cloned());
+        inclusion_path.push(self.target.reconstruct_block(signed_result));
+        inclusion_path.extend(self.path_after_target.iter().cloned());
+        Ok(ReputationGovernanceDagReadbackV1 {
+            version: self.version,
+            head: self.head.clone(),
+            inclusion_path,
+        })
     }
 }
 
@@ -3873,6 +3971,11 @@ impl ReputationPublicationPolicyV1 {
     }
 
     /// Qualify or revalidate the external threshold signer.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a signer whose handle, revision, or trust-policy digest differs
+    /// from the publication policy.
     pub fn revalidate_threshold_signer(
         &self,
         signer: &dyn ReputationThresholdSignerClientV1,
@@ -3885,6 +3988,11 @@ impl ReputationPublicationPolicyV1 {
     }
 
     /// Qualify or revalidate authenticated Governance DAG publication/readback.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a client whose handle, revision, or governed publisher-key
+    /// digest differs from the publication policy.
     pub fn revalidate_governance_dag(
         &self,
         governance_dag: &dyn ReputationGovernanceDagClientV1,
@@ -3975,7 +4083,8 @@ impl ReputationCommittedSnapshotV1 {
         policy: &ReputationPublicationPolicyV1,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         governance_readback: &StoredReputationGovernanceDagReadbackV1,
-    ) -> Result<(), ReputationRuntimeError> {
+        previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
+    ) -> Result<ReputationGovernanceDagReadbackV1, ReputationRuntimeError> {
         verify_persisted_signed_result(&self.signed_result, trust_policy)?;
         if self.sequence == 0
             || self.material_digest == [0; 32]
@@ -3985,20 +4094,23 @@ impl ReputationCommittedSnapshotV1 {
         {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
-        let block = governance_readback.reconstruct_block(&self.signed_result);
-        let expected_acknowledgement = governance_acknowledgement_from_block(
+        let readback = governance_readback
+            .reconstruct_readback(&self.signed_result)
+            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+        let (expected_acknowledgement, _) = governance_acknowledgement_from_readback(
             policy,
             self.sequence,
             self.material_digest,
             self.signed_result_digest,
             &self.signed_result,
-            &block,
+            &readback,
+            previous_readback,
         )
         .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
         if expected_acknowledgement != self.governance_acknowledgement {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
-        Ok(())
+        Ok(readback)
     }
 }
 
@@ -4036,13 +4148,14 @@ impl ReputationCommittedReadProjectionV1 {
         policy: &ReputationPublicationPolicyV1,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         governance_readback: &StoredReputationGovernanceDagReadbackV1,
+        previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
     ) -> Result<bool, ReputationRuntimeError> {
-        committed.validate(policy, trust_policy, governance_readback)?;
         if let Some(existing) = &self.latest {
             if existing == &committed {
                 return Ok(false);
             }
         }
+        committed.validate(policy, trust_policy, governance_readback, previous_readback)?;
         if self
             .events
             .iter()
@@ -4208,11 +4321,18 @@ impl ReputationPublicationCheckpointV1 {
         if retention_limit == 0 || retention_limit > REPUTATION_COMMITTED_READ_MAX_EVENTS_V1 {
             return Err(ReputationRuntimeError::PublicationCheckpointConflict);
         }
+        let previous_readback = self
+            .committed_snapshots
+            .last()
+            .zip(self.committed_governance_readbacks.last())
+            .map(|(previous, readback)| readback.reconstruct_readback(&previous.signed_result))
+            .transpose()?;
         let appended = self.committed_read.append(
             committed.clone(),
             policy,
             trust_policy,
             &governance_readback,
+            previous_readback.as_ref(),
         )?;
         if !appended {
             return if self.committed_snapshots.last() == Some(&committed)
@@ -4431,11 +4551,9 @@ impl ReputationPublicationReconcilerV1 {
         self.validate_signed_result(&delivery, &pending.signed_result)?;
         if pending.governance_acknowledgement.is_none() {
             let request = governance_publication_request(&pending)?;
-            self.ensure_governance_dag_binding()?;
-            let block_result = self.governance_dag.reconcile_publication(&request);
-            self.ensure_governance_dag_binding()?;
-            let block = match block_result {
-                Ok(Some(block)) => block,
+            let readback_result = self.reconcile_governance_publication(&request)?;
+            let readback = match readback_result {
+                Ok(Some(readback)) => readback,
                 Ok(None) => return Ok(ReputationPublicationOutcomeV1::AwaitingGovernanceDag),
                 Err(failure) => {
                     return self.record_external_failure(
@@ -4445,8 +4563,9 @@ impl ReputationPublicationReconcilerV1 {
                     );
                 }
             };
-            let (acknowledgement, readback) = self.validate_governance_block(&pending, &block)?;
-            self.store_governance_readback(acknowledgement, readback)?;
+            let (acknowledgement, stored_readback) =
+                self.validate_governance_readback(&pending, &readback)?;
+            self.store_governance_readback(acknowledgement, stored_readback)?;
         }
 
         let pending = self
@@ -4594,10 +4713,23 @@ impl ReputationPublicationReconcilerV1 {
         Ok(())
     }
 
-    fn validate_governance_block(
+    fn reconcile_governance_publication(
+        &self,
+        request: &ReputationGovernanceDagPublicationRequestV1,
+    ) -> Result<
+        Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>,
+        ReputationRuntimeError,
+    > {
+        self.ensure_governance_dag_binding()?;
+        let result = self.governance_dag.reconcile_publication(request);
+        self.ensure_governance_dag_binding()?;
+        Ok(result)
+    }
+
+    fn validate_governance_readback(
         &self,
         pending: &StoredReputationPublicationV1,
-        block: &GovernanceDagBlockV1,
+        readback: &ReputationGovernanceDagReadbackV1,
     ) -> Result<
         (
             ReputationGovernanceDagAcknowledgementV1,
@@ -4605,17 +4737,31 @@ impl ReputationPublicationReconcilerV1 {
         ),
         ReputationRuntimeError,
     > {
-        let acknowledgement = governance_acknowledgement_from_block(
+        let previous_readback = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+            state
+                .checkpoint
+                .committed_snapshots
+                .last()
+                .zip(state.checkpoint.committed_governance_readbacks.last())
+                .map(|(committed, stored)| stored.reconstruct_readback(&committed.signed_result))
+                .transpose()?
+        };
+        let (acknowledgement, target_index) = governance_acknowledgement_from_readback(
             &self.policy,
             pending.sequence,
             pending.material_digest,
             pending.signed_result_digest,
             &pending.signed_result,
-            block,
+            readback,
+            previous_readback.as_ref(),
         )?;
         Ok((
             acknowledgement,
-            StoredReputationGovernanceDagReadbackV1::from_block(block),
+            StoredReputationGovernanceDagReadbackV1::from_readback(readback, target_index)?,
         ))
     }
 
@@ -5002,27 +5148,121 @@ fn verify_persisted_signed_result(
         .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)
 }
 
-fn governance_acknowledgement_from_block(
+fn validate_governance_readback_envelope<'a>(
+    policy: &ReputationPublicationPolicyV1,
+    readback: &'a ReputationGovernanceDagReadbackV1,
+) -> Result<(&'a GovernanceDagBlockV1, &'a GovernanceDagBlockV1), ReputationRuntimeError> {
+    let path_len = readback.inclusion_path.len();
+    if path_len > REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 {
+        return Err(ReputationRuntimeError::GovernanceReadbackPathTooLong {
+            found: path_len,
+            maximum: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1,
+        });
+    }
+    if path_len == 0 {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    if readback.version != REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1 {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+
+    readback
+        .head
+        .validate()
+        .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    if readback.head.publisher_peer_id != policy.governance_publisher_peer_id
+        || readback.head.head_signature.public_key != policy.governance_publisher_public_key
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    let maximum = u64::try_from(REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1)
+        .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    if (readback.head.block_count <= maximum && readback.head.checkpoint_cid.is_some())
+        || (readback.head.block_count > maximum && readback.head.checkpoint_cid.is_none())
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+
+    validate_governance_dag_chain_v1(
+        &readback.inclusion_path,
+        Some(readback.head.head_block_cid.as_slice()),
+    )
+    .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    let first = readback
+        .inclusion_path
+        .first()
+        .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    let tip = readback
+        .inclusion_path
+        .last()
+        .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    if tip.sequence.checked_add(1) != Some(readback.head.block_count)
+        || readback.head.generated_at < tip.timestamp
+        || readback.inclusion_path.iter().any(|block| {
+            block.publisher_peer_id != policy.governance_publisher_peer_id
+                || block.node.publisher_peer_id != policy.governance_publisher_peer_id
+                || block.block_signature.public_key != policy.governance_publisher_public_key
+                || block.node.publisher_signature.public_key
+                    != policy.governance_publisher_public_key
+        })
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    if readback.head.block_count > maximum
+        && first.sequence == readback.head.block_count - maximum
+        && readback.head.checkpoint_cid.as_deref() != Some(first.block_cid.as_slice())
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    Ok((first, tip))
+}
+
+fn governance_acknowledgement_from_readback(
     policy: &ReputationPublicationPolicyV1,
     sequence: u64,
     material_digest: [u8; 32],
-    signed_result_digest: [u8; 32],
+    expected_signed_result_digest: [u8; 32],
     signed_result: &SignedReputationSnapshotV1,
-    block: &GovernanceDagBlockV1,
-) -> Result<ReputationGovernanceDagAcknowledgementV1, ReputationRuntimeError> {
-    block
-        .validate()
-        .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    readback: &ReputationGovernanceDagReadbackV1,
+    previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
+) -> Result<(ReputationGovernanceDagAcknowledgementV1, usize), ReputationRuntimeError> {
     if sequence == 0
         || material_digest == [0; 32]
-        || signed_result_digest == [0; 32]
-        || block.publisher_peer_id != policy.governance_publisher_peer_id
-        || block.node.publisher_peer_id != policy.governance_publisher_peer_id
-        || block.block_signature.public_key != policy.governance_publisher_public_key
-        || block.node.publisher_signature.public_key != policy.governance_publisher_public_key
-        || block.node.payload
-            != GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone())
-        || block.node.timestamp < signed_result.snapshot.generated_at_unix
+        || expected_signed_result_digest == [0; 32]
+        || signed_result_digest(signed_result).ok() != Some(expected_signed_result_digest)
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    let (first, _) = validate_governance_readback_envelope(policy, readback)?;
+    if let Some(previous_readback) = previous_readback {
+        let (_, previous_tip) = validate_governance_readback_envelope(policy, previous_readback)?;
+        if first.prev_block_cid.as_deref() != Some(previous_tip.block_cid.as_slice())
+            || first.node.prev_cid.as_deref() != Some(previous_tip.node.node_cid.as_slice())
+            || previous_tip.sequence.checked_add(1) != Some(first.sequence)
+            || first.timestamp < previous_tip.timestamp
+            || first.node.timestamp < previous_tip.node.timestamp
+            || first.timestamp < previous_readback.head.generated_at
+            || first.node.timestamp < previous_readback.head.generated_at
+            || readback.head.block_count <= previous_readback.head.block_count
+            || readback.head.generated_at < previous_readback.head.generated_at
+        {
+            return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+        }
+    }
+
+    let target_payload = GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone());
+    let mut target_index = None;
+    for (index, block) in readback.inclusion_path.iter().enumerate() {
+        if block.node.payload == target_payload {
+            if target_index.replace(index).is_some() {
+                return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+            }
+        }
+    }
+    let target_index =
+        target_index.ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    let block = &readback.inclusion_path[target_index];
+    if block.node.timestamp < signed_result.snapshot.generated_at_unix
         || block.timestamp < signed_result.snapshot.generated_at_unix
     {
         return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
@@ -5031,7 +5271,7 @@ fn governance_acknowledgement_from_block(
         version: REPUTATION_GOVERNANCE_DAG_ACKNOWLEDGEMENT_VERSION_V1,
         sequence,
         material_digest,
-        signed_result_digest,
+        signed_result_digest: expected_signed_result_digest,
         dag_block_sequence: block.sequence,
         dag_block_cid: exact_32(&block.block_cid)
             .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?,
@@ -5041,7 +5281,7 @@ fn governance_acknowledgement_from_block(
         publisher_key_digest: policy.governance_publisher_key_digest,
     };
     acknowledgement.validate()?;
-    Ok(acknowledgement)
+    Ok((acknowledgement, target_index))
 }
 
 fn decode_publication_checkpoint(
@@ -5074,13 +5314,19 @@ fn validate_publication_checkpoint(
     }
     checkpoint.committed_read.validate(policy_digest)?;
     let mut retained_snapshot_ids = BTreeSet::new();
+    let mut previous_readback = None;
     for ((committed, governance_readback), event) in checkpoint
         .committed_snapshots
         .iter()
         .zip(&checkpoint.committed_governance_readbacks)
         .zip(&checkpoint.committed_read.events)
     {
-        committed.validate(policy, trust_policy, governance_readback)?;
+        let readback = committed.validate(
+            policy,
+            trust_policy,
+            governance_readback,
+            previous_readback.as_ref(),
+        )?;
         if !retained_snapshot_ids.insert(committed.signed_result.snapshot.snapshot_id) {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
@@ -5092,6 +5338,7 @@ fn validate_publication_checkpoint(
         if event != &expected_event {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
+        previous_readback = Some(readback);
     }
     if let Some(pending) = &checkpoint.pending {
         verify_persisted_signed_result(&pending.signed_result, trust_policy)?;
@@ -5123,14 +5370,17 @@ fn validate_publication_checkpoint(
         ) {
             (None, None) => {}
             (Some(acknowledgement), Some(readback)) => {
-                let block = readback.reconstruct_block(&pending.signed_result);
-                let expected_acknowledgement = governance_acknowledgement_from_block(
+                let readback = readback
+                    .reconstruct_readback(&pending.signed_result)
+                    .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+                let (expected_acknowledgement, _) = governance_acknowledgement_from_readback(
                     policy,
                     pending.sequence,
                     pending.material_digest,
                     pending.signed_result_digest,
                     &pending.signed_result,
-                    &block,
+                    &readback,
+                    previous_readback.as_ref(),
                 )
                 .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
                 if acknowledgement != expected_acknowledgement {
@@ -5490,6 +5740,14 @@ pub enum ReputationRuntimeError {
     /// Governance readback is invalid, forged, or from the wrong publisher.
     #[error("reputation Governance DAG acknowledgement is invalid")]
     InvalidGovernanceAcknowledgement,
+    /// A Governance DAG inclusion readback exceeds the hard V1 path bound.
+    #[error("reputation Governance DAG inclusion path has {found} blocks; maximum is {maximum}")]
+    GovernanceReadbackPathTooLong {
+        /// Observed inclusion-path block count.
+        found: usize,
+        /// Hard maximum accepted by this runtime.
+        maximum: usize,
+    },
     /// Publication durable state conflicts with projector/external state.
     #[error("reputation publication checkpoint conflicts with reconciliation state")]
     PublicationCheckpointConflict,
@@ -5691,7 +5949,6 @@ mod tests {
         ReputationJournalFinalizedEventV1, StreamTokenExcludedKindV1,
         StreamTokenValidationStatusV1,
     };
-    use sorafs_manifest::GovernanceSignatureAlgorithm;
     use sorafs_manifest::reputation::{
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
@@ -5702,6 +5959,7 @@ mod tests {
             SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
         },
     };
+    use sorafs_manifest::{GOVERNANCE_DAG_HEAD_VERSION_V1, GovernanceSignatureAlgorithm};
     use tempfile::TempDir;
 
     use super::*;
@@ -5975,14 +6233,22 @@ mod tests {
         };
     }
 
-    fn governance_block(signed_result: &SignedReputationSnapshotV1) -> GovernanceDagBlockV1 {
+    fn governance_block_after(
+        signed_result: &SignedReputationSnapshotV1,
+        previous: Option<&GovernanceDagBlockV1>,
+    ) -> GovernanceDagBlockV1 {
         let signing_key = SigningKey::from_bytes(&[0xB1; 32]);
         let publisher_peer_id = b"peer-a".to_vec();
-        let publication_timestamp = signed_result.snapshot.generated_at_unix;
+        let publication_timestamp =
+            previous.map_or(signed_result.snapshot.generated_at_unix, |block| {
+                block
+                    .timestamp
+                    .max(signed_result.snapshot.generated_at_unix)
+            });
         let mut node = GovernanceLogNodeV1 {
             version: GOVERNANCE_LOG_VERSION_V1,
             node_cid: Vec::new(),
-            prev_cid: None,
+            prev_cid: previous.map(|block| block.node.node_cid.clone()),
             timestamp: publication_timestamp,
             publisher_peer_id: publisher_peer_id.clone(),
             payload: GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone()),
@@ -5996,8 +6262,10 @@ mod tests {
         let mut block = GovernanceDagBlockV1 {
             version: GOVERNANCE_DAG_BLOCK_VERSION_V1,
             block_cid: Vec::new(),
-            prev_block_cid: None,
-            sequence: 0,
+            prev_block_cid: previous.map(|block| block.block_cid.clone()),
+            sequence: previous.map_or(0, |block| {
+                block.sequence.checked_add(1).expect("fixture sequence")
+            }),
             timestamp: publication_timestamp,
             publisher_peer_id,
             node,
@@ -6018,6 +6286,70 @@ mod tests {
         block
     }
 
+    fn governance_head(path: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
+        let signing_key = SigningKey::from_bytes(&[0xB1; 32]);
+        let tip = path.last().expect("non-empty Governance DAG path");
+        let block_count = tip.sequence.checked_add(1).expect("fixture block count");
+        let mut head = GovernanceDagHeadV1 {
+            version: GOVERNANCE_DAG_HEAD_VERSION_V1,
+            head_block_cid: tip.block_cid.clone(),
+            block_count,
+            generated_at: tip.timestamp,
+            publisher_peer_id: b"peer-a".to_vec(),
+            checkpoint_cid: (block_count
+                > u64::try_from(REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1)
+                    .expect("fixture bound"))
+            .then(|| path.first().expect("non-empty path").block_cid.clone()),
+            head_signature: empty_governance_signature(),
+        };
+        let payload = head
+            .signature_payload_bytes()
+            .expect("encode Governance DAG head signature payload");
+        head.head_signature = GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: signing_key.sign(&payload).to_bytes().to_vec(),
+        };
+        head.validate()
+            .expect("validate Governance DAG head fixture");
+        head
+    }
+
+    fn governance_readback_after(
+        policy: &ReputationPublicationPolicyV1,
+        sequence: u64,
+        material_digest: [u8; 32],
+        signed_result_digest: [u8; 32],
+        signed_result: &SignedReputationSnapshotV1,
+        previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
+    ) -> (
+        ReputationGovernanceDagAcknowledgementV1,
+        StoredReputationGovernanceDagReadbackV1,
+    ) {
+        let previous_tip = previous_readback.and_then(|readback| readback.inclusion_path.last());
+        let block = governance_block_after(signed_result, previous_tip);
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&block)),
+            inclusion_path: vec![block],
+        };
+        let (acknowledgement, target_index) = governance_acknowledgement_from_readback(
+            policy,
+            sequence,
+            material_digest,
+            signed_result_digest,
+            signed_result,
+            &readback,
+            previous_readback,
+        )
+        .expect("derive governance acknowledgement");
+        (
+            acknowledgement,
+            StoredReputationGovernanceDagReadbackV1::from_readback(&readback, target_index)
+                .expect("store Governance DAG readback"),
+        )
+    }
+
     fn governance_readback(
         policy: &ReputationPublicationPolicyV1,
         sequence: u64,
@@ -6028,19 +6360,13 @@ mod tests {
         ReputationGovernanceDagAcknowledgementV1,
         StoredReputationGovernanceDagReadbackV1,
     ) {
-        let block = governance_block(signed_result);
-        let acknowledgement = governance_acknowledgement_from_block(
+        governance_readback_after(
             policy,
             sequence,
             material_digest,
             signed_result_digest,
             signed_result,
-            &block,
-        )
-        .expect("derive governance acknowledgement");
-        (
-            acknowledgement,
-            StoredReputationGovernanceDagReadbackV1::from_block(&block),
+            None,
         )
     }
 
@@ -6085,7 +6411,8 @@ mod tests {
     #[derive(Debug)]
     struct NullQuery {
         handle: String,
-        qualification: ReputationRuntimeProviderQualificationV1,
+        qualification: Mutex<ReputationRuntimeProviderQualificationV1>,
+        drift_after_anchor: bool,
     }
 
     impl ReputationRuntimeProviderV1 for NullQuery {
@@ -6096,16 +6423,30 @@ mod tests {
         fn qualification(
             &self,
         ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
-            Ok(self.qualification)
+            Ok(*self.qualification.lock().expect("qualification lock"))
         }
     }
 
     impl ReputationFinalizedQueryV1 for NullQuery {
         fn finalized_at_or_before(
             &self,
-            _chain_id: &ChainId,
-            _maximum_height: u64,
+            chain_id: &ChainId,
+            maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
+            if self.drift_after_anchor {
+                self.qualification
+                    .lock()
+                    .expect("qualification lock")
+                    .revision = REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+                return Ok(ReputationFinalizedAnchorV1 {
+                    chain_id: chain_id.clone(),
+                    identity: ReputationFinalizedIdentityV1 {
+                        height: maximum_height,
+                        block_hash: [0x91; 32],
+                    },
+                    finalized_at_unix_ms: FINALIZED_AT_MS,
+                });
+            }
             Err(ReputationExternalFailureV1::try_new([1; 32]).expect("failure"))
         }
 
@@ -6365,8 +6706,42 @@ mod tests {
         fn reconcile_publication(
             &self,
             _request: &ReputationGovernanceDagPublicationRequestV1,
-        ) -> Result<Option<GovernanceDagBlockV1>, ReputationExternalFailureV1> {
+        ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>
+        {
             Ok(None)
+        }
+    }
+
+    #[derive(Debug)]
+    struct DriftingGovernanceDag {
+        handle: String,
+        qualification: Mutex<ReputationRuntimeProviderQualificationV1>,
+        readback: ReputationGovernanceDagReadbackV1,
+    }
+
+    impl ReputationRuntimeProviderV1 for DriftingGovernanceDag {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(*self.qualification.lock().expect("qualification lock"))
+        }
+    }
+
+    impl ReputationGovernanceDagClientV1 for DriftingGovernanceDag {
+        fn reconcile_publication(
+            &self,
+            _request: &ReputationGovernanceDagPublicationRequestV1,
+        ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>
+        {
+            self.qualification
+                .lock()
+                .expect("qualification lock")
+                .revision = REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+            Ok(Some(self.readback.clone()))
         }
     }
 
@@ -6412,13 +6787,51 @@ mod tests {
             policy,
             Arc::new(NullQuery {
                 handle: "query-b".to_owned(),
-                qualification: query_qualification,
+                qualification: Mutex::new(query_qualification),
+                drift_after_anchor: false,
             }),
         );
         assert!(matches!(
             result,
             Err(ReputationRuntimeError::RuntimeBindingMismatch)
         ));
+    }
+
+    #[test]
+    fn finalized_query_result_is_discarded_when_qualification_drifts() {
+        let temp = TempDir::new().expect("tempdir");
+        let trust = trust_policy();
+        let ingest = ingest_policy(&trust);
+        let projector = Arc::new(
+            ReputationIngestService::open(temp.path(), ingest.clone()).expect("projector"),
+        );
+        let policy = ReputationFinalizedQueryPolicyV1::try_new(&ingest, "query-a", 32, 1_024)
+            .expect("query policy");
+        let query = Arc::new(NullQuery {
+            handle: "query-a".to_owned(),
+            qualification: Mutex::new(policy.query_qualification()),
+            drift_after_anchor: true,
+        });
+        let runtime = ReputationCommittedProjectorRuntimeV1::new(
+            Arc::clone(&projector),
+            &ingest,
+            policy,
+            query,
+        )
+        .expect("qualified runtime");
+
+        assert!(matches!(
+            runtime.reconcile_once(),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        assert!(
+            projector
+                .status()
+                .expect("projector status")
+                .latest_finalized
+                .is_none(),
+            "the anchor returned during qualification drift must not reach durable ingest"
+        );
     }
 
     #[test]
@@ -7116,6 +7529,62 @@ mod tests {
     }
 
     #[test]
+    fn governance_readback_is_discarded_when_provider_qualification_drifts() {
+        let projector_root = TempDir::new().expect("projector root");
+        let publication_root = TempDir::new().expect("publication root");
+        let trust = trust_policy();
+        let projector = Arc::new(
+            ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
+                .expect("projector"),
+        );
+        let policy = publication_policy(&trust);
+        let signed = signed_snapshot(&trust, [0xD8; 16], None, FINALIZED_AT_MS / 1_000);
+        let block = governance_block_after(&signed, None);
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&block)),
+            inclusion_path: vec![block],
+        };
+        let pending = StoredReputationPublicationV1 {
+            sequence: 1,
+            material_digest: [0xD9; 32],
+            signed_result_digest: signed_result_digest(&signed).expect("signed result digest"),
+            signed_result: signed,
+            governance_acknowledgement: None,
+            governance_readback: None,
+        };
+        let request = governance_publication_request(&pending).expect("publication request");
+        let reconciler = ReputationPublicationReconcilerV1::open(
+            publication_root.path(),
+            projector,
+            trust,
+            policy.clone(),
+            Arc::new(NullThresholdSigner {
+                handle: "signer-a".to_owned(),
+                qualification: policy.threshold_signer_qualification(),
+            }),
+            Arc::new(DriftingGovernanceDag {
+                handle: "dag-a".to_owned(),
+                qualification: Mutex::new(policy.governance_dag_qualification()),
+                readback,
+            }),
+        )
+        .expect("open reconciler");
+
+        assert!(matches!(
+            reconciler.reconcile_governance_publication(&request),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        assert!(
+            reconciler
+                .pending_publication()
+                .expect("read durable publication state")
+                .is_none(),
+            "a receipt returned during qualification drift must not become durable"
+        );
+    }
+
+    #[test]
     fn committed_projection_is_gated_idempotent_restart_safe_and_corruption_strict() {
         let projector_root = TempDir::new().expect("projector root");
         let publication_root = TempDir::new().expect("publication root");
@@ -7300,6 +7769,9 @@ mod tests {
             first_digest,
             &first,
         );
+        let first_public_readback = first_readback
+            .reconstruct_readback(&first)
+            .expect("reconstruct first Governance DAG readback");
         reconciler
             .store_governance_readback(first_acknowledgement, first_readback)
             .expect("store first Governance DAG readback");
@@ -7346,12 +7818,13 @@ mod tests {
         );
 
         let second_digest = signed_result_digest(&second).expect("second signed result digest");
-        let (second_acknowledgement, second_readback) = governance_readback(
+        let (second_acknowledgement, second_readback) = governance_readback_after(
             &policy,
             second_delivery.sequence,
             second_delivery.material_digest,
             second_digest,
             &second,
+            Some(&first_public_readback),
         );
         reconciler
             .store_governance_readback(second_acknowledgement, second_readback)
@@ -7482,6 +7955,7 @@ mod tests {
         let policy_digest = policy.digest().expect("publication policy digest");
         let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
         let mut previous_snapshot_id = None;
+        let mut previous_governance_readback = None;
 
         for offset in 0_u8..3 {
             let snapshot_id = [0xC0 + offset; 16];
@@ -7494,13 +7968,17 @@ mod tests {
             let material_digest = [0xD0 + offset; 32];
             let signed_result_digest = signed_result_digest(&signed).expect("signed result digest");
             let sequence = u64::from(offset) + 1;
-            let (acknowledgement, governance_readback) = governance_readback(
+            let (acknowledgement, governance_readback) = governance_readback_after(
                 &policy,
                 sequence,
                 material_digest,
                 signed_result_digest,
                 &signed,
+                previous_governance_readback.as_ref(),
             );
+            let current_governance_readback = governance_readback
+                .reconstruct_readback(&signed)
+                .expect("reconstruct Governance DAG readback");
             let committed = ReputationCommittedSnapshotV1 {
                 sequence,
                 material_digest,
@@ -7518,6 +7996,7 @@ mod tests {
                 )
                 .expect("commit bounded authoritative snapshot");
             previous_snapshot_id = Some(snapshot_id);
+            previous_governance_readback = Some(current_governance_readback);
         }
 
         assert_eq!(checkpoint.committed_snapshots.len(), 2);
@@ -7650,6 +8129,280 @@ mod tests {
     }
 
     #[test]
+    fn signed_head_inclusion_path_is_persisted_and_reverified_on_restart() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let policy_digest = policy.digest().expect("publication policy digest");
+        let before = signed_snapshot(&trust, [0x31; 16], None, FINALIZED_AT_MS / 1_000);
+        let target = signed_snapshot(&trust, [0x32; 16], None, FINALIZED_AT_MS / 1_000 + 1);
+        let after = signed_snapshot(&trust, [0x33; 16], None, FINALIZED_AT_MS / 1_000 + 2);
+        let first = governance_block_after(&before, None);
+        let target_block = governance_block_after(&target, Some(&first));
+        let tip = governance_block_after(&after, Some(&target_block));
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(&[first.clone(), target_block.clone(), tip.clone()]),
+            inclusion_path: vec![first, target_block, tip],
+        };
+        let material_digest = [0x34; 32];
+        let target_digest = signed_result_digest(&target).expect("signed result digest");
+        let (acknowledgement, target_index) = governance_acknowledgement_from_readback(
+            &policy,
+            1,
+            material_digest,
+            target_digest,
+            &target,
+            &readback,
+            None,
+        )
+        .expect("validate signed-head inclusion");
+        assert_eq!(target_index, 1);
+        let mut substituted_head = readback.clone();
+        substituted_head.head.publisher_peer_id = b"peer-b".to_vec();
+        substituted_head.head.head_signature = empty_governance_signature();
+        let substituted_payload = substituted_head
+            .head
+            .signature_payload_bytes()
+            .expect("encode substituted head payload");
+        let governance_signing_key = SigningKey::from_bytes(&[0xB1; 32]);
+        substituted_head.head.head_signature = GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: governance_signing_key.verifying_key().to_bytes().to_vec(),
+            signature: governance_signing_key
+                .sign(&substituted_payload)
+                .to_bytes()
+                .to_vec(),
+        };
+        substituted_head
+            .head
+            .validate()
+            .expect("substituted head remains cryptographically valid");
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                material_digest,
+                target_digest,
+                &target,
+                &substituted_head,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+        let stored =
+            StoredReputationGovernanceDagReadbackV1::from_readback(&readback, target_index)
+                .expect("compact readback");
+        let committed = ReputationCommittedSnapshotV1 {
+            sequence: 1,
+            material_digest,
+            signed_result_digest: target_digest,
+            signed_result: target,
+            governance_acknowledgement: acknowledgement,
+        };
+        let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
+        checkpoint
+            .commit_authoritative(committed, &policy, &trust, stored)
+            .expect("commit signed-head inclusion");
+
+        let canonical = norito::to_bytes(&checkpoint).expect("encode checkpoint");
+        assert_eq!(
+            decode_publication_checkpoint(&canonical, &policy, policy_digest, &trust)
+                .expect("restart must reverify the full retained path"),
+            checkpoint
+        );
+
+        let mut forged_path = checkpoint.clone();
+        forged_path.committed_governance_readbacks[0].path_after_target[0]
+            .block_signature
+            .signature[0] ^= 0x01;
+        let forged_path = norito::to_bytes(&forged_path).expect("encode forged path checkpoint");
+        assert!(matches!(
+            decode_publication_checkpoint(&forged_path, &policy, policy_digest, &trust),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+
+        let mut forged_head = checkpoint;
+        forged_head.committed_governance_readbacks[0]
+            .head
+            .head_signature
+            .signature[0] ^= 0x01;
+        let forged_head = norito::to_bytes(&forged_head).expect("encode forged head checkpoint");
+        assert!(matches!(
+            decode_publication_checkpoint(&forged_head, &policy, policy_digest, &trust),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+    }
+
+    #[test]
+    fn governance_readback_rejects_oversize_path_without_truncation() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let signed = signed_snapshot(&trust, [0x41; 16], None, FINALIZED_AT_MS / 1_000);
+        let mut path = Vec::new();
+        for _ in 0..=REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 {
+            let block = governance_block_after(&signed, path.last());
+            path.push(block);
+        }
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(&path),
+            inclusion_path: path,
+        };
+        let error = governance_acknowledgement_from_readback(
+            &policy,
+            1,
+            [0x42; 32],
+            signed_result_digest(&signed).expect("signed result digest"),
+            &signed,
+            &readback,
+            None,
+        )
+        .expect_err("oversize inclusion path must fail closed");
+        assert_eq!(
+            error,
+            ReputationRuntimeError::GovernanceReadbackPathTooLong {
+                found: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 + 1,
+                maximum: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1,
+            }
+        );
+    }
+
+    #[test]
+    fn governance_readback_requires_the_exact_target_once() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let target = signed_snapshot(&trust, [0x45; 16], None, FINALIZED_AT_MS / 1_000);
+        let other = signed_snapshot(&trust, [0x46; 16], None, FINALIZED_AT_MS / 1_000);
+        let other_block = governance_block_after(&other, None);
+        let missing = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&other_block)),
+            inclusion_path: vec![other_block],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                [0x47; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &missing,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+
+        let first_target = governance_block_after(&target, None);
+        let wrong_version = ReputationGovernanceDagReadbackV1 {
+            version: 0,
+            head: governance_head(std::slice::from_ref(&first_target)),
+            inclusion_path: vec![first_target.clone()],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                [0x48; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &wrong_version,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+
+        let second_target = governance_block_after(&target, Some(&first_target));
+        let duplicate = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(&[first_target.clone(), second_target.clone()]),
+            inclusion_path: vec![first_target, second_target],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                [0x49; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &duplicate,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+    }
+
+    #[test]
+    fn governance_readback_rejects_fork_and_rollback_from_previous_head() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let previous = signed_snapshot(&trust, [0x51; 16], None, FINALIZED_AT_MS / 1_000);
+        let previous_block = governance_block_after(&previous, None);
+        let previous_readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&previous_block)),
+            inclusion_path: vec![previous_block],
+        };
+        governance_acknowledgement_from_readback(
+            &policy,
+            1,
+            [0x52; 32],
+            signed_result_digest(&previous).expect("previous digest"),
+            &previous,
+            &previous_readback,
+            None,
+        )
+        .expect("validate previous authenticated head");
+
+        let target = signed_snapshot(
+            &trust,
+            [0x53; 16],
+            Some(previous.snapshot.snapshot_id),
+            FINALIZED_AT_MS / 1_000 + 1,
+        );
+        let fork_root = governance_block_after(
+            &signed_snapshot(&trust, [0x54; 16], None, FINALIZED_AT_MS / 1_000),
+            None,
+        );
+        let fork_target = governance_block_after(&target, Some(&fork_root));
+        let fork_readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&fork_target)),
+            inclusion_path: vec![fork_target],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                2,
+                [0x55; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &fork_readback,
+                Some(&previous_readback),
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+
+        let rollback_block = governance_block_after(&target, None);
+        let rollback_readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&rollback_block)),
+            inclusion_path: vec![rollback_block],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                2,
+                [0x56; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &rollback_readback,
+                Some(&previous_readback),
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+    }
+
+    #[test]
     fn canonical_checkpoint_rejects_forged_governance_readback_signature() {
         let trust = trust_policy();
         let policy = publication_policy(&trust);
@@ -7693,6 +8446,7 @@ mod tests {
             .committed_governance_readbacks
             .last_mut()
             .expect("committed Governance DAG readback")
+            .target
             .block_signature
             .signature[0] ^= 0x01;
         let forged = norito::to_bytes(&checkpoint).expect("canonical forged DAG checkpoint");

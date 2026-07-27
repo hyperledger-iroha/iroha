@@ -10,6 +10,7 @@ default = ["cli-orchestrator"]
 cli-orchestrator = [
     "dep:iroha_config",
     "dep:iroha_crypto",
+    "dep:sha2",
     "dep:sorafs_chunker",
     "dep:sorafs_manifest",
     "dep:toml",

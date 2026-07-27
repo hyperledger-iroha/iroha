@@ -720,14 +720,21 @@ actor. It preserves FIFO order for each target while round-robin service lets
 later responsive targets and fan-outs proceed during another target's
 backpressure. Completion and reducer work continue to run while such output is
 pending. The corridor freezes `roster × {Safety, Lane, Bulk}` reservations for
-the height and adds a distinct non-zero shared fanout budget. A deterministic
-maximum matching assigns at most one unique frozen target/class reservation to
-each retained fanout and is recomputed after every attempt. Non-roster reply
-identities and repeated output for an already-owned target/class are confined
-to shared capacity, while partial multi-target completion reopens the exact
-finished reservation. This prevents authenticated observer identity churn from
-filling validator safety/lane reserves. Once Kura has returned the exact
-applied-height receipt and matching
+the height, one `SidecarTopologyProgress` Lane reservation for topology-routed
+Request/Close traffic, and one independent `SidecarReplyControl` Lane
+reservation for exact-reply CloseAck/GenerationHint traffic at every frozen
+target. It also adds a distinct non-zero shared fanout budget. A deterministic
+maximum matching assigns at most one unique frozen target/class/kind
+reservation to each retained fanout and is recomputed after every attempt.
+Parked ordinary output for the same target and a saturated shared pool cannot
+consume either progress reservation. Alternate authenticated routes for one
+semantic Hint coalesce as attempts of the same reserved occurrence rather than
+multiplying reservations. Non-roster reply identities and repeated output for
+an already-owned target/class/kind are confined to shared capacity, while
+partial multi-target completion reopens the exact finished reservation. This
+prevents authenticated observer identity churn from filling validator
+safety/lane reserves. Once Kura has returned the exact applied-height receipt
+and matching
 finality artifact, the runner applies one atomic preflight to every retained
 fan-out. It rechecks the pinned hash of every network message and accepts only a
 typed claim created in the exact Decision context and height. A historical
@@ -1034,10 +1041,12 @@ checkpoint without changing the module or corridor geometry. They prove that a
 same-tenure replay cannot cross actor admission again while its writer flush
 is pending or flushed-but-unapplied, that a terminal source remains a
 zero-reservation route-history member while two live sibling sources progress,
-and that a closed writer's replacement tenure reacquires the current sidecar
-item only after exact-output capacity is available. The last transition is a
-capacity-checked reactivation, not a cursor reset: the old test which treated
-an unflushed reconnect as terminal is renamed to assert the required retry.
+and that a same-source reconnect preserves either the unflushed current item or
+the terminal cursor without acquiring another reservation. A closed writer
+never advances the cursor, so its replacement tenure retries the retained
+current item through the ordinary route update. A successful writer flush is
+terminal and cannot be reinterpreted as a newly materialized cursor zero, even
+when another source keeps the fanout live and the shared corridor is full.
 The source-authority, immutable-sidecar, runner-race, daemon-corridor,
 shared-byte-budget, cached-Arc-admission, and executable-refinement closure adds 22 exact
 regressions. It also moves two peer tests to their actual shared-byte-budget
@@ -1076,11 +1085,17 @@ adds 115 net regressions: 3 authoritative-ingress, 57 merge-sidecar, 17
 lane-work, 3 runner, 17 worker, and 18 P2P-network tests; the daemon
 network-relay rename is cardinality neutral.
 The routed-Hint and crash-safe V3 lifecycle closure adds 26 exact regressions
-and retires eight obsolete route-free/V2 selectors. The current source-bound
-inventory therefore contains 723 exact tests across
+and retires eight obsolete route-free/V2 selectors. Rejecting replay of a
+proposal superseded by a same-round lock adds one exact reducer regression.
+Preserving that proposal's tag, round, and subject through runner startup adds
+one exact runner regression. Two cross-platform lifecycle V3 crash regressions
+cover state replacement before directory sync and root replacement before
+predecessor cleanup. Rejecting a matching CommitQC from a foreign height
+context before Apply schedules work adds one exact `v2_effects` regression.
+The current source-bound inventory therefore contains 733 exact tests across
 38 modules and 81 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`66a130b892347a296ed3b447d3cf388e00a5c83fdfcd193b228b8eab67059f1a`.
+`e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66`.
 Nine of those legs execute the separate 277-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `dc6e4c3eece63441e9ba5ffdf6b603665e21cf6086a3a6a1307b45829a678510`.
@@ -1190,14 +1205,17 @@ projections, and refinement state.
 A lower-generation, otherwise canonical Request or Close is a stateless
 authenticated probe. The responder returns an exact canonical
 `GenerationHint`, bound to the observed and current generations and the exact
-triggering message hash, without allocating a stream, gate, cursor, or route
-and without rewriting the lifecycle journal. An unadvertised future generation
-is rejected without a Hint or server-state mutation. Like CloseAck and Chunk,
-the Hint retains the exact authenticated reply route of its triggering Request
-or Close. Lane, runner, worker, daemon, topic selection, and exact-output
-ownership preserve that capability without topology fallback. A duplicate
-semantic Hint coalesces alternate authenticated sources as independent
-attempts, and a same-source refresh cannot erase a sibling. The requester
+triggering message hash, without allocating stream, gate, cursor, or other
+server-lifecycle state and without rewriting the lifecycle journal. An
+unadvertised future generation is rejected without a Hint or server-state
+mutation. Like CloseAck and Chunk, the Hint retains the exact authenticated
+reply route of its triggering Request or Close. Lane, runner, worker, daemon,
+topic selection, and exact-output ownership preserve that capability without
+topology fallback. A duplicate semantic Hint coalesces alternate authenticated
+sources as independent attempts, and a same-source refresh cannot erase a
+sibling. Its dedicated `SidecarReplyControl` Lane reservation remains
+available even when ordinary output for the same target is parked and shared
+capacity is full. The requester
 accepts a Hint only from the expected responder when it names the exact hash of
 an outstanding Request or Close and strictly advances the current generation.
 It first persists that generation and a fresh stream epoch. Only after that
@@ -1224,26 +1242,54 @@ V2 inductive-safety, successor-isolation, and temporal-product operators remain
 unproved; the structural result does not imply network or consensus liveness.
 
 The responder owns one bounded unified `server_streams` table and one bounded
-request-gate table; attempts are bounded within their gates. Service generation
-advances only for a certified changed-roster geometry after every predecessor
-stream, gate, transfer, and flush is terminal. A full same-roster table, gate
-pressure, active-state exhaustion, and generation-counter overflow return
+request-gate table; attempts are bounded within their gates. Equal-roster
+rehydration always preserves responder ownership and generation, including a
+retained current chunk; a new same-roster requester against a full table
+receives fail-atomic `Capacity`. Ordinary changed-roster transition requires
+authenticated terminality for every predecessor stream, gate, transfer, and
+flush. Two private durable paths may instead fence active predecessor responder
+state: a move-only `DurableMergeSidecarRolloverAuthority` obtained after the
+exact-output corridor is durably sealed, or a restart-only fence minted after a
+V3 snapshot passes complete semantic restoration. Both require a lifecycle
+journal and authorize only a certified changed-roster geometry. Gate pressure,
+unauthorized active-state replacement, and generation-counter overflow return
 `Capacity` atomically without advancing a floor, clearing a table, or emitting
-a Hint. A finality handoff cannot override this roster-transition and
-terminality gate.
+a Hint.
 
-An eligible changed-roster transition checks the successor generation,
-constructs the complete empty responder state, and persists both together
-before changing memory or emitting `GenerationHint` on the triggering
-authenticated reply route. The sole durable schema is
-`MergeSidecarLifecycleSnapshotV3`: its integrity-bound canonical Norito payload
-contains geometry, `next_stream_epoch`, responder generation, requester
-streams, unified server streams, and request gates. Its inactive alternating
-slot is fsynced before the independent root high-water marker commits it.
-Restore validates the complete marker-selected candidate, including bounds,
-uniqueness, monotonic floors, gate/stream correspondence, and pending-chunk
-identity, before assigning any field or retiring the inactive slot. V1/V2,
-corrupt, and unknown bytes fail closed as unsupported; there is no migration.
+Every authorized changed-roster transition checks the successor generation,
+constructs the complete empty responder projection, and commits it before
+changing memory or emitting `GenerationHint` on the triggering authenticated
+reply route. The force-fenced paths retire predecessor streams, gates, outbound
+state, and process-local closure-handoff debt, but do not synthesize
+requester-authenticated close prefixes for sequences that were never closed.
+The sole durable schema is `MergeSidecarLifecycleSnapshotV3`: its
+integrity-bound canonical Norito payload contains geometry,
+`next_stream_epoch`, responder generation, requester streams, unified server
+streams, request gates, and the journal root generation.
+
+The root is first atomically published and fsynced as a generation-zero
+bootstrap sentinel with no snapshot hash, before the state directory is
+created; the first state candidate is generation one. If that first state
+survives beside the sentinel, startup semantically validates it and rechecks
+the live pair before allowing the root to adopt it. Later commits write and
+fsync the inactive alternating slot before atomically replacing and fsyncing
+the root marker, so the root selects the predecessor before publication and
+the successor afterward. Startup validates the complete selected candidate,
+including bounds, uniqueness, monotonic floors, gate/stream correspondence,
+and pending-chunk identity; rechecks the live pair; and validates known temp
+artifact types before deleting a temp or unselected slot. Unknown or
+non-regular artifacts fail closed. Before committed recovery deletes any
+predecessor or inactive artifact, it re-syncs both the selected state directory
+and the root-marker directory, so a second crash cannot retire the only
+rollback-safe copy before the preceding replacements are durable. Filesystem
+aliases, including Windows reparse-point files or directories, fail closed.
+State and root replacement are native atomic replacements on Unix and Windows,
+while platforms without durable directory synchronization fail closed. V1/V2,
+corrupt, and unknown bytes are unsupported; there is no migration.
+
+The root marker is the local trust anchor, not an external monotonic counter.
+Replacing or rolling it back—including restoring the bootstrap sentinel—or
+rolling back the whole store/root pair is outside this rollback guarantee.
 Compaction does not weaken response authority: live requests still require the
 current exact context, and historical serving independently rereads canonical
 Kura data and matching finality before returning a sidecar.
@@ -1297,7 +1343,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 723-test inventory is a mechanically checked
+The current 733-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1353,20 +1399,26 @@ unissued future completion without replacing its owner and preserve the latest
 consumer while a missing body waits for durable recovery and retries.
 
 The earlier `SumeragiV2TypedRolloverHandoffProofs` strict and bounded receipts
-predate the V3 two-slot compaction/persistence relation, so they are not current
-evidence. The control partition and `NoRolloverFailure` remain specification
-structure only. The conditional rollover declaration is not promoted while its
-final persistence relation and downstream rotating-leader dependency remain
-unproved. Both typed-handoff entries remain `specified_unproved`; they do not
-establish recovery, eventual finality validation, network or writer progress,
-repeated rollover, end-to-end liveness, or production refinement. Fresh strict
+predate the authority-gated active-state fence, the V3 two-slot
+compaction/persistence relation, bootstrap adoption, validation-before-cleanup
+ordering, and the root trust boundary, so they are not current evidence. The
+control partition and `NoRolloverFailure` remain specification structure only.
+The conditional rollover declaration is not promoted while its final
+persistence relation and downstream rotating-leader dependency remain
+unproved. Both typed-handoff declarations remain source-bound support leaves
+consumed transitively by the top-level successor-activation production-
+refinement debt; they are not independent ledger rows and do not establish
+filesystem or Rust refinement, recovery, eventual finality validation, network
+or writer progress, repeated rollover, or end-to-end liveness. Fresh strict
 safety-and-liveness validation remains pending.
 
 The strict proof-run counts in the following paragraphs are retained
 historical submodule evidence, not current aggregate source-manifest-bound
-release evidence. The canonical 64-entry proof ledger currently reports 35
-`tlaps_proved`, 22 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope` entry, with `machine_checked_completion: false`. The legacy-named
+release evidence. The canonical 54-entry top-level proof ledger currently
+reports 35 `tlaps_proved`, 12 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope` entry, with `machine_checked_completion: false`. Sixteen
+source-bound decomposition leaves remain checked transitively through their
+reviewed consumers and are not independent ledger rows. The legacy-named
 locked-body-reproposal entry denotes the exact three-arm progress obligation:
 old-round Commit, unchanged later-view same-round re-proposal, or legitimate
 Decision/higher-Prepare supersession. It and the production cross-tool refinements remain explicitly
@@ -1375,6 +1427,21 @@ aggregate temporal module likewise retains
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` as explicit proofless
 residuals; downstream wrappers cannot promote them.
+
+The adequate-leader residual is target-local rather than aggregate: another
+validator's Decision is not terminal for the indexed target. Its occurrence
+rank counts every distinct target/leader owner at the frozen semantic rank,
+preventing one serviced owner from hiding another. Equal-count replacement
+and count-increasing replenishment remain explicit non-progress cases and
+require a prior finite or coalesced producer argument.
+
+The exact-Decision producer audit narrows causal replenishment to reachable
+local debt setters; Serve-capacity growth to ordinary or historical request
+drain, fresh causal Completion admission, or local Control enqueue; and
+priority growth to exact network-claim admission or the same archive's normal,
+recovery, or historical runner. Each classification is action-local. No
+current state expression decreases across every producer episode, so the five
+exact off-scheduler convergence leaves remain proofless.
 Independently, `ResponsiveStrongFairnessToReceiptResidual` now has a SANY-clean
 proof script, but remains `specified_unproved` pending fresh strict TLAPS; the
 current conditional cursor theorem is likewise not promoted from its stale
@@ -1461,7 +1528,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 705 exact production
+Before those longer scenarios, the PR gate inventories 733 exact production
 liveness tests and executes all 38 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 277-test
 focus inventory. The
@@ -1559,7 +1626,8 @@ regression raises that total to 440 without adding a module or corridor leg
 and binds one exact writer-flush owner per source chunk. Three subsequent
 worker regressions produce the historical 443-test checkpoint. They bind same-tenure
 pending/unapplied flush deduplication, mixed-source terminal-route history, and
-capacity-checked reconnect reactivation of the unflushed current item.
+same-source reconnect preservation for both the unflushed current item and a
+terminal zero-reservation cursor.
 The subsequent 22-test source-authority and shared-payload closure raises the
 inventory to the 465-test checkpoint across 30 modules and 53 pre-network legs.
 The authenticated-non-validator source-cap and alternate-route-before-lane-cap
@@ -1587,8 +1655,11 @@ daemon-relay changes, producing the 704-test checkpoint. The runner
 close-prefix failed-suffix handoff regression adds one exact name, bringing the
 historical inventory to 705 tests. The routed-Hint and crash-safe V3 lifecycle
 closure adds 26 exact regressions and retires eight obsolete route-free/V2
-selectors, bringing the current inventory to 723 tests across 38 modules and
-81 legs. The rollover
+selectors, producing the 723-test checkpoint across 38 modules and 81 legs.
+The replay-safe locked-proposal authorization regression produces the 724-test
+checkpoint. The exact runner replay-owner regression produces the 732-test
+checkpoint. The foreign-context CommitQC Apply rejection brings the current
+inventory to 733 tests without adding a module or leg. The rollover
 slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1860,7 +1931,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 81 pre-network corridor legs and
-their exact 723-test production inventory, the separate 277-test G-UNIT
+their exact 733-test production inventory, the separate 277-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

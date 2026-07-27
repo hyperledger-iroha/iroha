@@ -21,6 +21,15 @@ function fixture(relativePath) {
   return fs.readFileSync(path.join(fixtureRoot, relativePath));
 }
 
+function expectedProfile(fileName) {
+  return JSON.parse(
+    fs.readFileSync(
+      path.join(fixtureRoot, "..", "reference_sdk", fileName),
+      "utf8",
+    ),
+  );
+}
+
 function assertOutcomeShape(outcome, expected) {
   assert.equal(outcome.status, expected.status);
   assert.equal(outcome.code, expected.code);
@@ -56,6 +65,30 @@ test("appeal-finance validation reports the stable canonical profile", () => {
     outcome.context.find((field) => field.key === "canonical_bytes"),
     { key: "canonical_bytes", value: "85" },
   );
+});
+
+test("appeal-finance positive and negative profiles match the signed inventory fixtures", () => {
+  for (const [payloadPath, label, expectedFile] of [
+    [
+      "cancel_asset_lock_v1.to",
+      "cancel_asset_lock_v1.to",
+      "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+    ],
+    [
+      "negative/cancel_asset_lock_zero_expected_v1.to",
+      "cancel_asset_lock_zero_expected_v1.to",
+      "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+    ],
+  ]) {
+    assert.deepEqual(
+      validateAppealFinanceCancelAssetLock(fixture(payloadPath), {
+        label,
+        generatedAtUnix: 123,
+      }),
+      expectedProfile(expectedFile),
+      payloadPath,
+    );
+  }
 });
 
 test("appeal-finance validation reports the stable missing-field profile", () => {

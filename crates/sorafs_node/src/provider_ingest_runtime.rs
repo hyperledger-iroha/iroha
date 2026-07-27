@@ -19,7 +19,8 @@ use iroha_data_model::{
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestFinalizedRecordV1, PinStatus, ReplicationOrderRecord, ReplicationOrderStatus,
+            PinManifestFinalizedRecordV1, PinStatus, ProviderIngestCompletionAuthorityV1,
+            ProviderIngestCompletionSignerPolicyV1, ReplicationOrderRecord, ReplicationOrderStatus,
         },
     },
     transaction::{SignedTransaction, TransactionPayload},
@@ -34,9 +35,8 @@ use tokio::sync::watch;
 use crate::provider_ingest_outbox::{
     FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_STATUS_PAGE_MAX_V1,
     ProviderIngestCancellationReasonV1, ProviderIngestClaimOwnerV1,
-    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSigningContextV1,
-    ProviderIngestCompletionStateV1, ProviderIngestDeadLetterReasonV1,
-    ProviderIngestDeliveryStateV1, ProviderIngestFailureClassV1,
+    ProviderIngestCompletionSigningContextV1, ProviderIngestCompletionStateV1,
+    ProviderIngestDeadLetterReasonV1, ProviderIngestDeliveryStateV1, ProviderIngestFailureClassV1,
     ProviderIngestFinalizedCancellationV1, ProviderIngestFinalizedCompletionV1,
     ProviderIngestFinalizedCursorV1, ProviderIngestOutbox, ProviderIngestOutboxError,
     ProviderIngestSignerPolicyObservationV1, ProviderIngestSourceClaimV1,
@@ -128,6 +128,8 @@ pub struct ProviderIngestFinalizedAssignmentV1 {
     pub order: ReplicationOrderRecord,
     /// Current registered owner of this runtime's provider identity.
     pub provider_owner: Option<AccountId>,
+    /// Exact current chain-authoritative completion owner and signer policy.
+    pub completion_authority: Option<ProviderIngestCompletionAuthorityV1>,
     /// Current authoritative epoch to use for a new completion transaction.
     pub completion_epoch: Option<u64>,
     /// Exact committed transaction hash, when the finalized reader exposes it.
@@ -244,6 +246,10 @@ pub struct ProviderIngestCompletionPayloadRequestV1 {
     pub authorization: FinalizedProviderIngestAuthorizationV1,
     /// Current finalized provider owner.
     pub provider_owner: AccountId,
+    /// Exact finalized completion authority to compare again at commit.
+    pub expected_authority: ProviderIngestCompletionAuthorityV1,
+    /// Exact order-scoped assignment revision to compare again at commit.
+    pub expected_assignment_revision: u64,
     /// Exact configured production chain identity.
     pub chain_id: ChainId,
     /// Authoritative completion epoch.
@@ -1078,6 +1084,9 @@ where
     ) -> Result<(), ProviderIngestRuntimeErrorV1> {
         let mut completion = completion;
         let mut exposed_absent_transaction = None;
+        let completion_authority = row.completion_authority.as_ref().filter(|binding| {
+            binding.is_valid() && row.provider_owner.as_ref() == Some(&binding.provider_owner)
+        });
 
         // Bytes that may already have crossed the queue boundary are always
         // reconciled by exact hash before any signer/HSM dependency is queried.
@@ -1162,6 +1171,16 @@ where
             ProviderIngestCompletionStateV1::Signing { .. }
                 | ProviderIngestCompletionStateV1::Signed { .. }
         ) {
+            if completion_authority.is_none() {
+                self.outbox.invalidate_stale_completion_authority(
+                    job_id,
+                    row.provider_owner.as_ref(),
+                    ProviderIngestSignerPolicyObservationV1::Missing,
+                    self.clock.now_ms(),
+                    cursor,
+                )?;
+                return Ok(());
+            }
             self.outbox.invalidate_stale_completion_authority(
                 job_id,
                 row.provider_owner.as_ref(),
@@ -1185,6 +1204,11 @@ where
                 | ProviderIngestCompletionStateV1::Signed { .. }
         ) {
             if let Some(provider_owner) = row.provider_owner.clone() {
+                let Some(expected_policy) =
+                    completion_authority.map(|binding| binding.signer_policy)
+                else {
+                    return Ok(());
+                };
                 let signer_policy_observation = match tokio::time::timeout(
                     Duration::from_millis(self.policy.signer_timeout_ms),
                     self.signer_resolver.resolve(provider_owner.clone(), cursor),
@@ -1194,9 +1218,13 @@ where
                     Ok(Ok(Some(signer))) => {
                         match exact_current_signer_policy(&signer, &provider_owner) {
                             Ok(signer_policy) => {
-                                submission_authority =
-                                    Some((provider_owner.clone(), signer_policy));
-                                ProviderIngestSignerPolicyObservationV1::Active(signer_policy)
+                                if signer_policy == expected_policy {
+                                    submission_authority =
+                                        Some((provider_owner.clone(), signer_policy));
+                                    ProviderIngestSignerPolicyObservationV1::Active(signer_policy)
+                                } else {
+                                    ProviderIngestSignerPolicyObservationV1::Active(expected_policy)
+                                }
                             }
                             Err(CurrentSignerPolicyErrorV1::Ineligible) => {
                                 ProviderIngestSignerPolicyObservationV1::Missing
@@ -1258,11 +1286,12 @@ where
             ProviderIngestCompletionStateV1::Ready {
                 next_attempt_at_ms, ..
             } => {
-                let (Some(provider_owner), Some(completion_epoch)) =
-                    (row.provider_owner.clone(), row.completion_epoch)
+                let (Some(completion_authority), Some(completion_epoch)) =
+                    (completion_authority.cloned(), row.completion_epoch)
                 else {
                     return Ok(());
                 };
+                let provider_owner = completion_authority.provider_owner.clone();
                 if completion_epoch < row.order.issued_epoch
                     || completion_epoch > row.order.deadline_epoch
                 {
@@ -1331,6 +1360,15 @@ where
                         return Err(ProviderIngestRuntimeErrorV1::SignerProtocolViolation);
                     }
                 };
+                if signer_policy != completion_authority.signer_policy {
+                    self.outbox.record_completion_signer_policy_missing(
+                        job_id,
+                        &provider_owner,
+                        self.clock.now_ms(),
+                        cursor,
+                    )?;
+                    return Ok(());
+                }
                 if let Err(error) = self.outbox.validate_ready_completion_signer_policy(
                     job_id,
                     &provider_owner,
@@ -1348,6 +1386,8 @@ where
                 let request = ProviderIngestCompletionPayloadRequestV1 {
                     authorization: authorization_from_status_and_row(&status, row, cursor)?,
                     provider_owner: provider_owner.clone(),
+                    expected_authority: completion_authority,
+                    expected_assignment_revision: row.order.assignment_revision,
                     chain_id: self.chain_id.clone(),
                     completion_epoch,
                     finalized_cursor: cursor,
@@ -1377,6 +1417,7 @@ where
                     chain_id: self.chain_id.clone(),
                     provider_owner: provider_owner.clone(),
                     signer_policy,
+                    assignment_revision: row.order.assignment_revision,
                     completion_epoch,
                     expected_payload: payload,
                 };
@@ -1817,8 +1858,13 @@ fn validate_assignment(
         || row
             .committed_transaction_hash
             .is_some_and(|hash| hash == [0; 32])
+        || row.order.assignment_revision == 0
         || row.order.canonical_order.is_empty()
         || row.order.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+        || row.completion_authority.as_ref().is_some_and(|authority| {
+            !authority.is_valid() || row.provider_owner.as_ref() != Some(&authority.provider_owner)
+        })
+        || row.provider_owner.is_none() && row.completion_authority.is_some()
     {
         return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
     }
@@ -1871,6 +1917,13 @@ fn validate_assignment(
             .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
             || completion.completion_epoch < row.order.issued_epoch
             || completion.completion_epoch > row.order.deadline_epoch
+            || completion.assignment_revision != row.order.assignment_revision
+            || !completion.completion_authority.is_valid()
+            || completion.completion_authority.provider_owner != completion.completed_by
+            || !completion.finalized_anchor.is_valid()
+            || completion.finalized_anchor.height > cursor.height
+            || completion.finalized_anchor.height == cursor.height
+                && completion.finalized_anchor.block_hash != cursor.block_hash
             || !completions.insert(*completion.provider_id.as_bytes())
         {
             return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
@@ -1998,7 +2051,8 @@ mod tests {
         metadata::Metadata,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1,
-            PinManifestRecord, PinPolicy, ReplicationOrderCompletionRecord, ReplicationOrderId,
+            PinManifestRecord, PinPolicy, ProviderIngestFinalizedAnchorV1,
+            ReplicationOrderCompletionRecord, ReplicationOrderId,
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
@@ -2028,10 +2082,33 @@ mod tests {
     }
 
     fn completion_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
+        let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xA1; 32],
             revision,
-            policy_digest: [u8::try_from(revision).unwrap_or(0xFE); 32],
+            predecessor_digest: (revision > 1).then(|| [digest_byte.saturating_sub(1); 32]),
+            policy_digest: [digest_byte; 32],
+        }
+    }
+
+    fn completion_record(
+        provider_id: ProviderId,
+        completed_by: AccountId,
+        completion_epoch: u64,
+    ) -> ReplicationOrderCompletionRecord {
+        ReplicationOrderCompletionRecord {
+            provider_id,
+            completed_by: completed_by.clone(),
+            completion_epoch,
+            assignment_revision: 1,
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                completed_by,
+                completion_signer_policy(1),
+            ),
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: completion_epoch,
+                block_hash: cursor(completion_epoch).block_hash,
+            },
         }
     }
 
@@ -2107,10 +2184,15 @@ mod tests {
                 issued_epoch: 7,
                 deadline_epoch: 20,
                 canonical_order: norito::to_bytes(&order_body).expect("order bytes"),
+                assignment_revision: 1,
                 provider_completions: Vec::new(),
                 status: ReplicationOrderStatus::Pending,
             },
             provider_owner: Some(account(8)),
+            completion_authority: Some(ProviderIngestCompletionAuthorityV1::new(
+                account(8),
+                completion_signer_policy(1),
+            )),
             completion_epoch: Some(8),
             committed_transaction_hash: None,
         }
@@ -2273,6 +2355,12 @@ mod tests {
                         order_id: ReplicationOrderId::new(request.authorization.order_id()),
                         provider_id: ProviderId::new(request.authorization.provider_id()),
                         completion_epoch: request.completion_epoch,
+                        expected_authority: request.expected_authority,
+                        expected_assignment_revision: request.expected_assignment_revision,
+                        finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                            height: request.finalized_cursor.height,
+                            block_hash: request.finalized_cursor.block_hash,
+                        },
                     },
                 )]);
                 builder.set_creation_time(Duration::from_millis(1_000));
@@ -2580,11 +2668,11 @@ mod tests {
         unassigned_completion
             .order
             .provider_completions
-            .push(ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new([0x99; 32]),
-                completed_by: account(9),
-                completion_epoch: 8,
-            });
+            .push(completion_record(
+                ProviderId::new([0x99; 32]),
+                account(9),
+                8,
+            ));
         assert!(matches!(
             validate_assignment(
                 &unassigned_completion,
@@ -2850,19 +2938,19 @@ mod tests {
         page.rows[0]
             .order
             .provider_completions
-            .push(ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(SOURCE_PROVIDER),
-                completed_by: account(7),
-                completion_epoch: 8,
-            });
+            .push(completion_record(
+                ProviderId::new(SOURCE_PROVIDER),
+                account(7),
+                8,
+            ));
         page.rows[0]
             .order
             .provider_completions
-            .push(ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(LOCAL_PROVIDER),
-                completed_by: account(9),
-                completion_epoch: 9,
-            });
+            .push(completion_record(
+                ProviderId::new(LOCAL_PROVIDER),
+                account(9),
+                9,
+            ));
         page.rows[0].order.status = ReplicationOrderStatus::Completed(9);
         page.rows[0].completion_epoch = Some(9);
         drop(page);
@@ -2883,16 +2971,8 @@ mod tests {
     async fn finalized_completion_first_row_bypasses_full_active_capacity() {
         let mut completed = fixture_row(0x2E);
         completed.order.provider_completions = vec![
-            ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(SOURCE_PROVIDER),
-                completed_by: account(7),
-                completion_epoch: 8,
-            },
-            ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(LOCAL_PROVIDER),
-                completed_by: account(9),
-                completion_epoch: 9,
-            },
+            completion_record(ProviderId::new(SOURCE_PROVIDER), account(7), 8),
+            completion_record(ProviderId::new(LOCAL_PROVIDER), account(9), 9),
         ];
         completed.order.status = ReplicationOrderStatus::Completed(9);
         completed.completion_epoch = Some(9);

@@ -1470,6 +1470,25 @@ impl Reducer {
             && durable.timeout_intent(proposal.round()).is_none()
             && durable.proposal_intent(proposal.round()) == Some(proposal)
             && exact_justification
+            && Self::proposal_is_safe_for_durable_lock(durable, proposal)
+    }
+
+    fn proposal_is_safe_for_durable_lock(durable: &DurableState, proposal: &Proposal) -> bool {
+        let Some(locked) = durable.locked() else {
+            return true;
+        };
+        let subject = proposal.manifest().subject();
+        if locked.subject() == subject {
+            return true;
+        }
+        let ProposalJustification::Timeout(certificate) = proposal.justification() else {
+            return false;
+        };
+        certificate.highest_prepare().is_some_and(|highest| {
+            highest.phase() == Phase::Prepare
+                && highest.subject() == subject
+                && highest.round().view() > locked.round().view()
+        })
     }
 
     fn durable_vote_is_active(durable: &DurableState, vote: Vote) -> bool {
@@ -3553,21 +3572,7 @@ impl Reducer {
     }
 
     fn safe_to_prepare(&self, proposal: &Proposal) -> bool {
-        let Some(locked) = self.durable.locked() else {
-            return true;
-        };
-        let subject = proposal.manifest().subject();
-        if locked.subject() == subject {
-            return true;
-        }
-        let ProposalJustification::Timeout(certificate) = proposal.justification() else {
-            return false;
-        };
-        certificate.highest_prepare().is_some_and(|highest| {
-            highest.phase() == Phase::Prepare
-                && highest.subject() == subject
-                && highest.round().view() > locked.round().view()
-        })
+        Self::proposal_is_safe_for_durable_lock(&self.durable, proposal)
     }
 
     fn on_body_available(&mut self, round: Round, subject: Subject) -> StepOutcome {

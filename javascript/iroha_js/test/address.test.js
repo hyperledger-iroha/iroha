@@ -476,11 +476,27 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
   }
 });
 
-test("canonicalizeDomainLabel enforces STD3 hyphen rules while allowing punycode", () => {
+test("canonicalizeDomainLabel matches the Rust domain-segment policy", () => {
   const punycode = canonicalizeDomainLabel("xn--exmple-cua");
   assert.equal(punycode, "xn--exmple-cua");
+  assert.equal(canonicalizeDomainLabel("foo_bar"), "foo_bar");
+  assert.equal(canonicalizeDomainLabel("bücher"), "xn--bcher-kva");
 
-  for (const invalid of ["-leading", "trailing-", "ab--cd"]) {
+  for (const invalid of [
+    "-leading",
+    "trailing-",
+    "ab--cd",
+    "ḷ",
+    "foo:123",
+    "foo/bar",
+    "foo\\bar",
+    "foo?bar",
+    "foo%41",
+    " foo",
+    "foo ",
+    "\uFEFFfoo",
+    "foo\uFEFF",
+  ]) {
     assert.throws(
       () => canonicalizeDomainLabel(invalid),
       (error) =>

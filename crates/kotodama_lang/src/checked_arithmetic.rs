@@ -56,7 +56,6 @@ impl ConstantNumericError {
             Self::Numeric(NumericOperationError::InexactConversion) => "E_INEXACT_CONVERSION",
             Self::Numeric(NumericOperationError::NegativeQuantity) => "E_NEGATIVE_QUANTITY",
             Self::Numeric(NumericOperationError::QuantityUnderflow) => "E_QUANTITY_UNDERFLOW",
-            Self::Numeric(NumericOperationError::TooManyFactors) => "E_DECIMAL_FACTOR_LIMIT",
             Self::InvalidTypedOperation => "E_INTERNAL_NUMERIC_MATRIX",
         }
     }
@@ -341,10 +340,6 @@ mod tests {
         assert_eq!(
             ConstantNumericError::Numeric(NumericOperationError::MantissaOverflow).code(),
             "E_DECIMAL_MANTISSA_OVERFLOW"
-        );
-        assert_eq!(
-            ConstantNumericError::Numeric(NumericOperationError::TooManyFactors).code(),
-            "E_DECIMAL_FACTOR_LIMIT"
         );
     }
 

@@ -1052,6 +1052,31 @@ pub fn committed_transactions_snapshot(
         .collect())
 }
 
+/// Materialize an index-bounded committed-transaction snapshot.
+///
+/// The filter must resolve through Kura's positive transaction indexes. This
+/// keeps app-facing aggregate and projection queries from holding a world-state
+/// view while rebuilding complete transaction history. The authoritative
+/// predicate is still evaluated against every selected transaction.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::Conversion`] when the filter is not bounded by
+/// a complete sparse index, or selected durable evidence is unavailable.
+pub fn committed_transactions_indexed_snapshot(
+    state_ro: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    let (_, candidate_heights) = transaction_query_plan(&filter, state_ro);
+    if candidate_heights.is_none() {
+        return Err(QueryExecutionFail::Conversion(
+            "transaction aggregate/select queries require a positive indexed filter".to_owned(),
+        ));
+    }
+    ValidQuery::execute(FindTransactions, filter, state_ro)
+        .map(|transactions| transactions.collect())
+}
+
 impl ValidQuery for FindTransactions {
     #[metrics(+"find_transactions")]
     fn execute(
@@ -1574,6 +1599,54 @@ pub(crate) mod tests {
             by_result
                 .iter()
                 .all(|transaction| transaction.result.as_ref().is_err())
+        );
+    }
+
+    #[test]
+    fn indexed_snapshot_uses_entrypoint_index_and_rejects_unbounded_filters() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+
+        state_view.kura().reset_merge_query_read_counters_for_test();
+        let selected = committed_transactions_indexed_snapshot(
+            &state_view,
+            CompoundPredicate::from_filters(CommittedTxFilters {
+                entry_eq: Some(fixture.target_entrypoint_hash),
+                ..CommittedTxFilters::default()
+            }),
+        )
+        .expect("indexed transaction snapshot");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].entrypoint_hash, fixture.target_entrypoint_hash);
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 1),
+            "indexed materialization must resolve only the selected carrier"
+        );
+
+        state_view.kura().reset_merge_query_read_counters_for_test();
+        let missing_hash = HashOf::from_untyped_unchecked(Hash::new(b"missing-query-entrypoint"));
+        let missing = committed_transactions_indexed_snapshot(
+            &state_view,
+            CompoundPredicate::from_filters(CommittedTxFilters {
+                entry_eq: Some(missing_hash),
+                ..CommittedTxFilters::default()
+            }),
+        )
+        .expect("missing indexed transaction snapshot");
+        assert!(missing.is_empty());
+        assert_eq!(
+            state_view.kura().merge_query_read_counters_for_test(),
+            (0, 0, 0),
+            "a complete sparse-index miss must not read a carrier or merge sidecar"
+        );
+
+        let error = committed_transactions_indexed_snapshot(&state_view, CompoundPredicate::PASS)
+            .expect_err("unbounded transaction history must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("require a positive indexed filter")
         );
     }
 

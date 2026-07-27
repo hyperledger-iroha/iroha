@@ -52,7 +52,10 @@ use iroha_data_model::{
     peer::PeerId,
 };
 #[cfg(test)]
-use iroha_p2p::network::{NetworkReplyFlushAckTestFixture, NetworkReplyRouteTestFixture};
+use iroha_p2p::network::{
+    NetworkActorAdmissionTicketTestFixture, NetworkReplyFlushAckTestFixture,
+    NetworkReplyRouteTestFixture,
+};
 use iroha_p2p::{
     Post, Priority,
     network::{
@@ -262,9 +265,8 @@ enum V2IoCommand {
     Validate(BodyValidationTask),
     Apply(ApplyTask),
     Serve {
+        lifecycle_id: CertifiedServeLifecycleId,
         request: AuthenticatedCertifiedBodyRequest,
-        reply_routes: NetworkReplyRoutes,
-        ingress_ownership: FairV2IngressOwnershipEvidence,
     },
     LoadCandidate {
         acquisition_id: LockedCandidateAcquisitionId,
@@ -275,6 +277,64 @@ enum V2IoCommand {
 }
 
 const LOCAL_IO_CONTROL_RESERVE: usize = 1;
+const CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
+
+/// Immutable process-local owner of one exact certified-body Serve lifecycle.
+///
+/// The ordinal is minted once, before fair ingress releases the request, and
+/// is retained through queueing, execution, completion, and the terminal
+/// replay tombstone. Neither field is serialized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CertifiedServeLifecycleId {
+    admission_ordinal: u128,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CertifiedServeOwnerKey {
+    /// Frozen validators retain their semantic identity across relays.
+    Roster(PeerId),
+    /// Observer churn is charged to its already-bounded authenticated source.
+    AuthenticatedSource(PeerId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CertifiedServeFamilyKey {
+    requester: PeerId,
+    phase: wire::GlobalPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CertifiedServeAdmissionKind {
+    New,
+    Existing,
+    Stale,
+}
+
+/// Prepared ownership transfer from fair ingress into the ordered I/O FIFO.
+///
+/// A `New` admission already owns a reserved placeholder in the FIFO. The
+/// runner must consume this token with
+/// [`ProductionV2Services::serve_certified_request_on_routes`] immediately
+/// after removing the matching ingress owner.
+#[derive(Debug)]
+#[must_use]
+pub(crate) struct CertifiedServeAdmission {
+    lifecycle_id: CertifiedServeLifecycleId,
+    kind: CertifiedServeAdmissionKind,
+    request: wire::CertifiedBodyRequest,
+}
+
+/// Result of preflighting one authenticated current-height Serve owner.
+#[derive(Debug)]
+pub(crate) enum CertifiedServePrepareError {
+    /// The auxiliary prefix is temporarily full; retain fair-ingress ownership.
+    Backpressure,
+    /// The signed request conflicts with an already admitted logical owner.
+    Rejected(String),
+    /// The bounded local service actor cannot continue safely.
+    Service(String),
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoAdmissionClass {
@@ -305,6 +365,19 @@ impl V2IoCommand {
             Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
                 None
             }
+        }
+    }
+
+    const fn serve_lifecycle_id(&self) -> Option<CertifiedServeLifecycleId> {
+        match self {
+            Self::Serve { lifecycle_id, .. } => Some(*lifecycle_id),
+            Self::Sign { .. }
+            | Self::Store(_)
+            | Self::Validate(_)
+            | Self::Apply(_)
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
         }
     }
 
@@ -594,9 +667,62 @@ struct V2IoTrackedWork {
     state: V2IoWorkState,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IoServeState {
+    /// Authenticated ingress owns the least future auxiliary slot. All later
+    /// ordinary I/O admission is saturated until predecessors release it.
+    PendingCapacity,
+    /// Physical FIFO position is owned, but fair ingress has not transferred
+    /// its authenticated route/evidence carrier yet.
+    Reserved,
+    Queued,
+    Active,
+    CompletionPending,
+    Terminal,
+    /// The local QC retention-owner contract was violated. Consensus is
+    /// fail-stopped; this state is never eligible for transport resurrection.
+    Failed,
+}
+
+#[derive(Clone, Debug)]
+enum V2IoServeTerminal {
+    Response(wire::CertifiedBodyResponse),
+}
+
+#[derive(Debug)]
+struct V2IoTrackedServe {
+    owner: CertifiedServeOwnerKey,
+    recipient: PeerId,
+    phase: wire::GlobalPhase,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    state: V2IoServeState,
+    reply_routes: Option<NetworkReplyRoutes>,
+    ingress_ownership: Option<FairV2IngressOwnershipEvidence>,
+    terminal: Option<V2IoServeTerminal>,
+}
+
 struct V2IoCommandQueueState {
     commands: VecDeque<V2IoCommand>,
     work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
+    serves: BTreeMap<CertifiedServeLifecycleId, V2IoTrackedServe>,
+    serve_by_request: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CertifiedServeLifecycleId>,
+    /// One monotone high-watermark/lifecycle slot per signed requester and
+    /// certified phase.
+    ///
+    /// This semantic alias is deliberately independent from the authenticated
+    /// relay charged for observer capacity. An exact retry or delayed lower
+    /// view cannot escape its tombstone by arriving through another relay.
+    serve_by_family: BTreeMap<CertifiedServeFamilyKey, CertifiedServeLifecycleId>,
+    /// At most one authenticated future-slot debt is exposed to fair ingress.
+    /// Its ordinal is therefore trivially the least outstanding ordinal.
+    serve_barrier: Option<CertifiedServeLifecycleId>,
+    /// Authenticated command payload retained while the future slot waits.
+    pending_serve_requests: BTreeMap<CertifiedServeLifecycleId, AuthenticatedCertifiedBodyRequest>,
+    /// Terminal high-watermark displaced transactionally by a new lifecycle.
+    serve_replacements:
+        BTreeMap<CertifiedServeLifecycleId, (CertifiedServeLifecycleId, V2IoTrackedServe)>,
+    next_serve_admission_ordinal: u128,
     sender_open: bool,
     receiver_open: bool,
 }
@@ -609,6 +735,10 @@ struct V2IoCommandQueueState {
 /// charging completed work against the hierarchical queue reservations.
 struct V2IoCommandQueue {
     capacity: usize,
+    roster_serve_capacity: usize,
+    observer_source_capacity: usize,
+    observer_per_source_capacity: usize,
+    serve_family_capacity: usize,
     admission: Arc<V2IoAdmission>,
     state: Mutex<V2IoCommandQueueState>,
     ready: Condvar,
@@ -628,6 +758,18 @@ enum V2IoTrySendError {
     ConflictingWorkId { work_id: EffectWorkId },
 }
 
+enum CertifiedServeCommit {
+    Queued,
+    Coalesced,
+    Replay {
+        recipient: PeerId,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+        response: wire::CertifiedBodyResponse,
+    },
+    Ignored,
+}
+
 impl std::fmt::Debug for V2IoTrySendError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -643,14 +785,40 @@ impl std::fmt::Debug for V2IoTrySendError {
 
 fn v2_io_command_channel(
     capacity: usize,
+    roster_serve_capacity: usize,
+    observer_source_capacity: usize,
+    observer_per_source_capacity: usize,
     admission: Arc<V2IoAdmission>,
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
+    assert!(
+        roster_serve_capacity != 0
+            || (observer_source_capacity != 0 && observer_per_source_capacity != 0),
+        "Sumeragi v2 Serve owner capacity must be non-zero"
+    );
     let queue = Arc::new(V2IoCommandQueue {
         capacity,
+        roster_serve_capacity,
+        observer_source_capacity,
+        observer_per_source_capacity,
+        serve_family_capacity: roster_serve_capacity
+            .checked_add(
+                observer_source_capacity
+                    .checked_mul(observer_per_source_capacity)
+                    .expect("bounded observer Serve owner capacity must not overflow"),
+            )
+            .and_then(|owners| owners.checked_mul(CERTIFIED_SERVE_PHASE_FAMILIES))
+            .expect("bounded Serve phase-family capacity must not overflow"),
         admission,
         state: Mutex::new(V2IoCommandQueueState {
             commands: VecDeque::with_capacity(capacity.min(1_024)),
             work: BTreeMap::new(),
+            serves: BTreeMap::new(),
+            serve_by_request: BTreeMap::new(),
+            serve_by_family: BTreeMap::new(),
+            serve_barrier: None,
+            pending_serve_requests: BTreeMap::new(),
+            serve_replacements: BTreeMap::new(),
+            next_serve_admission_ordinal: 0,
             sender_open: true,
             receiver_open: true,
         }),
@@ -671,16 +839,623 @@ impl V2IoCommandQueue {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Materialize the least admitted future-slot owner after one predecessor
+    /// releases capacity. Callers hold the queue lock, so no later producer
+    /// can interpose between the release and this FIFO append.
+    fn materialize_serve_barrier(&self, state: &mut V2IoCommandQueueState) -> bool {
+        let Some(lifecycle_id) = state.serve_barrier else {
+            return false;
+        };
+        if !state
+            .serves
+            .get(&lifecycle_id)
+            .is_some_and(|tracked| tracked.state == V2IoServeState::PendingCapacity)
+            || state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Auxiliary)
+        {
+            return false;
+        }
+        let request = state
+            .pending_serve_requests
+            .remove(&lifecycle_id)
+            .expect("pending Serve future-slot owner retains its authenticated request");
+        state
+            .serves
+            .get_mut(&lifecycle_id)
+            .expect("pending Serve future-slot owner remains indexed")
+            .state = V2IoServeState::Reserved;
+        state.commands.push_back(V2IoCommand::Serve {
+            lifecycle_id,
+            request,
+        });
+        true
+    }
+
+    fn serve_barrier_request_hash(
+        &self,
+    ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
+        let state = self.lock();
+        let Some(lifecycle_id) = state.serve_barrier else {
+            return Ok(None);
+        };
+        let tracked = state
+            .serves
+            .get(&lifecycle_id)
+            .ok_or_else(|| "Sumeragi v2 Serve barrier lost its lifecycle owner".to_owned())?;
+        if !matches!(
+            tracked.state,
+            V2IoServeState::PendingCapacity | V2IoServeState::Reserved
+        ) {
+            return Err(
+                "Sumeragi v2 Serve barrier crossed a non-admission lifecycle state".to_owned(),
+            );
+        }
+        Ok(Some(lifecycle_id.request_hash))
+    }
+
+    fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
+        let state = self.lock();
+        state.receiver_open
+            && state.serve_barrier.is_none()
+            && state.commands.len() < self.capacity
+            && self.admission.has_capacity(class)
+    }
+
+    fn prepare_serve(
+        &self,
+        proposed_owner: CertifiedServeOwnerKey,
+        request: AuthenticatedCertifiedBodyRequest,
+    ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
+        let request_hash = request.request_hash();
+        let recipient = request.request().requester.clone();
+        let round = request.request().round;
+        let subject = request.request().subject;
+        let phase = request.request().certificate.phase;
+        let family = CertifiedServeFamilyKey {
+            requester: recipient.clone(),
+            phase,
+        };
+        let request_value = request.request().clone();
+        if matches!(
+            &proposed_owner,
+            CertifiedServeOwnerKey::Roster(owner) if owner != &recipient
+        ) {
+            return Err(CertifiedServePrepareError::Service(
+                "Sumeragi v2 roster Serve capacity owner changed signed requester".to_owned(),
+            ));
+        }
+        let mut state = self.lock();
+        if !state.receiver_open {
+            return Err(CertifiedServePrepareError::Service(
+                "Sumeragi v2 I/O worker is disconnected".to_owned(),
+            ));
+        }
+        let _ = self.materialize_serve_barrier(&mut state);
+        if let Some(lifecycle_id) = state.serve_by_request.get(&request_hash).copied() {
+            let tracked = state.serves.get(&lifecycle_id).ok_or_else(|| {
+                CertifiedServePrepareError::Service(
+                    "Sumeragi v2 Serve request index lost its lifecycle owner".to_owned(),
+                )
+            })?;
+            // The authenticated relay is a bounded resource owner, not part of
+            // the signed logical request identity. Retain the first charge and
+            // merge an exact retry arriving through another relay.
+            if tracked.recipient != recipient
+                || tracked.round != round
+                || tracked.subject != subject
+                || tracked.phase != phase
+            {
+                return Err(CertifiedServePrepareError::Service(
+                    "Sumeragi v2 exact Serve lifecycle changed logical identity".to_owned(),
+                ));
+            }
+            return match tracked.state {
+                V2IoServeState::PendingCapacity => Err(CertifiedServePrepareError::Backpressure),
+                V2IoServeState::Reserved => Ok(CertifiedServeAdmission {
+                    lifecycle_id,
+                    kind: CertifiedServeAdmissionKind::New,
+                    request: request_value,
+                }),
+                V2IoServeState::Failed => Err(CertifiedServePrepareError::Service(
+                    "Sumeragi v2 Serve retention contract already failed".to_owned(),
+                )),
+                V2IoServeState::Queued
+                | V2IoServeState::Active
+                | V2IoServeState::CompletionPending
+                | V2IoServeState::Terminal => Ok(CertifiedServeAdmission {
+                    lifecycle_id,
+                    kind: CertifiedServeAdmissionKind::Existing,
+                    request: request_value,
+                }),
+            };
+        }
+        // The least admitted future-slot owner freezes every later ordinary
+        // I/O producer until it acquires and commits its physical position.
+        if state.serve_barrier.is_some() {
+            return Err(CertifiedServePrepareError::Backpressure);
+        }
+        let (replacement, owner) = if let Some(existing) =
+            state.serve_by_family.get(&family).copied()
+        {
+            let tracked = state.serves.get(&existing).ok_or_else(|| {
+                CertifiedServePrepareError::Service(
+                    "Sumeragi v2 Serve family index lost its lifecycle owner".to_owned(),
+                )
+            })?;
+            if tracked.recipient != recipient || tracked.phase != phase {
+                return Err(CertifiedServePrepareError::Service(
+                    "Sumeragi v2 Serve family index changed semantic identity".to_owned(),
+                ));
+            }
+            if tracked.round.context_id != round.context_id || tracked.round.height != round.height
+            {
+                return Err(CertifiedServePrepareError::Service(
+                    "Sumeragi v2 Serve requester crossed immutable height context".to_owned(),
+                ));
+            }
+            if tracked.round == round && tracked.subject == subject {
+                return Err(CertifiedServePrepareError::Rejected(
+                    "certified-body request changed exact signed bytes for one logical Serve identity"
+                        .to_owned(),
+                ));
+            }
+            if round.view < tracked.round.view {
+                return Ok(CertifiedServeAdmission {
+                    lifecycle_id: existing,
+                    kind: CertifiedServeAdmissionKind::Stale,
+                    request: request_value,
+                });
+            }
+            if round.view == tracked.round.view {
+                return Err(CertifiedServePrepareError::Rejected(
+                    "certified-body request conflicts with its phase-family Serve high-watermark"
+                        .to_owned(),
+                ));
+            }
+            if tracked.state != V2IoServeState::Terminal {
+                return Err(CertifiedServePrepareError::Backpressure);
+            }
+            // Higher views replace the terminal lifecycle but retain the
+            // original roster/source capacity charge. Route migration cannot
+            // multiply owner slots or resurrect an older lifecycle.
+            (Some(existing), tracked.owner.clone())
+        } else {
+            // Prepare and Commit are independent high-watermark families but
+            // share one bounded requester/source capacity charge.
+            let inherited = state
+                .serves
+                .values()
+                .find(|tracked| tracked.recipient == recipient)
+                .map(|tracked| tracked.owner.clone());
+            (None, inherited.unwrap_or(proposed_owner))
+        };
+        if replacement.is_none() {
+            match &owner {
+                CertifiedServeOwnerKey::Roster(_) => {
+                    let used = state
+                        .serves
+                        .values()
+                        .filter_map(|tracked| {
+                            matches!(tracked.owner, CertifiedServeOwnerKey::Roster(_))
+                                .then(|| tracked.recipient.clone())
+                        })
+                        .collect::<BTreeSet<_>>();
+                    let already_charged = used.contains(&recipient);
+                    if !already_charged && used.len() >= self.roster_serve_capacity {
+                        return Err(CertifiedServePrepareError::Rejected(
+                            "Sumeragi v2 exhausted its frozen roster Serve owner slots".to_owned(),
+                        ));
+                    }
+                }
+                CertifiedServeOwnerKey::AuthenticatedSource(source) => {
+                    let mut sources = BTreeSet::new();
+                    let mut source_requesters = BTreeSet::new();
+                    for retained in state.serves.values() {
+                        if let CertifiedServeOwnerKey::AuthenticatedSource(retained_source) =
+                            &retained.owner
+                        {
+                            sources.insert(retained_source.clone());
+                            if retained_source == source {
+                                source_requesters.insert(retained.recipient.clone());
+                            }
+                        }
+                    }
+                    if source_requesters.is_empty()
+                        && sources.len() >= self.observer_source_capacity
+                    {
+                        return Err(CertifiedServePrepareError::Rejected(
+                            "Sumeragi v2 exhausted its authenticated observer-source slots"
+                                .to_owned(),
+                        ));
+                    }
+                    if !source_requesters.contains(&recipient)
+                        && source_requesters.len() >= self.observer_per_source_capacity
+                    {
+                        return Err(CertifiedServePrepareError::Rejected(
+                            "Sumeragi v2 observer source exhausted its bounded Serve quota"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+            if state.serves.len() >= self.serve_family_capacity {
+                return Err(CertifiedServePrepareError::Service(
+                    "Sumeragi v2 exceeded its derived Serve phase-family bound".to_owned(),
+                ));
+            }
+        }
+        let admission_ordinal = state
+            .next_serve_admission_ordinal
+            .checked_add(1)
+            .ok_or_else(|| {
+                CertifiedServePrepareError::Service(
+                    "Sumeragi v2 Serve admission ordinal exhausted".to_owned(),
+                )
+            })?;
+        let lifecycle_id = CertifiedServeLifecycleId {
+            admission_ordinal,
+            request_hash,
+        };
+        state.next_serve_admission_ordinal = admission_ordinal;
+        let replaced_terminal = replacement.map(|previous| {
+            let retired = state
+                .serves
+                .remove(&previous)
+                .expect("terminal Serve high-watermark remains indexed until replacement");
+            assert_eq!(retired.state, V2IoServeState::Terminal);
+            assert_eq!(
+                state.serve_by_request.remove(&previous.request_hash),
+                Some(previous)
+            );
+            assert_eq!(
+                state.serve_by_family.remove(&CertifiedServeFamilyKey {
+                    requester: retired.recipient.clone(),
+                    phase: retired.phase,
+                }),
+                Some(previous)
+            );
+            (previous, retired)
+        });
+        let owns_physical_slot = state.commands.len() < self.capacity
+            && self.admission.try_reserve(V2IoAdmissionClass::Auxiliary);
+        let lifecycle_state = if owns_physical_slot {
+            V2IoServeState::Reserved
+        } else {
+            V2IoServeState::PendingCapacity
+        };
+        let replaced = state.serves.insert(
+            lifecycle_id,
+            V2IoTrackedServe {
+                owner: owner.clone(),
+                recipient: recipient.clone(),
+                phase,
+                round,
+                subject,
+                state: lifecycle_state,
+                reply_routes: None,
+                ingress_ownership: None,
+                terminal: None,
+            },
+        );
+        debug_assert!(replaced.is_none());
+        let replaced = state.serve_by_request.insert(request_hash, lifecycle_id);
+        debug_assert!(replaced.is_none());
+        let replaced = state.serve_by_family.insert(family, lifecycle_id);
+        debug_assert!(replaced.is_none());
+        state.serve_barrier = Some(lifecycle_id);
+        if let Some(replaced_terminal) = replaced_terminal {
+            debug_assert!(
+                state
+                    .serve_replacements
+                    .insert(lifecycle_id, replaced_terminal)
+                    .is_none()
+            );
+        }
+        if owns_physical_slot {
+            state.commands.push_back(V2IoCommand::Serve {
+                lifecycle_id,
+                request,
+            });
+            Ok(CertifiedServeAdmission {
+                lifecycle_id,
+                kind: CertifiedServeAdmissionKind::New,
+                request: request_value,
+            })
+        } else {
+            debug_assert!(
+                state
+                    .pending_serve_requests
+                    .insert(lifecycle_id, request)
+                    .is_none()
+            );
+            Err(CertifiedServePrepareError::Backpressure)
+        }
+    }
+
+    fn commit_serve(
+        &self,
+        admission: &CertifiedServeAdmission,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+    ) -> Result<CertifiedServeCommit, String> {
+        if admission.kind == CertifiedServeAdmissionKind::Stale {
+            // A strictly newer terminal lifecycle already owns this
+            // requester/context high-watermark. Consuming the delayed carrier
+            // cannot recreate or replace the retired Serve stage.
+            return Ok(CertifiedServeCommit::Ignored);
+        }
+        let mut state = self.lock();
+        if !state.receiver_open {
+            return Err("Sumeragi v2 I/O worker disconnected before Serve commit".to_owned());
+        }
+        if admission.kind == CertifiedServeAdmissionKind::New
+            && state.serve_barrier != Some(admission.lifecycle_id)
+        {
+            return Err(
+                "Sumeragi v2 Serve commit lost its future-slot barrier identity".to_owned(),
+            );
+        }
+        let tracked = state
+            .serves
+            .get_mut(&admission.lifecycle_id)
+            .ok_or_else(|| {
+                "prepared Sumeragi v2 Serve lifecycle lost its bounded owner".to_owned()
+            })?;
+        match admission.kind {
+            CertifiedServeAdmissionKind::New if tracked.state != V2IoServeState::Reserved => {
+                return Err(
+                    "new Sumeragi v2 Serve admission no longer owns its reserved FIFO position"
+                        .to_owned(),
+                );
+            }
+            CertifiedServeAdmissionKind::Existing
+                if matches!(
+                    tracked.state,
+                    V2IoServeState::PendingCapacity | V2IoServeState::Reserved
+                ) =>
+            {
+                return Err(
+                    "Sumeragi v2 Serve retry observed an uncommitted foreign reservation"
+                        .to_owned(),
+                );
+            }
+            _ => {}
+        }
+
+        if let (Some(retained_routes), Some(retained_ownership)) = (
+            tracked.reply_routes.as_ref(),
+            tracked.ingress_ownership.as_ref(),
+        ) {
+            let mut route_candidate = retained_routes.clone();
+            let receipt = route_candidate
+                .merge_observed_with_receipt(&reply_routes)
+                .map_err(|error| {
+                    format!("invalid authenticated route on exact Sumeragi v2 Serve retry: {error}")
+                })?;
+            let mut ownership_candidate = retained_ownership.clone();
+            let merged_routes = ownership_candidate
+                .merge_downstream_with_observed_receipt(ingress_ownership, receipt)
+                .ok_or_else(|| {
+                    "exact Sumeragi v2 Serve retry changed fair-ingress identity".to_owned()
+                })?;
+            tracked.reply_routes = Some(merged_routes);
+            tracked.ingress_ownership = Some(ownership_candidate);
+        } else if tracked.reply_routes.is_none() && tracked.ingress_ownership.is_none() {
+            tracked.reply_routes = Some(reply_routes);
+            tracked.ingress_ownership = Some(ingress_ownership);
+        } else {
+            return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
+        }
+
+        let committed = match tracked.state {
+            V2IoServeState::PendingCapacity => {
+                return Err(
+                    "Sumeragi v2 Serve future-slot debt crossed ingress removal before materialization"
+                        .to_owned(),
+                );
+            }
+            V2IoServeState::Reserved => {
+                tracked.state = V2IoServeState::Queued;
+                CertifiedServeCommit::Queued
+            }
+            V2IoServeState::Queued | V2IoServeState::Active | V2IoServeState::CompletionPending => {
+                CertifiedServeCommit::Coalesced
+            }
+            V2IoServeState::Terminal => {
+                let reply_routes = tracked
+                    .reply_routes
+                    .clone()
+                    .expect("terminal Serve lifecycle retains exact reply routes");
+                let ingress_ownership = tracked
+                    .ingress_ownership
+                    .clone()
+                    .expect("terminal Serve lifecycle retains fair-ingress ownership");
+                match tracked
+                    .terminal
+                    .clone()
+                    .expect("terminal Serve lifecycle retains its exact outcome")
+                {
+                    V2IoServeTerminal::Response(response) => CertifiedServeCommit::Replay {
+                        recipient: tracked.recipient.clone(),
+                        reply_routes,
+                        ingress_ownership,
+                        response,
+                    },
+                }
+            }
+            V2IoServeState::Failed => {
+                return Err("Sumeragi v2 Serve retention contract failed".to_owned());
+            }
+        };
+        if matches!(committed, CertifiedServeCommit::Queued) {
+            state.serve_barrier = None;
+            let _ = state.serve_replacements.remove(&admission.lifecycle_id);
+        }
+        drop(state);
+        if matches!(committed, CertifiedServeCommit::Queued) {
+            self.ready.notify_all();
+        }
+        Ok(committed)
+    }
+
+    fn abort_serve(&self, admission: CertifiedServeAdmission) {
+        if admission.kind != CertifiedServeAdmissionKind::New {
+            return;
+        }
+        let mut state = self.lock();
+        let Some(tracked) = state.serves.get(&admission.lifecycle_id) else {
+            return;
+        };
+        if !matches!(
+            tracked.state,
+            V2IoServeState::PendingCapacity | V2IoServeState::Reserved
+        ) && !(tracked.state == V2IoServeState::Failed && !state.receiver_open)
+        {
+            return;
+        }
+        let family = CertifiedServeFamilyKey {
+            requester: tracked.recipient.clone(),
+            phase: tracked.phase,
+        };
+        let tracked_state = tracked.state;
+        let placeholder = state
+            .commands
+            .iter()
+            .position(|command| command.serve_lifecycle_id() == Some(admission.lifecycle_id))
+            .and_then(|index| state.commands.remove(index));
+        let _ = state.pending_serve_requests.remove(&admission.lifecycle_id);
+        debug_assert!(
+            placeholder.is_some()
+                || !state.receiver_open
+                || tracked_state == V2IoServeState::PendingCapacity,
+            "open receiver must retain a prepared Serve FIFO placeholder"
+        );
+        state
+            .serves
+            .remove(&admission.lifecycle_id)
+            .expect("reserved Serve lifecycle remains indexed");
+        assert_eq!(
+            state
+                .serve_by_request
+                .remove(&admission.lifecycle_id.request_hash),
+            Some(admission.lifecycle_id)
+        );
+        assert_eq!(
+            state.serve_by_family.remove(&family),
+            Some(admission.lifecycle_id)
+        );
+        if state.serve_barrier == Some(admission.lifecycle_id) {
+            state.serve_barrier = None;
+        }
+        if let Some((previous_id, previous)) =
+            state.serve_replacements.remove(&admission.lifecycle_id)
+        {
+            let previous_family = CertifiedServeFamilyKey {
+                requester: previous.recipient.clone(),
+                phase: previous.phase,
+            };
+            debug_assert_eq!(previous.state, V2IoServeState::Terminal);
+            assert!(state.serves.insert(previous_id, previous).is_none());
+            assert_eq!(
+                state
+                    .serve_by_request
+                    .insert(previous_id.request_hash, previous_id),
+                None
+            );
+            assert_eq!(
+                state.serve_by_family.insert(previous_family, previous_id),
+                None
+            );
+        }
+        // Receiver teardown releases every still-queued physical occurrence.
+        // Only a placeholder removed here still owns an admission unit.
+        if placeholder.is_some() {
+            self.admission.release();
+        }
+        drop(state);
+        self.ready.notify_all();
+    }
+
+    fn serve_completion_ownership(
+        &self,
+        lifecycle_id: CertifiedServeLifecycleId,
+    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
+        let state = self.lock();
+        let tracked = state
+            .serves
+            .get(&lifecycle_id)
+            .ok_or_else(|| "certified-body completion lost its Serve lifecycle owner".to_owned())?;
+        if tracked.state != V2IoServeState::CompletionPending {
+            return Err(
+                "certified-body completion crossed a non-pending Serve lifecycle".to_owned(),
+            );
+        }
+        let reply_routes = tracked.reply_routes.clone().ok_or_else(|| {
+            "certified-body completion lost its authenticated reply routes".to_owned()
+        })?;
+        let ingress_ownership = tracked.ingress_ownership.clone().ok_or_else(|| {
+            "certified-body completion lost its fair-ingress ownership".to_owned()
+        })?;
+        Ok((tracked.recipient.clone(), reply_routes, ingress_ownership))
+    }
+
+    fn complete_serve_response(&self, lifecycle_id: CertifiedServeLifecycleId) {
+        let mut state = self.lock();
+        let tracked = state
+            .serves
+            .get_mut(&lifecycle_id)
+            .expect("completed Serve work retains its lifecycle owner");
+        assert_eq!(tracked.state, V2IoServeState::Active);
+        tracked.state = V2IoServeState::CompletionPending;
+    }
+
+    fn fail_serve(&self, lifecycle_id: CertifiedServeLifecycleId) {
+        let mut state = self.lock();
+        let tracked = state
+            .serves
+            .get_mut(&lifecycle_id)
+            .expect("failed Serve work retains its lifecycle owner");
+        assert_eq!(tracked.state, V2IoServeState::Active);
+        tracked.state = V2IoServeState::Failed;
+        self.admission.release();
+    }
+
+    fn acknowledge_serve_completion(
+        &self,
+        lifecycle_id: CertifiedServeLifecycleId,
+        terminal: V2IoServeTerminal,
+    ) {
+        let mut state = self.lock();
+        let tracked = state
+            .serves
+            .get_mut(&lifecycle_id)
+            .expect("delivered certified-body completion retains its lifecycle owner");
+        assert_eq!(tracked.state, V2IoServeState::CompletionPending);
+        tracked.state = V2IoServeState::Terminal;
+        tracked.terminal = Some(terminal);
+        self.admission.release();
+        let materialized = self.materialize_serve_barrier(&mut state);
+        drop(state);
+        if materialized {
+            self.ready.notify_all();
+        }
+    }
+
     fn try_send_as(
         &self,
         class: V2IoAdmissionClass,
         command: V2IoCommand,
     ) -> Result<(), V2IoTrySendError> {
+        assert!(
+            command.serve_lifecycle_id().is_none(),
+            "Serve commands require an atomic fair-ingress reservation"
+        );
         let descriptor = command.work_descriptor();
         let mut state = self.lock();
         if !state.receiver_open {
             return Err(V2IoTrySendError::Disconnected);
         }
+        let _ = self.materialize_serve_barrier(&mut state);
         if let Some((work_id, descriptor)) = &descriptor
             && let Some(existing) = state.work.get(work_id)
         {
@@ -688,6 +1463,9 @@ impl V2IoCommandQueue {
                 return Ok(());
             }
             return Err(V2IoTrySendError::ConflictingWorkId { work_id: *work_id });
+        }
+        if state.serve_barrier.is_some() {
+            return Err(V2IoTrySendError::Full(command));
         }
         if state.commands.len() >= self.capacity || !self.admission.try_reserve(class) {
             return Err(V2IoTrySendError::Full(command));
@@ -748,14 +1526,37 @@ impl V2IoCommandQueue {
             .remove(&work_id)
             .expect("removed Sumeragi v2 work must have an ownership record");
         self.admission.release();
+        let materialized = self.materialize_serve_barrier(&mut state);
+        drop(state);
+        if materialized {
+            self.ready.notify_all();
+        }
         Ok(true)
     }
 
     fn recv(&self) -> Result<V2IoCommand, ()> {
         let mut state = self.lock();
         loop {
+            if let Some(lifecycle_id) = state
+                .commands
+                .front()
+                .and_then(V2IoCommand::serve_lifecycle_id)
+                && state
+                    .serves
+                    .get(&lifecycle_id)
+                    .is_some_and(|tracked| tracked.state != V2IoServeState::Queued)
+            {
+                state = self
+                    .ready
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                continue;
+            }
             if let Some(command) = state.commands.pop_front() {
-                self.admission.release();
+                if command.serve_lifecycle_id().is_none() {
+                    self.admission.release();
+                    let _ = self.materialize_serve_barrier(&mut state);
+                }
                 if let Some(work_id) = command.work_id() {
                     let tracked = state
                         .work
@@ -763,6 +1564,14 @@ impl V2IoCommandQueue {
                         .expect("queued Sumeragi v2 command must have an ownership record");
                     assert_eq!(tracked.state, V2IoWorkState::Queued);
                     tracked.state = V2IoWorkState::Active;
+                }
+                if let Some(lifecycle_id) = command.serve_lifecycle_id() {
+                    let tracked = state
+                        .serves
+                        .get_mut(&lifecycle_id)
+                        .expect("queued Serve command must have a lifecycle owner");
+                    assert_eq!(tracked.state, V2IoServeState::Queued);
+                    tracked.state = V2IoServeState::Active;
                 }
                 return Ok(command);
             }
@@ -779,6 +1588,17 @@ impl V2IoCommandQueue {
     #[cfg(test)]
     fn try_recv(&self) -> Result<V2IoCommand, mpsc::TryRecvError> {
         let mut state = self.lock();
+        if let Some(lifecycle_id) = state
+            .commands
+            .front()
+            .and_then(V2IoCommand::serve_lifecycle_id)
+            && state
+                .serves
+                .get(&lifecycle_id)
+                .is_some_and(|tracked| tracked.state != V2IoServeState::Queued)
+        {
+            return Err(mpsc::TryRecvError::Empty);
+        }
         let Some(command) = state.commands.pop_front() else {
             return if state.sender_open {
                 Err(mpsc::TryRecvError::Empty)
@@ -786,7 +1606,10 @@ impl V2IoCommandQueue {
                 Err(mpsc::TryRecvError::Disconnected)
             };
         };
-        self.admission.release();
+        if command.serve_lifecycle_id().is_none() {
+            self.admission.release();
+            let _ = self.materialize_serve_barrier(&mut state);
+        }
         if let Some(work_id) = command.work_id() {
             let tracked = state
                 .work
@@ -794,6 +1617,14 @@ impl V2IoCommandQueue {
                 .expect("queued Sumeragi v2 command must have an ownership record");
             assert_eq!(tracked.state, V2IoWorkState::Queued);
             tracked.state = V2IoWorkState::Active;
+        }
+        if let Some(lifecycle_id) = command.serve_lifecycle_id() {
+            let tracked = state
+                .serves
+                .get_mut(&lifecycle_id)
+                .expect("queued Serve command must have a lifecycle owner");
+            assert_eq!(tracked.state, V2IoServeState::Queued);
+            tracked.state = V2IoServeState::Active;
         }
         Ok(command)
     }
@@ -832,13 +1663,72 @@ impl V2IoCommandQueue {
         state.receiver_open = false;
         let queued = state.commands.len();
         state.commands.clear();
+        if let Some(lifecycle_id) = state.serve_barrier
+            && state
+                .serves
+                .get(&lifecycle_id)
+                .is_some_and(|tracked| tracked.state == V2IoServeState::PendingCapacity)
+        {
+            let pending = state
+                .serves
+                .remove(&lifecycle_id)
+                .expect("pending Serve barrier remains indexed");
+            assert_eq!(
+                state.serve_by_request.remove(&lifecycle_id.request_hash),
+                Some(lifecycle_id)
+            );
+            assert_eq!(
+                state.serve_by_family.remove(&CertifiedServeFamilyKey {
+                    requester: pending.recipient,
+                    phase: pending.phase,
+                }),
+                Some(lifecycle_id)
+            );
+            let _ = state.pending_serve_requests.remove(&lifecycle_id);
+            state.serve_barrier = None;
+            if let Some((previous_id, previous)) = state.serve_replacements.remove(&lifecycle_id) {
+                let previous_family = CertifiedServeFamilyKey {
+                    requester: previous.recipient.clone(),
+                    phase: previous.phase,
+                };
+                assert!(state.serves.insert(previous_id, previous).is_none());
+                assert_eq!(
+                    state
+                        .serve_by_request
+                        .insert(previous_id.request_hash, previous_id),
+                    None
+                );
+                assert_eq!(
+                    state.serve_by_family.insert(previous_family, previous_id),
+                    None
+                );
+            }
+        }
+        let mut active_serves = 0usize;
+        for tracked in state.serves.values_mut() {
+            match tracked.state {
+                V2IoServeState::Reserved | V2IoServeState::Queued => {
+                    tracked.state = V2IoServeState::Failed;
+                }
+                V2IoServeState::Active => {
+                    tracked.state = V2IoServeState::Failed;
+                    active_serves = active_serves.saturating_add(1);
+                }
+                V2IoServeState::CompletionPending
+                | V2IoServeState::Terminal
+                | V2IoServeState::Failed => {}
+                V2IoServeState::PendingCapacity => {
+                    unreachable!("the sole pending Serve barrier was retired above");
+                }
+            }
+        }
         // A normal Shutdown/Retire exit can close the command receiver while
         // already-sent completions remain buffered. Keep those ownership
         // records until the serialized handle drains and acknowledges them.
         state
             .work
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
-        for _ in 0..queued {
+        for _ in 0..queued.saturating_add(active_serves) {
             self.admission.release();
         }
         drop(state);
@@ -860,6 +1750,41 @@ impl V2IoCommandSender {
         self.queue.try_send_as(class, command)
     }
 
+    fn prepare_serve(
+        &self,
+        owner: CertifiedServeOwnerKey,
+        request: AuthenticatedCertifiedBodyRequest,
+    ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
+        self.queue.prepare_serve(owner, request)
+    }
+
+    fn serve_barrier_request_hash(
+        &self,
+    ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
+        self.queue.serve_barrier_request_hash()
+    }
+
+    fn commit_serve(
+        &self,
+        admission: &CertifiedServeAdmission,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+    ) -> Result<CertifiedServeCommit, String> {
+        self.queue
+            .commit_serve(admission, reply_routes, ingress_ownership)
+    }
+
+    fn abort_serve(&self, admission: CertifiedServeAdmission) {
+        self.queue.abort_serve(admission);
+    }
+
+    fn serve_completion_ownership(
+        &self,
+        lifecycle_id: CertifiedServeLifecycleId,
+    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
+        self.queue.serve_completion_ownership(lifecycle_id)
+    }
+
     fn cancel(
         &self,
         work_id: EffectWorkId,
@@ -870,6 +1795,15 @@ impl V2IoCommandSender {
 
     fn acknowledge_completion(&self, work_id: EffectWorkId) {
         self.queue.acknowledge_completion(work_id);
+    }
+
+    fn acknowledge_serve_completion(
+        &self,
+        lifecycle_id: CertifiedServeLifecycleId,
+        terminal: V2IoServeTerminal,
+    ) {
+        self.queue
+            .acknowledge_serve_completion(lifecycle_id, terminal);
     }
 }
 
@@ -896,6 +1830,14 @@ impl V2IoCommandReceiver {
 
     fn complete_work(&self, work_id: EffectWorkId) {
         self.queue.complete_work(work_id);
+    }
+
+    fn complete_serve_response(&self, lifecycle_id: CertifiedServeLifecycleId) {
+        self.queue.complete_serve_response(lifecycle_id);
+    }
+
+    fn fail_serve(&self, lifecycle_id: CertifiedServeLifecycleId) {
+        self.queue.fail_serve(lifecycle_id);
     }
 }
 
@@ -933,12 +1875,14 @@ enum V2IoCompletion {
         reference: CertifiedMergeLedgerReference,
     },
     CertifiedResponse {
-        recipient: PeerId,
-        reply_routes: NetworkReplyRoutes,
-        ingress_ownership: FairV2IngressOwnershipEvidence,
+        lifecycle_id: CertifiedServeLifecycleId,
         response: wire::CertifiedBodyResponse,
     },
-    CertifiedRequestIgnored,
+    CertifiedRequestFailed {
+        lifecycle_id: CertifiedServeLifecycleId,
+        reason: String,
+    },
+    AuxiliaryNoop,
     CandidateLoaded(LockedCandidateLoad),
     CandidateLoadUnavailable {
         acquisition_id: LockedCandidateAcquisitionId,
@@ -974,7 +1918,8 @@ impl V2IoCompletion {
             Self::Validated(completion) => Some(completion.work_id()),
             Self::Applied(completion) => Some(completion.work_id()),
             Self::CertifiedResponse { .. }
-            | Self::CertifiedRequestIgnored
+            | Self::CertifiedRequestFailed { .. }
+            | Self::AuxiliaryNoop
             | Self::CandidateLoaded(_)
             | Self::CandidateLoadUnavailable { .. }
             | Self::CandidateLoadFailed { .. }
@@ -984,6 +1929,64 @@ impl V2IoCompletion {
             | Self::Failed(_) => None,
         }
     }
+
+    const fn serve_lifecycle_id(&self) -> Option<CertifiedServeLifecycleId> {
+        match self {
+            Self::CertifiedResponse { lifecycle_id, .. }
+            | Self::CertifiedRequestFailed { lifecycle_id, .. } => Some(*lifecycle_id),
+            Self::Signature { .. }
+            | Self::Stored(_)
+            | Self::Validated(_)
+            | Self::Applied(_)
+            | Self::ApplyDeferred { .. }
+            | Self::AuxiliaryNoop
+            | Self::CandidateLoaded(_)
+            | Self::CandidateLoadUnavailable { .. }
+            | Self::CandidateLoadFailed { .. }
+            | Self::Retired
+            | Self::RetirementFailed(_)
+            | Self::RecoveryRequired(_)
+            | Self::Failed(_) => None,
+        }
+    }
+
+    fn acknowledgement(&self) -> V2IoCompletionAcknowledgement {
+        match self {
+            Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => {
+                V2IoCompletionAcknowledgement::Work(*work_id)
+            }
+            Self::Stored(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
+            Self::Validated(completion) => {
+                V2IoCompletionAcknowledgement::Work(completion.work_id())
+            }
+            Self::Applied(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
+            Self::CertifiedResponse {
+                lifecycle_id,
+                response,
+            } => V2IoCompletionAcknowledgement::Serve {
+                lifecycle_id: *lifecycle_id,
+                terminal: V2IoServeTerminal::Response(response.clone()),
+            },
+            Self::CertifiedRequestFailed { .. } => V2IoCompletionAcknowledgement::Untracked,
+            Self::CandidateLoaded(_)
+            | Self::CandidateLoadUnavailable { .. }
+            | Self::CandidateLoadFailed { .. }
+            | Self::Retired
+            | Self::RetirementFailed(_)
+            | Self::RecoveryRequired(_)
+            | Self::Failed(_)
+            | Self::AuxiliaryNoop => V2IoCompletionAcknowledgement::Untracked,
+        }
+    }
+}
+
+enum V2IoCompletionAcknowledgement {
+    Work(EffectWorkId),
+    Serve {
+        lifecycle_id: CertifiedServeLifecycleId,
+        terminal: V2IoServeTerminal,
+    },
+    Untracked,
 }
 
 struct V2IoHandle {
@@ -1121,6 +2124,7 @@ impl V2IoHandle {
         local_validator: Option<wire::ValidatorIndex>,
         auxiliary_queue_capacity: usize,
         consensus_queue_capacity: usize,
+        observer_serve_capacity: usize,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
         let admission = Arc::new(V2IoAdmission::new(
@@ -1128,7 +2132,16 @@ impl V2IoHandle {
             consensus_queue_capacity,
         )?);
         let capacity = admission.capacity();
-        let (command_tx, command_rx) = v2_io_command_channel(capacity, Arc::clone(&admission));
+        if observer_serve_capacity == 0 {
+            return Err("Sumeragi v2 observer Serve capacity must be non-zero".to_owned());
+        }
+        let (command_tx, command_rx) = v2_io_command_channel(
+            capacity,
+            context.roster.len(),
+            observer_serve_capacity,
+            auxiliary_queue_capacity,
+            Arc::clone(&admission),
+        );
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
         let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
@@ -1144,6 +2157,7 @@ impl V2IoHandle {
                 );
                 while let Ok(command) = command_rx.recv() {
                     let work_id = command.work_id();
+                    let serve_lifecycle_id = command.serve_lifecycle_id();
                     match command {
                         V2IoCommand::Retire(receipt) => {
                             let Some(completion) = execute_retire_io_command(&output_guard, || {
@@ -1232,16 +2246,14 @@ impl V2IoHandle {
                                         Err(error) => Err(error.to_string()),
                                     },
                                     V2IoCommand::Serve {
+                                        lifecycle_id,
                                         request,
-                                        reply_routes,
-                                        ingress_ownership,
                                     } => serve_certified_body(
                                         &body_store,
                                         &key_pair,
                                         local_validator,
+                                        lifecycle_id,
                                         request,
-                                        reply_routes,
-                                        ingress_ownership,
                                     ),
                                     V2IoCommand::LoadCandidate { .. }
                                     | V2IoCommand::Retire(_)
@@ -1261,16 +2273,37 @@ impl V2IoHandle {
                                     if let Some(work_id) = work_id {
                                         command_rx.complete_work(work_id);
                                     }
+                                    if let Some(lifecycle_id) = serve_lifecycle_id {
+                                        command_rx.fail_serve(lifecycle_id);
+                                    }
                                     let _ = try_send_tracked_completion(
                                         &completion_tx,
                                         &worker_admission,
-                                        V2IoCompletion::RecoveryRequired(reason),
+                                        serve_lifecycle_id.map_or_else(
+                                            || V2IoCompletion::RecoveryRequired(reason.clone()),
+                                            |lifecycle_id| {
+                                                V2IoCompletion::CertifiedRequestFailed {
+                                                    lifecycle_id,
+                                                    reason: reason.clone(),
+                                                }
+                                            },
+                                        ),
                                     );
                                     true
                                 }
                                 Ok(completion) => {
                                     if let Some(work_id) = work_id {
                                         command_rx.complete_work(work_id);
+                                    }
+                                    match &completion {
+                                        V2IoCompletion::CertifiedResponse {
+                                            lifecycle_id,
+                                            ..
+                                        } => {
+                                            command_rx
+                                                .complete_serve_response(*lifecycle_id);
+                                        }
+                                        _ => {}
                                     }
                                     send_completion(
                                         &completion_tx,
@@ -1322,7 +2355,42 @@ impl V2IoHandle {
     }
 
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
-        self.admission.has_capacity(class)
+        self.command_tx.queue.can_enqueue_as(class)
+    }
+
+    fn prepare_serve(
+        &self,
+        owner: CertifiedServeOwnerKey,
+        request: AuthenticatedCertifiedBodyRequest,
+    ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
+        self.command_tx.prepare_serve(owner, request)
+    }
+
+    fn serve_barrier_request_hash(
+        &self,
+    ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
+        self.command_tx.serve_barrier_request_hash()
+    }
+
+    fn commit_serve(
+        &self,
+        admission: &CertifiedServeAdmission,
+        reply_routes: NetworkReplyRoutes,
+        ingress_ownership: FairV2IngressOwnershipEvidence,
+    ) -> Result<CertifiedServeCommit, String> {
+        self.command_tx
+            .commit_serve(admission, reply_routes, ingress_ownership)
+    }
+
+    fn abort_serve(&self, admission: CertifiedServeAdmission) {
+        self.command_tx.abort_serve(admission);
+    }
+
+    fn serve_completion_ownership(
+        &self,
+        lifecycle_id: CertifiedServeLifecycleId,
+    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
+        self.command_tx.serve_completion_ownership(lifecycle_id)
     }
 
     fn cancel(
@@ -1333,15 +2401,29 @@ impl V2IoHandle {
         self.command_tx.cancel(work_id, expected_kind)
     }
 
-    fn acknowledge_completion_at(&self, work_id: Option<EffectWorkId>, ownership_position: usize) {
+    fn acknowledge_completion_at(
+        &self,
+        acknowledgement: V2IoCompletionAcknowledgement,
+        ownership_position: usize,
+    ) {
         self.admission.acknowledge_completion_at(ownership_position);
-        if let Some(work_id) = work_id {
-            self.command_tx.acknowledge_completion(work_id);
+        match acknowledgement {
+            V2IoCompletionAcknowledgement::Work(work_id) => {
+                self.command_tx.acknowledge_completion(work_id);
+            }
+            V2IoCompletionAcknowledgement::Serve {
+                lifecycle_id,
+                terminal,
+            } => {
+                self.command_tx
+                    .acknowledge_serve_completion(lifecycle_id, terminal);
+            }
+            V2IoCompletionAcknowledgement::Untracked => {}
         }
     }
 
     fn acknowledge_completion(&self, completion: &V2IoCompletion) {
-        self.acknowledge_completion_at(completion.work_id(), 0);
+        self.acknowledge_completion_at(completion.acknowledgement(), 0);
     }
 
     fn record_completion_service_attempt(&self, remaining_runtime_capacity: usize) -> bool {
@@ -1364,13 +2446,17 @@ impl V2IoHandle {
     #[cfg(test)]
     fn try_recv_completion(&self) -> Result<V2IoCompletion, mpsc::TryRecvError> {
         let completion = self.completion_rx.try_recv()?;
-        self.acknowledge_completion(&completion);
+        if !matches!(&completion, V2IoCompletion::CertifiedResponse { .. }) {
+            self.acknowledge_completion(&completion);
+        }
         Ok(completion)
     }
 
     fn recv_completion(&self) -> Result<V2IoCompletion, mpsc::RecvError> {
         let completion = self.completion_rx.recv()?;
-        self.acknowledge_completion(&completion);
+        if !matches!(&completion, V2IoCompletion::CertifiedResponse { .. }) {
+            self.acknowledge_completion(&completion);
+        }
         Ok(completion)
     }
 
@@ -1379,7 +2465,9 @@ impl V2IoHandle {
         timeout: Duration,
     ) -> Result<V2IoCompletion, mpsc::RecvTimeoutError> {
         let completion = self.completion_rx.recv_timeout(timeout)?;
-        self.acknowledge_completion(&completion);
+        if !matches!(&completion, V2IoCompletion::CertifiedResponse { .. }) {
+            self.acknowledge_completion(&completion);
+        }
         Ok(completion)
     }
 
@@ -1558,13 +2646,12 @@ fn serve_certified_body(
     body_store: &V2BodyStore,
     key_pair: &KeyPair,
     local_validator: Option<wire::ValidatorIndex>,
+    lifecycle_id: CertifiedServeLifecycleId,
     authenticated: AuthenticatedCertifiedBodyRequest,
-    reply_routes: NetworkReplyRoutes,
-    ingress_ownership: FairV2IngressOwnershipEvidence,
 ) -> Result<V2IoCompletion, String> {
     let request = authenticated.request();
     let Some(responder) = local_validator else {
-        return Ok(V2IoCompletion::CertifiedRequestIgnored);
+        return Err("local observer crossed certified-body Serve admission".to_owned());
     };
     if request
         .certificate
@@ -1572,7 +2659,10 @@ fn serve_certified_body(
         .binary_search(&responder)
         .is_err()
     {
-        return Ok(V2IoCompletion::CertifiedRequestIgnored);
+        return Err(
+            "local validator crossed certified-body Serve admission without retention authority"
+                .to_owned(),
+        );
     }
     let (manifest, receipt) = body_store
         .recovered(request.round, request.subject)
@@ -1597,9 +2687,7 @@ fn serve_certified_body(
         .payload()
         .to_vec();
     Ok(V2IoCompletion::CertifiedResponse {
-        recipient: request.requester.clone(),
-        reply_routes,
-        ingress_ownership,
+        lifecycle_id,
         response,
     })
 }
@@ -2195,11 +3283,14 @@ struct ExactTargetSource {
 ///
 /// FIFO and backpressure follow the authenticated transport source, but
 /// reservation geometry follows the frozen semantic target set. Every
-/// target/class occurrence is charged independently, preventing one relay from
-/// multiplying credits and one multi-target fanout from being undercounted.
-/// Route-free Request/Close progress and reproducible exact-reply responder
-/// controls use distinct kinds, so ordinary parked output cannot consume either
-/// bounded progress opportunity.
+/// ordinary target/class occurrence is charged independently, preventing one
+/// relay from multiplying credits and one multi-target fanout from being
+/// undercounted. A reproducible responder control instead owns one fanout-level
+/// unit per semantic target: its exact sources remain independently FIFO-indexed
+/// and route-bounded, but alternate authenticated return paths cannot make the
+/// dedicated control reservation depend on shared capacity. Topology-routed
+/// Request/Close progress and exact-reply responder controls use distinct kinds,
+/// so ordinary parked output cannot consume either bounded progress opportunity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ExactTargetReservationKind {
     Reliable,
@@ -2796,10 +3887,6 @@ enum ReplyTargetMerge {
         candidate_index: usize,
         update: NetworkReplyRouteSourceUpdate,
     },
-    Reactivate {
-        prior_index: usize,
-        candidate_index: usize,
-    },
     Append {
         candidate_index: usize,
     },
@@ -2816,6 +3903,18 @@ struct ReplyTargetMergePlan {
 struct ReplyTargetMergePreview {
     current_source_targets: BTreeMap<ExactTargetSource, BTreeSet<usize>>,
     outstanding_sources: BTreeSet<ExactTargetSource>,
+}
+
+#[derive(Debug)]
+struct ResponderControlReplacementPlan {
+    retained_index: usize,
+    replacement_fifo_id: ExactFanoutFifoId,
+    next_fanout_fifo_id: ExactFanoutFifoId,
+    next_fanout_index: usize,
+    source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
+    reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
+    ownership_units: usize,
+    shared_ownership_units: usize,
 }
 
 impl PendingExactFanout {
@@ -3392,6 +4491,14 @@ impl PendingExactFanout {
                 })?;
             for class in exact_output_classes(*classes) {
                 let reservation = self.target_reservation(semantic_target, class);
+                if reservation.kind == ExactTargetReservationKind::SidecarReplyControl {
+                    // One bounded responder-control fanout may retain several
+                    // exact authenticated return paths. Route/source bounds
+                    // account for those paths; the dedicated progress credit
+                    // must remain one unit for the semantic target.
+                    reservations.entry(reservation).or_insert(1);
+                    continue;
+                }
                 let count = reservations.entry(reservation).or_default();
                 *count = count.checked_add(1).ok_or_else(|| {
                     "Sumeragi v2 outbound target/class ownership overflowed".to_owned()
@@ -3419,6 +4526,10 @@ impl PendingExactFanout {
                 })?;
             for class in exact_output_classes(*classes) {
                 let reservation = self.target_reservation(semantic_target, class);
+                if reservation.kind == ExactTargetReservationKind::SidecarReplyControl {
+                    reservations.entry(reservation).or_insert(1);
+                    continue;
+                }
                 let count = reservations.entry(reservation).or_default();
                 *count = count.checked_add(1).ok_or_else(|| {
                     "Sumeragi v2 outbound admission ownership overflowed".to_owned()
@@ -3668,22 +4779,15 @@ impl PendingExactFanout {
                 if !used_prior.insert(prior_index) {
                     return Err("Sumeragi v2 retry updated one reply attempt twice".to_owned());
                 }
-                if self.target_is_complete(prior_index)
-                    && !candidate.target_is_complete(candidate_index)
-                    && update == NetworkReplyRouteSourceUpdate::Reconnected
-                    && candidate.is_certified_sidecar_chunk_fanout()
-                {
-                    plan.push(ReplyTargetMerge::Reactivate {
-                        prior_index,
-                        candidate_index,
-                    });
-                } else {
-                    plan.push(ReplyTargetMerge::Update {
-                        prior_index,
-                        candidate_index,
-                        update,
-                    });
-                }
+                // Cursor ownership belongs to the retained source attempt.
+                // A reconnect may replace only its route capability; it cannot
+                // reinterpret a successfully flushed terminal cursor as the
+                // candidate's newly materialized cursor zero.
+                plan.push(ReplyTargetMerge::Update {
+                    prior_index,
+                    candidate_index,
+                    update,
+                });
             } else {
                 unmatched.push(candidate_index);
             }
@@ -3711,14 +4815,12 @@ impl PendingExactFanout {
             .into_iter()
             .next()
             .ok_or_else(|| "Sumeragi v2 reply fanout lost its semantic target".to_owned())?;
+        let retained_reservations = self.outstanding_reservation_counts()?;
         let mut additions = BTreeMap::<ExactTargetReservation, usize>::new();
         for merge in plan {
             let added_mask = match *merge {
                 ReplyTargetMerge::Park { .. } | ReplyTargetMerge::Update { .. } => 0,
-                ReplyTargetMerge::Reactivate {
-                    candidate_index, ..
-                }
-                | ReplyTargetMerge::Append { candidate_index } => {
+                ReplyTargetMerge::Append { candidate_index } => {
                     let candidate_target =
                         candidate.targets.get(candidate_index).ok_or_else(|| {
                             "Sumeragi v2 retry candidate disappeared before reservation preflight"
@@ -3734,9 +4836,14 @@ impl PendingExactFanout {
                 }
             };
             for class in exact_output_classes(added_mask) {
-                let count = additions
-                    .entry(candidate.target_reservation(&semantic_target, class))
-                    .or_default();
+                let reservation = candidate.target_reservation(&semantic_target, class);
+                if reservation.kind == ExactTargetReservationKind::SidecarReplyControl
+                    && (retained_reservations.contains_key(&reservation)
+                        || additions.contains_key(&reservation))
+                {
+                    continue;
+                }
+                let count = additions.entry(reservation).or_default();
                 *count = count
                     .checked_add(1)
                     .ok_or_else(|| "Sumeragi v2 alternate-route ownership overflowed".to_owned())?;
@@ -3812,30 +4919,6 @@ impl PendingExactFanout {
                         }
                     }
                 }
-                ReplyTargetMerge::Reactivate {
-                    prior_index,
-                    candidate_index,
-                } => {
-                    let target = targets.get_mut(prior_index).ok_or_else(|| {
-                        "Sumeragi v2 sidecar reactivation target disappeared before commit"
-                            .to_owned()
-                    })?;
-                    let candidate_target =
-                        candidate.targets.get(candidate_index).ok_or_else(|| {
-                            "Sumeragi v2 sidecar reactivation candidate disappeared before commit"
-                                .to_owned()
-                        })?;
-                    if !matches!(target.0, ExactTargetRoute::Reply(_))
-                        || !matches!(candidate_target.route, ExactTargetRoute::Reply(_))
-                    {
-                        return Err(
-                            "Sumeragi v2 sidecar reactivation changed route kind".to_owned()
-                        );
-                    }
-                    target.0 = candidate_target.route.clone();
-                    target.1 = candidate_target.message_index;
-                    target.2 = false;
-                }
                 ReplyTargetMerge::Append { candidate_index } => {
                     let candidate_target =
                         candidate.targets.get(candidate_index).ok_or_else(|| {
@@ -3910,21 +4993,6 @@ impl PendingExactFanout {
                     };
                     let target = &mut self.targets[prior_index];
                     target.apply_reply_route_update(candidate_route, update);
-                }
-                ReplyTargetMerge::Reactivate {
-                    prior_index,
-                    candidate_index,
-                } => {
-                    let candidate_target = &candidate.targets[candidate_index];
-                    let ExactTargetRoute::Reply(candidate_route) = &candidate_target.route else {
-                        unreachable!("preflighted sidecar retry must retain its route kind");
-                    };
-                    let target = &mut self.targets[prior_index];
-                    target.apply_reply_route_update(
-                        candidate_route,
-                        NetworkReplyRouteSourceUpdate::Reconnected,
-                    );
-                    target.message_index = candidate_target.message_index;
                 }
                 ReplyTargetMerge::Append { candidate_index } => {
                     let candidate_target = &candidate.targets[candidate_index];
@@ -4017,9 +5085,11 @@ impl PendingExactFanout {
 
     /// Return the target when this fanout is a statelessly reproducible responder control.
     ///
-    /// A stale request or close deterministically regenerates these controls,
-    /// so retaining more than one for the same semantic target cannot improve
-    /// delivery progress. Controls for distinct targets remain independent.
+    /// A stale request or close deterministically regenerates these controls.
+    /// The worker retains at most one for each semantic target, while a
+    /// distinct successor remains source-owned until the incumbent drains or
+    /// loses every writer and can be atomically replaced. Controls for
+    /// distinct targets remain independent.
     /// Requester-owned `Request`/`Close` output remains non-droppable and is
     /// never deduplicated; `CloseAck` and `GenerationHint` retain their exact
     /// reply routes, and responder `Chunk` output retains ordinary exact
@@ -4046,6 +5116,35 @@ impl PendingExactFanout {
             && !self.targets.is_empty()
             && self.peers.iter().all(|peer| peer == target))
         .then_some(target)
+    }
+
+    /// Return whether one incomplete exact-reply target still has a writer.
+    fn has_writable_reply_target(&self) -> bool {
+        self.targets.iter().enumerate().any(|(index, target)| {
+            !self.target_is_complete(index)
+                && matches!(
+                    &target.route,
+                    ExactTargetRoute::Reply(route) if route.is_reply_writable()
+                )
+        })
+    }
+
+    /// Return whether a reproducible responder control has lost every writer.
+    ///
+    /// A pending writer-flush witness is deliberately not replaceable: the old
+    /// write may still cross its terminal flush fence even after its tenure
+    /// becomes unwritable. Actor-returned admission state has no such
+    /// ambiguity; when every incomplete route is monotonically unwritable,
+    /// dropping its ticket cancels that local actor reservation.
+    fn is_stranded_retryable_certified_sidecar_responder_control(&self) -> bool {
+        self.retryable_certified_sidecar_responder_control_target()
+            .is_some()
+            && !self.is_complete()
+            && !self.has_writable_reply_target()
+            && self
+                .targets
+                .iter()
+                .all(|target| target.pending_flush.is_none())
     }
 
     #[cfg(test)]
@@ -4310,7 +5409,7 @@ impl PendingExactOutput {
                     .into_iter()
                     .chain([ExactTargetReservation {
                         semantic_target: semantic_target.clone(),
-                        // Route-free Request/Close progress is canonical
+                        // Topology-routed Request/Close progress is canonical
                         // Consensus traffic and therefore uses the Lane class.
                         class: ExactOutputClass::Lane,
                         kind: ExactTargetReservationKind::SidecarTopologyProgress,
@@ -4994,6 +6093,95 @@ impl PendingExactOutput {
         ))
     }
 
+    fn ownership_state_after_replacement(
+        &self,
+        removals: &BTreeMap<ExactTargetReservation, usize>,
+        additions: &BTreeMap<ExactTargetReservation, usize>,
+    ) -> Result<Option<(BTreeMap<ExactTargetReservation, usize>, usize, usize)>, String> {
+        let mut current_units = 0usize;
+        let mut current_shared_units = 0usize;
+        for (reservation, count) in &self.reservation_owner_counts {
+            current_units = current_units.checked_add(*count).ok_or_else(|| {
+                "Sumeragi v2 responder-control current ownership overflowed".to_owned()
+            })?;
+            let frozen_credit = usize::from(self.reserved_target_classes.contains(reservation));
+            current_shared_units = current_shared_units
+                .checked_add(count.checked_sub(frozen_credit).ok_or_else(|| {
+                    "Sumeragi v2 responder-control current ownership lost its frozen credit"
+                        .to_owned()
+                })?)
+                .ok_or_else(|| {
+                    "Sumeragi v2 responder-control current shared ownership overflowed".to_owned()
+                })?;
+        }
+        if current_units != self.ownership_units
+            || current_shared_units != self.shared_ownership_units
+        {
+            return Err(
+                "Sumeragi v2 responder-control replacement found inconsistent ownership".to_owned(),
+            );
+        }
+
+        let mut next_reservation_owner_counts = self.reservation_owner_counts.clone();
+        for (reservation, removed) in removals {
+            if *removed == 0 {
+                return Err("Sumeragi v2 outbound ownership replaced an empty unit".to_owned());
+            }
+            let current = next_reservation_owner_counts
+                .get(reservation)
+                .copied()
+                .ok_or_else(|| {
+                    "Sumeragi v2 responder-control replacement lost its target/class".to_owned()
+                })?;
+            let remaining = current.checked_sub(*removed).ok_or_else(|| {
+                "Sumeragi v2 responder-control replacement removed too many units".to_owned()
+            })?;
+            if remaining == 0 {
+                next_reservation_owner_counts.remove(reservation);
+            } else {
+                next_reservation_owner_counts.insert(reservation.clone(), remaining);
+            }
+        }
+        for (reservation, added) in additions {
+            if *added == 0 {
+                return Err("Sumeragi v2 outbound ownership replaced with an empty unit".to_owned());
+            }
+            let count = next_reservation_owner_counts
+                .entry(reservation.clone())
+                .or_default();
+            *count = count.checked_add(*added).ok_or_else(|| {
+                "Sumeragi v2 responder-control replacement multiplicity overflowed".to_owned()
+            })?;
+        }
+
+        let mut next_ownership_units = 0usize;
+        let mut next_shared_ownership_units = 0usize;
+        for (reservation, count) in &next_reservation_owner_counts {
+            next_ownership_units = next_ownership_units.checked_add(*count).ok_or_else(|| {
+                "Sumeragi v2 responder-control replacement ownership overflowed".to_owned()
+            })?;
+            let frozen_credit = usize::from(self.reserved_target_classes.contains(reservation));
+            next_shared_ownership_units = next_shared_ownership_units
+                .checked_add(count.checked_sub(frozen_credit).ok_or_else(|| {
+                    "Sumeragi v2 responder-control replacement lost its frozen credit".to_owned()
+                })?)
+                .ok_or_else(|| {
+                    "Sumeragi v2 responder-control replacement shared ownership overflowed"
+                        .to_owned()
+                })?;
+        }
+        if next_ownership_units > self.ownership_unit_capacity
+            || next_shared_ownership_units > self.shared_ownership_unit_capacity
+        {
+            return Ok(None);
+        }
+        Ok(Some((
+            next_reservation_owner_counts,
+            next_ownership_units,
+            next_shared_ownership_units,
+        )))
+    }
+
     fn remove_ownership_units(
         &mut self,
         removals: &BTreeMap<ExactTargetReservation, usize>,
@@ -5186,8 +6374,235 @@ impl PendingExactOutput {
             })
     }
 
+    fn stranded_responder_control_replacement_index(
+        &self,
+        candidate: &PendingExactFanout,
+    ) -> Option<usize> {
+        let candidate_target = candidate.retryable_certified_sidecar_responder_control_target()?;
+        if !candidate.has_writable_reply_target() {
+            return None;
+        }
+        self.fanouts.iter().position(|retained| {
+            retained.retryable_certified_sidecar_responder_control_target()
+                == Some(candidate_target)
+                && retained.is_stranded_retryable_certified_sidecar_responder_control()
+        })
+    }
+
+    fn responder_control_replacement_ownership(
+        &self,
+        retained_index: usize,
+        candidate: &PendingExactFanout,
+    ) -> Result<Option<(BTreeMap<ExactTargetReservation, usize>, usize, usize)>, String> {
+        let retained = self
+            .fanouts
+            .get(retained_index)
+            .ok_or_else(|| "Sumeragi v2 stranded responder control disappeared".to_owned())?;
+        let retained_fifo_id = retained.fifo_id.ok_or_else(|| {
+            "Sumeragi v2 stranded responder control lost its FIFO identity".to_owned()
+        })?;
+        let retained_sources = retained.outstanding_sources()?;
+        let indexed_sources = self
+            .source_fifo_owners
+            .iter()
+            .filter_map(|(source, owners)| {
+                owners.contains(&retained_fifo_id).then_some(source.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        if indexed_sources != retained_sources {
+            return Err(
+                "Sumeragi v2 stranded responder control changed its FIFO ownership".to_owned(),
+            );
+        }
+        self.ownership_state_after_replacement(
+            &retained.outstanding_reservation_counts()?,
+            &candidate.outstanding_reservation_counts()?,
+        )
+    }
+
+    fn responder_control_replacement_available(
+        &self,
+        candidate: &PendingExactFanout,
+    ) -> Result<bool, String> {
+        let Some(retained_index) = self.stranded_responder_control_replacement_index(candidate)
+        else {
+            return Ok(false);
+        };
+        Ok(self
+            .responder_control_replacement_ownership(retained_index, candidate)?
+            .is_some())
+    }
+
+    fn responder_control_replacement_plan(
+        &self,
+        retained_index: usize,
+        candidate: &PendingExactFanout,
+    ) -> Result<Option<ResponderControlReplacementPlan>, String> {
+        let Some((reservation_owner_counts, ownership_units, shared_ownership_units)) =
+            self.responder_control_replacement_ownership(retained_index, candidate)?
+        else {
+            return Ok(None);
+        };
+        let retained = self
+            .fanouts
+            .get(retained_index)
+            .expect("located stranded responder control must remain present");
+        let retained_fifo_id = retained
+            .fifo_id
+            .expect("preflighted responder control retains its FIFO identity");
+        let replacement_fifo_id = self.next_fanout_fifo_id;
+        let next_fanout_fifo_id = replacement_fifo_id.checked_add(1).ok_or_else(|| {
+            "Sumeragi v2 outbound FIFO must rebase before responder-control replacement".to_owned()
+        })?;
+        if self
+            .source_fifo_owners
+            .values()
+            .any(|owners| owners.contains(&replacement_fifo_id))
+        {
+            return Err(
+                "Sumeragi v2 responder-control replacement reused a live FIFO identity".to_owned(),
+            );
+        }
+        let fanout_count = self.fanouts.len();
+        if fanout_count == 0 || self.next_fanout_index >= fanout_count {
+            return Err(
+                "Sumeragi v2 responder-control replacement found an invalid scheduler cursor"
+                    .to_owned(),
+            );
+        }
+        let next_fanout_index = if fanout_count == 1 {
+            0
+        } else if self.next_fanout_index == retained_index {
+            if retained_index + 1 < fanout_count {
+                // Removing the retained slot shifts its successor into the
+                // same index. The fresh replacement rejoins at the tail.
+                retained_index
+            } else {
+                // The retired slot was last, so continue at the old wrap
+                // point instead of granting the replacement that position.
+                0
+            }
+        } else if self.next_fanout_index > retained_index {
+            self.next_fanout_index - 1
+        } else {
+            self.next_fanout_index
+        };
+
+        let retained_sources = retained.outstanding_sources()?;
+        let replacement_sources = candidate.outstanding_sources()?;
+        let mut source_fifo_owners = self.source_fifo_owners.clone();
+        for source in &retained_sources {
+            let remove_source = {
+                let owners = source_fifo_owners.get_mut(source).ok_or_else(|| {
+                    "Sumeragi v2 responder-control replacement lost a registered source".to_owned()
+                })?;
+                if !owners.remove(&retained_fifo_id) {
+                    return Err(
+                        "Sumeragi v2 responder-control replacement lost its registered owner"
+                            .to_owned(),
+                    );
+                }
+                owners.is_empty()
+            };
+            if remove_source {
+                source_fifo_owners.remove(source);
+            }
+        }
+        for source in replacement_sources {
+            if !source_fifo_owners
+                .entry(source)
+                .or_default()
+                .insert(replacement_fifo_id)
+            {
+                return Err(
+                    "Sumeragi v2 responder-control replacement registered one source twice"
+                        .to_owned(),
+                );
+            }
+        }
+        Ok(Some(ResponderControlReplacementPlan {
+            retained_index,
+            replacement_fifo_id,
+            next_fanout_fifo_id,
+            next_fanout_index,
+            source_fifo_owners,
+            reservation_owner_counts,
+            ownership_units,
+            shared_ownership_units,
+        }))
+    }
+
+    fn commit_stranded_responder_control_replacement(
+        &mut self,
+        mut candidate: PendingExactFanout,
+    ) -> Result<Option<PendingExactFanout>, String> {
+        let Some(retained_index) = self.stranded_responder_control_replacement_index(&candidate)
+        else {
+            return Ok(None);
+        };
+        // Capacity failure must not rebase live FIFO identities. Establish
+        // that the replacement fits at the same liveness snapshot before the
+        // only preparatory mutation. Reply writability is monotonic within a
+        // tenure, so the plan below deliberately reuses this retained index
+        // instead of rereading external route state after a FIFO rebase.
+        if self
+            .responder_control_replacement_ownership(retained_index, &candidate)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        if self.fanouts.is_empty() || self.next_fanout_index >= self.fanouts.len() {
+            return Err(
+                "Sumeragi v2 responder-control replacement found an invalid scheduler cursor"
+                    .to_owned(),
+            );
+        }
+        if self.next_fanout_fifo_id == ExactFanoutFifoId::MAX {
+            self.rebase_source_fifo()?;
+        }
+        let Some(plan) = self.responder_control_replacement_plan(retained_index, &candidate)?
+        else {
+            return Ok(None);
+        };
+        candidate.fifo_id = Some(plan.replacement_fifo_id);
+        let retired = self
+            .fanouts
+            .remove(plan.retained_index)
+            .expect("planned stranded responder control must remain present");
+        // This is new authenticated-source work. Appending it keeps deque
+        // round-robin age aligned with the fresh source FIFO identity, even
+        // after a later FIFO rebase.
+        self.fanouts.push_back(candidate);
+        self.next_fanout_fifo_id = plan.next_fanout_fifo_id;
+        self.next_fanout_index = plan.next_fanout_index;
+        self.source_fifo_owners = plan.source_fifo_owners;
+        self.reservation_owner_counts = plan.reservation_owner_counts;
+        self.ownership_units = plan.ownership_units;
+        self.shared_ownership_units = plan.shared_ownership_units;
+        Ok(Some(retired))
+    }
+
+    fn replace_stranded_responder_control(
+        &mut self,
+        candidate: PendingExactFanout,
+    ) -> Result<bool, String> {
+        let Some(retired) = self.commit_stranded_responder_control_replacement(candidate)? else {
+            return Ok(false);
+        };
+        // Actor-ticket destruction can emit cancellation. Keep that external
+        // side effect strictly after every worker-owned index is committed.
+        drop(retired);
+        Ok(true)
+    }
+
     fn can_enqueue(&self, fanout: &PendingExactFanout) -> Result<bool, String> {
         self.validate_fanout_bounds(fanout)?;
+        if self
+            .stranded_responder_control_replacement_index(fanout)
+            .is_some()
+        {
+            return self.responder_control_replacement_available(fanout);
+        }
         if self
             .fanouts
             .iter()
@@ -5196,10 +6611,11 @@ impl PendingExactOutput {
             return self.capacity_available_for(fanout);
         }
         if self.retains_retryable_sidecar_responder_control_for(fanout) {
-            // The exact stale request/close can regenerate this response. Let
-            // lane work consume the effect as safely owned instead of retaining
-            // another response for the same semantic target upstream.
-            return Ok(true);
+            // Preserve one bounded successor in lane work while the incumbent
+            // still has a writer or a pending flush. Consuming a distinct
+            // control here would lose the newest cumulative CloseAck or the
+            // GenerationHint for the request hash the client actually retains.
+            return Ok(false);
         }
         self.capacity_available_for(fanout)
     }
@@ -5235,8 +6651,13 @@ impl PendingExactOutput {
         if !self.validate_owned_reply_transfer(&mut fanout)? {
             return Ok(true);
         }
-        let _source_retained =
-            self.complete_sidecar_targets_with_retained_flush_ownership(&mut fanout)?;
+        self.project_sidecar_receipt_completions(&mut fanout)?;
+        if self
+            .stranded_responder_control_replacement_index(&fanout)
+            .is_some()
+        {
+            return self.responder_control_replacement_available(&fanout);
+        }
         if self
             .fanouts
             .iter()
@@ -5245,7 +6666,7 @@ impl PendingExactOutput {
             return self.capacity_available_for(&fanout);
         }
         if self.retains_retryable_sidecar_responder_control_for(&fanout) {
-            return Ok(true);
+            return Ok(false);
         }
         self.capacity_available_for(&fanout)
     }
@@ -5262,14 +6683,8 @@ impl PendingExactOutput {
         if !self.validate_owned_reply_transfer(&mut fanout)? {
             return Ok(ExactFanoutOwnership::Owned);
         }
-        let source_retained =
-            self.complete_sidecar_targets_with_retained_flush_ownership(&mut fanout)?;
-        let ownership = self.enqueue_validated(fanout)?;
-        if source_retained {
-            Ok(ExactFanoutOwnership::SourceRetained)
-        } else {
-            Ok(ownership)
-        }
+        self.project_sidecar_receipt_completions(&mut fanout)?;
+        self.enqueue_validated(fanout)
     }
 
     /// Coalesce a reply redelivery after a sidecar writer flush was observed.
@@ -5278,18 +6693,18 @@ impl PendingExactOutput {
     /// unchanged cursor participates in the normal exact/reconnect merge. Only
     /// a flushed admission receipt sits beyond the fanout and needs this
     /// terminal-source projection.
-    fn complete_sidecar_targets_with_retained_flush_ownership(
+    fn project_sidecar_receipt_completions(
         &self,
         fanout: &mut PendingExactFanout,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         let [message] = fanout.messages.as_slice() else {
-            return Ok(false);
+            return Ok(());
         };
         let NetworkMessage::CertifiedMergeSidecar(message) = message else {
-            return Ok(false);
+            return Ok(());
         };
         let CertifiedMergeSidecarMessage::Chunk(_) = message.as_ref() else {
-            return Ok(false);
+            return Ok(());
         };
 
         let completed_cursor = fanout.messages.len();
@@ -5333,7 +6748,7 @@ impl PendingExactOutput {
         if projected_completion {
             fanout.rebuild_current_source_targets()?;
         }
-        Ok(false)
+        Ok(())
     }
 
     fn enqueue_validated(
@@ -5342,6 +6757,20 @@ impl PendingExactOutput {
     ) -> Result<ExactFanoutOwnership, String> {
         if fanout.is_complete() {
             return Ok(ExactFanoutOwnership::Owned);
+        }
+        if self
+            .stranded_responder_control_replacement_index(&fanout)
+            .is_some()
+        {
+            return self
+                .replace_stranded_responder_control(fanout)
+                .map(|replaced| {
+                    if replaced {
+                        ExactFanoutOwnership::Owned
+                    } else {
+                        ExactFanoutOwnership::SourceRetained
+                    }
+                });
         }
         if let Some(index) = self
             .fanouts
@@ -5408,12 +6837,10 @@ impl PendingExactOutput {
             return Ok(ExactFanoutOwnership::Owned);
         }
         if self.retains_retryable_sidecar_responder_control_for(&fanout) {
-            // At most one reproducible responder control per semantic target
-            // may own the worker corridor. Returning `Owned` consumes the lane
-            // effect without retaining another distinct control. An exact
-            // reply retry was coalesced above first; both response controls
-            // remain reproducible from their exact stale triggers.
-            return Ok(ExactFanoutOwnership::Owned);
+            // At most one responder control per semantic target owns this
+            // corridor. Lane work retains the distinct successor until the
+            // incumbent drains or becomes safely replaceable.
+            return Ok(ExactFanoutOwnership::SourceRetained);
         }
         let ownership_additions = fanout.outstanding_reservation_counts()?;
         if !self.ownership_capacity_available(&ownership_additions)? {
@@ -5766,13 +7193,24 @@ impl PendingExactOutput {
                         "Sumeragi v2 exact-output target advanced beyond its class suffix"
                             .to_owned()
                     })?;
-                (remaining_mask & exact_output_class_bit(source.class) == 0).then(|| {
+                if remaining_mask & exact_output_class_bit(source.class) != 0 {
+                    None
+                } else {
                     let semantic_target = fanout
                         .peers
                         .get(target_index)
                         .expect("selected exact-output target must retain its peer");
-                    fanout.target_reservation(semantic_target, source.class)
-                })
+                    let reservation = fanout.target_reservation(semantic_target, source.class);
+                    if reservation.kind == ExactTargetReservationKind::SidecarReplyControl
+                        && fanout
+                            .outstanding_reservation_counts()?
+                            .contains_key(&reservation)
+                    {
+                        None
+                    } else {
+                        Some(reservation)
+                    }
+                }
             } else {
                 None
             };
@@ -6931,15 +8369,20 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 outbound fanout message bound overflowed".to_owned())?;
         let reply_route_source_capacity = network.reply_route_source_capacity().max(1);
         let max_peers_per_fanout = context.roster.len().max(reply_route_source_capacity).max(1);
-        // Capacity is charged per outstanding target/class ownership unit, not
-        // per container fanout. Async producers and one reducer macro-step bound
-        // the shared unit pool; frozen validator target/classes and one sidecar
-        // topology-progress unit per frozen target are checked-added separately
-        // so duplicate, observer, or parked reply traffic cannot consume their
-        // first units. The protocol fanout bound covers both the frozen roster
-        // and reply routes, but only the configured authenticated-source count
-        // can form an entirely non-frozen fanout. Require that source-sized
-        // fanout to fit the shared pool without charging the frozen roster twice.
+        // Serve lifecycle storage has a frozen roster partition plus the
+        // existing bounded authenticated reply-source partition. Each source
+        // may own at most the already-configured auxiliary capacity; no new
+        // environment or wire limit is introduced.
+        // Capacity is charged per outstanding ordinary target/class occurrence.
+        // Async producers and one reducer macro-step bound the shared unit pool;
+        // frozen validator target/classes plus one topology-progress unit and one
+        // fanout-level responder-control unit per frozen target are checked-added
+        // separately. A responder control's exact authenticated routes remain
+        // independently source-FIFO-indexed and bounded by the protocol fanout,
+        // but cannot borrow shared capacity merely because one replay reached
+        // several return paths. Only the configured authenticated-source count
+        // can form an entirely non-frozen ordinary fanout, so require that
+        // source-sized fanout to fit without charging the frozen roster twice.
         let shared_pending_ownership_unit_capacity =
             sumeragi_v2_exact_output_shared_ownership_capacity(
                 consensus_io_capacity,
@@ -6981,6 +8424,7 @@ impl ProductionV2Services {
             local_validator,
             auxiliary_io_capacity,
             consensus_io_capacity,
+            reply_route_source_capacity,
             Arc::clone(&output_guard),
         )?;
         super::status::set_v2_effect_completion_observer(
@@ -7271,39 +8715,121 @@ impl ProductionV2Services {
         Ok(())
     }
 
-    /// Whether the auxiliary I/O prefix can accept a certified-body service request.
-    pub(crate) fn can_serve_certified_request(&self) -> bool {
-        // An absent worker is not capacity backpressure: allow dequeue so the
-        // subsequent enqueue reports the fatal service failure to the runner.
+    /// Reserve an immutable Serve lifecycle before fair ingress releases it.
+    ///
+    /// A new request installs a non-runnable placeholder at the physical FIFO
+    /// tail. Exact retries reuse their existing lifecycle even while the
+    /// auxiliary prefix is full.
+    pub(crate) fn certified_serve_barrier_request_hash(
+        &self,
+    ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
         self.io
             .as_ref()
-            .is_none_or(|io| io.can_enqueue_as(V2IoAdmissionClass::Auxiliary))
+            .map_or(Ok(None), |io| io.serve_barrier_request_hash())
+    }
+
+    pub(crate) fn prepare_certified_request(
+        &self,
+        authenticated_via: &PeerId,
+        request: AuthenticatedCertifiedBodyRequest,
+    ) -> Result<CertifiedServeAdmission, CertifiedServePrepareError> {
+        let Some(responder) = self.local_validator else {
+            return Err(CertifiedServePrepareError::Rejected(
+                "local observer has no certified-body Serve authority".to_owned(),
+            ));
+        };
+        if request
+            .request()
+            .certificate
+            .signers
+            .binary_search(&responder)
+            .is_err()
+        {
+            return Err(CertifiedServePrepareError::Rejected(
+                "local validator is not a certified-body retention owner".to_owned(),
+            ));
+        }
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard.acquire().ok_or_else(|| {
+            CertifiedServePrepareError::Service(
+                "Sumeragi v2 consensus requires process restart".to_owned(),
+            )
+        })?;
+        let io = self.io.as_ref().ok_or_else(|| {
+            CertifiedServePrepareError::Service("Sumeragi v2 I/O worker is unavailable".to_owned())
+        })?;
+        let requester = request.request().requester.clone();
+        let owner = if self
+            .context
+            .roster
+            .iter()
+            .any(|entry| entry.validator == requester)
+        {
+            CertifiedServeOwnerKey::Roster(requester)
+        } else {
+            CertifiedServeOwnerKey::AuthenticatedSource(authenticated_via.clone())
+        };
+        io.prepare_serve(owner, request)
     }
 
     /// Queue an authenticated certified-body request with every independent return route.
     pub(crate) fn serve_certified_request_on_routes(
         &mut self,
-        request: AuthenticatedCertifiedBodyRequest,
+        admission: CertifiedServeAdmission,
         reply_routes: NetworkReplyRoutes,
         ingress_ownership: FairV2IngressOwnershipEvidence,
     ) -> Result<(), String> {
         let request_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.request().clone()),
+            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(admission.request.clone()),
         ));
         if !ingress_ownership.validate_exact()
             || !ingress_ownership.matches_message(&request_message)
-            || !ingress_ownership.matches_semantic_origin(Some(reply_routes.semantic_target()))
+            || !ingress_ownership.matches_semantic_origin(Some(&admission.request.requester))
             || !ingress_ownership.matches_reply_routes(Some(&reply_routes))
+            || reply_routes.semantic_target() != &admission.request.requester
         {
+            if let Some(io) = self.io.as_ref() {
+                io.abort_serve(admission);
+            }
             return Err(
                 "certified-body service request carried altered fair-ingress ownership".to_owned(),
             );
         }
-        self.enqueue_io(V2IoCommand::Serve {
-            request,
-            reply_routes,
-            ingress_ownership,
-        })
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(permit) = output_guard.acquire() else {
+            if let Some(io) = self.io.as_ref() {
+                io.abort_serve(admission);
+            }
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        };
+        let Some(io) = self.io.as_ref() else {
+            return Err("Sumeragi v2 I/O worker is unavailable".to_owned());
+        };
+        let committed = match io.commit_serve(&admission, reply_routes, ingress_ownership) {
+            Ok(committed) => committed,
+            Err(error) => {
+                io.abort_serve(admission);
+                return Err(error);
+            }
+        };
+        drop(permit);
+        match committed {
+            CertifiedServeCommit::Queued | CertifiedServeCommit::Coalesced => Ok(()),
+            CertifiedServeCommit::Replay {
+                recipient,
+                reply_routes,
+                ingress_ownership,
+                response,
+            } => self.post_to_peer_on_reply_routes(
+                recipient,
+                reply_routes,
+                ingress_ownership,
+                wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
+                ),
+            ),
+            CertifiedServeCommit::Ignored => Ok(()),
+        }
     }
 
     /// Load the exact durable body required by a lock-constrained proposal.
@@ -7823,7 +9349,9 @@ impl ProductionV2Services {
         let Some(completion) = self.held_io_completion.take() else {
             return;
         };
-        if let Some(io) = self.io.as_ref() {
+        if !matches!(&completion, V2IoCompletion::CertifiedResponse { .. })
+            && let Some(io) = self.io.as_ref()
+        {
             io.acknowledge_completion(&completion);
         }
     }
@@ -7884,7 +9412,7 @@ impl ProductionV2Services {
                 PendingServiceCompletion::Io {
                     completion,
                     ownership_position,
-                } => Some((completion.work_id(), *ownership_position)),
+                } => Some((completion.acknowledgement(), *ownership_position)),
                 PendingServiceCompletion::Local(_) => None,
             };
             let serviced: Result<(), EffectExecutorError> = (|| {
@@ -7939,13 +9467,24 @@ impl ProductionV2Services {
                     PendingServiceCompletion::Io {
                         completion:
                             V2IoCompletion::CertifiedResponse {
-                                recipient,
-                                reply_routes,
-                                ingress_ownership,
+                                lifecycle_id,
                                 response,
                             },
                         ..
                     } => {
+                        let ownership = self.io.as_ref().map_or_else(
+                            || {
+                                Err("certified-body completion lost its I/O service owner"
+                                    .to_owned())
+                            },
+                            |io| io.serve_completion_ownership(lifecycle_id),
+                        );
+                        let (recipient, reply_routes, ingress_ownership) = match ownership {
+                            Ok(ownership) => ownership,
+                            Err(reason) => {
+                                return Err(executor.external_service_failed(reason, self));
+                            }
+                        };
                         let message = wire::ConsensusMessageV2::new(
                             wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
                         );
@@ -7960,7 +9499,20 @@ impl ProductionV2Services {
                         }
                     }
                     PendingServiceCompletion::Io {
-                        completion: V2IoCompletion::CertifiedRequestIgnored,
+                        completion:
+                            V2IoCompletion::CertifiedRequestFailed {
+                                lifecycle_id: _,
+                                reason,
+                            },
+                        ..
+                    } => {
+                        return Err(executor.external_service_failed(
+                            format!("certified-body retention contract failed: {reason}"),
+                            self,
+                        ));
+                    }
+                    PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::AuxiliaryNoop,
                         ..
                     } => {}
                     PendingServiceCompletion::Io {
@@ -8091,10 +9643,14 @@ impl ProductionV2Services {
                 }
                 Ok(())
             })();
-            if let Some((work_id, ownership_position)) = io_acknowledgement
-                && let Some(io) = self.io.as_ref()
-            {
-                io.acknowledge_completion_at(work_id, ownership_position);
+            if let Some((acknowledgement, ownership_position)) = io_acknowledgement {
+                let acknowledge = !matches!(
+                    &acknowledgement,
+                    V2IoCompletionAcknowledgement::Serve { .. }
+                ) || serviced.is_ok();
+                if acknowledge && let Some(io) = self.io.as_ref() {
+                    io.acknowledge_completion_at(acknowledgement, ownership_position);
+                }
             }
             serviced?;
             if local_completion_deferred {
@@ -10582,7 +12138,7 @@ pub(super) mod tests {
             BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
             RetiredBodyPipelineCompletions, RuntimeStep,
         },
-        v2_transport::authenticate_payload_chunk,
+        v2_transport::{authenticate_certified_body_request, authenticate_payload_chunk},
     };
     #[cfg(feature = "bls")]
     use crate::sumeragi::{
@@ -10599,7 +12155,13 @@ pub(super) mod tests {
         capacity: usize,
     ) -> (V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>) {
         let admission = V2IoAdmission::unbounded_for_tests();
-        let (sender, receiver) = v2_io_command_channel(capacity, Arc::clone(&admission));
+        let (sender, receiver) = v2_io_command_channel(
+            capacity,
+            capacity.max(1),
+            capacity.max(1),
+            capacity.max(1),
+            Arc::clone(&admission),
+        );
         (sender, receiver, admission)
     }
 
@@ -11193,34 +12755,61 @@ pub(super) mod tests {
         peer: &PeerId,
         message: CertifiedMergeSidecarMessage,
     ) -> PendingExactFanout {
-        let message_hash = HashOf::new(&message);
         let reply_control = matches!(
             &message,
             CertifiedMergeSidecarMessage::CloseAck(_)
                 | CertifiedMergeSidecarMessage::GenerationHint(_)
         );
+        if reply_control {
+            let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+            let reply_route = routes.mint(peer.clone());
+            return certified_sidecar_reply_control_fanout(
+                scope,
+                peer,
+                message,
+                NetworkReplyRoutes::try_from_route(reply_route)
+                    .expect("worker responder control keeps one exact return route"),
+            );
+        }
+        let message_hash = HashOf::new(&message);
         let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(message));
         let claim = ExactOutputRolloverClaim::CertifiedSidecarControl {
             scope,
             target: peer.clone(),
             message_hash,
         };
-        let fanout = if reply_control {
-            let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
-            let reply_route = routes.mint(peer.clone());
-            PendingExactFanout::claimed_with_reply_routes(
-                vec![message],
-                peer.clone(),
-                NetworkReplyRoutes::try_from_route(reply_route)
-                    .expect("worker responder control keeps one exact return route"),
-                claim,
-            )
-        } else {
-            PendingExactFanout::claimed(vec![message], vec![peer.clone()], claim)
-        };
+        let fanout = PendingExactFanout::claimed(vec![message], vec![peer.clone()], claim);
         fanout
             .expect("valid worker sidecar-control rollover claim")
             .expect("one exact worker sidecar-control fanout")
+    }
+
+    fn certified_sidecar_reply_control_fanout(
+        scope: ExactOutputCreationScope,
+        peer: &PeerId,
+        message: CertifiedMergeSidecarMessage,
+        reply_routes: NetworkReplyRoutes,
+    ) -> PendingExactFanout {
+        assert!(matches!(
+            &message,
+            CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::GenerationHint(_)
+        ));
+        let message_hash = HashOf::new(&message);
+        let message = NetworkMessage::CertifiedMergeSidecar(Arc::new(message));
+        let claim = ExactOutputRolloverClaim::CertifiedSidecarControl {
+            scope,
+            target: peer.clone(),
+            message_hash,
+        };
+        PendingExactFanout::claimed_with_reply_routes(
+            vec![message],
+            peer.clone(),
+            reply_routes,
+            claim,
+        )
+        .expect("valid worker responder-control rollover claim")
+        .expect("one exact worker responder-control fanout")
     }
 
     fn certified_sidecar_request_fanout(
@@ -11342,6 +12931,68 @@ pub(super) mod tests {
             assert!(pending.fanouts[0].targets.iter().any(
                 |target| matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_delivery(&second_route))
             ));
+            let control_reservation = ExactTargetReservation {
+                semantic_target: peer.clone(),
+                class: ExactOutputClass::Lane,
+                kind: ExactTargetReservationKind::SidecarReplyControl,
+            };
+            assert_eq!(
+                pending.reservation_owner_counts.get(&control_reservation),
+                Some(&1),
+                "alternate exact routes share one fanout-level control credit"
+            );
+            assert_eq!(pending.ownership_units, 1);
+            assert_eq!(pending.shared_ownership_units, 0);
+
+            let mut admitted_routes = Vec::new();
+            assert_eq!(
+                pending.drive_with_budget(1, |_post, ticket, route| {
+                    assert!(ticket.is_none());
+                    let ExactTargetRoute::Reply(route) = route else {
+                        panic!("responder control changed route kind")
+                    };
+                    admitted_routes.push(route.clone());
+                    Ok(())
+                }),
+                Ok(ExactOutputDriveOutcome::BudgetExhausted {
+                    closest_backpressure_rank: None,
+                })
+            );
+            assert_eq!(pending.ownership_units, 1);
+            assert_eq!(
+                pending.reservation_owner_counts.get(&control_reservation),
+                Some(&1),
+                "the fanout credit survives until its last exact route flushes"
+            );
+            assert_eq!(
+                pending.drive_with_budget(1, |_post, ticket, route| {
+                    assert!(ticket.is_none());
+                    let ExactTargetRoute::Reply(route) = route else {
+                        panic!("responder control changed route kind")
+                    };
+                    admitted_routes.push(route.clone());
+                    Ok(())
+                }),
+                Ok(ExactOutputDriveOutcome::Drained)
+            );
+            assert_eq!(admitted_routes.len(), 2);
+            assert!(
+                admitted_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&first_route))
+            );
+            assert!(
+                admitted_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&second_route))
+            );
+            assert_eq!(pending.ownership_units, 0);
+            assert_eq!(pending.shared_ownership_units, 0);
+            assert!(
+                !pending
+                    .reservation_owner_counts
+                    .contains_key(&control_reservation)
+            );
         }
     }
 
@@ -11349,15 +13000,17 @@ pub(super) mod tests {
     fn responder_control_uses_ordinary_reply_flush_ownership() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
-        let fanout = certified_sidecar_control_fanout(
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let expected_route = routes.mint_via(peer.clone(), hub_a);
+        let fanout = certified_sidecar_reply_control_fanout(
             service.exact_output_scope(),
             &peer,
             certified_sidecar_close_ack(&service.local_peer, &peer, 19),
+            NetworkReplyRoutes::try_from_route(expected_route.clone())
+                .expect("CloseAck keeps one exact reply route"),
         );
-        let ExactTargetRoute::Reply(expected_route) = &fanout.targets[0].route else {
-            unreachable!("CloseAck keeps an exact reply route")
-        };
-        let expected_route = expected_route.clone();
         let mut pending = PendingExactOutput::new(2, 1, 1, std::slice::from_ref(&peer))
             .expect("one exact responder control fits");
         assert_eq!(
@@ -11397,6 +13050,34 @@ pub(super) mod tests {
             "responder controls must never enter chunk-admission ownership"
         );
         assert!(
+            routes.mark_reply_unwritable_while_delivery_active(&expected_route),
+            "the old route may drain while its admitted write still owns a flush"
+        );
+        let alternate_route = routes.mint_via(peer.clone(), hub_b);
+        let alternate_message = certified_sidecar_generation_hint(&service.local_peer, &peer, 21);
+        let alternate = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &peer,
+            alternate_message.clone(),
+            NetworkReplyRoutes::try_from_route(alternate_route.clone())
+                .expect("the alternate source attempt has one live reply route"),
+        );
+        assert_eq!(
+            pending.can_enqueue(&alternate),
+            Ok(false),
+            "a pending old writer flush cannot be replaced"
+        );
+        assert_eq!(
+            pending.enqueue(alternate),
+            Ok(ExactFanoutOwnership::SourceRetained)
+        );
+        assert!(pending.fanouts[0].targets[0].pending_flush.is_some());
+        assert!(matches!(
+            pending.fanouts[0].messages.as_slice(),
+            [NetworkMessage::CertifiedMergeSidecar(message)]
+                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::CloseAck(_))
+        ));
+        assert!(
             flush_control
                 .as_mut()
                 .expect("the exact reply minted one writer receipt")
@@ -11407,6 +13088,16 @@ pub(super) mod tests {
             .expect("consume the ordinary CloseAck writer flush");
         assert!(pending.fanouts.is_empty());
         assert!(pending.admitted_sidecar_chunks.is_empty());
+
+        let alternate = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &peer,
+            alternate_message,
+            NetworkReplyRoutes::try_from_route(alternate_route)
+                .expect("the retained alternate control keeps its exact route"),
+        );
+        assert_eq!(pending.can_enqueue(&alternate), Ok(true));
+        assert_eq!(pending.enqueue(alternate), Ok(ExactFanoutOwnership::Owned));
     }
 
     #[test]
@@ -11475,7 +13166,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn retryable_sidecar_responder_controls_retain_at_most_one_worker_fanout() {
+    fn writable_responder_control_source_retains_one_distinct_pending_control() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let scope = service.exact_output_scope();
@@ -11504,7 +13195,7 @@ pub(super) mod tests {
         let mut pending = PendingExactOutput::new(controls.len(), 1, 1, &[])
             .expect("the unconstrained test corridor could retain every control");
 
-        for message in controls {
+        for (index, message) in controls.into_iter().enumerate() {
             match &message {
                 CertifiedMergeSidecarMessage::GenerationHint(hint) => {
                     assert_eq!(hint.hint_id, hint.canonical_hint_id());
@@ -11519,12 +13210,17 @@ pub(super) mod tests {
                 fanout.is_retryable_certified_sidecar_responder_control_fanout(),
                 "only stateless responder controls exercise the bounded-control rule"
             );
+            let expected_available = index == 0;
+            assert_eq!(pending.can_enqueue(&fanout), Ok(expected_available));
             assert_eq!(
-                pending.can_enqueue(&fanout),
-                Ok(true),
-                "a safely droppable control must not remain in the upstream lane queue"
+                pending.enqueue(fanout),
+                Ok(if expected_available {
+                    ExactFanoutOwnership::Owned
+                } else {
+                    ExactFanoutOwnership::SourceRetained
+                }),
+                "one distinct pending control remains owned by upstream lane work"
             );
-            assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
             assert_eq!(
                 pending.fanouts.len(),
                 1,
@@ -11541,7 +13237,7 @@ pub(super) mod tests {
             assert_eq!(
                 HashOf::new(retained.as_ref()),
                 first_control_hash,
-                "later controls must not replace the one exact retained occurrence"
+                "a writable incumbent is never displaced by a distinct control"
             );
         }
 
@@ -11900,6 +13596,484 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger() {
+        let (service, _) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let scope = service.exact_output_scope();
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_d = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 4);
+        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
+            .expect("one frozen responder-control slot plus one shared unit");
+
+        let unwritable_route = routes.mint_via(target.clone(), hub_a);
+        let unwritable = certified_sidecar_reply_control_fanout(
+            scope,
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 281),
+            NetworkReplyRoutes::try_from_route(unwritable_route.clone())
+                .expect("one exact old responder-control route"),
+        );
+        assert_eq!(pending.enqueue(unwritable), Ok(ExactFanoutOwnership::Owned));
+        let old_fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("the old responder control owns FIFO age");
+        let old_source = ExactTargetRoute::Reply(unwritable_route.clone())
+            .source(&target, ExactOutputClass::Lane);
+        let writable_route = routes.mint_via(target.clone(), hub_b);
+        let older_same_source = PendingExactFanout::new_with_reply_routes(
+            vec![merge_share_message(
+                b"older exact reply sharing the replacement source",
+            )],
+            target.clone(),
+            NetworkReplyRoutes::try_from_route(writable_route.clone())
+                .expect("one older exact reply source"),
+        )
+        .expect("one older same-source exact reply");
+        let older_message_hash = older_same_source.message_hashes[0];
+        assert_eq!(
+            pending.enqueue_owned_reply_transfer(older_same_source),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let older_fifo_id = pending.fanouts[1]
+            .fifo_id
+            .expect("the older same-source reply owns FIFO age");
+        let replacement_source =
+            ExactTargetRoute::Reply(writable_route.clone()).source(&target, ExactOutputClass::Lane);
+        assert_eq!(
+            pending.source_fifo_owners.get(&replacement_source),
+            Some(&BTreeSet::from([older_fifo_id]))
+        );
+        assert!(
+            routes.mark_reply_unwritable_while_delivery_active(&unwritable_route),
+            "the old source enters its monotonic draining interval"
+        );
+        assert!(!pending.fanouts[0].targets[0].parked);
+
+        let writable = certified_sidecar_reply_control_fanout(
+            scope,
+            &target,
+            certified_sidecar_close_ack(&service.local_peer, &target, 282),
+            NetworkReplyRoutes::try_from_route(writable_route.clone())
+                .expect("one exact replacement responder-control route"),
+        );
+        let replacement_message_hash = writable.message_hashes[0];
+        assert_eq!(
+            pending.can_enqueue(&writable),
+            Ok(true),
+            "writability is checked before the worker has a chance to park the old route"
+        );
+        pending.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
+        assert_eq!(pending.enqueue(writable), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(pending.fanouts.len(), 2);
+        let replacement = pending
+            .fanouts
+            .back()
+            .expect("the replacement rejoins at the worker tail");
+        let replacement_fifo_id = replacement
+            .fifo_id
+            .expect("the replacement owns fresh FIFO age");
+        assert_ne!(
+            replacement_fifo_id, old_fifo_id,
+            "a different authenticated source must not inherit old source age"
+        );
+        assert!(matches!(
+            replacement.messages.as_slice(),
+            [NetworkMessage::CertifiedMergeSidecar(message)]
+                if matches!(message.as_ref(), CertifiedMergeSidecarMessage::CloseAck(_))
+        ));
+        assert!(matches!(
+            replacement.targets.as_slice(),
+            [PendingExactTarget {
+                route: ExactTargetRoute::Reply(route),
+                parked: false,
+                ..
+            }] if route.same_delivery(&writable_route)
+        ));
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 0);
+        assert!(!pending.source_fifo_owners.contains_key(&old_source));
+        assert_eq!(
+            pending.source_fifo_owners.get(&replacement_source),
+            Some(&BTreeSet::from([older_fifo_id, replacement_fifo_id])),
+            "forced rebase and replacement must keep older exact-source work first"
+        );
+        pending.next_fanout_fifo_id = ExactFanoutFifoId::MAX;
+        pending
+            .rebase_source_fifo()
+            .expect("a later FIFO exhaustion preserves replacement age");
+        let older_rebased_fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("the older reply keeps a rebased FIFO identity");
+        let replacement_rebased_fifo_id = pending.fanouts[1]
+            .fifo_id
+            .expect("the replacement keeps a rebased FIFO identity");
+        assert_eq!(
+            pending.source_fifo_owners.get(&replacement_source),
+            Some(&BTreeSet::from([
+                older_rebased_fifo_id,
+                replacement_rebased_fifo_id,
+            ])),
+            "later rebasing must preserve the tail-rejoined replacement's age"
+        );
+
+        let mut admitted_hashes = Vec::new();
+        assert_eq!(
+            pending.drive_with(|post, ticket, route| {
+                assert!(ticket.is_none());
+                assert_eq!(post.peer_id, target);
+                assert!(matches!(
+                    route,
+                    ExactTargetRoute::Reply(route)
+                        if route.same_delivery(&writable_route)
+                ));
+                admitted_hashes.push(HashOf::new(&post.data));
+                Ok(())
+            }),
+            Ok(None)
+        );
+        assert_eq!(
+            admitted_hashes,
+            vec![older_message_hash, replacement_message_hash],
+            "fresh replacement work must not inherit the retired occurrence's queue age"
+        );
+
+        let retired_route = routes.mint_via(target.clone(), hub_c);
+        let retired = certified_sidecar_reply_control_fanout(
+            scope,
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 283),
+            NetworkReplyRoutes::try_from_route(retired_route.clone())
+                .expect("one exact route which will retire"),
+        );
+        assert_eq!(pending.enqueue(retired), Ok(ExactFanoutOwnership::Owned));
+        assert!(routes.retire(&retired_route));
+        assert_eq!(
+            pending.drive_with(|_post, _ticket, _route| {
+                panic!("a retired responder-control route must park before admission")
+            }),
+            Ok(None)
+        );
+        assert!(pending.fanouts[0].targets[0].parked);
+
+        let live_after_park = routes.mint_via(target.clone(), hub_d);
+        let replacement = certified_sidecar_reply_control_fanout(
+            scope,
+            &target,
+            certified_sidecar_close_ack(&service.local_peer, &target, 284),
+            NetworkReplyRoutes::try_from_route(live_after_park.clone())
+                .expect("one exact live route after parking"),
+        );
+        assert_eq!(
+            pending.enqueue(replacement),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        assert_eq!(pending.fanouts.len(), 1);
+        assert!(matches!(
+            pending.fanouts[0].targets.as_slice(),
+            [PendingExactTarget {
+                route: ExactTargetRoute::Reply(route),
+                parked: false,
+                ..
+            }] if route.same_delivery(&live_after_park)
+        ));
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 0);
+    }
+
+    #[test]
+    fn responder_control_replacement_cancels_ticket_after_index_commit() {
+        let (service, _) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let old_route = routes.mint_via(target.clone(), hub_a);
+        let old = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 285),
+            NetworkReplyRoutes::try_from_route(old_route.clone())
+                .expect("one old responder-control route"),
+        );
+        let mut pending = PendingExactOutput::new(1, 1, 1, std::slice::from_ref(&target))
+            .expect("one dedicated responder-control slot");
+        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
+
+        let old_post = Post {
+            data: pending.fanouts[0].messages[0].clone(),
+            peer_id: target.clone(),
+            priority: Priority::High,
+        };
+        let (ticket_fixture, ticket) =
+            NetworkActorAdmissionTicketTestFixture::for_reply(&old_post, &old_route);
+        assert_eq!(ticket.rank(), Some(1));
+        assert_eq!(ticket_fixture.waiter_count(), 1);
+        assert_eq!(ticket_fixture.ticket_drop_cancellations(), 0);
+        pending.fanouts[0].targets[0].current = Some(old_post);
+        pending.fanouts[0].targets[0].ticket = Some(ticket);
+        assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
+
+        let replacement_route = routes.mint_via(target.clone(), hub_b);
+        let replacement = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_close_ack(&service.local_peer, &target, 286),
+            NetworkReplyRoutes::try_from_route(replacement_route.clone())
+                .expect("one replacement responder-control route"),
+        );
+        let replacement_hash = replacement.message_hashes[0];
+        let replacement_source = ExactTargetRoute::Reply(replacement_route.clone())
+            .source(&target, ExactOutputClass::Lane);
+        let retired = pending
+            .commit_stranded_responder_control_replacement(replacement)
+            .expect("replacement planning must remain valid")
+            .expect("the unwritable responder control must be replaced");
+
+        assert_eq!(pending.fanouts.len(), 1);
+        assert_eq!(pending.next_fanout_index, 0);
+        assert_eq!(pending.fanouts[0].message_hashes, vec![replacement_hash]);
+        let replacement_fifo_id = pending.fanouts[0]
+            .fifo_id
+            .expect("replacement owns a committed FIFO identity");
+        assert_eq!(
+            pending.next_fanout_fifo_id,
+            replacement_fifo_id
+                .checked_add(1)
+                .expect("bounded replacement FIFO identity must advance")
+        );
+        assert_eq!(
+            pending.source_fifo_owners,
+            BTreeMap::from([(replacement_source, BTreeSet::from([replacement_fifo_id]))])
+        );
+        assert_eq!(pending.target_is_global_head(0, 0), Ok(true));
+        assert_eq!(
+            pending.reservation_owner_counts,
+            BTreeMap::from([(
+                ExactTargetReservation {
+                    semantic_target: target,
+                    class: ExactOutputClass::Lane,
+                    kind: ExactTargetReservationKind::SidecarReplyControl,
+                },
+                1,
+            )])
+        );
+        assert_eq!(pending.ownership_units, 1);
+        assert_eq!(pending.shared_ownership_units, 0);
+        assert!(pending.fanouts[0].targets[0].ticket.is_none());
+        assert_eq!(
+            retired.targets[0]
+                .ticket
+                .as_ref()
+                .and_then(NetworkActorAdmissionTicket::rank),
+            Some(1),
+            "the retired external owner remains live after every worker index commits"
+        );
+        assert_eq!(ticket_fixture.waiter_count(), 1);
+        assert_eq!(
+            ticket_fixture.ticket_drop_cancellations(),
+            0,
+            "the commit phase cannot trigger actor cancellation"
+        );
+
+        drop(retired);
+        assert_eq!(ticket_fixture.waiter_count(), 0);
+        assert_eq!(
+            ticket_fixture.ticket_drop_cancellations(),
+            1,
+            "terminal destruction cancels the exact actor waiter once"
+        );
+        drop(pending);
+        assert_eq!(
+            ticket_fixture.ticket_drop_cancellations(),
+            1,
+            "the replacement owns no alias of the retired actor ticket"
+        );
+    }
+
+    #[test]
+    fn multi_route_stranded_responder_control_uses_one_dedicated_reservation() {
+        let (service, _) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let blocker = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let old_route = routes.mint_via(target.clone(), hub_a);
+        let old = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_close_ack(&service.local_peer, &target, 285),
+            NetworkReplyRoutes::try_from_route(old_route.clone())
+                .expect("one old responder-control route"),
+        );
+        let mut pending = PendingExactOutput::new(1, 1, 2, std::slice::from_ref(&target))
+            .expect("one shared unit and two candidate reply sources");
+        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(
+            pending.enqueue(
+                PendingExactFanout::new(
+                    vec![merge_share_message(
+                        b"shared-unit blocker for fail-atomic responder replacement",
+                    )],
+                    vec![blocker],
+                )
+                .expect("one non-frozen blocker"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let old_post = Post {
+            data: pending.fanouts[0].messages[0].clone(),
+            peer_id: target.clone(),
+            priority: Priority::High,
+        };
+        pending.fanouts[0].targets[0].current = Some(old_post);
+        assert!(
+            routes.mark_reply_unwritable_while_delivery_active(&old_route),
+            "the actor-returned old source becomes unwritable"
+        );
+
+        let route_b = routes.mint_via(target.clone(), hub_b);
+        let route_c = routes.mint_via(target.clone(), hub_c);
+        let mut candidate_routes = NetworkReplyRoutes::try_from_route(route_b)
+            .expect("the replacement starts with one source");
+        candidate_routes
+            .merge(
+                &NetworkReplyRoutes::try_from_route(route_c)
+                    .expect("the replacement has a second source"),
+            )
+            .expect("two live replacement sources fit their route bound");
+        let candidate = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 286),
+            candidate_routes,
+        );
+
+        assert_eq!(
+            pending.can_enqueue(&candidate),
+            Ok(true),
+            "alternate authenticated routes must not borrow shared capacity"
+        );
+        assert_eq!(pending.enqueue(candidate), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(pending.fanouts.len(), 2);
+        let replacement = pending
+            .fanouts
+            .back()
+            .expect("the multi-route replacement rejoins at the tail");
+        assert_eq!(replacement.targets.len(), 2);
+        assert_eq!(
+            pending
+                .reservation_owner_counts
+                .get(&ExactTargetReservation {
+                    semantic_target: target,
+                    class: ExactOutputClass::Lane,
+                    kind: ExactTargetReservationKind::SidecarReplyControl,
+                }),
+            Some(&1),
+            "all exact routes share the target's one responder-control credit"
+        );
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(
+            pending.shared_ownership_units, 1,
+            "only the unrelated non-frozen blocker consumes shared capacity"
+        );
+    }
+
+    #[test]
+    fn stranded_responder_control_fifo_collision_is_fail_atomic() {
+        let (service, _) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let blocker = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 1);
+        let old_route = routes.mint_via(target.clone(), hub_a);
+        let old = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_close_ack(&service.local_peer, &target, 287),
+            NetworkReplyRoutes::try_from_route(old_route.clone())
+                .expect("one old responder-control route"),
+        );
+        let mut pending = PendingExactOutput::new(2, 1, 1, std::slice::from_ref(&target))
+            .expect("one control plus one independent blocker");
+        assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
+        assert_eq!(
+            pending.enqueue(
+                PendingExactFanout::new(
+                    vec![merge_share_message(
+                        b"live FIFO owner colliding with the replacement sequence",
+                    )],
+                    vec![blocker],
+                )
+                .expect("one independent FIFO owner"),
+            ),
+            Ok(ExactFanoutOwnership::Owned)
+        );
+        let old_post = Post {
+            data: pending.fanouts[0].messages[0].clone(),
+            peer_id: target.clone(),
+            priority: Priority::High,
+        };
+        pending.fanouts[0].targets[0].current = Some(old_post);
+        assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
+
+        let replacement_route = routes.mint_via(target.clone(), hub_b);
+        let candidate = certified_sidecar_reply_control_fanout(
+            service.exact_output_scope(),
+            &target,
+            certified_sidecar_generation_hint(&service.local_peer, &target, 288),
+            NetworkReplyRoutes::try_from_route(replacement_route)
+                .expect("one live replacement route"),
+        );
+        let colliding_fifo_id = pending.fanouts[1]
+            .fifo_id
+            .expect("the independent blocker owns one FIFO identity");
+        pending.next_fanout_fifo_id = colliding_fifo_id;
+        let fanout_fifo_before = pending
+            .fanouts
+            .iter()
+            .map(|fanout| fanout.fifo_id)
+            .collect::<Vec<_>>();
+        let next_fanout_index_before = pending.next_fanout_index;
+        let source_owners_before = pending.source_fifo_owners.clone();
+        let reservations_before = pending.reservation_owner_counts.clone();
+        let ownership_units_before = pending.ownership_units;
+        let shared_units_before = pending.shared_ownership_units;
+        let retained_hash_before = pending.fanouts[0].message_hashes.clone();
+
+        assert_eq!(pending.can_enqueue(&candidate), Ok(true));
+        assert_eq!(
+            pending.enqueue(candidate),
+            Err("Sumeragi v2 responder-control replacement reused a live FIFO identity".to_owned())
+        );
+        assert_eq!(pending.fanouts.len(), 2);
+        assert_eq!(
+            pending
+                .fanouts
+                .iter()
+                .map(|fanout| fanout.fifo_id)
+                .collect::<Vec<_>>(),
+            fanout_fifo_before
+        );
+        assert_eq!(pending.next_fanout_fifo_id, colliding_fifo_id);
+        assert_eq!(pending.next_fanout_index, next_fanout_index_before);
+        assert_eq!(pending.source_fifo_owners, source_owners_before);
+        assert_eq!(pending.reservation_owner_counts, reservations_before);
+        assert_eq!(pending.ownership_units, ownership_units_before);
+        assert_eq!(pending.shared_ownership_units, shared_units_before);
+        assert_eq!(pending.fanouts[0].message_hashes, retained_hash_before);
+        assert!(
+            pending.fanouts[0].targets[0].current.is_some(),
+            "failed planning preserves the actor-returned old attempt"
+        );
+    }
+
+    #[test]
     fn parked_same_target_reply_and_full_shared_pool_do_not_block_request_or_close() {
         let (service, _) = fixture();
         let target = service.context.roster[1].validator.clone();
@@ -12156,10 +14330,13 @@ pub(super) mod tests {
                 let duplicate = certified_sidecar_control_fanout(scope, &peer, message);
                 assert_eq!(
                     pending.can_enqueue(&duplicate),
-                    Ok(true),
-                    "same-target control replay is safely consumable"
+                    Ok(false),
+                    "a distinct same-target control remains source-owned"
                 );
-                assert_eq!(pending.enqueue(duplicate), Ok(ExactFanoutOwnership::Owned));
+                assert_eq!(
+                    pending.enqueue(duplicate),
+                    Ok(ExactFanoutOwnership::SourceRetained)
+                );
             }
             assert_eq!(
                 pending.fanouts.len(),
@@ -13972,7 +16149,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn closed_sidecar_reconnect_is_capacity_checked_then_retries_current_item() {
+    fn completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge() {
         let (service, _) = fixture();
         let peer = service.context.roster[1].validator.clone();
         let (_, chunk_message) = certified_sidecar_outputs(&service.local_peer, &peer);
@@ -14014,7 +16191,7 @@ pub(super) mod tests {
                 &NetworkReplyRoutes::try_from_route(route_b.clone()).expect("source B route set"),
             )
             .expect("retain both response sources");
-        let mut retained = fanout(initial_routes);
+        let retained = fanout(initial_routes);
         let a_index = retained
             .targets
             .iter()
@@ -14022,10 +16199,13 @@ pub(super) mod tests {
                 matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_a))
             })
             .expect("source A target");
-        retained.targets[a_index].message_index = retained.messages.len();
-        retained
-            .rebuild_current_source_targets()
-            .expect("closed source A is terminal until reconnect");
+        let b_index = retained
+            .targets
+            .iter()
+            .position(|target| {
+                matches!(&target.route, ExactTargetRoute::Reply(route) if route.same_source(&route_b))
+            })
+            .expect("source B target");
 
         let mut pending =
             PendingExactOutput::new(2, 1, 2, &[]).expect("two shared ownership units fit");
@@ -14038,12 +16218,56 @@ pub(super) mod tests {
         let fifo_id = pending.fanouts[0]
             .fifo_id
             .expect("sidecar fanout owns stable FIFO age");
+        assert_eq!(pending.ownership_units, 2);
+
+        let mut source_a_flush_control = None;
+        assert_eq!(
+            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
+                assert!(ticket.is_none());
+                let ExactTargetRoute::Reply(route) = route else {
+                    panic!("sidecar response must retain its exact reply route")
+                };
+                if route.same_source(&route_a) {
+                    let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
+                    source_a_flush_control = Some(control);
+                    return Ok(ExactOutputAttemptOutcome::SidecarFlush(ack));
+                }
+                assert!(route.same_source(&route_b));
+                Err(NetworkActorAdmissionError::Backpressured {
+                    message: post,
+                    ticket,
+                    rank: 19,
+                })
+            }),
+            Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 19 })
+        );
+        assert!(
+            source_a_flush_control
+                .as_mut()
+                .expect("source A owns its exact writer-flush witness")
+                .flush()
+        );
+        pending
+            .poll_reply_flushes()
+            .expect("source A successful writer flush advances one cursor");
+        assert_eq!(
+            pending.fanouts[0].targets[a_index].message_index,
+            pending.fanouts[0].messages.len()
+        );
+        assert_eq!(pending.fanouts[0].targets[b_index].message_index, 0);
         assert_eq!(pending.ownership_units, 1);
+        let _applied_admission = pending
+            .admitted_sidecar_chunks
+            .pop_front()
+            .expect("the successful writer flush publishes one lane receipt");
+        assert!(pending.admitted_sidecar_chunks.is_empty());
+        assert_eq!(pending.ownership_units, 1);
+
         assert_eq!(
             pending
                 .enqueue(
                     PendingExactFanout::new(
-                        vec![merge_share_message(b"closed sidecar capacity blocker")],
+                        vec![merge_share_message(b"terminal sidecar capacity blocker")],
                         vec![peer.clone()],
                     )
                     .expect("one unrelated capacity blocker"),
@@ -14062,23 +16286,32 @@ pub(super) mod tests {
             )
         };
         assert!(
-            !pending
+            pending
                 .can_enqueue_owned_reply_transfer(reconnect())
-                .expect("reactivation preflight observes full shared capacity")
+                .expect("terminal source reattachment preflight observes no new reservation"),
+            "a terminal source reattachment must fit even when shared capacity is full"
         );
         assert_eq!(
             pending
                 .enqueue_owned_reply_transfer(reconnect())
-                .expect("full corridor returns exact source ownership"),
-            ExactFanoutOwnership::SourceRetained
+                .expect("full corridor updates only the terminal route capability"),
+            ExactFanoutOwnership::Owned
         );
         assert_eq!(pending.ownership_units, 2);
         let terminal_a = &pending.fanouts[0].targets[a_index];
         assert_eq!(terminal_a.message_index, 1);
         assert!(matches!(
             &terminal_a.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&route_a)
+            ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
         ));
+        assert!(
+            !pending.source_fifo_owners.contains_key(&source_a),
+            "terminal source A must not regain FIFO or reservation ownership"
+        );
+        assert_eq!(
+            pending.source_fifo_owners.get(&source_b),
+            Some(&BTreeSet::from([fifo_id]))
+        );
 
         assert_eq!(
             pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
@@ -14100,71 +16333,18 @@ pub(super) mod tests {
         );
         assert_eq!(pending.ownership_units, 1);
         assert_eq!(pending.shared_ownership_units, 1);
-
-        assert!(
-            pending
-                .can_enqueue_owned_reply_transfer(reconnect())
-                .expect("released capacity admits source A reactivation")
-        );
         assert_eq!(
-            pending
-                .enqueue_owned_reply_transfer(reconnect())
-                .expect("reactivate source A at its current item"),
-            ExactFanoutOwnership::Owned
+            pending.fanouts[0].targets[a_index].message_index,
+            pending.fanouts[0].messages.len(),
+            "service progress cannot reopen a terminal sidecar source"
         );
-        let reactivated_a = &pending.fanouts[0].targets[a_index];
-        assert_eq!(reactivated_a.message_index, 0);
-        assert!(!reactivated_a.parked);
-        assert!(matches!(
-            &reactivated_a.route,
-            ExactTargetRoute::Reply(route) if route.same_delivery(&reconnected_a)
-        ));
-        assert_eq!(pending.ownership_units, 2);
-        assert_eq!(pending.shared_ownership_units, 2);
-        assert_eq!(
-            pending.source_fifo_owners.get(&source_a),
-            Some(&BTreeSet::from([fifo_id]))
-        );
+        assert!(!pending.source_fifo_owners.contains_key(&source_a));
         assert_eq!(
             pending.source_fifo_owners.get(&source_b),
             Some(&BTreeSet::from([fifo_id]))
         );
-
-        let mut flush_control = None;
-        assert_eq!(
-            pending.drive_with_budget_ack(usize::MAX, |post, ticket, route, _timeout_attempt| {
-                assert!(ticket.is_none());
-                let ExactTargetRoute::Reply(route) = route else {
-                    panic!("capacity blocker was already admitted")
-                };
-                if route.same_source(&reconnected_a) {
-                    let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, route);
-                    flush_control = Some(control);
-                    return Ok(ExactOutputAttemptOutcome::SidecarFlush(ack));
-                }
-                assert!(route.same_source(&route_b));
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message: post,
-                    ticket,
-                    rank: 7,
-                })
-            }),
-            Ok(ExactOutputDriveOutcome::Backpressured { closest_rank: 7 })
-        );
-        assert_eq!(pending.pending_sidecar_flushes(), 1);
-        assert_eq!(pending.fanouts[0].targets[a_index].message_index, 0);
-        assert!(!pending.fanouts[0].target_is_complete(a_index));
-        assert!(
-            flush_control
-                .as_mut()
-                .expect("reconnected writer owns the retried current chunk")
-                .flush()
-        );
-        pending
-            .poll_reply_flushes()
-            .expect("reconnected writer publishes the exact cursor receipt");
         assert_eq!(pending.pending_sidecar_flushes(), 0);
-        assert_eq!(pending.admitted_sidecar_chunks.len(), 1);
+        assert!(pending.admitted_sidecar_chunks.is_empty());
     }
 
     #[test]
@@ -16164,7 +18344,7 @@ pub(super) mod tests {
         assert!(
             missing_route_service
                 .can_retain_lane_work_effect(&missing_route_effect)
-                .expect_err("route-free GenerationHint must fail preflight")
+                .expect_err("GenerationHint missing reply-route ownership must fail preflight")
                 .contains("reply-route ownership")
         );
         assert!(
@@ -16174,7 +18354,9 @@ pub(super) mod tests {
                     None,
                     missing_route_hint,
                 )
-                .expect_err("route-free GenerationHint must fail exact-output admission")
+                .expect_err(
+                    "GenerationHint missing reply-route ownership must fail exact-output admission",
+                )
                 .contains("reply-route ownership")
         );
         assert!(missing_route_service.output_guard.restart_required());
@@ -18476,10 +20658,10 @@ pub(super) mod tests {
             admission,
         });
         completion_tx
-            .try_send(V2IoCompletion::CertifiedRequestIgnored)
+            .try_send(V2IoCompletion::AuxiliaryNoop)
             .expect("first I/O completion");
         completion_tx
-            .try_send(V2IoCompletion::CertifiedRequestIgnored)
+            .try_send(V2IoCompletion::AuxiliaryNoop)
             .expect("second I/O completion");
 
         let payload = b"completion fairness body";
@@ -18573,8 +20755,13 @@ pub(super) mod tests {
     fn worker_completion_is_retained_behind_a_full_runtime_fifo() {
         let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
         let channel_capacity = admission.capacity();
-        let (command_tx, _command_rx) =
-            v2_io_command_channel(channel_capacity, Arc::clone(&admission));
+        let (command_tx, _command_rx) = v2_io_command_channel(
+            channel_capacity,
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            Arc::clone(&admission),
+        );
         let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
         try_send_tracked_completion(
             &completion_tx,
@@ -18648,8 +20835,13 @@ pub(super) mod tests {
 
         let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
         let channel_capacity = admission.capacity();
-        let (command_tx, command_rx) =
-            v2_io_command_channel(channel_capacity, Arc::clone(&admission));
+        let (command_tx, command_rx) = v2_io_command_channel(
+            channel_capacity,
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            Arc::clone(&admission),
+        );
         let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let tag = EventTag::new(
@@ -18699,12 +20891,8 @@ pub(super) mod tests {
             },
         )
         .expect("retain runtime-producing completion");
-        try_send_tracked_completion(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::CertifiedRequestIgnored,
-        )
-        .expect("retain auxiliary completion behind runtime work");
+        try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
+            .expect("retain auxiliary completion behind runtime work");
         try_send_tracked_completion(
             &completion_tx,
             &admission,
@@ -18840,15 +21028,16 @@ pub(super) mod tests {
         .expect("construct effect executor");
         let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
         let channel_capacity = admission.capacity();
-        let (command_tx, _command_rx) =
-            v2_io_command_channel(channel_capacity, Arc::clone(&admission));
+        let (command_tx, _command_rx) = v2_io_command_channel(
+            channel_capacity,
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            Arc::clone(&admission),
+        );
         let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-        try_send_tracked_completion(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::CertifiedRequestIgnored,
-        )
-        .expect("retain auxiliary completion");
+        try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
+            .expect("retain auxiliary completion");
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
@@ -18893,16 +21082,17 @@ pub(super) mod tests {
             V2IoAdmission::new(MAX_COMPLETION_DRAIN_BATCH + 1, 1).expect("bounded I/O admission"),
         );
         let channel_capacity = admission.capacity();
-        let (command_tx, _command_rx) =
-            v2_io_command_channel(channel_capacity, Arc::clone(&admission));
+        let (command_tx, _command_rx) = v2_io_command_channel(
+            channel_capacity,
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            channel_capacity.max(1),
+            Arc::clone(&admission),
+        );
         let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
         for _ in 0..=MAX_COMPLETION_DRAIN_BATCH {
-            try_send_tracked_completion(
-                &completion_tx,
-                &admission,
-                V2IoCompletion::CertifiedRequestIgnored,
-            )
-            .expect("retain bounded auxiliary burst");
+            try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
+                .expect("retain bounded auxiliary burst");
         }
         service.io = Some(V2IoHandle {
             command_tx,
@@ -19886,8 +22076,13 @@ pub(super) mod tests {
     fn remote_auxiliary_flood_cannot_consume_consensus_or_control_reservations() {
         let admission = Arc::new(V2IoAdmission::new(1, 2).expect("bounded I/O admission"));
         assert_eq!(admission.capacity(), 4);
-        let (command_tx, command_rx) =
-            v2_io_command_channel(admission.capacity(), Arc::clone(&admission));
+        let (command_tx, command_rx) = v2_io_command_channel(
+            admission.capacity(),
+            admission.capacity(),
+            admission.capacity(),
+            admission.capacity(),
+            Arc::clone(&admission),
+        );
         let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
         let io = V2IoHandle {
             command_tx,
@@ -20132,13 +22327,10 @@ pub(super) mod tests {
                     Arc::new(AtomicBool::new(false)),
                 );
                 let completion = execute_fail_stop_io_command(&output_guard, || {
-                    Ok(V2IoCompletion::CertifiedRequestIgnored)
+                    Ok(V2IoCompletion::AuxiliaryNoop)
                 })
                 .expect("model successful I/O operation");
-                assert!(matches!(
-                    completion,
-                    V2IoCompletion::CertifiedRequestIgnored
-                ));
+                assert!(matches!(completion, V2IoCompletion::AuxiliaryNoop));
                 panic!("model panic before completion delivery");
             }
         });

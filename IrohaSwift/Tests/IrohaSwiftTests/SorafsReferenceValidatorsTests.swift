@@ -760,6 +760,36 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
                 profile.path
             )
         }
+
+        for (payloadPath, expectedName) in [
+            (
+                "sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to",
+                "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+            ),
+            (
+                "sorafs_manifest/appeal_finance/negative/"
+                    + "cancel_asset_lock_zero_expected_v1.to",
+                "appeal_finance_cancel_asset_lock_zero_expected_negative_"
+                    + "validation_outcome_v1.json"
+            ),
+        ] {
+            let label = URL(fileURLWithPath: payloadPath).lastPathComponent
+            let outcome = try SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJSON(
+                payload: try fixture(payloadPath),
+                label: label,
+                generatedAtUnix: 123
+            )
+            XCTAssertEqual(
+                outcome,
+                String(
+                    decoding: try fixture(
+                        "sorafs_manifest/reference_sdk/\(expectedName)"
+                    ),
+                    as: UTF8.self
+                ),
+                payloadPath
+            )
+        }
     }
 
     func testValidatesLinkedFixtureBundleWhenNativeBridgeIsAvailable() throws {

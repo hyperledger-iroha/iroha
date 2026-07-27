@@ -34,6 +34,9 @@ from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
     emit_runner_error_lines,
     emit_runner_exception,
+    inspect_runner_path_exists,
+    inspect_runner_path_is_dir,
+    inspect_runner_path_is_symlink,
     run_command_plan,
     require_existing_files,
     require_runner_non_negative_int,
@@ -41,6 +44,8 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_runner_positive_int,
     require_runner_url_args,
     validate_runner_fixed_evidence_plan,
+    validate_runner_output_dir,
+    validate_runner_output_parent,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
@@ -58,6 +63,59 @@ PLAN_FIELDS = frozenset(
     }
 )
 EXTERNAL_EVIDENCE_FIELDS = frozenset({"publish", "metrics", "transport", "consumption"})
+AUTH_ACCOUNT_ERROR = "--auth-account must be a canonical non-alias I105 literal"
+I105_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+I105_KANA_ALPHABET = (
+    "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ"
+)
+I105_PAYLOAD_ALPHABET = frozenset(I105_BASE58_ALPHABET + I105_KANA_ALPHABET)
+I105_KNOWN_SENTINELS = ("sora", "test", "dev")
+I105_NAMED_DISCRIMINANTS = frozenset({0x0000, 0x0171, 0x02F1})
+I105_CHECKSUM_SYMBOLS = 6
+I105_MAX_LITERAL_BYTES = 512
+REPUTATION_PROVIDER_ID_MAX_BYTES = 256
+REPUTATION_PROVIDER_ID_PUNCTUATION = frozenset("-_.:")
+REPUTATION_PROVIDER_ID_ERROR = (
+    "--provider-id must be canonical 1..=256 ASCII [A-Za-z0-9_.:-], excluding . and .."
+)
+PROVIDER_ARTIFACT_HEX_CHUNK_CHARS = 64
+PROVIDER_ARTIFACT_FILENAME = "artifact.json"
+PROVIDER_ARTIFACT_NAMESPACES = {
+    "provider": "provider-by-provider-id",
+    "verify": "verify-by-provider-id",
+}
+REPUTATION_MAX_PAGE_ITEMS = 500
+U64_MAX = (1 << 64) - 1
+REPEATABLE_OPTIONS = frozenset({"--provider-id", "--provider-proof"})
+VALUE_OPTIONS = frozenset(
+    {
+        "--sorafs-cli-bin",
+        "--verifier",
+        "--torii-url",
+        "--auth-account",
+        "--auth-private-key-file",
+        "--snapshot",
+        "--publish-evidence",
+        "--provider-id",
+        "--provider-proof",
+        "--metrics-evidence",
+        "--transport-evidence",
+        "--consumption-evidence",
+        "--out-dir",
+        "--summary-out",
+        "--now-unix",
+        "--max-snapshot-age-secs",
+        "--max-ingest-lag-secs",
+        "--watch-since",
+        "--watch-limit",
+        "--watch-max-polls",
+        "--watch-poll-interval-ms",
+    }
+)
+FLAG_OPTIONS = frozenset({"--dry-run", "--help", "-h"})
+OPTION_DIAGNOSTIC_LABELS = {
+    "--auth-private-key-file": "runtime signer-file option",
+}
 
 
 @dataclass(frozen=True)
@@ -69,13 +127,104 @@ class CommandPlan:
     command: list[str]
 
 
+def i105_payload_is_candidate(payload: str) -> bool:
+    """Return whether text has the minimum shape of a canonical I105 payload."""
+
+    return (
+        len(payload) > I105_CHECKSUM_SYMBOLS
+        and all(character in I105_PAYLOAD_ALPHABET for character in payload)
+    )
+
+
+def auth_account_is_i105_candidate(value: str) -> bool:
+    """Reject aliases and malformed I105 shapes before rendering a command plan.
+
+    The Rust CLI performs the authoritative checksum, canonical-byte, chain,
+    single-key, and private-key/account-match checks immediately before each
+    request is signed.
+    """
+
+    if (
+        not diagnostic_text_is_canonical(value)
+        or len(value.encode("utf-8")) > I105_MAX_LITERAL_BYTES
+    ):
+        return False
+    for sentinel in I105_KNOWN_SENTINELS:
+        if value.startswith(sentinel):
+            return i105_payload_is_candidate(value[len(sentinel) :])
+    if not value.startswith("n"):
+        return False
+
+    rest = value[1:]
+    for sentinel_length in range(1, min(5, len(rest)) + 1):
+        numeric_sentinel = rest[:sentinel_length]
+        if not numeric_sentinel.isascii() or not numeric_sentinel.isdigit():
+            break
+        if len(numeric_sentinel) > 1 and numeric_sentinel.startswith("0"):
+            continue
+        discriminant = int(numeric_sentinel)
+        if discriminant > 0xFFFF or discriminant in I105_NAMED_DISCRIMINANTS:
+            continue
+        if i105_payload_is_candidate(rest[sentinel_length:]):
+            return True
+    return False
+
+
+def provider_id_is_canonical(value: str) -> bool:
+    """Return whether a provider id matches the committed Torii path contract."""
+
+    return (
+        diagnostic_text_is_canonical(value)
+        and value not in {".", ".."}
+        and value.isascii()
+        and len(value) <= REPUTATION_PROVIDER_ID_MAX_BYTES
+        and all(
+            character.isascii()
+            and (character.isalnum() or character in REPUTATION_PROVIDER_ID_PUNCTUATION)
+            for character in value
+        )
+    )
+
+
+def validate_expanded_options(args: Sequence[str]) -> None:
+    """Reject unknown, abbreviated, or repeated scalar options without values."""
+
+    counts: dict[str, int] = {}
+    index = 0
+    while index < len(args):
+        argument = args[index]
+        if not isinstance(argument, str) or not diagnostic_text_is_canonical(argument):
+            raise ValueError("reputation rollout arguments must be canonical strings")
+        option, separator, _inline_value = argument.partition("=")
+        if option not in VALUE_OPTIONS and option not in FLAG_OPTIONS:
+            raise ValueError("unsupported reputation rollout option")
+
+        count = counts.get(option, 0) + 1
+        counts[option] = count
+        option_label = OPTION_DIAGNOSTIC_LABELS.get(option, option)
+        if count > 1 and option not in REPEATABLE_OPTIONS:
+            raise ValueError(f"{option_label} must be supplied at most once")
+
+        if option in FLAG_OPTIONS:
+            if separator:
+                raise ValueError(f"{option_label} does not accept a value")
+            index += 1
+            continue
+        if separator:
+            index += 1
+            continue
+        if index + 1 >= len(args) or args[index + 1].startswith("-"):
+            raise ValueError(f"{option_label} requires a value")
+        index += 2
+
+
 def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
     provider_id, separator, path = spec.partition("=")
     if (
         not separator
         or not provider_id
         or not path
-        or not diagnostic_text_is_canonical(provider_id)
+        or not provider_id_is_canonical(provider_id)
         or not diagnostic_text_is_canonical(path)
     ):
         raise ValueError("--provider-proof must use PROVIDER_ID=PATH form")
@@ -84,15 +233,29 @@ def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
-    require_runner_passthrough_args(args, ("sorafs_cli_bin",), (), errors)
+    require_runner_passthrough_args(
+        args,
+        ("sorafs_cli_bin", "auth_account"),
+        (),
+        errors,
+    )
+    if not auth_account_is_i105_candidate(args.auth_account):
+        errors.append(AUTH_ACCOUNT_ERROR)
     require_runner_url_args(args, ("torii_url",), errors)
     seen_input_files: dict[Path, tuple[str, Path]] = {}
+    errors.extend(
+        require_existing_files(
+            [args.auth_private_key_file],
+            "--auth-private-key-file",
+            seen=seen_input_files,
+        )
+    )
     if not args.provider_id:
         errors.append("at least one --provider-id is required")
     seen_provider_ids: set[str] = set()
     for provider_id in args.provider_id:
-        if not diagnostic_text_is_canonical(provider_id):
-            errors.append("--provider-id must be canonical")
+        if not provider_id_is_canonical(provider_id):
+            errors.append(REPUTATION_PROVIDER_ID_ERROR)
             continue
         if provider_id in seen_provider_ids:
             errors.append("duplicate --provider-id")
@@ -139,16 +302,147 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     require_runner_positive_int(args, "now_unix", errors, allow_none=True)
     require_runner_positive_int(args, "max_snapshot_age_secs", errors)
     require_runner_positive_int(args, "max_ingest_lag_secs", errors)
-    require_runner_non_negative_int(args, "watch_since", errors)
-    require_runner_positive_int(args, "watch_limit", errors)
-    require_runner_positive_int(args, "watch_max_polls", errors)
-    require_runner_non_negative_int(args, "watch_poll_interval_ms", errors)
+    watch_since_valid = require_runner_non_negative_int(args, "watch_since", errors)
+    watch_limit_valid = require_runner_positive_int(args, "watch_limit", errors)
+    watch_max_polls_valid = require_runner_positive_int(args, "watch_max_polls", errors)
+    watch_poll_interval_valid = require_runner_non_negative_int(
+        args,
+        "watch_poll_interval_ms",
+        errors,
+    )
+    if watch_since_valid and args.watch_since > U64_MAX:
+        errors.append("--watch-since must fit an unsigned 64-bit integer")
+    if watch_limit_valid and args.watch_limit > REPUTATION_MAX_PAGE_ITEMS:
+        errors.append(
+            f"--watch-limit must be within 1..={REPUTATION_MAX_PAGE_ITEMS}"
+        )
+    if watch_max_polls_valid and args.watch_max_polls > U64_MAX:
+        errors.append("--watch-max-polls must fit an unsigned 64-bit integer")
+    if watch_poll_interval_valid and args.watch_poll_interval_ms > U64_MAX:
+        errors.append("--watch-poll-interval-ms must fit an unsigned 64-bit integer")
     return errors
 
 
-def provider_artifact_name(provider_id: str, suffix: str) -> str:
-    safe = "".join(char if char.isalnum() or char in ".-_" else "_" for char in provider_id)
-    return f"{suffix}-{safe}.json"
+def provider_artifact_name(provider_id: str, suffix: str) -> Path:
+    """Return an injective, component-bounded relative provider artifact path."""
+
+    if not provider_id_is_canonical(provider_id):
+        raise ValueError(REPUTATION_PROVIDER_ID_ERROR)
+    namespace = PROVIDER_ARTIFACT_NAMESPACES.get(suffix)
+    if namespace is None:
+        raise ValueError("provider artifact suffix must be provider or verify")
+    provider_id_hex = provider_id.encode("ascii").hex()
+    chunks = tuple(
+        provider_id_hex[index : index + PROVIDER_ARTIFACT_HEX_CHUNK_CHARS]
+        for index in range(0, len(provider_id_hex), PROVIDER_ARTIFACT_HEX_CHUNK_CHARS)
+    )
+    return Path(namespace, *chunks, PROVIDER_ARTIFACT_FILENAME)
+
+
+def prepare_reputation_artifact_parent(
+    step: CommandPlan,
+    out_dir: Path,
+) -> list[str]:
+    """Create one canonical provider artifact parent immediately before launch."""
+
+    command = step.command
+    if len(command) < 3 or command[1] != "reputation":
+        return []
+    operation = command[2]
+    suffix = {"fetch": "provider", "verify": "verify"}.get(operation)
+    if suffix is None:
+        return []
+
+    errors: list[str] = []
+    provider_args = [
+        argument.removeprefix("--provider-id=")
+        for argument in command
+        if argument.startswith("--provider-id=")
+    ]
+    if len(provider_args) != 1 or not provider_id_is_canonical(provider_args[0]):
+        return ["provider artifact step must bind one canonical provider id"]
+    expected_artifact = out_dir / provider_artifact_name(provider_args[0], suffix)
+    if step.artifact != expected_artifact:
+        return ["provider artifact path must match its canonical sharded layout"]
+    if not validate_runner_output_dir(
+        out_dir,
+        errors,
+        require_exists=True,
+    ):
+        return errors
+
+    relative_parent = expected_artifact.parent.relative_to(out_dir)
+    current = out_dir
+    for component in relative_parent.parts:
+        current /= component
+        directory_is_symlink = inspect_runner_path_is_symlink(
+            current,
+            errors,
+            label="provider artifact directory",
+        )
+        if directory_is_symlink is None:
+            return errors
+        if directory_is_symlink:
+            errors.append("provider artifact directory must not be a symlink")
+            return errors
+        directory_exists = inspect_runner_path_exists(
+            current,
+            errors,
+            label="provider artifact directory",
+        )
+        if directory_exists is None:
+            return errors
+        if not directory_exists:
+            try:
+                current.mkdir(mode=0o700)
+            except (OSError, RuntimeError) as error:
+                errors.append(
+                    "provider artifact directory could not be created: "
+                    f"{error_diagnostic_label(error)}"
+                )
+                return errors
+        directory_is_symlink = inspect_runner_path_is_symlink(
+            current,
+            errors,
+            label="provider artifact directory",
+        )
+        directory_is_dir = inspect_runner_path_is_dir(
+            current,
+            errors,
+            label="provider artifact directory",
+        )
+        if errors:
+            return errors
+        if directory_is_symlink:
+            errors.append("provider artifact directory must not be a symlink")
+            return errors
+        if not directory_is_dir:
+            errors.append("provider artifact directory must be a directory")
+            return errors
+
+    if not validate_runner_output_parent(
+        expected_artifact,
+        errors,
+        label="provider artifact",
+    ):
+        return errors
+    artifact_is_symlink = inspect_runner_path_is_symlink(
+        expected_artifact,
+        errors,
+        label="provider artifact",
+    )
+    artifact_exists = inspect_runner_path_exists(
+        expected_artifact,
+        errors,
+        label="provider artifact",
+    )
+    if errors:
+        return errors
+    if artifact_is_symlink:
+        errors.append("provider artifact must not be a symlink")
+    elif artifact_exists:
+        errors.append("provider artifact must not already exist")
+    return errors
 
 
 def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
@@ -158,6 +452,10 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     events_out = out_dir / "events.json"
     cli = args.sorafs_cli_bin
     torii_url = args.torii_url
+    auth_args = [
+        f"--auth-account={args.auth_account}",
+        f"--auth-private-key-file={args.auth_private_key_file}",
+    ]
 
     plan = [
         CommandPlan(
@@ -168,6 +466,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
                 "reputation",
                 "snapshot",
                 f"--torii-url={torii_url}",
+                *auth_args,
                 f"--output={latest_out}",
             ],
         ),
@@ -187,6 +486,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
                     "fetch",
                     f"--torii-url={torii_url}",
                     f"--provider-id={provider_id}",
+                    *auth_args,
                     "--format=json",
                     f"--summary-out={provider_out}",
                 ],
@@ -217,6 +517,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
                 "reputation",
                 "watch",
                 f"--torii-url={torii_url}",
+                *auth_args,
                 f"--since={args.watch_since}",
                 f"--limit={args.watch_limit}",
                 f"--max-polls={args.watch_max_polls}",
@@ -317,12 +618,17 @@ def validate_plan_json(
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
-    return run_command_plan(plan, out_dir)
+    return run_command_plan(
+        plan,
+        out_dir,
+        prepare_step=lambda step: prepare_reputation_artifact_parent(step, out_dir),
+    )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = EvidenceArgumentParser(
         description="Collect and verify SoraFS reputation rollout evidence.",
+        allow_abbrev=False,
     )
     parser.add_argument("--sorafs-cli-bin", default="sorafs_cli", help="sorafs_cli binary to run.")
     parser.add_argument(
@@ -332,6 +638,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Rollout evidence verifier script path.",
     )
     parser.add_argument("--torii-url", required=True, help="Deployed Torii base URL.")
+    parser.add_argument(
+        "--auth-account",
+        required=True,
+        help="Exact canonical single-key I105 account used to authenticate live reads.",
+    )
+    parser.add_argument(
+        "--auth-private-key-file",
+        type=Path,
+        required=True,
+        help=(
+            "Runtime-only private-key file for --auth-account. "
+            "The path is forwarded to sorafs_cli; key material is never read by this runner."
+        ),
+    )
     parser.add_argument(
         "--snapshot",
         type=Path,
@@ -420,6 +740,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)
+        validate_expanded_options(expanded_args)
     except ValueError as error:
         emit_runner_exception(error)
         raise SystemExit(2) from error

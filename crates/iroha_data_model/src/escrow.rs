@@ -451,6 +451,24 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "json")]
+    #[test]
+    fn escrow_id_json_is_a_canonical_hash_literal() {
+        let id = EscrowId::new(Hash::new("escrow-json"));
+        let expected =
+            norito::json::to_json(id.as_hash()).expect("serialize canonical escrow hash");
+        let encoded = norito::json::to_json(&id).expect("serialize escrow id");
+        assert_eq!(encoded, expected);
+        assert_eq!(
+            norito::json::from_str::<EscrowId>(&encoded).expect("deserialize escrow id"),
+            id
+        );
+        assert!(
+            norito::json::from_str::<EscrowId>(&format!("[{encoded}]")).is_err(),
+            "the retired tuple-shaped EscrowId JSON must be rejected"
+        );
+    }
+
     #[test]
     fn escrow_id_norito_is_transparent_hash_bytes() {
         let id = EscrowId::new(Hash::new("sorafs-appeal-cancel-asset-lock-v1"));

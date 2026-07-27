@@ -235,12 +235,18 @@ public sealed class TransactionBuilder
     public TransactionBuilder CompleteReplicationOrder(
         string orderId,
         string providerId,
-        ulong completionEpoch)
+        ulong completionEpoch,
+        ProviderIngestCompletionAuthorityV1 expectedAuthority,
+        ulong expectedAssignmentRevision,
+        ProviderIngestFinalizedAnchorV1 finalizedAnchor)
     {
         return AddInstruction(TransactionInstruction.CompleteReplicationOrder(
             orderId,
             providerId,
-            completionEpoch));
+            completionEpoch,
+            expectedAuthority,
+            expectedAssignmentRevision,
+            finalizedAnchor));
     }
 
     public TransactionBuilder ExpireReplicationOrder(

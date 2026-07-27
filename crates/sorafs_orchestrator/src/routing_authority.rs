@@ -539,7 +539,9 @@ mod tests {
         sorafs::{
             capacity::ProviderId,
             pin_registry::{
-                ChunkerProfileHandle, PinPolicy, ReplicationOrderCompletionRecord, StorageClass,
+                ChunkerProfileHandle, PinPolicy, ProviderIngestCompletionAuthorityV1,
+                ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+                ReplicationOrderCompletionRecord, StorageClass,
             },
         },
     };
@@ -654,6 +656,20 @@ mod tests {
                     provider_id: ProviderId::new(provider_id),
                     completed_by: issued_by.clone(),
                     completion_epoch,
+                    assignment_revision: 1,
+                    completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                        issued_by.clone(),
+                        ProviderIngestCompletionSignerPolicyV1 {
+                            policy_id: [0xA1; 32],
+                            revision: 1,
+                            predecessor_digest: None,
+                            policy_digest: [0xA2; 32],
+                        },
+                    ),
+                    finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                        height: completion_epoch,
+                        block_hash: [0xA3; 32],
+                    },
                 })
                 .collect(),
             ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_) => Vec::new(),
@@ -666,6 +682,7 @@ mod tests {
             issued_epoch: 5,
             deadline_epoch: 20,
             canonical_order: norito::to_bytes(&payload).expect("encode replication order"),
+            assignment_revision: 1,
             provider_completions,
             status,
         };

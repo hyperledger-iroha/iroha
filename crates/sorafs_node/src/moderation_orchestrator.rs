@@ -76,6 +76,8 @@ pub const MODERATION_TRANSACTION_TTL_MS_V1: u64 = 5 * 60 * 1_000;
 pub const MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1: u64 = 30_000;
 /// Exact first-release lease for signer, ingress, lookup, and terminal-sink work.
 pub const MODERATION_EXTERNAL_WORK_LEASE_MS_V1: u64 = 30_000;
+/// Maximum accepted opaque runtime-provider handle size.
+pub const MODERATION_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 /// Initial retry delay for a panel-notification delivery.
 pub const MODERATION_PANEL_NOTIFICATION_BACKOFF_BASE_MS_V1: u64 = 1_000;
 /// Maximum retry delay for a panel-notification delivery.
@@ -93,6 +95,8 @@ const RETIRED_ENVELOPE_RECORD_DIGEST_DOMAIN_V1: &[u8] =
 const PANEL_NOTIFICATION_ID_DOMAIN_V1: &[u8] = b"sorafs.moderation.panel-notification-id.v1";
 const PANEL_NOTIFICATION_SCOPE_DOMAIN_V1: &[u8] = b"sorafs.moderation.panel-notification-scope.v1";
 const PANEL_NOTIFICATION_LEASE_DOMAIN_V1: &[u8] = b"sorafs.moderation.panel-notification-lease.v1";
+const PANEL_NOTIFICATION_WORKER_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-worker.v1";
 const PANEL_NOTIFICATION_RECORD_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.panel-notification-record.v1";
 const PANEL_NOTIFICATION_OUTBOX_DOMAIN_V1: &[u8] =
@@ -433,7 +437,215 @@ impl ModerationNativeActionV1 {
     }
 }
 
-/// Bounds and durable path for one moderation orchestrator.
+/// Public, non-secret qualification for one moderation runtime provider.
+///
+/// `revision` identifies the deployment-owned adapter and public policy
+/// revision. `policy_digest` binds that exact public policy. The orchestrator
+/// pins both values before opening durable state and requires the same values
+/// before and after every external provider operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModerationRuntimeProviderQualificationV1 {
+    revision: u64,
+    policy_digest: [u8; 32],
+}
+
+impl ModerationRuntimeProviderQualificationV1 {
+    /// Construct one provider qualification observation.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return the non-zero deployment adapter/policy revision.
+    #[must_use]
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Return the non-zero digest of the public provider policy.
+    #[must_use]
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest != [0; 32]
+    }
+}
+
+/// Stable, payload-free moderation runtime-provider qualification failures.
+///
+/// Provider implementations keep credentials, key identifiers, and vendor
+/// diagnostics behind this boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ModerationRuntimeProviderQualificationErrorV1 {
+    /// The configured opaque provider handle is malformed.
+    #[error("configured moderation runtime provider handle is invalid")]
+    InvalidConfiguredHandle,
+    /// The configured handle is explicitly marked for test or development use.
+    #[error("configured moderation runtime provider handle is test-marked")]
+    TestMarkedConfiguredHandle,
+    /// The injected provider's opaque handle is malformed.
+    #[error("injected moderation runtime provider handle is invalid")]
+    InvalidProviderHandle,
+    /// The injected provider advertises a test- or development-marked handle.
+    #[error("injected moderation runtime provider handle is test-marked")]
+    TestMarkedProviderHandle,
+    /// The configured provider revision or public policy digest is zero.
+    #[error("configured moderation runtime provider qualification is invalid")]
+    InvalidConfiguredQualification,
+    /// The injected provider does not match the configured stable handle.
+    #[error("moderation runtime provider handle does not match configuration")]
+    SubstitutedProvider,
+    /// Qualification could not prove that the provider is current and usable.
+    #[error("moderation runtime provider is unavailable, stale, or unqualified")]
+    UnavailableOrStale,
+    /// The provider returned a zero revision or all-zero public policy digest.
+    #[error("moderation runtime provider returned an invalid qualification")]
+    InvalidQualification,
+    /// The provider does not match the independently governed qualification.
+    #[error("moderation runtime provider qualification does not match configuration")]
+    QualificationMismatch,
+    /// The provider identity or public policy changed after it was pinned.
+    #[error("moderation runtime provider identity or policy changed after qualification")]
+    IdentityOrPolicyChanged,
+}
+
+/// Fixed readiness failures returned by a moderation runtime provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ModerationRuntimeProviderReadinessErrorV1 {
+    /// The provider or a required credential is temporarily unavailable.
+    #[error("moderation runtime provider unavailable")]
+    Unavailable,
+    /// The provider is revoked, stale, unauthorized, or otherwise ineligible.
+    #[error("moderation runtime provider rejected qualification")]
+    Rejected,
+}
+
+/// Stable identity and readiness exposed by an external moderation provider.
+///
+/// Implementations own credentials, signing keys, authentication material,
+/// and provider-specific diagnostics. `qualification` must fail when the
+/// provider is unavailable, revoked, stale, test-marked, or otherwise not
+/// production-ready.
+pub trait ModerationRuntimeProviderV1: Send + Sync + fmt::Debug {
+    /// Return the stable opaque deployment handle for this provider.
+    fn handle(&self) -> &str;
+
+    /// Qualify the active adapter and its public policy revision.
+    fn qualification(
+        &self,
+    ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>;
+}
+
+/// Qualify one provider against an independently configured exact binding.
+///
+/// # Errors
+///
+/// Fails for malformed or test-marked handles, unavailable providers, invalid
+/// observations, substitutions, and revision or policy-digest mismatches.
+pub fn qualify_moderation_runtime_provider_v1<P: ModerationRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: ModerationRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+    validate_moderation_runtime_provider_handle(expected_handle, true)?;
+    if !expected_qualification.is_valid() {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification);
+    }
+    validate_moderation_runtime_provider_handle(provider.handle(), false)?;
+    if provider.handle() != expected_handle {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::SubstitutedProvider);
+    }
+    let qualification = provider
+        .qualification()
+        .map_err(|_| ModerationRuntimeProviderQualificationErrorV1::UnavailableOrStale)?;
+    if !qualification.is_valid() {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::InvalidQualification);
+    }
+    if qualification != expected_qualification {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::QualificationMismatch);
+    }
+    if provider.handle() != expected_handle {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    Ok(())
+}
+
+/// Revalidate an already pinned provider immediately around external work.
+///
+/// # Errors
+///
+/// Fails when readiness, identity, revision, or public policy differs from the
+/// exact binding qualified at startup.
+pub fn revalidate_moderation_runtime_provider_v1<P: ModerationRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: ModerationRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+    if provider.handle() != expected_handle {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    let qualification = provider
+        .qualification()
+        .map_err(|_| ModerationRuntimeProviderQualificationErrorV1::UnavailableOrStale)?;
+    if !qualification.is_valid() {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::InvalidQualification);
+    }
+    if provider.handle() != expected_handle || qualification != expected_qualification {
+        return Err(ModerationRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    Ok(())
+}
+
+fn validate_moderation_runtime_provider_handle(
+    handle: &str,
+    configured: bool,
+) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+    if handle.is_empty()
+        || handle.len() > MODERATION_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
+        || !handle.is_ascii()
+        || handle
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(if configured {
+            ModerationRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle
+        } else {
+            ModerationRuntimeProviderQualificationErrorV1::InvalidProviderHandle
+        });
+    }
+    let lowercase = handle.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
+            )
+        })
+    {
+        return Err(if configured {
+            ModerationRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle
+        } else {
+            ModerationRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
+        });
+    }
+    Ok(())
+}
+
+fn map_runtime_provider_qualification_error(
+    _error: ModerationRuntimeProviderQualificationErrorV1,
+) -> ModerationOrchestratorError {
+    ModerationOrchestratorError::InvalidConfiguration(
+        "moderation runtime provider binding is unavailable or invalid".to_owned(),
+    )
+}
+
+/// Bounds, provider bindings, and durable path for one moderation orchestrator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationOrchestratorConfigV1 {
     /// Absolute private checkpoint path.
@@ -452,6 +664,26 @@ pub struct ModerationOrchestratorConfigV1 {
     pub max_submit_attempts: u32,
     /// Maximum checkpoint bytes.
     pub checkpoint_max_bytes: u64,
+    /// Governed identity of the injected HSM transaction signer.
+    pub transaction_signer_handle: String,
+    /// Independently governed signer adapter and public-policy qualification.
+    pub expected_transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Governed identity of the injected strict transaction ingress.
+    pub strict_ingress_handle: String,
+    /// Independently governed ingress adapter and public-policy qualification.
+    pub expected_strict_ingress_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Governed identity of the durable appeal-finance handoff boundary.
+    pub settlement_handoff_handle: String,
+    /// Independently governed settlement adapter and public-policy qualification.
+    pub expected_settlement_handoff_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Governed identity of the durable governance/publication handoff boundary.
+    pub publication_handoff_handle: String,
+    /// Independently governed publication adapter and public-policy qualification.
+    pub expected_publication_handoff_qualification: ModerationRuntimeProviderQualificationV1,
+    /// Governed identity of the durable panel-notification delivery boundary.
+    pub panel_notification_handle: String,
+    /// Independently governed notification adapter and public-policy qualification.
+    pub expected_panel_notification_qualification: ModerationRuntimeProviderQualificationV1,
 }
 
 impl ModerationOrchestratorConfigV1 {
@@ -490,6 +722,39 @@ impl ModerationOrchestratorConfigV1 {
             return Err(ModerationOrchestratorError::InvalidConfiguration(
                 "submission attempts or checkpoint byte bound is invalid".to_owned(),
             ));
+        }
+        for (handle, qualification) in [
+            (
+                self.transaction_signer_handle.as_str(),
+                self.expected_transaction_signer_qualification,
+            ),
+            (
+                self.strict_ingress_handle.as_str(),
+                self.expected_strict_ingress_qualification,
+            ),
+            (
+                self.settlement_handoff_handle.as_str(),
+                self.expected_settlement_handoff_qualification,
+            ),
+            (
+                self.publication_handoff_handle.as_str(),
+                self.expected_publication_handoff_qualification,
+            ),
+            (
+                self.panel_notification_handle.as_str(),
+                self.expected_panel_notification_qualification,
+            ),
+        ] {
+            validate_moderation_runtime_provider_handle(handle, true).map_err(|_| {
+                ModerationOrchestratorError::InvalidConfiguration(
+                    "moderation runtime provider binding is invalid".to_owned(),
+                )
+            })?;
+            if !qualification.is_valid() {
+                return Err(ModerationOrchestratorError::InvalidConfiguration(
+                    "moderation runtime provider binding is invalid".to_owned(),
+                ));
+            }
         }
         Ok(())
     }
@@ -754,6 +1019,12 @@ pub enum ModerationSubmissionLookupV1 {
 
 /// Runtime-only HSM and strict transaction-ingress interface.
 pub trait ModerationTransactionSubmitterV1: Send + Sync {
+    /// Return the exact external signer provider qualified by this submitter.
+    fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1;
+
+    /// Return the exact strict-ingress provider qualified by this submitter.
+    fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1;
+
     /// Exact ledger chain implemented by this runtime boundary.
     ///
     /// The orchestrator freezes this value at open and rejects every retained
@@ -838,7 +1109,7 @@ pub struct ModerationTerminalHandoffV1 {
 }
 
 /// Exactly-once terminal settlement/publication adapter.
-pub trait ModerationTerminalHandoffSinkV1: Send + Sync {
+pub trait ModerationTerminalHandoffSinkV1: ModerationRuntimeProviderV1 {
     /// Deliver a payload-free finalized handoff, deduplicating `handoff_id`.
     fn deliver(
         &self,
@@ -943,6 +1214,25 @@ pub enum ModerationPanelNotificationFailureV1 {
     Permanent,
 }
 
+/// Exactly-once payload-free panel-notification delivery adapter.
+///
+/// Implementations must atomically deduplicate
+/// [`ModerationPanelNotificationV1::notification_id`] against the exact
+/// canonical notification bytes before returning a receipt. A replay of the
+/// same identity and bytes must return the same stable receipt; a replay with
+/// different bytes must return [`ModerationPanelNotificationFailureV1::Permanent`].
+pub trait ModerationPanelNotificationSinkV1: ModerationRuntimeProviderV1 {
+    /// Deliver one exact claimed notification.
+    ///
+    /// The sink must not persist message bodies, evidence locators, bearer
+    /// grants, or other private payloads. Recipient-facing content is resolved
+    /// from the finalized ledger after the payload-free notification arrives.
+    fn deliver(
+        &self,
+        claim: &ModerationPanelNotificationClaimV1,
+    ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>;
+}
+
 /// Durable terminal reason for a panel notification.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -1021,6 +1311,8 @@ pub struct ModerationOrchestratorDepsV1 {
     pub settlement_sink: Arc<dyn ModerationTerminalHandoffSinkV1>,
     /// Governance/transparency terminal sink.
     pub publication_sink: Arc<dyn ModerationTerminalHandoffSinkV1>,
+    /// Durable payload-free panel-notification sink.
+    pub panel_notification_sink: Arc<dyn ModerationPanelNotificationSinkV1>,
 }
 
 impl fmt::Debug for ModerationOrchestratorDepsV1 {
@@ -1031,6 +1323,302 @@ impl fmt::Debug for ModerationOrchestratorDepsV1 {
             .field("snapshot_reader", &"<runtime-only>")
             .field("settlement_sink", &"<runtime-only>")
             .field("publication_sink", &"<runtime-only>")
+            .field("panel_notification_sink", &"<runtime-only>")
+            .finish()
+    }
+}
+
+struct QualifiedModerationTransactionSubmitterV1 {
+    transaction_signer_handle: String,
+    transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
+    strict_ingress_handle: String,
+    strict_ingress_qualification: ModerationRuntimeProviderQualificationV1,
+    submitter: Arc<dyn ModerationTransactionSubmitterV1>,
+}
+
+impl QualifiedModerationTransactionSubmitterV1 {
+    fn try_new(
+        config: &ModerationOrchestratorConfigV1,
+        submitter: Arc<dyn ModerationTransactionSubmitterV1>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        qualify_moderation_runtime_provider_v1(
+            &config.transaction_signer_handle,
+            config.expected_transaction_signer_qualification,
+            submitter.transaction_signer_provider(),
+        )?;
+        qualify_moderation_runtime_provider_v1(
+            &config.strict_ingress_handle,
+            config.expected_strict_ingress_qualification,
+            submitter.strict_ingress_provider(),
+        )?;
+        Ok(Self {
+            transaction_signer_handle: config.transaction_signer_handle.clone(),
+            transaction_signer_qualification: config.expected_transaction_signer_qualification,
+            strict_ingress_handle: config.strict_ingress_handle.clone(),
+            strict_ingress_qualification: config.expected_strict_ingress_qualification,
+            submitter,
+        })
+    }
+
+    fn revalidate_transaction_signer(
+        &self,
+    ) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+        revalidate_moderation_runtime_provider_v1(
+            &self.transaction_signer_handle,
+            self.transaction_signer_qualification,
+            self.submitter.transaction_signer_provider(),
+        )
+    }
+
+    fn revalidate_strict_ingress(
+        &self,
+    ) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+        revalidate_moderation_runtime_provider_v1(
+            &self.strict_ingress_handle,
+            self.strict_ingress_qualification,
+            self.submitter.strict_ingress_provider(),
+        )
+    }
+
+    fn chain_id(
+        &self,
+    ) -> Result<iroha_data_model::ChainId, ModerationRuntimeProviderQualificationErrorV1> {
+        self.revalidate_transaction_signer()?;
+        self.revalidate_strict_ingress()?;
+        let chain_id = self.submitter.chain_id();
+        self.revalidate_transaction_signer()?;
+        self.revalidate_strict_ingress()?;
+        Ok(chain_id)
+    }
+
+    fn sign(
+        &self,
+        request: &ModerationTransactionRequestV1,
+    ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1> {
+        self.revalidate_transaction_signer()
+            .map_err(|_| ModerationSubmissionFailureV1::RuntimeUnavailable)?;
+        let result = self.submitter.sign(request);
+        self.revalidate_transaction_signer()
+            .map_err(|_| ModerationSubmissionFailureV1::RuntimeUnavailable)?;
+        result
+    }
+
+    fn submit_signed(
+        &self,
+        request: &ModerationTransactionRequestV1,
+        signed: &ModerationSignedTransactionV1,
+    ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
+        self.revalidate_strict_ingress()
+            .map_err(|_| ModerationSubmissionFailureV1::NotSubmittedUnavailable)?;
+        let result = self.submitter.submit_signed(request, signed);
+        self.revalidate_strict_ingress()
+            .map_err(|_| ModerationSubmissionFailureV1::Ambiguous)?;
+        result
+    }
+
+    fn lookup(
+        &self,
+        operation_id: [u8; 32],
+        transaction_id: Option<[u8; 32]>,
+    ) -> ModerationSubmissionLookupV1 {
+        if self.revalidate_strict_ingress().is_err() {
+            return ModerationSubmissionLookupV1::Unknown;
+        }
+        let lookup = self.submitter.lookup(operation_id, transaction_id);
+        if self.revalidate_strict_ingress().is_err() {
+            return ModerationSubmissionLookupV1::Unknown;
+        }
+        lookup
+    }
+}
+
+impl fmt::Debug for QualifiedModerationTransactionSubmitterV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedModerationTransactionSubmitterV1")
+            .field("transaction_signer_handle", &self.transaction_signer_handle)
+            .field(
+                "transaction_signer_qualification",
+                &self.transaction_signer_qualification,
+            )
+            .field("strict_ingress_handle", &self.strict_ingress_handle)
+            .field(
+                "strict_ingress_qualification",
+                &self.strict_ingress_qualification,
+            )
+            .field("submitter", &"<runtime-only>")
+            .finish()
+    }
+}
+
+struct QualifiedModerationTerminalHandoffSinkV1 {
+    handle: String,
+    qualification: ModerationRuntimeProviderQualificationV1,
+    sink: Arc<dyn ModerationTerminalHandoffSinkV1>,
+}
+
+impl QualifiedModerationTerminalHandoffSinkV1 {
+    fn try_new(
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        sink: Arc<dyn ModerationTerminalHandoffSinkV1>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        qualify_moderation_runtime_provider_v1(
+            expected_handle,
+            expected_qualification,
+            sink.as_ref(),
+        )?;
+        Ok(Self {
+            handle: expected_handle.to_owned(),
+            qualification: expected_qualification,
+            sink,
+        })
+    }
+
+    fn revalidate(&self) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+        revalidate_moderation_runtime_provider_v1(
+            &self.handle,
+            self.qualification,
+            self.sink.as_ref(),
+        )
+    }
+
+    fn deliver(
+        &self,
+        handoff: &ModerationTerminalHandoffV1,
+    ) -> Result<(), ModerationHandoffFailureV1> {
+        self.revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::NotDelivered)?;
+        let result = self.sink.deliver(handoff);
+        self.revalidate()
+            .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
+        result
+    }
+}
+
+impl fmt::Debug for QualifiedModerationTerminalHandoffSinkV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedModerationTerminalHandoffSinkV1")
+            .field("handle", &self.handle)
+            .field("qualification", &self.qualification)
+            .field("sink", &"<runtime-only>")
+            .finish()
+    }
+}
+
+struct QualifiedModerationPanelNotificationSinkV1 {
+    handle: String,
+    qualification: ModerationRuntimeProviderQualificationV1,
+    sink: Arc<dyn ModerationPanelNotificationSinkV1>,
+}
+
+impl QualifiedModerationPanelNotificationSinkV1 {
+    fn try_new(
+        expected_handle: &str,
+        expected_qualification: ModerationRuntimeProviderQualificationV1,
+        sink: Arc<dyn ModerationPanelNotificationSinkV1>,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        qualify_moderation_runtime_provider_v1(
+            expected_handle,
+            expected_qualification,
+            sink.as_ref(),
+        )?;
+        Ok(Self {
+            handle: expected_handle.to_owned(),
+            qualification: expected_qualification,
+            sink,
+        })
+    }
+
+    fn revalidate(&self) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
+        revalidate_moderation_runtime_provider_v1(
+            &self.handle,
+            self.qualification,
+            self.sink.as_ref(),
+        )
+    }
+
+    fn deliver(
+        &self,
+        claim: &ModerationPanelNotificationClaimV1,
+    ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>
+    {
+        self.revalidate()
+            .map_err(|_| ModerationPanelNotificationFailureV1::NotDelivered)?;
+        let result = self.sink.deliver(claim);
+        self.revalidate()
+            .map_err(|_| ModerationPanelNotificationFailureV1::Ambiguous)?;
+        result
+    }
+}
+
+impl fmt::Debug for QualifiedModerationPanelNotificationSinkV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedModerationPanelNotificationSinkV1")
+            .field("handle", &self.handle)
+            .field("qualification", &self.qualification)
+            .field("sink", &"<runtime-only>")
+            .finish()
+    }
+}
+
+struct QualifiedModerationOrchestratorDepsV1 {
+    submitter: QualifiedModerationTransactionSubmitterV1,
+    snapshot_reader: Arc<dyn ModerationFinalizedSnapshotReaderV1>,
+    settlement_sink: QualifiedModerationTerminalHandoffSinkV1,
+    publication_sink: QualifiedModerationTerminalHandoffSinkV1,
+    panel_notification_sink: QualifiedModerationPanelNotificationSinkV1,
+}
+
+impl QualifiedModerationOrchestratorDepsV1 {
+    fn try_new(
+        config: &ModerationOrchestratorConfigV1,
+        deps: ModerationOrchestratorDepsV1,
+    ) -> Result<Self, ModerationRuntimeProviderQualificationErrorV1> {
+        let ModerationOrchestratorDepsV1 {
+            submitter,
+            snapshot_reader,
+            settlement_sink,
+            publication_sink,
+            panel_notification_sink,
+        } = deps;
+        let submitter = QualifiedModerationTransactionSubmitterV1::try_new(config, submitter)?;
+        let settlement_sink = QualifiedModerationTerminalHandoffSinkV1::try_new(
+            &config.settlement_handoff_handle,
+            config.expected_settlement_handoff_qualification,
+            settlement_sink,
+        )?;
+        let publication_sink = QualifiedModerationTerminalHandoffSinkV1::try_new(
+            &config.publication_handoff_handle,
+            config.expected_publication_handoff_qualification,
+            publication_sink,
+        )?;
+        let panel_notification_sink = QualifiedModerationPanelNotificationSinkV1::try_new(
+            &config.panel_notification_handle,
+            config.expected_panel_notification_qualification,
+            panel_notification_sink,
+        )?;
+        Ok(Self {
+            submitter,
+            snapshot_reader,
+            settlement_sink,
+            publication_sink,
+            panel_notification_sink,
+        })
+    }
+}
+
+impl fmt::Debug for QualifiedModerationOrchestratorDepsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedModerationOrchestratorDepsV1")
+            .field("submitter", &self.submitter)
+            .field("snapshot_reader", &"<local-committed-state-view>")
+            .field("settlement_sink", &self.settlement_sink)
+            .field("publication_sink", &self.publication_sink)
+            .field("panel_notification_sink", &self.panel_notification_sink)
             .finish()
     }
 }
@@ -1346,7 +1934,7 @@ impl Default for ModerationOrchestratorCheckpointV1 {
 pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
     chain_id: iroha_data_model::ChainId,
-    deps: ModerationOrchestratorDepsV1,
+    deps: QualifiedModerationOrchestratorDepsV1,
     state: Mutex<ModerationOrchestratorCheckpointV1>,
     durability_faulted: AtomicBool,
 }
@@ -1377,7 +1965,15 @@ impl ModerationOrchestratorV1 {
         deps: ModerationOrchestratorDepsV1,
     ) -> Result<Self, ModerationOrchestratorError> {
         config.validate()?;
-        let chain_id = deps.submitter.chain_id();
+        // Every external provider is independently qualified before even the
+        // checkpoint parent is inspected. A disabled, substituted, stale, or
+        // test-marked boundary therefore cannot influence durable state.
+        let deps = QualifiedModerationOrchestratorDepsV1::try_new(&config, deps)
+            .map_err(map_runtime_provider_qualification_error)?;
+        let chain_id = deps
+            .submitter
+            .chain_id()
+            .map_err(map_runtime_provider_qualification_error)?;
         if chain_id.as_str().is_empty() || chain_id.as_str() != chain_id.as_str().trim() {
             return Err(ModerationOrchestratorError::InvalidConfiguration(
                 "moderation submitter chain id must be non-empty and canonical".to_owned(),
@@ -2042,6 +2638,91 @@ impl ModerationOrchestratorV1 {
             }
         }
         self.persist_checkpoint_locked(&mut state)
+    }
+
+    /// Deliver a bounded batch of due panel notifications through the
+    /// independently qualified durable sink.
+    ///
+    /// Claims are checkpointed before the sink is called. The sink must
+    /// deduplicate the stable notification identity, so a crash after the
+    /// downstream effect but before receipt persistence replays the same
+    /// payload-free notification safely. The worker identity is derived from
+    /// the exact chain and governed sink binding; no process-local randomness
+    /// or secret material participates.
+    ///
+    /// # Errors
+    ///
+    /// Fails for an invalid runtime timestamp, checkpoint failure, corrupt
+    /// provider receipt, stale lease, or provider qualification drift.
+    pub fn deliver_due_panel_notifications(
+        &self,
+        now_unix_ms: u64,
+        limit: usize,
+    ) -> Result<usize, ModerationOrchestratorError> {
+        if now_unix_ms == 0 {
+            return Err(ModerationOrchestratorError::InvalidPanelNotificationClaim);
+        }
+        if limit == 0 {
+            return Ok(0);
+        }
+        let worker_id = panel_notification_worker_id(
+            &self.chain_id,
+            &self.config.panel_notification_handle,
+            self.config.expected_panel_notification_qualification,
+        );
+        let claims = self.claim_panel_notifications(worker_id, now_unix_ms, limit)?;
+        let mut delivered = 0_usize;
+        for claim in claims {
+            match self.deps.panel_notification_sink.deliver(&claim) {
+                Ok(receipt)
+                    if receipt.notification_id == claim.notification.notification_id
+                        && receipt.receipt_digest != [0; 32]
+                        && receipt.delivered_at_unix_ms
+                            >= claim.notification.source_occurred_at_unix_ms
+                        && receipt.delivered_at_unix_ms < claim.lease_expires_at_unix_ms =>
+                {
+                    let completion_unix_ms = now_unix_ms.max(receipt.delivered_at_unix_ms);
+                    if completion_unix_ms >= claim.lease_expires_at_unix_ms {
+                        self.release_panel_notification_claim(
+                            claim.notification.notification_id,
+                            claim.worker_id,
+                            claim.lease_token,
+                            ModerationPanelNotificationFailureV1::Ambiguous,
+                            now_unix_ms,
+                        )?;
+                        continue;
+                    }
+                    self.finalize_panel_notification_delivery(
+                        claim.worker_id,
+                        claim.lease_token,
+                        receipt,
+                        completion_unix_ms,
+                    )?;
+                    delivered = delivered
+                        .checked_add(1)
+                        .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+                }
+                Ok(_) => {
+                    self.release_panel_notification_claim(
+                        claim.notification.notification_id,
+                        claim.worker_id,
+                        claim.lease_token,
+                        ModerationPanelNotificationFailureV1::Ambiguous,
+                        now_unix_ms,
+                    )?;
+                }
+                Err(failure) => {
+                    self.release_panel_notification_claim(
+                        claim.notification.notification_id,
+                        claim.worker_id,
+                        claim.lease_token,
+                        failure,
+                        now_unix_ms,
+                    )?;
+                }
+            }
+        }
+        Ok(delivered)
     }
 
     /// Return the durable payload-free state for one notification.
@@ -5836,6 +6517,22 @@ fn panel_notification_scope_digest(case_id: &str, round_id: &str) -> [u8; 32] {
     )
 }
 
+fn panel_notification_worker_id(
+    chain_id: &iroha_data_model::ChainId,
+    handle: &str,
+    qualification: ModerationRuntimeProviderQualificationV1,
+) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_WORKER_DOMAIN_V1,
+        &[
+            chain_id.as_str().as_bytes(),
+            handle.as_bytes(),
+            &qualification.revision().to_le_bytes(),
+            &qualification.policy_digest(),
+        ],
+    )
+}
+
 fn panel_notification_id(
     chain_id: &iroha_data_model::ChainId,
     source_operation_id: [u8; 32],
@@ -6722,6 +7419,73 @@ mod tests {
     use super::*;
 
     const TEST_ENVELOPE_CREATION_UNIX_MS: u64 = 1_700_000_000_000;
+    const TRANSACTION_SIGNER_HANDLE: &str = "moderation-hsm-primary";
+    const STRICT_INGRESS_HANDLE: &str = "moderation-ingress-primary";
+    const HANDOFF_PROVIDER_HANDLE: &str = "moderation-handoff-primary";
+    const PANEL_NOTIFICATION_PROVIDER_HANDLE: &str = "moderation-notification-primary";
+    const TRANSACTION_SIGNER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA1; 32]);
+    const STRICT_INGRESS_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
+    const HANDOFF_PROVIDER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA3; 32]);
+    const PANEL_NOTIFICATION_PROVIDER_QUALIFICATION: ModerationRuntimeProviderQualificationV1 =
+        ModerationRuntimeProviderQualificationV1::new(1, [0xA4; 32]);
+
+    #[derive(Debug)]
+    struct MockRuntimeProvider {
+        handle: String,
+        qualification: Mutex<
+            Result<
+                ModerationRuntimeProviderQualificationV1,
+                ModerationRuntimeProviderReadinessErrorV1,
+            >,
+        >,
+    }
+
+    impl MockRuntimeProvider {
+        fn new(
+            handle: impl Into<String>,
+            qualification: ModerationRuntimeProviderQualificationV1,
+        ) -> Self {
+            Self {
+                handle: handle.into(),
+                qualification: Mutex::new(Ok(qualification)),
+            }
+        }
+
+        fn set_qualification(&self, qualification: ModerationRuntimeProviderQualificationV1) {
+            *self
+                .qualification
+                .lock()
+                .expect("provider qualification lock") = Ok(qualification);
+        }
+
+        fn set_readiness(&self, readiness: ModerationRuntimeProviderReadinessErrorV1) {
+            *self
+                .qualification
+                .lock()
+                .expect("provider qualification lock") = Err(readiness);
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for MockRuntimeProvider {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            *self
+                .qualification
+                .lock()
+                .expect("provider qualification lock")
+        }
+    }
 
     #[derive(Debug)]
     struct MockSnapshotReader {
@@ -6766,6 +7530,8 @@ mod tests {
     #[derive(Debug)]
     struct MockSubmitter {
         state: Mutex<MockSubmitterState>,
+        transaction_signer_provider: MockRuntimeProvider,
+        strict_ingress_provider: MockRuntimeProvider,
     }
 
     impl MockSubmitter {
@@ -6782,6 +7548,14 @@ mod tests {
                     failure: None,
                     ambiguous_is_applied: false,
                 }),
+                transaction_signer_provider: MockRuntimeProvider::new(
+                    TRANSACTION_SIGNER_HANDLE,
+                    TRANSACTION_SIGNER_QUALIFICATION,
+                ),
+                strict_ingress_provider: MockRuntimeProvider::new(
+                    STRICT_INGRESS_HANDLE,
+                    STRICT_INGRESS_QUALIFICATION,
+                ),
             }
         }
 
@@ -6798,6 +7572,14 @@ mod tests {
                     failure: Some(ModerationSubmissionFailureV1::Ambiguous),
                     ambiguous_is_applied: true,
                 }),
+                transaction_signer_provider: MockRuntimeProvider::new(
+                    TRANSACTION_SIGNER_HANDLE,
+                    TRANSACTION_SIGNER_QUALIFICATION,
+                ),
+                strict_ingress_provider: MockRuntimeProvider::new(
+                    STRICT_INGRESS_HANDLE,
+                    STRICT_INGRESS_QUALIFICATION,
+                ),
             }
         }
 
@@ -6836,6 +7618,14 @@ mod tests {
     }
 
     impl ModerationTransactionSubmitterV1 for MockSubmitter {
+        fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            &self.transaction_signer_provider
+        }
+
+        fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            &self.strict_ingress_provider
+        }
+
         fn chain_id(&self) -> ChainId {
             ChainId::from("moderation-orchestrator-test")
         }
@@ -6954,10 +7744,24 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
     struct MockHandoffSink {
+        provider: MockRuntimeProvider,
         delivered: Mutex<Vec<[u8; 32]>>,
         calls: AtomicUsize,
+    }
+
+    impl Default for MockHandoffSink {
+        fn default() -> Self {
+            Self {
+                provider: MockRuntimeProvider::new(
+                    HANDOFF_PROVIDER_HANDLE,
+                    HANDOFF_PROVIDER_QUALIFICATION,
+                ),
+                delivered: Mutex::new(Vec::new()),
+                calls: AtomicUsize::new(0),
+            }
+        }
     }
 
     impl MockHandoffSink {
@@ -6967,6 +7771,21 @@ mod tests {
 
         fn calls(&self) -> usize {
             self.calls.load(AtomicOrdering::Relaxed)
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for MockHandoffSink {
+        fn handle(&self) -> &str {
+            self.provider.handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            self.provider.qualification()
         }
     }
 
@@ -7042,6 +7861,14 @@ mod tests {
     }
 
     impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
+        fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            self.inner.transaction_signer_provider()
+        }
+
+        fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            self.inner.strict_ingress_provider()
+        }
+
         fn chain_id(&self) -> ChainId {
             self.inner.chain_id()
         }
@@ -7079,6 +7906,21 @@ mod tests {
         probe: Arc<ReentrantLockProbe>,
     }
 
+    impl ModerationRuntimeProviderV1 for ProbedHandoffSink {
+        fn handle(&self) -> &str {
+            self.inner.handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            self.inner.qualification()
+        }
+    }
+
     impl ModerationTerminalHandoffSinkV1 for ProbedHandoffSink {
         fn deliver(
             &self,
@@ -7114,6 +7956,14 @@ mod tests {
     }
 
     impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
+        fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            self.inner.transaction_signer_provider()
+        }
+
+        fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            self.inner.strict_ingress_provider()
+        }
+
         fn chain_id(&self) -> ChainId {
             self.inner.chain_id()
         }
@@ -7152,10 +8002,121 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug)]
+    struct DriftingSubmitter {
+        inner: Arc<MockSubmitter>,
+        signer_after_sign: Option<ModerationRuntimeProviderQualificationV1>,
+        ingress_after_submit: Option<ModerationRuntimeProviderQualificationV1>,
+        ingress_after_lookup: Option<ModerationRuntimeProviderQualificationV1>,
+    }
+
+    impl ModerationTransactionSubmitterV1 for DriftingSubmitter {
+        fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            self.inner.transaction_signer_provider()
+        }
+
+        fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1 {
+            self.inner.strict_ingress_provider()
+        }
+
+        fn chain_id(&self) -> ChainId {
+            self.inner.chain_id()
+        }
+
+        fn sign(
+            &self,
+            request: &ModerationTransactionRequestV1,
+        ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1> {
+            let result = self.inner.sign(request);
+            if let Some(qualification) = self.signer_after_sign {
+                self.inner
+                    .transaction_signer_provider
+                    .set_qualification(qualification);
+            }
+            result
+        }
+
+        fn submit_signed(
+            &self,
+            request: &ModerationTransactionRequestV1,
+            signed: &ModerationSignedTransactionV1,
+        ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
+            let result = self.inner.submit_signed(request, signed);
+            if let Some(qualification) = self.ingress_after_submit {
+                self.inner
+                    .strict_ingress_provider
+                    .set_qualification(qualification);
+            }
+            result
+        }
+
+        fn lookup(
+            &self,
+            operation_id: [u8; 32],
+            transaction_id: Option<[u8; 32]>,
+        ) -> ModerationSubmissionLookupV1 {
+            let result = self.inner.lookup(operation_id, transaction_id);
+            if let Some(qualification) = self.ingress_after_lookup {
+                self.inner
+                    .strict_ingress_provider
+                    .set_qualification(qualification);
+            }
+            result
+        }
+    }
+
+    #[derive(Debug)]
+    struct DriftingHandoffSink {
+        inner: Arc<MockHandoffSink>,
+        qualification_after_delivery: ModerationRuntimeProviderQualificationV1,
+    }
+
+    impl ModerationRuntimeProviderV1 for DriftingHandoffSink {
+        fn handle(&self) -> &str {
+            self.inner.handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            self.inner.qualification()
+        }
+    }
+
+    impl ModerationTerminalHandoffSinkV1 for DriftingHandoffSink {
+        fn deliver(
+            &self,
+            handoff: &ModerationTerminalHandoffV1,
+        ) -> Result<(), ModerationHandoffFailureV1> {
+            let result = self.inner.deliver(handoff);
+            self.inner
+                .provider
+                .set_qualification(self.qualification_after_delivery);
+            result
+        }
+    }
+
+    #[derive(Debug)]
     struct MockPanelNotificationSink {
+        provider: MockRuntimeProvider,
         calls: Mutex<usize>,
         receipts: Mutex<BTreeMap<[u8; 32], ModerationPanelNotificationDeliveryReceiptV1>>,
+    }
+
+    impl Default for MockPanelNotificationSink {
+        fn default() -> Self {
+            Self {
+                provider: MockRuntimeProvider::new(
+                    PANEL_NOTIFICATION_PROVIDER_HANDLE,
+                    PANEL_NOTIFICATION_PROVIDER_QUALIFICATION,
+                ),
+                calls: Mutex::new(0),
+                receipts: Mutex::new(BTreeMap::new()),
+            }
+        }
     }
 
     impl MockPanelNotificationSink {
@@ -7185,6 +8146,40 @@ mod tests {
 
         fn unique_deliveries(&self) -> usize {
             self.receipts.lock().expect("panel sink receipt lock").len()
+        }
+    }
+
+    impl ModerationRuntimeProviderV1 for MockPanelNotificationSink {
+        fn handle(&self) -> &str {
+            self.provider.handle()
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationRuntimeProviderQualificationV1,
+            ModerationRuntimeProviderReadinessErrorV1,
+        > {
+            self.provider.qualification()
+        }
+    }
+
+    impl ModerationPanelNotificationSinkV1 for MockPanelNotificationSink {
+        fn deliver(
+            &self,
+            claim: &ModerationPanelNotificationClaimV1,
+        ) -> Result<
+            ModerationPanelNotificationDeliveryReceiptV1,
+            ModerationPanelNotificationFailureV1,
+        > {
+            Ok(MockPanelNotificationSink::deliver(
+                self,
+                claim,
+                claim
+                    .notification
+                    .source_occurred_at_unix_ms
+                    .saturating_add(1),
+            ))
         }
     }
 
@@ -7602,7 +8597,207 @@ mod tests {
             max_handoffs: 64,
             max_submit_attempts: 3,
             checkpoint_max_bytes: 4 * 1024 * 1024,
+            transaction_signer_handle: TRANSACTION_SIGNER_HANDLE.to_owned(),
+            expected_transaction_signer_qualification: TRANSACTION_SIGNER_QUALIFICATION,
+            strict_ingress_handle: STRICT_INGRESS_HANDLE.to_owned(),
+            expected_strict_ingress_qualification: STRICT_INGRESS_QUALIFICATION,
+            settlement_handoff_handle: HANDOFF_PROVIDER_HANDLE.to_owned(),
+            expected_settlement_handoff_qualification: HANDOFF_PROVIDER_QUALIFICATION,
+            publication_handoff_handle: HANDOFF_PROVIDER_HANDLE.to_owned(),
+            expected_publication_handoff_qualification: HANDOFF_PROVIDER_QUALIFICATION,
+            panel_notification_handle: PANEL_NOTIFICATION_PROVIDER_HANDLE.to_owned(),
+            expected_panel_notification_qualification: PANEL_NOTIFICATION_PROVIDER_QUALIFICATION,
         }
+    }
+
+    fn provider_test_request() -> ModerationTransactionRequestV1 {
+        ModerationTransactionRequestV1::new(
+            ChainId::from("moderation-orchestrator-test"),
+            1,
+            account(41),
+            policy_action(policy(1)),
+            [0x71; 32],
+            7,
+            [0x72; 32],
+        )
+        .expect("canonical provider test request")
+    }
+
+    #[test]
+    fn external_providers_are_qualified_before_checkpoint_access() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut config = config(&temp, "missing/checkpoint.bin");
+        let missing_parent = config
+            .checkpoint_path
+            .parent()
+            .expect("checkpoint parent")
+            .to_path_buf();
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        submitter
+            .transaction_signer_provider
+            .set_readiness(ModerationRuntimeProviderReadinessErrorV1::Rejected);
+
+        let error = ModerationOrchestratorV1::open(config.clone(), deps(reader, submitter))
+            .expect_err("unqualified signer must fail before checkpoint access");
+
+        assert!(matches!(
+            error,
+            ModerationOrchestratorError::InvalidConfiguration(message)
+                if message.contains("runtime provider binding")
+        ));
+        assert!(!missing_parent.exists());
+
+        config.transaction_signer_handle = "moderation-hsm-secondary".to_owned();
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        assert!(matches!(
+            ModerationOrchestratorV1::open(config.clone(), deps(reader, submitter)),
+            Err(ModerationOrchestratorError::InvalidConfiguration(message))
+                if message.contains("runtime provider binding")
+        ));
+        assert!(!missing_parent.exists());
+
+        config.transaction_signer_handle = TRANSACTION_SIGNER_HANDLE.to_owned();
+        for settlement in [true, false] {
+            let mut boundary_config = config.clone();
+            if settlement {
+                boundary_config.settlement_handoff_handle =
+                    "moderation-settlement-secondary".to_owned();
+            } else {
+                boundary_config.publication_handoff_handle =
+                    "moderation-publication-secondary".to_owned();
+            }
+            let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+            let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+            assert!(matches!(
+                ModerationOrchestratorV1::open(
+                    boundary_config,
+                    deps(reader, submitter),
+                ),
+                Err(ModerationOrchestratorError::InvalidConfiguration(message))
+                    if message.contains("runtime provider binding")
+            ));
+            assert!(!missing_parent.exists());
+        }
+
+        config.panel_notification_handle = "moderation-notification-secondary".to_owned();
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        assert!(matches!(
+            ModerationOrchestratorV1::open(config, deps(reader, submitter)),
+            Err(ModerationOrchestratorError::InvalidConfiguration(message))
+                if message.contains("runtime provider binding")
+        ));
+        assert!(!missing_parent.exists());
+    }
+
+    #[test]
+    fn signer_policy_drift_discards_the_returned_envelope() {
+        let temp = TempDir::new().expect("tempdir");
+        let config = config(&temp, "signer-drift.bin");
+        let inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        let submitter: Arc<dyn ModerationTransactionSubmitterV1> = Arc::new(DriftingSubmitter {
+            inner: Arc::clone(&inner),
+            signer_after_sign: Some(ModerationRuntimeProviderQualificationV1::new(2, [0xB1; 32])),
+            ingress_after_submit: None,
+            ingress_after_lookup: None,
+        });
+        let qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
+            .expect("initially qualified submitter");
+
+        assert_eq!(
+            qualified.sign(&provider_test_request()),
+            Err(ModerationSubmissionFailureV1::RuntimeUnavailable)
+        );
+        assert_eq!(inner.sign_calls(), 1);
+    }
+
+    #[test]
+    fn ingress_policy_drift_after_admission_is_ambiguous() {
+        let temp = TempDir::new().expect("tempdir");
+        let config = config(&temp, "ingress-drift.bin");
+        let inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        let submitter: Arc<dyn ModerationTransactionSubmitterV1> = Arc::new(DriftingSubmitter {
+            inner: Arc::clone(&inner),
+            signer_after_sign: None,
+            ingress_after_submit: Some(ModerationRuntimeProviderQualificationV1::new(
+                2, [0xB2; 32],
+            )),
+            ingress_after_lookup: None,
+        });
+        let qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
+            .expect("initially qualified submitter");
+        let request = provider_test_request();
+        let signed = qualified.sign(&request).expect("qualified signer result");
+
+        assert_eq!(
+            qualified.submit_signed(&request, &signed),
+            Err(ModerationSubmissionFailureV1::Ambiguous)
+        );
+        assert_eq!(inner.calls(), 1);
+    }
+
+    #[test]
+    fn ingress_policy_drift_discards_a_positive_lookup() {
+        let temp = TempDir::new().expect("tempdir");
+        let config = config(&temp, "lookup-drift.bin");
+        let inner = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        let submitter: Arc<dyn ModerationTransactionSubmitterV1> = Arc::new(DriftingSubmitter {
+            inner: Arc::clone(&inner),
+            signer_after_sign: None,
+            ingress_after_submit: None,
+            ingress_after_lookup: Some(ModerationRuntimeProviderQualificationV1::new(
+                2, [0xC2; 32],
+            )),
+        });
+        let qualified = QualifiedModerationTransactionSubmitterV1::try_new(&config, submitter)
+            .expect("initially qualified submitter");
+        let request = provider_test_request();
+        let signed = qualified.sign(&request).expect("qualified signer result");
+        qualified
+            .submit_signed(&request, &signed)
+            .expect("qualified admission");
+
+        assert_eq!(
+            qualified.lookup(request.operation_id, Some(signed.transaction_id)),
+            ModerationSubmissionLookupV1::Unknown
+        );
+    }
+
+    #[test]
+    fn terminal_handoff_policy_drift_after_delivery_is_ambiguous() {
+        let inner = Arc::new(MockHandoffSink::default());
+        let sink: Arc<dyn ModerationTerminalHandoffSinkV1> = Arc::new(DriftingHandoffSink {
+            inner: Arc::clone(&inner),
+            qualification_after_delivery: ModerationRuntimeProviderQualificationV1::new(
+                2, [0xB3; 32],
+            ),
+        });
+        let qualified = QualifiedModerationTerminalHandoffSinkV1::try_new(
+            HANDOFF_PROVIDER_HANDLE,
+            HANDOFF_PROVIDER_QUALIFICATION,
+            sink,
+        )
+        .expect("initially qualified handoff");
+        let handoff = ModerationTerminalHandoffV1 {
+            handoff_id: [0x61; 32],
+            kind: ModerationTerminalHandoffKindV1::Settlement,
+            case_id: "case-1".to_owned(),
+            round_id: "round-1".to_owned(),
+            outcome_digest: [0x62; 32],
+            finalized_cursor: ModerationFinalizedCursorV1 {
+                height: 11,
+                block_hash: [0x63; 32],
+            },
+        };
+
+        assert_eq!(
+            qualified.deliver(&handoff),
+            Err(ModerationHandoffFailureV1::Ambiguous)
+        );
+        assert_eq!(inner.calls(), 1);
+        assert_eq!(inner.delivered(), vec![handoff.handoff_id]);
     }
 
     #[test]
@@ -7681,6 +8876,7 @@ mod tests {
             snapshot_reader: reader,
             settlement_sink: Arc::new(MockHandoffSink::default()),
             publication_sink: Arc::new(MockHandoffSink::default()),
+            panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
         }
     }
 
@@ -8053,6 +9249,7 @@ mod tests {
                         inner: Arc::clone(&publication),
                         probe: Arc::clone(&probe),
                     }),
+                    panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
                 },
             )
             .expect("orchestrator"),
@@ -8093,6 +9290,7 @@ mod tests {
                     snapshot_reader: reader,
                     settlement_sink: Arc::new(MockHandoffSink::default()),
                     publication_sink: Arc::new(MockHandoffSink::default()),
+                    panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
                 },
             )
             .expect("orchestrator"),
@@ -9395,6 +10593,7 @@ mod tests {
             snapshot_reader: reader.clone(),
             settlement_sink: settlement.clone(),
             publication_sink: publication.clone(),
+            panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
         };
         let orchestrator = ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps())
             .expect("orchestrator");
@@ -9457,6 +10656,7 @@ mod tests {
             snapshot_reader: reader.clone(),
             settlement_sink: settlement_sink.clone(),
             publication_sink: publication_sink.clone(),
+            panel_notification_sink: Arc::new(MockPanelNotificationSink::default()),
         };
         let first_checkpoint = config(&temp, "terminal-first.norito");
         let second_checkpoint = config(&temp, "terminal-second.norito");
@@ -9751,6 +10951,50 @@ mod tests {
                 "payload-free checkpoint retained a private intake digest"
             );
         }
+    }
+
+    #[test]
+    fn qualified_notification_sink_delivers_and_checkpoints_the_due_batch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x26; 32], governance);
+        let sink = Arc::new(MockPanelNotificationSink::default());
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "panel-qualified-sink.norito"),
+            ModerationOrchestratorDepsV1 {
+                submitter: Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+                snapshot_reader: Arc::new(MockSnapshotReader::new(snapshot)),
+                settlement_sink: Arc::new(MockHandoffSink::default()),
+                publication_sink: Arc::new(MockHandoffSink::default()),
+                panel_notification_sink: sink.clone(),
+            },
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("queue notifications");
+
+        assert_eq!(
+            orchestrator
+                .deliver_due_panel_notifications(1_000, 3)
+                .expect("deliver qualified notification batch"),
+            3
+        );
+        assert_eq!(sink.calls(), 3);
+        assert_eq!(sink.unique_deliveries(), 3);
+        assert_eq!(
+            orchestrator
+                .deliver_due_panel_notifications(1_001, 3)
+                .expect("delivered notifications are not re-claimed"),
+            0
+        );
+        assert!(
+            orchestrator
+                .state
+                .lock()
+                .expect("state")
+                .panel_notifications
+                .iter()
+                .all(|entry| entry.state == StoredPanelNotificationStateV1::Delivered)
+        );
     }
 
     #[test]

@@ -52,9 +52,9 @@ def test_reference_sdk_plan_does_not_reopen_native_orderbook_work() -> None:
         "The published and sealed cross-domain fixture inventory binds 82 payload "
         "artifacts",
         "82 payload artifacts",
-        "30 `ValidationOutcomeV1` outcomes",
+        "32 `ValidationOutcomeV1` outcomes",
         "38 negative payload vectors",
-        "ten exact parity profiles",
+        "twelve exact parity profiles",
         "All eight generated `CancelAssetLock` positive/negative files are "
         "checked in",
         "The 85-byte canonical frame is byte-exact",

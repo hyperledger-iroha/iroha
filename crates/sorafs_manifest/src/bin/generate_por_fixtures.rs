@@ -430,6 +430,37 @@ fn main() -> Result<(), Box<dyn Error>> {
         &moderation_outcome,
     )?;
 
+    let appeal_finance_dir = fixtures_root.join("appeal_finance");
+    let reference_sdk_dir = fixtures_root.join("reference_sdk");
+    fs::create_dir_all(&reference_sdk_dir)?;
+    let cancel_asset_lock_bytes = fs::read(appeal_finance_dir.join("cancel_asset_lock_v1.to"))?;
+    let cancel_asset_lock_outcome =
+        sorafs_manifest::validate_appeal_finance_cancel_asset_lock_bytes(
+            &cancel_asset_lock_bytes,
+            "cancel_asset_lock_v1.to",
+            123,
+        );
+    write_expected_success_validation_outcome(
+        &reference_sdk_dir
+            .join("appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"),
+        &cancel_asset_lock_outcome,
+    )?;
+    let cancel_asset_lock_zero_bytes =
+        fs::read(appeal_finance_dir.join("negative/cancel_asset_lock_zero_expected_v1.to"))?;
+    let cancel_asset_lock_zero_outcome =
+        sorafs_manifest::validate_appeal_finance_cancel_asset_lock_bytes(
+            &cancel_asset_lock_zero_bytes,
+            "cancel_asset_lock_zero_expected_v1.to",
+            123,
+        );
+    write_expected_validation_outcome(
+        &reference_sdk_dir.join(
+            "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+        ),
+        &cancel_asset_lock_zero_outcome,
+        "SFS-VAL-001",
+    )?;
+
     let first_dag_node = governance_dag_node(proof.clone(), None, 1_700_000_790)?;
     let second_dag_node =
         governance_dag_node(proof, Some(first_dag_node.node_cid.clone()), 1_700_000_850)?;
@@ -848,7 +879,7 @@ fn write_expected_success_validation_outcome(
 ) -> Result<(), Box<dyn Error>> {
     if !outcome.is_ok() || outcome.code != "SFS-OK-000" {
         return Err(format!(
-            "generated positive governance DAG fixture returned {}, expected SFS-OK-000",
+            "generated positive validation fixture returned {}, expected SFS-OK-000",
             outcome.code
         )
         .into());
@@ -864,7 +895,7 @@ fn write_expected_validation_outcome(
 ) -> Result<(), Box<dyn Error>> {
     if outcome.is_ok() || outcome.code != expected_code {
         return Err(format!(
-            "generated negative governance DAG fixture returned {}, expected {expected_code}",
+            "generated negative validation fixture returned {}, expected {expected_code}",
             outcome.code
         )
         .into());
@@ -2048,6 +2079,20 @@ fn write_reference_sdk_fixture_inventory(fixtures_root: &Path) -> Result<(), Box
             "wrong_provider",
             "Error",
             "SFS-PDP-003",
+        ),
+        (
+            "reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+            "appeal_finance",
+            "appeal_finance_cancel_asset_lock_positive",
+            "Ok",
+            "SFS-OK-000",
+        ),
+        (
+            "reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+            "appeal_finance",
+            "appeal_finance_cancel_asset_lock_zero_expected_negative",
+            "Error",
+            "SFS-VAL-001",
         ),
         (
             "reference_sdk/bundle_heterogeneous_positive_validation_outcome_v1.json",

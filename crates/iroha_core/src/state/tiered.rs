@@ -2052,6 +2052,11 @@ impl TieredStateBackend {
             world.privacy_pgc_accounts
         );
         collect_map!(
+            TieredSegment::PrivacyPgcPoolInvariants,
+            PrivacyPgcPoolInvariant,
+            world.privacy_pgc_pool_invariants
+        );
+        collect_map!(
             TieredSegment::PrivacyNullifiers,
             PrivacyNullifier,
             world.privacy_nullifiers
@@ -2785,8 +2790,8 @@ mod measured_bytes_impls {
     use crate::{
         governance::state::ParliamentTerm,
         privacy_state::{
-            PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyRootHeadRecordV1,
-            PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
+            PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
+            PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
         },
         smartcontracts::code::ContractSubjectBinding,
         state::{
@@ -2797,8 +2802,7 @@ mod measured_bytes_impls {
             GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
             GovernanceReferendumStatus, GovernanceSlashEntry, GovernanceSlashLedger,
             GovernanceStage, GovernanceStageApproval, GovernanceStageApprovals,
-            GovernanceStageFailure, GovernanceStageRecord, ZkAceIdentityRecord,
-            ZkAceIdentityStatus, ZkAssetState, ZkAssetVerifierBinding,
+            GovernanceStageFailure, GovernanceStageRecord, ZkAssetState, ZkAssetVerifierBinding,
         },
     };
 
@@ -2870,6 +2874,7 @@ mod measured_bytes_impls {
         PrivacyProtocolActivationRecordV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
+        PrivacyPgcPoolInvariantV1,
         PrivacyRootHeadRecordV1,
         PrivacyRootProvenanceV1,
         PrivacyStateItemRecordV1,
@@ -3836,26 +3841,6 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for ZkAceIdentityStatus {
-        fn measured_bytes(&self) -> usize {
-            size_of::<ZkAceIdentityStatus>()
-        }
-    }
-
-    impl MeasuredBytes for ZkAceIdentityRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ZkAceIdentityRecord>();
-            total = total.saturating_add(self.policy_hash.measured_bytes_extra());
-            total = total.saturating_add(self.allowed_accounts.measured_bytes_extra());
-            total = total.saturating_add(self.action_class.measured_bytes_extra());
-            total = total.saturating_add(self.domain_tag.measured_bytes_extra());
-            total = total.saturating_add(self.verifier.measured_bytes_extra());
-            total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.successor.measured_bytes_extra());
-            total
-        }
-    }
-
     impl MeasuredBytes for FrontierCheckpoint {
         fn measured_bytes(&self) -> usize {
             size_of::<FrontierCheckpoint>()
@@ -3876,8 +3861,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
             total = total.saturating_add(self.asset_hidden_pool_id.measured_bytes_extra());
             total = total.saturating_add(self.asset_hidden_asset_set_root.measured_bytes_extra());
-            total = total.saturating_add(self.zk_ace_identities.measured_bytes_extra());
-            total = total.saturating_add(self.zk_ace_replay_nullifiers.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
             total = total.saturating_add(self.tree.measured_bytes_extra());
             total
@@ -4385,6 +4368,7 @@ enum TieredSegment {
     RuntimeUpgrades,
     PrivacyActivations,
     PrivacyPgcAccounts,
+    PrivacyPgcPoolInvariants,
     PrivacyNullifiers,
     PrivacyCommitments,
     PrivacyRoots,
@@ -4442,6 +4426,7 @@ impl TieredSegment {
             TieredSegment::RuntimeUpgrades => "runtime_upgrades",
             TieredSegment::PrivacyActivations => "privacy_activations",
             TieredSegment::PrivacyPgcAccounts => "privacy_pgc_accounts",
+            TieredSegment::PrivacyPgcPoolInvariants => "privacy_pgc_pool_invariants",
             TieredSegment::PrivacyNullifiers => "privacy_nullifiers",
             TieredSegment::PrivacyCommitments => "privacy_commitments",
             TieredSegment::PrivacyRoots => "privacy_roots",
@@ -4512,6 +4497,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "runtime_upgrades" => TieredSegment::RuntimeUpgrades,
             "privacy_activations" => TieredSegment::PrivacyActivations,
             "privacy_pgc_accounts" => TieredSegment::PrivacyPgcAccounts,
+            "privacy_pgc_pool_invariants" => TieredSegment::PrivacyPgcPoolInvariants,
             "privacy_nullifiers" => TieredSegment::PrivacyNullifiers,
             "privacy_commitments" => TieredSegment::PrivacyCommitments,
             "privacy_roots" => TieredSegment::PrivacyRoots,
@@ -4725,6 +4711,7 @@ pub(crate) enum TieredKeyHandle {
     RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
     PrivacyActivation(crate::privacy_state::PrivacyActivationKeyV1),
     PrivacyPgcAccount(crate::privacy_state::PrivacyPgcAccountKeyV1),
+    PrivacyPgcPoolInvariant(crate::privacy_state::PrivacyPgcPoolInvariantKeyV1),
     PrivacyNullifier(crate::privacy_state::PrivacyNullifierKeyV1),
     PrivacyCommitment(crate::privacy_state::PrivacyCommitmentKeyV1),
     PrivacyRoot(crate::privacy_state::PrivacyRootKeyV1),
@@ -4788,6 +4775,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::RuntimeUpgrade(_) => TieredSegment::RuntimeUpgrades,
             TieredKeyHandle::PrivacyActivation(_) => TieredSegment::PrivacyActivations,
             TieredKeyHandle::PrivacyPgcAccount(_) => TieredSegment::PrivacyPgcAccounts,
+            TieredKeyHandle::PrivacyPgcPoolInvariant(_) => TieredSegment::PrivacyPgcPoolInvariants,
             TieredKeyHandle::PrivacyNullifier(_) => TieredSegment::PrivacyNullifiers,
             TieredKeyHandle::PrivacyCommitment(_) => TieredSegment::PrivacyCommitments,
             TieredKeyHandle::PrivacyRoot(_) => TieredSegment::PrivacyRoots,
@@ -4858,6 +4846,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyActivation(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyPgcAccount(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivacyPgcPoolInvariant(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyNullifier(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyCommitment(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::PrivacyRoot(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4950,6 +4939,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
             TieredKeyHandle::PrivacyActivation(id) => fetch!(world.privacy_activations, id),
             TieredKeyHandle::PrivacyPgcAccount(id) => fetch!(world.privacy_pgc_accounts, id),
+            TieredKeyHandle::PrivacyPgcPoolInvariant(id) => {
+                fetch!(world.privacy_pgc_pool_invariants, id)
+            }
             TieredKeyHandle::PrivacyNullifier(id) => fetch!(world.privacy_nullifiers, id),
             TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
             TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
@@ -5048,6 +5040,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
             TieredKeyHandle::PrivacyActivation(id) => fetch!(world.privacy_activations, id),
             TieredKeyHandle::PrivacyPgcAccount(id) => fetch!(world.privacy_pgc_accounts, id),
+            TieredKeyHandle::PrivacyPgcPoolInvariant(id) => {
+                fetch!(world.privacy_pgc_pool_invariants, id)
+            }
             TieredKeyHandle::PrivacyNullifier(id) => fetch!(world.privacy_nullifiers, id),
             TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
             TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
@@ -5170,6 +5165,9 @@ impl fmt::Display for TieredKeyHandle {
             }
             TieredKeyHandle::PrivacyPgcAccount(id) => {
                 write!(f, "privacy_pgc_account:{id:?}")
+            }
+            TieredKeyHandle::PrivacyPgcPoolInvariant(id) => {
+                write!(f, "privacy_pgc_pool_invariant:{id:?}")
             }
             TieredKeyHandle::PrivacyNullifier(id) => {
                 write!(f, "privacy_nullifier:{id:?}")

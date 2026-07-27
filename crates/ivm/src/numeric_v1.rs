@@ -78,7 +78,6 @@ fn numeric_fault(error: NumericOperationError) -> Result<NumericFaultV1, VMError
         NumericOperationError::InexactConversion => NumericFaultV1::InexactConversion,
         NumericOperationError::NegativeQuantity => NumericFaultV1::NegativeQuantity,
         NumericOperationError::QuantityUnderflow => NumericFaultV1::QuantityUnderflow,
-        NumericOperationError::TooManyFactors => NumericFaultV1::InvalidScale,
         NumericOperationError::NonCanonical => {
             return Err(VMError::PointerAbiFault(PointerAbiFaultV1::NonCanonical));
         }

@@ -24,7 +24,10 @@ use crate::{
     prelude::*,
     runtime::RuntimeUpgradeManifest,
     smart_contract::manifest::ManifestProvenance,
-    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
+    validation_fee::{
+        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
+        ValidationFeeTreasuryPayoutBindingV1,
+    },
 };
 
 #[cfg(not(feature = "governance"))]
@@ -190,6 +193,8 @@ pub struct ProposeValidationFeePolicy {
     pub referendum_window: Option<AtWindow>,
     /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
     pub mode: Option<VotingMode>,
+    /// Exact PLAIN electorate contract bound into the proposal fingerprint.
+    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 
 impl crate::seal::Instruction for ProposeValidationFeePolicy {}
@@ -206,6 +211,8 @@ pub struct ProposeValidationFeePayoutLifecycle {
     pub referendum_window: Option<AtWindow>,
     /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
     pub mode: Option<VotingMode>,
+    /// Exact PLAIN electorate contract bound into the proposal fingerprint.
+    pub plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 
 impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
@@ -581,12 +588,14 @@ impl_governance_decode_from_slice!(ProposeValidationFeePolicy {
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
     referendum_window: Option<AtWindow>,
     mode: Option<VotingMode>,
+    plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
 
 impl_governance_decode_from_slice!(ProposeValidationFeePayoutLifecycle {
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,
     referendum_window: Option<AtWindow>,
     mode: Option<VotingMode>,
+    plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 });
 
 impl_governance_decode_from_slice!(CastZkBallot {

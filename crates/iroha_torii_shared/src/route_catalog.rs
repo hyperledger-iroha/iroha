@@ -2674,6 +2674,9 @@ pub mod runtime_governance {
     /// Read node capability metadata.
     pub const NODE_CAPABILITIES: RouteDescriptor =
         public_get("node.capabilities", "/v1/node/capabilities");
+    /// Read the authoritative committed privacy capability snapshot.
+    pub const PRIVACY_CAPABILITIES: RouteDescriptor =
+        public_get("privacy.capabilities", "/v1/privacy/capabilities");
     /// Read the latest query-projection checkpoint.
     pub const NODE_PROJECTION_CHECKPOINT: RouteDescriptor = public_get(
         "node.query_projection.checkpoint",
@@ -2884,6 +2887,7 @@ pub mod runtime_governance {
         RUNTIME_ABI_HASH,
         RUNTIME_METRICS,
         NODE_CAPABILITIES,
+        PRIVACY_CAPABILITIES,
         NODE_PROJECTION_CHECKPOINT,
         NODE_PROJECTION_CHECKPOINT_PLAN,
         NODE_PROJECTION_CHECKPOINT_PUBLISH,
@@ -3279,40 +3283,49 @@ pub mod sorafs {
     );
 
     /// Read the latest reputation snapshot.
-    pub const REPUTATION_LATEST_GET: RouteDescriptor = documented_get(
+    pub const REPUTATION_LATEST_GET: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.latest",
         "/v1/sorafs/reputation/latest",
-    );
+    )
+    .with_implicit_head(false);
     /// Read one historical reputation snapshot.
-    pub const REPUTATION_SNAPSHOT: RouteDescriptor = documented_get(
+    pub const REPUTATION_SNAPSHOT: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.read",
         "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
-    );
+    )
+    .with_implicit_head(false);
     /// Read one provider's reputation record and proof.
-    pub const REPUTATION_PROVIDER: RouteDescriptor = documented_get(
+    pub const REPUTATION_PROVIDER: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_provider.read",
         "/v1/sorafs/reputation/providers/{provider_id}",
-    );
+    )
+    .with_implicit_head(false);
     /// Read the active reputation weights.
-    pub const REPUTATION_WEIGHTS: RouteDescriptor = documented_get(
+    pub const REPUTATION_WEIGHTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_weight.read",
         "/v1/sorafs/reputation/weights",
-    );
+    )
+    .with_implicit_head(false);
     /// Read a bounded reputation-event snapshot.
-    pub const REPUTATION_EVENTS: RouteDescriptor = documented_get(
+    pub const REPUTATION_EVENTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_event.list",
         "/v1/sorafs/reputation/events",
-    );
+    )
+    .with_implicit_head(false);
     /// Stream reputation events over SSE.
     pub const REPUTATION_EVENTS_STREAM: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_stream",
         "/v1/sorafs/reputation/events/stream",
-    );
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_implicit_head(false);
     /// Stream reputation events over WebSocket.
     pub const REPUTATION_EVENTS_WEBSOCKET: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_websocket",
         "/v1/sorafs/reputation/events/ws",
-    );
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_implicit_head(false);
 
     /// Read the `SoraFS` pin registry.
     pub const PIN_REGISTRY: RouteDescriptor = documented_get("sorafs.pin.list", "/v1/sorafs/pin");
@@ -4448,6 +4461,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::RUNTIME_ABI_HASH,
     runtime_governance::RUNTIME_METRICS,
     runtime_governance::NODE_CAPABILITIES,
+    runtime_governance::PRIVACY_CAPABILITIES,
     runtime_governance::NODE_PROJECTION_CHECKPOINT,
     runtime_governance::NODE_PROJECTION_CHECKPOINT_PLAN,
     runtime_governance::NODE_PROJECTION_CHECKPOINT_PUBLISH,
@@ -5001,6 +5015,30 @@ mod tests {
     }
 
     #[test]
+    fn canonical_catalog_exposes_only_the_authoritative_privacy_snapshot_route() {
+        let privacy_routes = CATALOGED_ROUTES
+            .iter()
+            .filter(|route| route.path().contains("/privacy/"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            privacy_routes,
+            vec![&runtime_governance::PRIVACY_CAPABILITIES]
+        );
+        assert_eq!(
+            runtime_governance::PRIVACY_CAPABILITIES.path(),
+            "/v1/privacy/capabilities"
+        );
+        assert_eq!(
+            runtime_governance::PRIVACY_CAPABILITIES.method(),
+            HttpMethod::Get
+        );
+        assert_eq!(
+            runtime_governance::PRIVACY_CAPABILITIES.stable_route_id(),
+            "privacy.capabilities"
+        );
+    }
+
+    #[test]
     fn canonical_catalog_has_no_direct_storage_ingest_route() {
         assert!(
             CATALOGED_ROUTES
@@ -5011,7 +5049,7 @@ mod tests {
         assert!(
             CATALOGED_ROUTES
                 .iter()
-                .all(|route| route.id() != "sorafs.storage.pin"),
+                .all(|route| route.stable_route_id() != "sorafs.storage.pin"),
             "the retired direct storage-ingest route id must not be reusable"
         );
     }
@@ -6106,17 +6144,43 @@ mod tests {
 
     #[test]
     fn reputation_surface_is_committed_projection_read_only() {
-        let matching = ALL_ROUTES
-            .iter()
-            .filter(|route| route.path() == "/v1/sorafs/reputation/latest")
-            .collect::<Vec<_>>();
-        assert_eq!(matching.len(), 1);
-        assert_eq!(matching[0].method(), HttpMethod::Get);
-        assert_eq!(matching[0].id(), "sorafs.reputation_snapshot.latest");
+        let routes = [
+            sorafs::REPUTATION_LATEST_GET,
+            sorafs::REPUTATION_SNAPSHOT,
+            sorafs::REPUTATION_PROVIDER,
+            sorafs::REPUTATION_WEIGHTS,
+            sorafs::REPUTATION_EVENTS,
+            sorafs::REPUTATION_EVENTS_STREAM,
+            sorafs::REPUTATION_EVENTS_WEBSOCKET,
+        ];
+        for route in routes {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert!(
+                !route.implicit_head(),
+                "authenticated reputation GET routes must reject implicit HEAD"
+            );
+            assert_eq!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .filter(|candidate| { candidate.stable_route_id() == route.stable_route_id() })
+                    .count(),
+                1,
+                "reputation route `{}` must appear exactly once",
+                route.stable_route_id()
+            );
+        }
+        assert_eq!(
+            sorafs::REPUTATION_LATEST_GET.stable_route_id(),
+            "sorafs.reputation_snapshot.latest"
+        );
         assert!(
-            !ALL_ROUTES
+            !CATALOGED_ROUTES
                 .iter()
-                .any(|route| route.id() == "sorafs.reputation_snapshot.publish")
+                .any(|route| { route.stable_route_id() == "sorafs.reputation_snapshot.publish" })
         );
     }
 }

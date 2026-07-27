@@ -215,6 +215,16 @@ impl From<crate::isi::privacy::RegisterPrivacyProtocolActivationV1> for Instruct
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1> for InstructionBox {
     fn from(i: crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1) -> Self {
         InstructionBox(Box::new(i))
@@ -227,6 +237,26 @@ impl From<crate::isi::privacy::PublishPrivacyRootV1> for InstructionBox {
 }
 impl From<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1> for InstructionBox {
     fn from(i: crate::isi::privacy::BootstrapPrivacyPgcAccountsV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RegisterPrivacyZkAcePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkAcePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkAcePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkAcePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkAcePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkAcePolicyV1) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -292,21 +322,6 @@ impl From<crate::isi::zk::RegisterAssetHiddenZkPool> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::zk::RegisterZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RegisterZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RotateZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RotateZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RevokeZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RevokeZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
 impl From<crate::isi::zk::ScheduleConfidentialPolicyTransition> for InstructionBox {
     fn from(i: crate::isi::zk::ScheduleConfidentialPolicyTransition) -> Self {
         InstructionBox(Box::new(i))
@@ -329,11 +344,6 @@ impl From<crate::isi::zk::ZkTransfer> for InstructionBox {
 }
 impl From<crate::isi::zk::AssetHiddenZkTransfer> for InstructionBox {
     fn from(i: crate::isi::zk::AssetHiddenZkTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::SubmitZkAceAuthorizedTransfer> for InstructionBox {
-    fn from(i: crate::isi::zk::SubmitZkAceAuthorizedTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1050,8 +1060,23 @@ impl From<crate::prelude::CompleteReplicationOrder> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::prelude::ReviseReplicationOrderAssignments> for InstructionBox {
+    fn from(i: crate::prelude::ReviseReplicationOrderAssignments) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::prelude::ExpireReplicationOrder> for InstructionBox {
     fn from(i: crate::prelude::ExpireReplicationOrder) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::prelude::SetProviderIngestCompletionAuthority> for InstructionBox {
+    fn from(i: crate::prelude::SetProviderIngestCompletionAuthority) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::prelude::RevokeProviderIngestCompletionAuthority> for InstructionBox {
+    fn from(i: crate::prelude::RevokeProviderIngestCompletionAuthority) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -4090,8 +4115,9 @@ pub mod prelude {
         ministry::SubmitAgendaProposal,
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         privacy::{
-            BootstrapPrivacyPgcAccountsV1, PublishPrivacyRootV1,
-            RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1,
+            BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
+            RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
+            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
             TransitionPrivacyProtocolLifecycleV1,
         },
         ram_lfe::{
@@ -4136,8 +4162,10 @@ pub mod prelude {
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
             RepaySorafsReserveCredit, RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-            ResolveSorafsModerationChallenge, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+            ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
             SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,

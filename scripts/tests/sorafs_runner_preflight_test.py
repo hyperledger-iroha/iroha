@@ -3409,6 +3409,87 @@ def test_run_command_plan_sanitizes_output_creation_failure(
     ) == captured.err
 
 
+def test_run_command_plan_prepares_each_step_immediately_before_launch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+
+    def prepare_step(step: Step) -> list[str]:
+        events.append(f"prepare:{step.label}")
+        return []
+
+    def run(command, *, check):
+        assert check is False
+        events.append(f"run:{command[0]}")
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr("sorafs_runner_preflight.subprocess.run", run)
+
+    assert (
+        run_command_plan(
+            [Step("gate", None, ["command"])],
+            tmp_path / "out",
+            prepare_step=prepare_step,
+        )
+        == 0
+    )
+    assert events == ["prepare:gate", "run:command"]
+
+
+def test_run_command_plan_preparation_error_prevents_launch(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    def run(*_args, **_kwargs):
+        raise AssertionError("command must not launch after preparation failure")
+
+    monkeypatch.setattr("sorafs_runner_preflight.subprocess.run", run)
+
+    assert (
+        run_command_plan(
+            [Step("gate", None, ["command"])],
+            tmp_path / "out",
+            prepare_step=lambda _step: ["runtime preparation rejected"],
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "ERROR: runtime preparation rejected\n"
+
+
+def test_run_command_plan_rejects_malformed_preparation_errors(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    def run(*_args, **_kwargs):
+        raise AssertionError("command must not launch after preparation failure")
+
+    monkeypatch.setattr("sorafs_runner_preflight.subprocess.run", run)
+
+    assert (
+        run_command_plan(
+            [Step("gate", None, ["command"])],
+            tmp_path / "out",
+            prepare_step=lambda _step: "not-a-sequence",
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert (
+        captured.err
+        == "ERROR: gate preparation failed: runner error messages must be a sequence of strings\n"
+    )
+
+
 def test_run_command_plan_rejects_malformed_plan_before_output_creation(
     tmp_path: Path,
     capsys,

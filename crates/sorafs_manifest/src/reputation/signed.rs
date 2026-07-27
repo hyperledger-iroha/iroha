@@ -1006,7 +1006,8 @@ mod tests {
 
     use super::*;
     use crate::reputation::{
-        REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+        MAX_REPUTATION_DEGRADATION_FLAGS, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+        REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationDegradationFlagV1,
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
         ReputationWeightsV1, build_reputation_snapshot,
     };
@@ -1178,6 +1179,36 @@ mod tests {
             )
             .expect("decode and verify signed snapshot"),
             envelope
+        );
+    }
+
+    #[test]
+    fn signed_structure_and_decoder_reject_too_many_degradation_flags() {
+        let (_, mut envelope) = signed_snapshot();
+        let provider_id = envelope.snapshot.providers[0].provider_id.clone();
+        envelope.snapshot.providers[0].degradation_flags = vec![
+            ReputationDegradationFlagV1::ReserveWarning,
+            ReputationDegradationFlagV1::ReserveGrace,
+            ReputationDegradationFlagV1::ReserveDelinquent,
+            ReputationDegradationFlagV1::ReserveDefault,
+            ReputationDegradationFlagV1::ProofSuccessBelow90,
+            ReputationDegradationFlagV1::ProofSuccessBelow80,
+        ];
+        let expected_error = || {
+            SignedReputationSnapshotError::Snapshot(
+                ReputationValidationError::TooManyDegradationFlags {
+                    provider_id: provider_id.clone(),
+                    count: 6,
+                    max: MAX_REPUTATION_DEGRADATION_FLAGS,
+                },
+            )
+        };
+
+        assert_eq!(envelope.validate_structure(), Err(expected_error()));
+        let bytes = norito::to_bytes(&envelope).expect("encode structurally invalid envelope");
+        assert_eq!(
+            decode_signed_reputation_snapshot(&bytes),
+            Err(expected_error())
         );
     }
 

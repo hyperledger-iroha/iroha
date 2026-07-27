@@ -304,7 +304,7 @@ impl PopCredentialRuntimeProviderQualificationV1 {
         }
     }
 
-    const fn is_valid(self) -> bool {
+    fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
@@ -903,6 +903,7 @@ impl PopCredentialToriiRuntimeV1 {
                 inner: secrets.finalized_time_provider,
                 registry: provider_registry.clone(),
             });
+        provider_registry.assert_qualification()?;
         let service = PopCredentialService::open(
             &config.issuer_state_dir,
             config.service_policy.clone(),
@@ -912,6 +913,7 @@ impl PopCredentialToriiRuntimeV1 {
         if service.policy() != &config.service_policy {
             return Err(PopCredentialServiceError::WrongPolicy);
         }
+        provider_registry.assert_qualification()?;
         let wallet = PopWalletVault::open(&config.wallet_state_dir, wallet_key_wrapper)?;
         provider_registry.assert_qualification()?;
         Ok(Self {
@@ -954,6 +956,7 @@ impl PopCredentialToriiRuntimeV1 {
                 self.config.max_finalized_time_skew.as_secs(),
             )
             .map_err(|_| PopCredentialServiceError::RuntimeProviderUnavailable)?;
+            self.provider_registry.assert_qualification()?;
             *accepted = Some(sample);
             Ok(sample.finalized_epoch)
         })();
@@ -1777,7 +1780,11 @@ fn error_response(error: PopCredentialServiceError) -> Response {
         | PopCredentialServiceError::HsmUnavailable
         | PopCredentialServiceError::HsmPolicyMismatch
         | PopCredentialServiceError::KeyWrapping
-        | PopCredentialServiceError::RuntimeProviderUnavailable => (
+        | PopCredentialServiceError::RuntimeProviderUnavailable
+        | PopCredentialServiceError::RuntimeProviderRegistryMissing
+        | PopCredentialServiceError::RuntimeProviderRegistryMismatch
+        | PopCredentialServiceError::RuntimeProviderRegistryUnavailable
+        | PopCredentialServiceError::RuntimeProviderRegistryDrift => (
             StatusCode::SERVICE_UNAVAILABLE,
             "pop_runtime_unavailable",
             "The governed PoP runtime is unavailable.",
@@ -2220,6 +2227,7 @@ mod tests {
     struct TestRuntimeHsm {
         key_id: String,
         keypair: KeyPair,
+        drift_revision: Option<Arc<AtomicU64>>,
     }
 
     impl fmt::Debug for TestRuntimeHsm {
@@ -2247,17 +2255,22 @@ mod tests {
         }
 
         fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
-            Signature::try_new(self.keypair.private_key(), &digest)
+            let signature: [u8; 64] = Signature::try_new(self.keypair.private_key(), &digest)
                 .map_err(|_| "HSM signing failed".to_owned())?
                 .payload()
                 .try_into()
-                .map_err(|_| "HSM signature width changed".to_owned())
+                .map_err(|_| "HSM signature width changed".to_owned())?;
+            if let Some(revision) = &self.drift_revision {
+                revision.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(signature)
         }
     }
 
     struct TestWalletKeyWrapper {
         key_id: String,
         wrapping_key: [u8; 32],
+        drift_revision: Option<Arc<AtomicU64>>,
     }
 
     impl fmt::Debug for TestWalletKeyWrapper {
@@ -2276,12 +2289,16 @@ mod tests {
         }
 
         fn wrap_dek(&self, context: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
-            Ok(dek
+            let wrapped = dek
                 .iter()
                 .zip(self.wrapping_key)
                 .zip(context)
                 .map(|((&byte, key), aad)| byte ^ key ^ aad)
-                .collect())
+                .collect();
+            if let Some(revision) = &self.drift_revision {
+                revision.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(wrapped)
         }
 
         fn unwrap_dek(
@@ -2296,6 +2313,9 @@ mod tests {
             let mut dek = [0; 32];
             for (index, output) in dek.iter_mut().enumerate() {
                 *output = wrapped_dek[index] ^ self.wrapping_key[index] ^ context[index];
+            }
+            if let Some(revision) = &self.drift_revision {
+                revision.fetch_add(1, Ordering::SeqCst);
             }
             Ok(dek)
         }
@@ -2471,6 +2491,7 @@ mod tests {
         let hsm = Arc::new(TestRuntimeHsm {
             key_id: "pkcs11:pop/issuer:primary".to_owned(),
             keypair: ed25519(0x41),
+            drift_revision: None,
         });
         let approver_a = ed25519(0x42);
         let approver_b = ed25519(0x43);
@@ -2536,6 +2557,7 @@ mod tests {
             wallet_key_wrapper: Arc::new(TestWalletKeyWrapper {
                 key_id: "kms:pop/wallet:primary".to_owned(),
                 wrapping_key: [0x72; 32],
+                drift_revision: None,
             }),
             wallet_witness_provider: Arc::new(UnavailableWalletWitnessProvider),
             finalized_time_provider: finalized_time_provider.clone(),
@@ -2624,6 +2646,21 @@ mod tests {
     }
 
     #[test]
+    fn runtime_registry_failures_have_one_payload_free_unavailable_surface() {
+        for error in [
+            PopCredentialServiceError::RuntimeProviderRegistryMissing,
+            PopCredentialServiceError::RuntimeProviderRegistryMismatch,
+            PopCredentialServiceError::RuntimeProviderRegistryUnavailable,
+            PopCredentialServiceError::RuntimeProviderRegistryDrift,
+        ] {
+            assert_eq!(
+                error_response(error).status(),
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+    }
+
+    #[test]
     fn runtime_registry_discards_a_provider_result_when_policy_drifts_during_call() {
         let temporary = tempfile::tempdir().expect("temporary runtime root");
         let (config, registry, finalized_time) = runtime_fixture(
@@ -2647,6 +2684,60 @@ mod tests {
                 .lock()
                 .expect("accepted-time lock")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn qualified_hsm_and_kms_discard_results_when_policy_drifts_during_call() {
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let qualified_registry = QualifiedPopCredentialRuntimeProviderRegistryV1::try_new(
+            &config,
+            Some(as_runtime_registry(&registry)),
+        )
+        .expect("exact provider registry must qualify");
+        let hsm = QualifiedPopIssuerHsmV1 {
+            inner: Arc::new(TestRuntimeHsm {
+                key_id: config.service_policy.issuer_hsm_key_id.clone(),
+                keypair: ed25519(0x41),
+                drift_revision: Some(Arc::clone(&registry.revision)),
+            }),
+            key_id: config.service_policy.issuer_hsm_key_id.clone(),
+            public_key: config.service_policy.issuer_public_key,
+            registry: qualified_registry,
+        };
+        assert_eq!(
+            hsm.sign_digest([0x91; 32]),
+            Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        let qualified_registry = QualifiedPopCredentialRuntimeProviderRegistryV1::try_new(
+            &config,
+            Some(as_runtime_registry(&registry)),
+        )
+        .expect("exact provider registry must qualify");
+        let wrapper = QualifiedPopWalletKeyWrapperV1 {
+            inner: Arc::new(TestWalletKeyWrapper {
+                key_id: config.wallet_wrapping_key_id.clone(),
+                wrapping_key: [0x92; 32],
+                drift_revision: Some(Arc::clone(&registry.revision)),
+            }),
+            active_key_id: config.wallet_wrapping_key_id,
+            registry: qualified_registry,
+        };
+        assert_eq!(
+            wrapper.wrap_dek([0x93; 32], &[0x94; 32]),
+            Err(POP_RUNTIME_PROVIDER_REDACTED_FAILURE_V1.to_owned())
         );
     }
 
@@ -2700,6 +2791,26 @@ mod tests {
             "runtime:pop:providers:primary",
         );
         registry.qualification_refused.store(true, Ordering::SeqCst);
+        assert_startup_failure_before_state(
+            config,
+            Some(as_runtime_registry(&registry)),
+            PopCredentialServiceError::RuntimeProviderRegistryUnavailable,
+        );
+
+        let temporary = tempfile::tempdir().expect("temporary runtime root");
+        let (config, registry, _) = runtime_fixture(
+            temporary.path(),
+            "runtime:pop:providers:primary",
+            "runtime:pop:providers:primary",
+        );
+        assert!(
+            registry
+                .secrets
+                .lock()
+                .expect("runtime secrets lock")
+                .take()
+                .is_some()
+        );
         assert_startup_failure_before_state(
             config,
             Some(as_runtime_registry(&registry)),
@@ -2780,16 +2891,18 @@ mod tests {
             "runtime:pop:providers:primary",
             "runtime:pop:providers:primary",
         );
+        let test_marked_wrapper: Arc<dyn PopWalletKeyWrapper> = Arc::new(TestWalletKeyWrapper {
+            key_id: "kms:pop:wallet:test".to_owned(),
+            wrapping_key: [0x72; 32],
+            drift_revision: None,
+        });
         registry
             .secrets
             .lock()
             .expect("runtime secrets lock")
             .as_mut()
             .expect("runtime secrets")
-            .wallet_key_wrapper = Arc::new(TestWalletKeyWrapper {
-            key_id: "kms:pop:wallet:test".to_owned(),
-            wrapping_key: [0x72; 32],
-        });
+            .wallet_key_wrapper = test_marked_wrapper;
         assert_startup_failure_before_state(
             config,
             Some(as_runtime_registry(&registry)),

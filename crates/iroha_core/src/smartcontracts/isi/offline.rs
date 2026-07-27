@@ -77,6 +77,17 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     InstructionExecutionError::InvariantViolation(boxed)
 }
 
+fn ensure_offline_enabled(state_transaction: &StateTransaction<'_, '_>) -> Result<(), Error> {
+    if !state_transaction.settlement.offline.enabled {
+        return Err(labeled_invariant(
+            "offline_disabled",
+            "offline cash is disabled by validator configuration",
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn verify_legacy_note_signature(
     signature: &Signature,
     signer: &PublicKey,
@@ -171,7 +182,7 @@ pub struct KagemushaRecursiveReadinessV4 {
     pub step_ep: KagemushaRecursiveVerifierReadinessV4,
     /// Authenticated release identity shared by both step verifiers.
     pub artifact_set: KagemushaAuthenticatedArtifactSetReadinessV4,
-    /// `None` only when the authenticated material constructs the production verifier.
+    /// `None` only when the authenticated material constructs the configured verifier.
     pub proof_backend_error: Option<String>,
 }
 
@@ -2957,10 +2968,10 @@ pub mod isi {
         backend: &str,
         backend_tag: BackendTag,
     ) -> Result<(), Error> {
-        if crate::zk::is_production_claim_backend_label(backend) {
+        if crate::zk::is_verifier_readiness_claim_label(backend) {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline transparent proofs may not use production-claim proof backends",
+                "offline transparent proofs may not use readiness-claim proof backends",
             )
             .into());
         }
@@ -2971,10 +2982,10 @@ pub mod isi {
             )
             .into());
         }
-        let expected_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
+        let expected_tag = crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
             labeled_invariant(
                 "verifier_key_invalid",
-                "offline recursive proof backend is not admitted by the production verifier registry",
+                "offline recursive proof backend is not admitted by the native verifier registry",
             )
         })?;
         if backend_tag != expected_tag {
@@ -3005,12 +3016,13 @@ pub mod isi {
             .into());
         }
         let backend = attachment.backend.as_str();
-        let backend_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha proof backend is not a supported generic OpenVerify engine",
-            )
-        })?;
+        let backend_tag =
+            crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha proof backend is not a supported generic OpenVerify engine",
+                )
+            })?;
         ensure_kagemusha_transparent_backend(backend, backend_tag)
     }
 
@@ -6978,6 +6990,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             let issue = self.issue;
             validate_legacy_note_certificate(&issue.key_certificate)?;
             if issue.amount <= Numeric::zero() {
@@ -7059,6 +7072,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             let redemption = self.redemption;
             if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
                 return Err(labeled_invariant(
@@ -7211,6 +7225,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             let audit = self.audit;
             if audit.input_nullifiers.is_empty()
                 || audit.input_nullifiers.len() > 4
@@ -7390,6 +7405,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             let registration = self.registration;
             let (registration_hash, admission_policy_hash) =
                 validate_offline_device_attestation_registration(
@@ -7560,6 +7576,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             if !can_manage_offline_device_attestation_policy(state_transaction, authority) {
                 return Err(labeled_invariant(
                     "unauthorized_controller",
@@ -8136,6 +8153,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             ensure_kagemusha_recursive_release_v4_activation_authorized(
                 state_transaction,
                 authority,
@@ -8318,6 +8336,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             let request = self.request;
             request
                 .validate_public_binding()
@@ -8565,6 +8584,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            ensure_offline_enabled(state_transaction)?;
             let request = self.request;
             request
                 .validate_public_binding()
@@ -9031,6 +9051,35 @@ pub mod isi {
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
             )
+        }
+
+        #[test]
+        fn disabled_profile_rejects_offline_mutation_before_state_change() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            state_transaction.settlement.offline.enabled = false;
+
+            let error = SetOfflineDeviceAttestationPolicy::new(
+                default_offline_device_attestation_policy()
+                    .expect("built-in policy fixture must be valid"),
+            )
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("disabled profile must reject every offline mutation");
+            assert!(
+                error
+                    .to_string()
+                    .contains("offline_reason::offline_disabled"),
+                "unexpected disabled-profile rejection: {error}"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
+                    .is_none(),
+                "rejected policy mutation must not change consensus state"
+            );
         }
 
         fn release_activation_device_policy() -> OfflineDeviceAttestationPolicy {

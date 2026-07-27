@@ -1067,6 +1067,7 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::replay_rejects_later_view_commit_even_after_exact_tc_lock_installation
   sumeragi::v2_core::tests::higher_conflicting_prepare_intent_fences_historical_commit_reconstruction
   sumeragi::v2_core::tests::higher_same_subject_prepare_fences_historical_commit_reconstruction
+  sumeragi::v2_core::tests::replay_does_not_resign_proposal_superseded_by_same_round_lock
   sumeragi::v2_core::tests::replay_does_not_resign_commit_superseded_by_higher_tc_lock
   sumeragi::v2_core::tests::replay_resigns_current_proposal_prepare_then_commit_fifo
   sumeragi::v2_core::tests::replay_resigns_current_timeout_then_durable_old_round_commit_fifo
@@ -1219,7 +1220,9 @@ required_production_liveness_tests=(
   merge_sidecar::tests::durable_lifecycle_v3_rejects_split_generations_and_rehashed_state
   merge_sidecar::tests::durable_lifecycle_v3_generation_exhaustion_precedes_close_mutation
   merge_sidecar::tests::durable_lifecycle_v3_generation_exhaustion_precedes_writer_flush_cas
+  merge_sidecar::tests::durable_lifecycle_v3_recovers_predecessor_before_state_directory_sync
   merge_sidecar::tests::durable_lifecycle_v3_recovers_predecessor_between_state_and_root_publication
+  merge_sidecar::tests::durable_lifecycle_v3_resyncs_replaced_root_before_predecessor_cleanup
   merge_sidecar::tests::durable_lifecycle_v3_recovers_successor_after_root_publication
   merge_sidecar::tests::durable_lifecycle_v3_rejects_missing_state_with_surviving_root_high_water
   merge_sidecar::tests::durable_lifecycle_rejects_legacy_stream_state_without_guessing_a_layout
@@ -1357,6 +1360,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::stale_generation_local_completion_uses_durable_recovery
   sumeragi::v2_effects::tests::missing_merge_sidecar_retains_exact_validation_until_retry
   sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery
+  sumeragi::v2_effects::tests::apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
   sumeragi::v2_effects::tests::production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
@@ -1424,6 +1428,7 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::request_generation_hint_journal_failure_preserves_queued_occurrence
   sumeragi::v2_lane_work::tests::retained_sidecar_handoff_rejects_foreign_owner_and_wrong_successor
   sumeragi::v2_lane_work::tests::retryable_control_flood_cannot_fail_stop_close_or_block_request_progress
+  sumeragi::v2_lane_work::tests::stranded_responder_control_queue_slot_replaces_with_a_writable_trigger
   sumeragi::v2_lane_work::tests::sidecar_close_cancels_and_coalesces_dominant_stream_epoch
   sumeragi::v2_lane_work::tests::sidecar_ingress_materializes_the_fair_scheduler_job_not_the_newest_request
   sumeragi::v2_lane_work::tests::sidecar_server_allocations_require_roster_requester_but_not_roster_relay
@@ -1491,6 +1496,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route
   sumeragi::v2_runner::tests::runner_dispatch_rejects_durable_response_without_reply_routes
   sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift
+  sumeragi::v2_runner::tests::replayed_proposal_sign_reserves_only_the_exact_current_lock_owner
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
@@ -1537,7 +1543,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::unavailable_admission_racing_retirement_is_nonfatal
   sumeragi::v2_worker::tests::ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once
   sumeragi::v2_worker::tests::closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures
-  sumeragi::v2_worker::tests::closed_sidecar_reconnect_is_capacity_checked_then_retries_current_item
+  sumeragi::v2_worker::tests::completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
   sumeragi::v2_worker::tests::later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress
   sumeragi::v2_worker::tests::mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblings
   sumeragi::v2_worker::tests::inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision
@@ -1574,6 +1580,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::generation_hint_uses_exact_reply_ownership_without_topology_fallback
   sumeragi::v2_worker::tests::generation_hint_requires_exact_reply_route_ownership
   sumeragi::v2_worker::tests::responder_control_retry_coalesces_alternate_return_route
+  sumeragi::v2_worker::tests::stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger
+  sumeragi::v2_worker::tests::multi_route_stranded_responder_control_uses_one_dedicated_reservation
+  sumeragi::v2_worker::tests::stranded_responder_control_fifo_collision_is_fail_atomic
+  sumeragi::v2_worker::tests::responder_control_replacement_cancels_ticket_after_index_commit
   sumeragi::v2_worker::tests::final_exact_output_seal_is_one_shot_and_blocks_late_enqueue
   sumeragi::v2_worker::tests::finalized_cleanup_without_exact_output_seal_latches_restart
   sumeragi::v2_worker::tests::generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences
@@ -1584,7 +1594,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::reliable_flush_projection_preserves_exact_stream_epoch
   sumeragi::v2_worker::tests::responder_control_uses_ordinary_reply_flush_ownership
   sumeragi::v2_worker::tests::retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target
-  sumeragi::v2_worker::tests::retryable_sidecar_responder_controls_retain_at_most_one_worker_fanout
+  sumeragi::v2_worker::tests::writable_responder_control_source_retains_one_distinct_pending_control
   sumeragi::v2_worker::tests::unrelated_parked_reply_does_not_suppress_responsive_target_control
   sumeragi::status::v2_liveness_watchdog_tests::blocker_classifier_has_stable_specific_precedence
   sumeragi::status::v2_liveness_watchdog_tests::current_view_timeout_path_yields_only_to_an_exact_locked_commit_owner
@@ -1755,7 +1765,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=723
+readonly expected_production_liveness_test_count=733
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1777,7 +1787,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# thirty-nine-module pre-network inventory.
+# thirty-eight-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -1855,7 +1865,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 723-test liveness inventory above. The later
+# not belong to the canonical 733-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2506,6 +2516,23 @@ if ! grep -Fqx -- \
   exit 1
 fi
 
+readonly expected_typed_rollover_formal_mutation_count=43
+observed_typed_rollover_formal_mutation_count="$(
+  grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|12\|\$\{INVARIANT_MARKER\}"$|^run_case repeated-handoff-after-restart-restore \\$' \
+    scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
+)"
+if ((observed_typed_rollover_formal_mutation_count
+    != expected_typed_rollover_formal_mutation_count)); then
+  echo "expected exactly ${expected_typed_rollover_formal_mutation_count} typed rollover formal mutations, found ${observed_typed_rollover_formal_mutation_count}" >&2
+  exit 1
+fi
+if ! grep -Fqx -- \
+  'echo "[tlc] typed rollover-handoff fixed model and 43-mutant root-anchored V3 matrix passed"' \
+  scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then
+  echo "typed rollover mutation runner lacks the exact 43-mutation completion contract" >&2
+  exit 1
+fi
+
 production_liveness_modules=(
   kura::tests
   kura::lane_geometry::tests
@@ -3134,15 +3161,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 proof_fidelity_pass_summary="$(
-  grep -Ec '^1045 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^1686 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1045 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1686 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 1045 \
+  preflight-proof-fidelity pytest 1686 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3158,15 +3185,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 formal_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 formal_launcher_pass_summary="$(
-  grep -Ec '^16 passed in [0-9]+([.][0-9]+)?s$' "$formal_launcher_contract_log" || true
+  grep -Ec '^24 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$formal_launcher_contract_log" || true
 )"
 if ((formal_launcher_pipeline_status[0] != 0 || formal_launcher_pipeline_status[1] != 0)) \
   || [[ "$formal_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 16 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 24 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-formal-launcher pytest 16 \
+  preflight-formal-launcher pytest 24 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${formal_launcher_contract_files[*]}" \
   "$formal_launcher_contract_log" \
   "${formal_launcher_pipeline_status[0]}" "${formal_launcher_pipeline_status[1]}"

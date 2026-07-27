@@ -294,6 +294,8 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
     "encodeCancelAssetLockV1",
     "decodeCancelAssetLockV1",
     "validateAppealFinanceCancelAssetLock",
+    "computeValidationFeePayoutLifecycleProposalFingerprintV1",
+    "computeValidationFeePolicyProposalFingerprintV1",
     "noritoEncodeInstruction",
     "privacyCapabilitiesV1",
   ]) {

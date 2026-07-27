@@ -750,7 +750,18 @@ var issue = TransactionInstruction.IssueReplicationOrder(
 var complete = TransactionInstruction.CompleteReplicationOrder(
     orderId,
     providerId,
-    completionEpoch: 27);
+    completionEpoch: 27,
+    expectedAuthority: new ProviderIngestCompletionAuthorityV1(
+        providerOwner,
+        new ProviderIngestCompletionSignerPolicyV1(
+            policyId,
+            revision: 2,
+            predecessorDigest,
+            policyDigest)),
+    expectedAssignmentRevision: 3,
+    finalizedAnchor: new ProviderIngestFinalizedAnchorV1(
+        height: 41,
+        blockHash));
 var expire = TransactionInstruction.ExpireReplicationOrder(
     orderId,
     expirationEpoch: 29);
@@ -759,8 +770,9 @@ var expire = TransactionInstruction.ExpireReplicationOrder(
 IDs must be non-zero lowercase 64-hex strings. Issue accepts bytes or canonical
 standard base64, caps the decoded archive at 1 MiB, and validates canonical
 `ReplicationOrderV1` framing, ID binding, target/provider ordering, and
-deadlines. Completion has no legacy two-field overload: `providerId` is
-mandatory and becomes the native `provider_id` field.
+deadlines. Completion requires the exact six-field authority hard cut, including
+the provider owner, four-part signer-policy chain, assignment revision, and
+finalized anchor. Missing, retired three-field, and alias forms have no overload.
 
 ## Asset-lock cancellation
 

@@ -77,8 +77,8 @@ use super::{
     },
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::{
-        ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor,
-        durable_exact_output_handoff_owner_pair,
+        CertifiedServeAdmission, CertifiedServePrepareError, ExactFanoutOwnership,
+        ProductionV2Services, V2CleanupSupervisor, durable_exact_output_handoff_owner_pair,
     },
 };
 use crate::{
@@ -194,6 +194,13 @@ struct CandidateWorkWait {
     owner: LocalProposalOwner,
     started_at: Instant,
     next_retry: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReplayedProposalSign {
+    tag: EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
 }
 
 /// Fallible construction ownership of an applied predecessor's successor.
@@ -341,12 +348,26 @@ struct LocalProposalState {
 }
 
 impl LocalProposalState {
-    fn from_replayed_tag(replayed_tag: Option<EventTag>, current: LocalProposalDirective) -> Self {
+    fn from_replayed_proposal(
+        replayed: Option<ReplayedProposalSign>,
+        current: LocalProposalDirective,
+    ) -> Self {
         let owner = LocalProposalOwner::from(current);
+        let replayed_owns_current = replayed.is_some_and(|replayed| {
+            replayed.tag == owner.tag
+                && replayed.round.height == replayed.tag.height()
+                && replayed.round.view == replayed.tag.view()
+                && owner.decided_subject.is_none()
+                && owner
+                    .locked_body
+                    .is_none_or(|(locked_round, locked_subject)| {
+                        replayed.round.context_id == locked_round.context_id
+                            && replayed.round.height == locked_round.height
+                            && replayed.subject == locked_subject
+                    })
+        });
         Self {
-            attempted: replayed_tag
-                .is_some_and(|tag| tag == owner.tag)
-                .then_some(owner),
+            attempted: replayed_owns_current.then_some(owner),
             ..Self::default()
         }
     }
@@ -930,10 +951,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         if let Some(authenticated_genesis) = first_height_genesis.as_ref() {
             executor.install_authenticated_genesis_body(authenticated_genesis)?;
         }
-        // A replayed ProposalIntent already owns this reducer incarnation.  Its
+        // A replayed ProposalIntent owns candidate work only when its exact
+        // tag, round, and subject still match the current lock snapshot. Its
         // asynchronous signature completion must restore and broadcast the
         // exact durable payload before any fresh candidate work is admitted.
-        let replayed_proposal_tag = replayed_proposal_sign_tag(&startup_effects);
+        let replayed_proposal = replayed_proposal_sign(&startup_effects);
         let recovering_interrupted_tip = pending_kura_apply.is_some();
         let pending_recovery_identity = pending_kura_apply;
         let initially_recovered_applied_height = pending_kura_apply.filter(|pending| {
@@ -1123,7 +1145,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
         let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
         let mut local_proposal_state =
-            LocalProposalState::from_replayed_tag(replayed_proposal_tag, initial_directive);
+            LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive);
         debug_assert!(!recovering_interrupted_tip || pending_successor_activation.is_none());
         let activation = pending_successor_activation
             .take()
@@ -1607,12 +1629,16 @@ impl CommittedLaneStatusPublisher {
     }
 }
 
-fn replayed_proposal_sign_tag(effects: &[AdapterEffect]) -> Option<EventTag> {
+fn replayed_proposal_sign(effects: &[AdapterEffect]) -> Option<ReplayedProposalSign> {
     effects.iter().find_map(|effect| match effect {
         AdapterEffect::Sign {
             tag,
-            request: SignRequest::Proposal(_),
-        } => Some(*tag),
+            request: SignRequest::Proposal(proposal),
+        } => Some(ReplayedProposalSign {
+            tag: *tag,
+            round: proposal.round,
+            subject: proposal.subject,
+        }),
         AdapterEffect::Sign { .. }
         | AdapterEffect::Broadcast(_)
         | AdapterEffect::FetchBody { .. }
@@ -2022,6 +2048,12 @@ fn drive_block_sync(
     Ok(())
 }
 
+enum PreparedCertifiedServe {
+    Admitted(CertifiedServeAdmission),
+    Rejected(String),
+    Service(String),
+}
+
 fn drain_v2_ingress(
     receiver: &FairV2Ingress,
     executor: &mut V2EffectExecutor,
@@ -2062,8 +2094,95 @@ fn drain_v2_ingress(
         }
         let terminal_subject = executor.local_proposal_directive()?.decided_subject();
         let terminal_decision = terminal_subject.is_some();
+        let mut prepared_serve = None;
+        let mut serve_barrier = services
+            .certified_serve_barrier_request_hash()
+            .map_err(V2RunnerError::Service)?;
         let Some(mut inbound) = receiver.try_recv_if(|inbound| {
-            v2_ingress_head_can_drain(inbound, executor, services, terminal_subject)
+            if let Some(barrier_hash) = serve_barrier {
+                let is_barrier_target = matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload:
+                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                        ..
+                    }) if HashOf::new(request) == barrier_hash
+                );
+                if !is_barrier_target {
+                    return false;
+                }
+            }
+            if !v2_ingress_head_can_drain(inbound, executor, terminal_subject) {
+                return false;
+            }
+            let BlockMessage::V2(message) = inbound.message() else {
+                return true;
+            };
+            if message.validate_version().is_err() {
+                return true;
+            }
+            let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
+            else {
+                return true;
+            };
+            if request.round.height != executor.context().height
+                || certified_body_request_is_superseded_after_decision(
+                    request,
+                    terminal_subject,
+                    executor.context().height,
+                )
+            {
+                return true;
+            }
+            let Some(sender) = inbound.sender() else {
+                return true;
+            };
+            let Some(authenticated_via) = inbound.via() else {
+                return true;
+            };
+            let Some(reply_routes) = inbound.reply_routes() else {
+                return true;
+            };
+            let Some(ingress_ownership) = inbound.ingress_ownership() else {
+                return true;
+            };
+            if reply_routes.semantic_target() != sender
+                || !ingress_ownership.validate_exact()
+                || !ingress_ownership.matches_message(inbound.message())
+                || !ingress_ownership.matches_semantic_origin(Some(sender))
+                || !ingress_ownership.matches_reply_routes(Some(reply_routes))
+            {
+                return true;
+            }
+            let authenticated =
+                match executor.authenticate_certified_body_request(request.clone(), sender) {
+                    Ok(authenticated) => authenticated,
+                    Err(error) => {
+                        prepared_serve = Some(PreparedCertifiedServe::Rejected(error.to_string()));
+                        return true;
+                    }
+                };
+            match services.prepare_certified_request(authenticated_via, authenticated) {
+                Ok(admission) => {
+                    prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));
+                    true
+                }
+                Err(CertifiedServePrepareError::Backpressure) => {
+                    // `prepare_certified_request` installs the off-queue debt
+                    // before returning capacity backpressure. Freeze this scan
+                    // immediately so no later ingress occurrence can pass.
+                    serve_barrier = Some(HashOf::new(request));
+                    false
+                }
+                Err(CertifiedServePrepareError::Rejected(reason)) => {
+                    prepared_serve = Some(PreparedCertifiedServe::Rejected(reason));
+                    true
+                }
+                Err(CertifiedServePrepareError::Service(reason)) => {
+                    prepared_serve = Some(PreparedCertifiedServe::Service(reason));
+                    true
+                }
+            }
         }) else {
             break;
         };
@@ -2240,18 +2359,27 @@ fn drain_v2_ingress(
                         drop(ingress_ownership);
                         continue;
                     }
-                    match executor.authenticate_certified_body_request(request, &sender) {
-                        Ok(request) => {
+                    match prepared_serve.take() {
+                        Some(PreparedCertifiedServe::Admitted(admission)) => {
                             services
                                 .serve_certified_request_on_routes(
-                                    request,
+                                    admission,
                                     reply_routes,
                                     ingress_ownership,
                                 )
                                 .map_err(V2RunnerError::Service)?;
                         }
-                        Err(error) => {
-                            iroha_logger::debug!(%error, "rejected certified body request");
+                        Some(PreparedCertifiedServe::Rejected(reason)) => {
+                            iroha_logger::debug!(%reason, "rejected certified body request");
+                        }
+                        Some(PreparedCertifiedServe::Service(reason)) => {
+                            return Err(V2RunnerError::Service(reason));
+                        }
+                        None => {
+                            return Err(V2RunnerError::Service(
+                                "current-height certified-body ingress crossed fair removal without an atomic Serve admission"
+                                    .to_owned(),
+                            ));
                         }
                     }
                 } else {
@@ -2383,7 +2511,6 @@ fn outer_ingress_turns(limit: usize) -> impl Iterator<Item = OuterIngressTurn> {
 fn v2_ingress_head_can_drain(
     inbound: &InboundBlockMessage,
     executor: &V2EffectExecutor,
-    services: &ProductionV2Services,
     terminal_subject: Option<wire::BlockSubject>,
 ) -> bool {
     let BlockMessage::V2(message) = inbound.message() else {
@@ -2417,14 +2544,7 @@ fn v2_ingress_head_can_drain(
     if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership) {
         return false;
     }
-    match &message.payload {
-        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
-            if inbound.sender().is_some() && request.round.height == executor.context().height =>
-        {
-            services.can_serve_certified_request()
-        }
-        _ => true,
-    }
+    true
 }
 
 fn certified_body_request_is_superseded_after_decision(
@@ -4203,7 +4323,10 @@ mod tests {
         second_request.request_id = second_request.canonical_request_id();
         let requests = [fixture.request, second_request];
         let hub = PeerId::new(KeyPair::random().public_key().clone());
-        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), 2);
+        // The shared lane fixture reserves the production test corridor for
+        // eight authenticated sources. Each capability must advertise that
+        // exact geometry even though this case exercises one source.
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
 
         for request in &requests {
             let reply_route = routes.mint_via(request.requester.clone(), hub.clone());
@@ -5657,7 +5780,7 @@ mod tests {
     }
 
     #[test]
-    fn replayed_proposal_sign_reserves_its_reducer_incarnation() {
+    fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
         let (context, _) = context();
         let tag = EventTag::new(context.height, 3, Generation::new(9));
         let round = wire::ConsensusRound {
@@ -5693,9 +5816,71 @@ mod tests {
             },
         ];
 
-        assert_eq!(replayed_proposal_sign_tag(&effects), Some(tag));
-        assert_eq!(replayed_proposal_sign_tag(&effects[..1]), None);
-        assert_eq!(replayed_proposal_sign_tag(&[]), None);
+        let replayed = replayed_proposal_sign(&effects).expect("extract exact replay owner");
+        assert_eq!(
+            replayed,
+            ReplayedProposalSign {
+                tag,
+                round,
+                subject,
+            }
+        );
+        assert_eq!(replayed_proposal_sign(&effects[..1]), None);
+        assert_eq!(replayed_proposal_sign(&[]), None);
+
+        let directive = |locked_subject: Option<wire::BlockSubject>,
+                         decided_subject: Option<wire::BlockSubject>| {
+            LocalProposalDirective::for_test(
+                tag,
+                context.leader(tag.view()),
+                locked_subject.map(|_| wire::ConsensusRound {
+                    context_id: context.id(),
+                    height: context.height,
+                    view: 1,
+                }),
+                locked_subject,
+                decided_subject,
+            )
+        };
+        let unlocked = directive(None, None);
+        assert_eq!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), unlocked).attempted,
+            Some(LocalProposalOwner::from(unlocked))
+        );
+
+        let exact_lock = directive(Some(subject), None);
+        assert_eq!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), exact_lock).attempted,
+            Some(LocalProposalOwner::from(exact_lock)),
+            "the exact replayed subject owns current locked-body work"
+        );
+
+        let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), foreign_lock)
+                .attempted
+                .is_none(),
+            "an equal-tag proposal for another subject cannot reserve the current lock owner"
+        );
+
+        let mismatched_round = ReplayedProposalSign {
+            round: wire::ConsensusRound { view: 2, ..round },
+            ..replayed
+        };
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(mismatched_round), unlocked)
+                .attempted
+                .is_none(),
+            "the replayed proposal round must match its reducer tag"
+        );
+
+        let decided = directive(Some(subject), Some(subject));
+        assert!(
+            LocalProposalState::from_replayed_proposal(Some(replayed), decided)
+                .attempted
+                .is_none(),
+            "a decision retires every replayed proposal reservation"
+        );
     }
 
     #[test]

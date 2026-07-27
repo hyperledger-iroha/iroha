@@ -451,7 +451,7 @@ pub struct HeightContext {
 impl HeightContext {
     /// Return the typed hash that identifies every round in this context.
     ///
-    /// The identity commits to the parent CommitQC's semantic decision key
+    /// The identity commits to the parent `CommitQC`'s semantic decision key
     /// (parent context, height, phase, subject, and execution commitment),
     /// rather than its round, aggregate signature, or signer subset. Two nodes
     /// that decide the same immutable body before or after an unchanged
@@ -1162,7 +1162,7 @@ pub struct QuorumCertificateRef {
 impl QuorumCertificateRef {
     /// Return whether both references certify the same committed decision.
     ///
-    /// CommitQCs for one immutable body may be assembled before or after an
+    /// `CommitQC`s for one immutable body may be assembled before or after an
     /// unchanged re-proposal. Their stable decision identity excludes the
     /// round and signer evidence while retaining context, height, subject, and
     /// deterministic execution.
@@ -1536,7 +1536,7 @@ pub struct TimeoutJustification {
     ///
     /// When present, the proposal must re-propose this certificate's exact
     /// subject. The value is repeated outside the grouped timeout votes so a
-    /// proposal authenticates the complete PrepareQC used by its safe-value
+    /// proposal authenticates the complete `PrepareQC` used by its safe-value
     /// rule without requiring a receiver to reconstruct a signer subset.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]

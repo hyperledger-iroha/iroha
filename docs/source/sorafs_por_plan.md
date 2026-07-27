@@ -29,10 +29,19 @@ after the configured endpoint quorum agrees. Provider VRF submissions are
 signature-checked, bound to provider/manifest/epoch/drand inputs, persisted
 with replay state, and supplied to the coordinator through the verified feed.
 `sorafs.por.enabled = true` fails startup when this configuration is
-missing or internally inconsistent; `randomness_seed_hex` is never accepted as
-authenticated drand. Remaining SF-9a work is live multi-provider drand/VRF/
-auditor evidence and any production governance archive handoff required by the
-operator, not implementation of the local verified feeds. Each deployment's
+missing or internally inconsistent. It also requires the complete non-secret
+`[sorafs.por.potr_runtime]` binding and injected
+`PotrRuntimeSignerRolesV1`; every configured signer, qualification, gateway
+key, reader/source/resolver identity, and baseline finalized admission field
+must match the injected roles exactly. The provider qualification is the
+baseline admission sequence/digest. Partial or disabled-stale bindings,
+test-marked/shared handles, identity collisions, and injected roles without
+enabled configuration fail closed. `randomness_seed_hex` is never accepted as
+authenticated drand. The exact configuration/startup binding is
+source-complete, while focused/workspace Cargo validation remains pending.
+Remaining SF-9a work is live multi-provider drand/VRF/auditor evidence and any
+production governance archive handoff required by the operator, not
+implementation of the local verified feeds. Each deployment's
 SQL/Parquet archive backend decision is part of the checked reporting/archive
 evidence, and operator-required governance archive handoff evidence must carry
 a fingerprinted digest.
@@ -286,8 +295,13 @@ CREATE TABLE sorafs_vrf_history (
   `spawn`, and Torii constructs it only from the verified drand and durable
   provider-VRF adapters. `sorafs.por.enabled = true` is rejected at
   startup unless pinned drand chain/endpoints/quorum/state and provider-VRF
-  state are configured consistently and the embedded node has a fully bound
-  runtime Ed25519 Governance DAG signer/publisher. The legacy optional
+  state are configured consistently, the exact
+  `[sorafs.por.potr_runtime]` public pins match the injected independent
+  gateway/provider signer roles, and the embedded node has a fully bound
+  runtime Ed25519 Governance DAG signer/publisher. The checked-in
+  [`potr_runtime_binding.toml`](sorafs/snippets/potr_runtime_binding.toml)
+  fragment enumerates the public PoTR fields; credentials and private keys
+  remain runtime-only. The legacy optional
   `randomness_seed_hex` is deterministic test material and cannot satisfy this
   readiness gate; defaults keep automation disabled.
 - **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans

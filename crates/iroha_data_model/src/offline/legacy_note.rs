@@ -283,11 +283,21 @@ impl From<&OfflineNoteKeyCertificate> for OfflineNoteKeyCertificatePayload {
 
 impl OfflineNoteKeyCertificate {
     /// Canonical payload bytes signed by the certificate issuer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the canonical certificate payload
+    /// cannot be encoded.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
         to_bytes(&OfflineNoteKeyCertificatePayload::from(self))
     }
 
     /// Deterministic certificate-payload hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the canonical certificate payload
+    /// cannot be encoded.
     pub fn payload_hash(&self) -> Result<Hash, norito::Error> {
         self.signing_bytes().map(Hash::new)
     }
@@ -295,6 +305,11 @@ impl OfflineNoteKeyCertificate {
 
 impl OfflineNoteIssuedClaim {
     /// Build the claim recorded when a note is issued.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the note key certificate cannot be
+    /// hashed canonically.
     pub fn from_issue(issue: &OfflineNoteIssue) -> Result<Self, norito::Error> {
         Ok(Self {
             domain: OFFLINE_NOTE_ISSUED_CLAIM_DOMAIN.to_owned(),
@@ -306,6 +321,11 @@ impl OfflineNoteIssuedClaim {
     }
 
     /// Build the claim expected by a redemption.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the sender key certificate cannot be
+    /// hashed canonically.
     pub fn from_redemption(redemption: &OfflineNoteRedeem) -> Result<Self, norito::Error> {
         Ok(Self {
             domain: OFFLINE_NOTE_ISSUED_CLAIM_DOMAIN.to_owned(),
@@ -317,6 +337,11 @@ impl OfflineNoteIssuedClaim {
     }
 
     /// Build the claim recorded for an accepted audit output.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the output key certificate cannot be
+    /// hashed canonically.
     pub fn from_audit_output(output: &OfflineNoteAuditOutputClaim) -> Result<Self, norito::Error> {
         Ok(Self {
             domain: OFFLINE_NOTE_ISSUED_CLAIM_DOMAIN.to_owned(),
@@ -328,6 +353,11 @@ impl OfflineNoteIssuedClaim {
     }
 
     /// Deterministic claim hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the canonical claim cannot be
+    /// encoded.
     pub fn claim_hash(&self) -> Result<Hash, norito::Error> {
         to_bytes(self).map(Hash::new)
     }
@@ -335,6 +365,11 @@ impl OfflineNoteIssuedClaim {
 
 impl OfflineNoteRedeemPublicInputs {
     /// Build the public inputs committed by a redemption proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the sender key certificate cannot be
+    /// hashed canonically.
     pub fn from_redemption(redemption: &OfflineNoteRedeem) -> Result<Self, norito::Error> {
         Ok(Self {
             domain: OFFLINE_NOTE_REDEEM_PUBLIC_INPUTS_DOMAIN.to_owned(),
@@ -348,6 +383,11 @@ impl OfflineNoteRedeemPublicInputs {
     }
 
     /// Deterministic public-input hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the canonical public inputs cannot be
+    /// encoded.
     pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
         to_bytes(self).map(Hash::new)
     }
@@ -355,6 +395,11 @@ impl OfflineNoteRedeemPublicInputs {
 
 impl OfflineNoteAuditPublicInputs {
     /// Build the public inputs committed by an audit proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if any output key certificate cannot be
+    /// hashed canonically.
     pub fn from_audit(audit: &OfflineNoteAuditBundle) -> Result<Self, norito::Error> {
         let output_claims = audit
             .output_claims
@@ -373,6 +418,11 @@ impl OfflineNoteAuditPublicInputs {
     }
 
     /// Deterministic public-input hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the canonical public inputs cannot be
+    /// encoded.
     pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
         to_bytes(self).map(Hash::new)
     }
@@ -380,6 +430,11 @@ impl OfflineNoteAuditPublicInputs {
 
 impl OfflineNoteAuditBundle {
     /// Deterministic hash exposed by the audit proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the audit public inputs cannot be
+    /// constructed or encoded canonically.
     pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
         OfflineNoteAuditPublicInputs::from_audit(self)?.public_inputs_hash()
     }
@@ -387,6 +442,11 @@ impl OfflineNoteAuditBundle {
 
 impl OfflineNoteRedeem {
     /// Deterministic hash exposed by the redemption proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the redemption public inputs cannot
+    /// be constructed or encoded canonically.
     pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
         OfflineNoteRedeemPublicInputs::from_redemption(self)?.public_inputs_hash()
     }

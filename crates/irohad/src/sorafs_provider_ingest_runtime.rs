@@ -32,7 +32,8 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{
             PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1, PinStatus,
-            ReplicationOrderId, ReplicationOrderStatus,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus,
         },
     },
     transaction::{
@@ -347,6 +348,67 @@ struct NativeFinalizedAssignmentLedgerV1 {
     probe: Arc<Mutex<FinalizedSnapshotProbeV1>>,
 }
 
+fn validated_replication_order_from_record(
+    order_id: &ReplicationOrderId,
+    order_record: &ReplicationOrderRecord,
+) -> std::result::Result<ReplicationOrderV1, ProviderIngestFinalizedLedgerErrorV1> {
+    if order_record.canonical_order.is_empty()
+        || order_record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+    {
+        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+    }
+    let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
+        &order_record.canonical_order,
+        REPLICATION_ORDER_DECODE_LIMITS_V1,
+    )
+    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+    order
+        .validate()
+        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+    let canonical =
+        norito::to_bytes(&order).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+    if canonical != order_record.canonical_order
+        || order_id != &order_record.order_id
+        || order.order_id != *order_record.order_id.as_bytes()
+        || order.manifest_digest != *order_record.manifest_digest.as_bytes()
+        || order.manifest_cid.as_slice() != order_record.manifest_root_cid.as_bytes()
+    {
+        return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
+    }
+    Ok(order)
+}
+
+fn finalized_assignment_snapshot_row_bytes(
+    row: &ProviderIngestFinalizedAssignmentV1,
+) -> std::result::Result<u64, ProviderIngestFinalizedLedgerErrorV1> {
+    let pin_bytes =
+        norito::to_bytes(&row.pin).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+    let order_bytes =
+        norito::to_bytes(&row.order).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+    let owner_bytes = row
+        .provider_owner
+        .as_ref()
+        .map(norito::to_bytes)
+        .transpose()
+        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
+        .map_or(0, |bytes| bytes.len());
+    let authority_bytes = row
+        .completion_authority
+        .as_ref()
+        .map(norito::to_bytes)
+        .transpose()
+        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
+        .map_or(0, |bytes| bytes.len());
+    let bytes = pin_bytes
+        .len()
+        .checked_add(order_bytes.len())
+        .and_then(|bytes| bytes.checked_add(owner_bytes))
+        .and_then(|bytes| bytes.checked_add(authority_bytes))
+        .and_then(|bytes| bytes.checked_add(SNAPSHOT_ROW_STRUCTURAL_OVERHEAD_BYTES_V1))
+        .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+    u64::try_from(bytes).map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)
+}
+
 impl NativeFinalizedAssignmentLedgerV1 {
     fn new(
         state: Arc<State>,
@@ -365,7 +427,36 @@ impl NativeFinalizedAssignmentLedgerV1 {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    fn charge_order_scan_budget(
+        &self,
+        order_record: &ReplicationOrderRecord,
+        inspected_rows: &mut usize,
+        inspected_bytes: &mut u64,
+    ) -> std::result::Result<(), ProviderIngestFinalizedLedgerErrorV1> {
+        let estimated_row_bytes = charge_snapshot_scan_budget(
+            inspected_rows,
+            inspected_bytes,
+            order_record.canonical_order.len(),
+            order_record.manifest_root_cid.as_bytes().len(),
+            order_record.provider_completions.len(),
+            self.max_snapshot_rows,
+            self.max_snapshot_bytes,
+        )?;
+        let exact_row_bytes = u64::try_from(
+            norito::to_bytes(order_record)
+                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
+                .len(),
+        )
+        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        if let Some(additional_bytes) = exact_row_bytes.checked_sub(estimated_row_bytes) {
+            *inspected_bytes = inspected_bytes
+                .checked_add(additional_bytes)
+                .filter(|bytes| *bytes <= self.max_snapshot_bytes)
+                .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+        }
+        Ok(())
+    }
+
     fn build_snapshot(
         &self,
     ) -> std::result::Result<OwnedFinalizedAssignmentSnapshotV1, ProviderIngestFinalizedLedgerErrorV1>
@@ -395,56 +486,19 @@ impl NativeFinalizedAssignmentLedgerV1 {
             .provider_owners()
             .get(&self.provider_id)
             .cloned();
+        let completion_authority = view
+            .world()
+            .provider_ingest_completion_authorities()
+            .get(&self.provider_id)
+            .cloned();
         let mut rows = Vec::new();
         let mut inspected_rows = 0_usize;
         let mut inspected_bytes = 0_u64;
         let mut selected_snapshot_bytes = 0_u64;
 
         for (order_id, order_record) in view.world().replication_orders().iter() {
-            let estimated_row_bytes = charge_snapshot_scan_budget(
-                &mut inspected_rows,
-                &mut inspected_bytes,
-                order_record.canonical_order.len(),
-                order_record.manifest_root_cid.as_bytes().len(),
-                order_record.provider_completions.len(),
-                self.max_snapshot_rows,
-                self.max_snapshot_bytes,
-            )?;
-            let exact_row_bytes = u64::try_from(
-                norito::to_bytes(order_record)
-                    .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
-                    .len(),
-            )
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-            if let Some(additional_bytes) = exact_row_bytes.checked_sub(estimated_row_bytes) {
-                inspected_bytes = inspected_bytes
-                    .checked_add(additional_bytes)
-                    .filter(|bytes| *bytes <= self.max_snapshot_bytes)
-                    .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-            }
-            if order_record.canonical_order.is_empty()
-                || order_record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
-            {
-                return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-            }
-            let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
-                &order_record.canonical_order,
-                REPLICATION_ORDER_DECODE_LIMITS_V1,
-            )
-            .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-            order
-                .validate()
-                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-            let canonical = norito::to_bytes(&order)
-                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
-            if canonical != order_record.canonical_order
-                || order_id != &order_record.order_id
-                || order.order_id != *order_record.order_id.as_bytes()
-                || order.manifest_digest != *order_record.manifest_digest.as_bytes()
-                || order.manifest_cid.as_slice() != order_record.manifest_root_cid.as_bytes()
-            {
-                return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
-            }
+            self.charge_order_scan_budget(order_record, &mut inspected_rows, &mut inspected_bytes)?;
+            let order = validated_replication_order_from_record(order_id, order_record)?;
             if !order
                 .assignments
                 .iter()
@@ -476,34 +530,13 @@ impl NativeFinalizedAssignmentLedgerV1 {
                 },
                 order: order_record.clone(),
                 provider_owner: provider_owner.clone(),
+                completion_authority: completion_authority.clone(),
                 completion_epoch,
                 committed_transaction_hash: None,
             };
-            let row_bytes = norito::to_bytes(&row.pin)
-                .and_then(|pin_bytes| {
-                    norito::to_bytes(&row.order).map(|order_bytes| {
-                        pin_bytes
-                            .len()
-                            .checked_add(order_bytes.len())
-                            .and_then(|bytes| {
-                                row.provider_owner.as_ref().map_or(Some(bytes), |owner| {
-                                    norito::to_bytes(owner).ok().and_then(|owner_bytes| {
-                                        bytes.checked_add(owner_bytes.len())
-                                    })
-                                })
-                            })
-                            .and_then(|bytes| {
-                                bytes.checked_add(SNAPSHOT_ROW_STRUCTURAL_OVERHEAD_BYTES_V1)
-                            })
-                    })
-                })
-                .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?
-                .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
+            let row_bytes = finalized_assignment_snapshot_row_bytes(&row)?;
             selected_snapshot_bytes = selected_snapshot_bytes
-                .checked_add(
-                    u64::try_from(row_bytes)
-                        .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Rejected)?,
-                )
+                .checked_add(row_bytes)
                 .ok_or(ProviderIngestFinalizedLedgerErrorV1::Rejected)?;
             if rows.len() >= self.max_snapshot_rows
                 || selected_snapshot_bytes > self.max_snapshot_bytes
@@ -899,6 +932,9 @@ impl NativeCompletionPayloadBuilderV1 {
         if request.chain_id != self.chain_id
             || request.finalized_cursor.height == 0
             || request.finalized_cursor.block_hash == [0; 32]
+            || request.expected_assignment_revision == 0
+            || !request.expected_authority.is_valid()
+            || request.expected_authority.provider_owner != request.provider_owner
         {
             return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
         }
@@ -910,7 +946,7 @@ impl NativeCompletionPayloadBuilderV1 {
             .map(|hash| *hash.as_ref())
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Unavailable)?;
         if view.chain_id != self.chain_id
-            || height < request.finalized_cursor.height
+            || height != request.finalized_cursor.height
             || !committed_head_matches_hash_journal(height, head_hash, view.block_hashes())
             || !cursor_matches_committed_hashes(request.finalized_cursor, view.block_hashes())
             || request.completion_epoch != request.finalized_cursor.height
@@ -923,12 +959,20 @@ impl NativeCompletionPayloadBuilderV1 {
         if world.provider_owners().get(&provider_id) != Some(&request.provider_owner) {
             return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
         }
+        if world
+            .provider_ingest_completion_authorities()
+            .get(&provider_id)
+            != Some(&request.expected_authority)
+        {
+            return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
+        }
         let order_record = world
             .replication_orders()
             .get(&order_id)
             .ok_or(ProviderIngestCompletionPayloadErrorV1::Rejected)?;
         if !matches!(order_record.status, ReplicationOrderStatus::Pending)
             || order_record.provider_completion(provider_id).is_some()
+            || order_record.assignment_revision != request.expected_assignment_revision
             || request.completion_epoch < order_record.issued_epoch
             || request.completion_epoch > order_record.deadline_epoch
             || height > order_record.deadline_epoch
@@ -974,8 +1018,17 @@ impl NativeCompletionPayloadBuilderV1 {
         {
             return Err(ProviderIngestCompletionPayloadErrorV1::Rejected);
         }
-        let instruction =
-            CompleteReplicationOrder::new(order_id, provider_id, request.completion_epoch);
+        let instruction = CompleteReplicationOrder::new(
+            order_id,
+            provider_id,
+            request.completion_epoch,
+            request.expected_authority,
+            request.expected_assignment_revision,
+            ProviderIngestFinalizedAnchorV1 {
+                height: request.finalized_cursor.height,
+                block_hash: request.finalized_cursor.block_hash,
+            },
+        );
         let mut builder = TransactionBuilder::new(
             self.chain_id.clone(),
             request.provider_owner,
@@ -2022,10 +2075,12 @@ mod tests {
     }
 
     fn test_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
+        let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xA1; 32],
             revision,
-            policy_digest: [u8::try_from(revision).unwrap_or(0xFE); 32],
+            predecessor_digest: (revision > 1).then(|| [digest_byte.saturating_sub(1); 32]),
+            policy_digest: [digest_byte; 32],
         }
     }
 
@@ -2034,15 +2089,27 @@ mod tests {
         provider_id: ProviderId,
         completion_epoch: u64,
     ) -> TransactionPayload {
+        let provider_owner = AccountId::new(key.public_key().clone());
+        let signer_policy = test_signer_policy(1);
         let mut builder = TransactionBuilder::new(
             ChainId::from("provider-ingest-governed-signer-test"),
-            AccountId::new(key.public_key().clone()),
+            provider_owner.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(CompleteReplicationOrder {
             order_id: ReplicationOrderId::new([0xB1; 32]),
             provider_id,
             completion_epoch,
+            expected_authority:
+                iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionAuthorityV1::new(
+                    provider_owner,
+                    signer_policy,
+                ),
+            expected_assignment_revision: 1,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: completion_epoch,
+                block_hash: [0xB2; 32],
+            },
         })]);
         builder.set_creation_time(Duration::from_secs(1));
         builder.set_ttl(Duration::from_secs(30));
@@ -2108,6 +2175,7 @@ mod tests {
             ProviderIngestCompletionSignerPolicyV1 {
                 policy_id: [0; 32],
                 revision: 0,
+                predecessor_digest: None,
                 policy_digest: [0; 32],
             },
             None,

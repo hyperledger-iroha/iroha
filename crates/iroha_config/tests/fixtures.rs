@@ -910,6 +910,7 @@ fn minimal_config_snapshot() {
                     moderation_screening_enabled: false,
                     moderation_screening_authority_bundle_path: None,
                     moderation_screening_authority_bundle_digest: None,
+                    moderation_quarantine_key_provider: None,
                     pop_credentials: None,
                     moderation_orchestrator: None,
                     evidence_viewer: None,
@@ -1007,6 +1008,8 @@ fn minimal_config_snapshot() {
                         per_subject_metric_cap: 1,
                         suppression_threshold: 25,
                         policy_digest: None,
+                        cycle_prf_provider: None,
+                        release_anchor_provider: None,
                         composition_budget_epsilon_numerator: 12,
                         composition_budget_epsilon_denominator: 1,
                         composition_budget_max_publications: 52,
@@ -1029,8 +1032,14 @@ fn minimal_config_snapshot() {
                         ipns_name: None,
                         ipns_key_name: None,
                         ipfs_authenticator_handle: None,
+                        ipfs_authenticator_revision: None,
+                        ipfs_authenticator_policy_digest: None,
                         head_authenticator_handle: None,
+                        head_authenticator_revision: None,
+                        head_authenticator_policy_digest: None,
                         checkpoint_store_handle: None,
+                        checkpoint_store_revision: None,
+                        checkpoint_store_policy_digest: None,
                         publisher_public_key_hex: None,
                         poll_interval: 5s,
                         connect_timeout: 3s,
@@ -1142,6 +1151,7 @@ fn minimal_config_snapshot() {
                     },
                     acme: SorafsGatewayAcme {
                         enabled: false,
+                        provider: None,
                         account_email: None,
                         directory_url: "https://acme-v02.api.letsencrypt.org/directory",
                         hostnames: [],
@@ -1160,6 +1170,7 @@ fn minimal_config_snapshot() {
                 },
                 sorafs_por: SorafsPor {
                     enabled: false,
+                    potr_runtime: None,
                     epoch_interval_secs: 3600,
                     response_window_secs: 900,
                     state_dir: "./storage/sorafs/por",
@@ -1336,7 +1347,21 @@ fn minimal_config_snapshot() {
                             29,
                             55,
                         ],
-                        projection: None,
+                        projection: Some(
+                            AssetDefinitionProjection {
+                                domain: DomainId {
+                                    name: Name(
+                                        "sora",
+                                    ),
+                                    dataspace: Name(
+                                        "universal",
+                                    ),
+                                },
+                                name: Name(
+                                    "xor",
+                                ),
+                            },
+                        ),
                     },
                     asset_scale: 9,
                     pricing: SorafsAppealPricingPolicy {
@@ -1625,6 +1650,7 @@ fn minimal_config_snapshot() {
                         },
                     },
                     submitter_signers: [],
+                    checkpoint_provider: None,
                     worker_scan_interval: 30s,
                     worker_max_retry_attempts: 3,
                     worker_max_pending: 4096,
@@ -3047,6 +3073,7 @@ fn minimal_config_snapshot() {
                     collateral_substitution_matrix: {},
                 },
                 offline: Offline {
+                    enabled: true,
                     escrow_required: true,
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,

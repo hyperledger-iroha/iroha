@@ -265,7 +265,7 @@ fn governance_sdk_fixture_regeneration_is_byte_identical() {
 
 #[test]
 fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
-    const INVENTORIED_FILES: [&str; 25] = [
+    const INVENTORIED_FILES: [&str; 27] = [
         "appeal_finance/cancel_asset_lock_v1.json",
         "appeal_finance/cancel_asset_lock_v1.to",
         "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
@@ -281,6 +281,8 @@ fn release_wide_reference_sdk_fixture_regeneration_is_byte_identical() {
         "repair/negative/task_manifest_mismatch_v1.to",
         "repair/negative/task_provider_unassigned_v1.json",
         "repair/negative/task_provider_unassigned_v1.to",
+        "reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+        "reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
         "reference_sdk/bundle_heterogeneous_positive_validation_outcome_v1.json",
         "reference_sdk/bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
         "reference_sdk/bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",

@@ -75,9 +75,9 @@ private signing material or creates a checked-in production envelope.
 | Order | ID | Canonical scope | Local proof surface | Required external proof | State |
 |-------|----|-----------------|---------------------|-------------------------|-------|
 | 1 | SFM-1 | Deterministic multi-source routing and authority join. | The canonical bounded join lives in `sorafs_orchestrator`, is keyed by exact finalized height/hash, rebuilds single-flight, rejects stale/fork identities without fallback, and emits canonical byte-identical Norito projections under fixed aggregate/output caps. Routing fixtures, replica-order parity, concurrency, eviction, failure, and authority tests are present. | Byte-identical multi-provider results and two-region failover/load evidence. | evidence-pending |
-| 2 | SF-1 | Canonical manifest, registry, provider advert, alias, storage-ingest, and retrieval contract. | Manifest/registry data model, Torii admission, fixture and SDK guards, plus the opt-in supervised finalized-ledger provider-ingest worker with a bounded immutable assignment snapshot, durable single-writer completion outbox, exact fee-quoted transaction construction, committed reconciliation, monotonic recovery, and fail-closed liveness. | Resolve `V1-BLOCK-PROVIDER-INGEST-RUNTIME-01`, then collect final pin/alias/provider/ingest/retrieval receipts from the reviewed deployment. | open |
+| 2 | SF-1 | Canonical manifest, registry, provider advert, alias, storage-ingest, and retrieval contract. | Manifest/registry data model, Torii admission, fixture and SDK guards, plus the opt-in supervised finalized-ledger provider-ingest worker with a bounded immutable assignment snapshot, exact fee-quoted transaction construction, committed reconciliation, and fail-closed liveness. Its external sealed monotonic checkpoint authority is bound by stable handle/revision/public-policy digest, stores canonical predecessor/digest/bounded-checkpoint records, performs authoritative pre/post readback, and treats the local file as a revalidated cache only. | Resolve `V1-BLOCK-PROVIDER-INGEST-RUNTIME-01`, including the real authenticated source transport, governance-aware HSM/KMS signer resolver, and provider-indexed committed query/archive; then collect final pin/alias/provider/ingest/retrieval receipts from the reviewed deployment. | open |
 | 3 | SF-2 | PDP provider protocol and proof validation. | Canonical PDP schemas, the durable provider protocol, authenticated Torii challenge/next-work/proof/status/terminal-export family, fail-closed exact-chain native repair-transaction handoff, finalized reconciliation, and storage execution gated by the exact finalized lease are implemented locally. The competing local repair projection is deleted. | Authenticated deployed provider transport, multi-provider proof replay, cross-peer exactly-once repair, and observability. | open |
-| 4 | SF-2c | PoR/PoTR challenge, receipt, and repair convergence. | PoR/PoTR schemas, coordinators, reference validation, final dual-signed PoTR receipt persistence with an exact finalized admission-policy binding, 32-byte native repair task identities, fail-closed exact-chain native handoff, finalized-lease-gated storage execution, exactly-once latency-repair identity, PoR latency/VRF/seed metrics, `PotrStateFinalizedPolicySourceV1`, `PotrFinalizedAdmissionReaderV1`, and the local repair-authority removal are implemented. | Live provider/auditor runs through the production finalized reader, governed provider-key rotation, dual-signed durable receipts, cross-peer exactly-once repair, and archive evidence. | open |
+| 4 | SF-2c | PoR/PoTR challenge, receipt, and repair convergence. | PoR/PoTR schemas, coordinators, reference validation, final dual-signed PoTR receipt persistence with an exact finalized admission-policy binding, 32-byte native repair task identities, fail-closed exact-chain native handoff, finalized-lease-gated storage execution, exactly-once latency-repair identity, PoR latency/VRF/seed metrics, `PotrStateFinalizedPolicySourceV1`, `PotrFinalizedAdmissionReaderV1`, the strict independent `[sorafs.por.potr_runtime]` public role binding, and the local repair-authority removal are implemented. | Live provider/auditor runs through the production finalized reader, governed provider-key rotation, dual-signed durable receipts, cross-peer exactly-once repair, and archive evidence. | open |
 | 5 | SF-3 | Gateway serving and compliance boundary. | Gateway conformance, policy/catalog helpers, load and compliance checkers. | Two independently administered gateways, live catalogs, failover, security probes, and load/soak. | open |
 | 6 | SF-4 | Repair authority and lifecycle. | Native task/lease/terminal/slash/appeal instructions, caller-signed one-instruction transaction ingress, finalized queries/events, exact-chain durable transaction forwarding, full-projection GC/reconciliation, and storage execution bound to the exact live finalized lease are implemented. The public `RepairManager`, filesystem store/checkpoint, local mutation/query/event APIs, and compatibility paths are deleted. | Prove cross-peer exactly-once execution and one terminal outcome in the reviewed deployment. | open |
 | 7 | SF-5b | Multi-provider range streaming and proof-aware delivery. | Deterministic gateway suite, SDK orchestrator, range/proof validation. | At least 1,000 concurrent live streams in cold/warm/mixed profiles with injected failures. | evidence-pending |
@@ -100,18 +100,18 @@ aggregate checker. There are 135 required kinds across 17 summaries.
 | `gateway_compliance` | 10 | `docs/source/sorafs_gateway_compliance_plan.md`; signed predecessor-bound controller core, bounded runtime feed transport, process-lifetime stable-file lease, revisioned exact-byte compare-and-swap checkpointing, same-directory atomic replace with file/parent sync and post-write fencing, LKG promotion/rollback, scoped toggle/appeal/hold precedence, canonical region/gateway identities, six authenticated Torii control routes, `AppState`-retained controller/transport, live manifest/CID/provider enforcement, canonical HTTP 451 `gateway_compliance_denied` serving contract and fail-closed 503 unavailable contract, unsigned-bootstrap mutual exclusion, ACME fail-closed source guard, bounded `torii_sorafs_gateway_compliance_*` telemetry with dashboard/alerts, and compliance evidence gate. The Torii/config local store, routes, CLI/xtask mutation commands, CI helper, sample bundle, legacy `sorafs_car` denial/proof wire, and readiness/self-cert `denylist_*` inventories are removed. The gate now binds canonical catalog promotion/predecessor/precedence evidence, exact observed `451` probes, and acknowledgements from distinct gateway, region, and administrator identities. | Gateway controller signature/predecessor/quorum/precedence/persistence, dual-controller lease, restart, stale-CAS, pre-persist conflict, crash-before/after-replace, revision rollback, truncation, symlink/hardlink, and unsafe-permission negatives; SSRF/DNS-rebinding/pin/redirect/decompression negatives; canonical-body/auth/role/error mapping, serving-scope/451/503/fail-closed/bootstrap-exclusion tests; bounded-label telemetry and dashboard/alert static contracts; TLS runtime-contract static guard; feed, policy, catalog, payload-safety, binding, runner, aggregate, legacy-field/code rejection, distinct-administrator, and observed-probe negatives. | Resolve `V1-BLOCK-GATEWAY-CONTROLLER-RUNTIME-01`: independently audited standard-daemon feed and ACME adapters, finalized appeal/hold catalog producers, external threshold signing, two-gateway deployment/promotion/rollback, and genuine probes. | open |
 | `gateway_load` | 5 | `docs/source/sorafs_gateway_load_tests.md`; deterministic 1,000-stream conformance harness. | Local conformance, staged-load schema, SLO, transport-scope, and aggregate tests. | Live cold/warm/mixed multi-provider runs, corruption/failover/flood pressure, and 24-hour soak. HTTP/3 is not applicable to V1. | evidence-pending |
 | `governance_dag` | 8 | `docs/source/sorafs_governance_dag_plan.md`; `sorafs_governance_dag`, bounded authenticated JSON mirror, IPFS/IPNS publication, checkpoint, health, and metrics. The embedded publisher now accepts only an injected runtime signer bound to an opaque handle, peer identity, and canonical non-weak Ed25519 public key. The service exposes a supervised library launcher requiring rotation-aware IPFS/head authenticators and a sealed monotonic CAS checkpoint store; all former signing-key, checkpoint-key, and bearer-token path settings are removed and the provider-free packaged launcher fails closed. | Service/unit/adversarial tests cover missing/mismatched/drifting providers, malformed/weak keys, bad signatures, provider-error redaction, credential rotation/outage, sealed-state tamper/CAS/rollback/replay/deletion, and legacy secret-path rejection without following symlinks; rollout checker/runner, mock-IPFS, and opt-in Kubo lane remain. | Finish `V1-BLOCK-GOVERNANCE-DAG-RUNTIME-01`: implement deployment-owned HSM signer, authenticator, and sealed-store adapters; package/supervise two instances with governed credentials, CAS/failover, public mirror, alert-routing, rollback, and recovery evidence. RocksDB/IPLD is conditional on the SF-12 capacity gate. | open |
-| `hedging_billing` | 8 | `docs/source/sorafs_hedging_plan.md`; canonical feed/pricing/billing payloads and bridge; durable signed-feed high-water state; bounded finalized event/period-close ingest; deterministic accrual, governed statement, aggregate exposure, and hedge-intent projection; durable signing/publication/acknowledgement/reconciliation/dead-letter state; sealed epoch witnesses; a supervised `irohad` worker with strict non-secret `iroha_config`, opaque identity-pinned finalized-query/journal-verifier/HSM-signer/publisher/acknowledgement/witness adapter seams, payload-free health/alert metrics, and no automatic-execution loop; plus seven canonical-account-authenticated, bounded, private/no-store billing, reconciliation, exposure, and intent routes backed only by the committed projection. Every intent disables automatic execution, and the separately authorized submission helper rejects automatic adapters. | Fixture, price/cycle/policy binding, route/catalog/OpenAPI authentication and schema contracts, runner, and aggregate gates are present. Focused Rust verification of the new service/runtime remains pending. | Deploy live external feeds and genuine finalized-query, journal-verifier, HSM/KMS signer, immutable publisher, acknowledgement-authority, sealed-witness, and any manually governed venue adapters; deploy and exercise the shipped API and add runtime CLI clients; validate scrapes and alert routing; then collect staged billing/reconciliation and rollout evidence. Automatic execution remains disabled. | open |
-| `moderation_panel` | 12 | `docs/source/sorafs_moderation_panel_plan.md`; native bounded moderation ISIs/queries/events, finalized-chain orchestrator, exact retained transaction bytes, ambiguous-ingress reconciliation, notification leases, terminal handoff contracts, fresh worker-owned read projection, deadline/non-overlap/freshness supervision, and the signed evidence-viewer checkpoint plus exact predecessor-bound receipt projection as the sole audit authority. The retired aggregate-audit POSTs are authenticated/authorized `410 Gone` tombstones and have no scheduler or local registry mutation. | Contiguous committed-event replay, exact sortition/selection authority, commit/reveal, restart reconciliation, duplicate cross-peer submission, no-show/failover, policy/case/roster/tally bindings, hung/stale/dead-letter/cursor-equivalence supervision, viewer authorization/WebAuthn/grant/range/receipt/projection-cursor/hold/erasure safety, runner, and aggregate tests. Focused Rust validation of the latest hardening remains pending. | Resolve `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01`: construct production runtime providers; add durable notification delivery plus settlement/publication and signed receipt-to-transparency adapters; add operation-ID and monotonic multi-instance checkpoint fencing; add signed replay-safe compaction/archive; then deploy real HSM/KMS/WebAuthn/downstream adapters and collect four-peer case evidence. | open |
+| `hedging_billing` | 8 | `docs/source/sorafs_hedging_plan.md`; canonical feed/pricing/billing payloads and bridge; durable signed-feed high-water state; bounded finalized event/period-close ingest; deterministic accrual, governed statement, aggregate exposure, and hedge-intent projection; durable signing/publication/acknowledgement/reconciliation/dead-letter state; sealed epoch witnesses; a supervised `irohad` worker with strict non-secret `iroha_config`, opaque identity-pinned finalized-query/journal-verifier/HSM-signer/publisher/acknowledgement/witness adapter seams, payload-free health/alert metrics, and no automatic-execution loop; plus seven canonical-account-authenticated, bounded, private/no-store billing, reconciliation, exposure, and intent routes backed only by the committed projection. The Rust client and standard CLI now expose those seven read/acknowledgement routes with strict lowercase identifiers, bounded pages and proofs, redacted authentication material, secure direct-file proof reads on Unix/Windows, and no-clobber Norito statement output. Every intent disables automatic execution, and the separately authorized submission helper rejects automatic adapters. | Fixture, price/cycle/policy binding, route/catalog/OpenAPI authentication and schema contracts, runner, and aggregate gates are present. Focused client validation is green: two signed-request/strict-input tests, eighteen CLI parse/input/proof tests across the three binary targets, and twelve exact-byte/no-clobber/symlink statement tests across those targets. Focused Rust verification of the service/runtime remains pending. | Deploy live external feeds and genuine finalized-query, journal-verifier, HSM/KMS signer, immutable publisher, acknowledgement-authority, sealed-witness, and any manually governed venue adapters; deploy and exercise the shipped API and CLI; validate scrapes and alert routing; then collect staged billing/reconciliation and rollout evidence. Automatic execution remains disabled. | open |
+| `moderation_panel` | 12 | `docs/source/sorafs_moderation_panel_plan.md`; native bounded moderation ISIs/queries/events, finalized-chain orchestrator, exact retained transaction bytes, ambiguous-ingress reconciliation, exact-once terminal handoff contracts, and a supervised payload-free panel-notification worker that checkpoints claims before calling an independently qualified durable boundary and persists stable receipts or bounded dead letters. `iroha_config`, standard `irohad`, and Torii hard-bind that boundary by a non-secret production handle, revision, and policy digest. Reads use a fresh worker-owned projection with deadline/non-overlap/freshness supervision, while the signed evidence-viewer checkpoint plus exact predecessor-bound receipt projection is the sole audit authority. The retired aggregate-audit POSTs are authenticated/authorized `410 Gone` tombstones and have no scheduler or local registry mutation. | Contiguous committed-event replay, exact sortition/selection authority, commit/reveal, restart reconciliation, duplicate cross-peer submission, no-show/failover, policy/case/roster/tally bindings, hung/stale/dead-letter/cursor-equivalence supervision, notification retry/idempotent replay/qualification-drift/receipt-checkpoint safety, viewer authorization/WebAuthn/grant/range/receipt/projection-cursor/hold/erasure safety, runner, and aggregate tests. Focused Rust validation of the latest hardening remains pending. | Resolve `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01`: supply genuine deployment-owned notification, settlement, publication, HSM/KMS/WebAuthn, and signed receipt-to-transparency providers; add operation-ID and monotonic multi-instance checkpoint fencing plus signed replay-safe compaction/archive; then collect four-peer case, failover, recovery, and payload-free promotion evidence. | open |
 | `orderbook` | 9 | `docs/source/sorafs_orderbook_plan.md`; canonical payloads in `crates/sorafs_manifest/src/orderbook.rs`, native policy/state in `crates/iroha_data_model/src/sorafs/orderbook.rs`, atomic execution in `crates/iroha_core/src/smartcontracts/isi/sorafs_orderbook.rs`, finalized Torii projections in `crates/iroha_torii/src/sorafs/api.rs`, durable native transaction forwarding/reconciliation, and the supervised finalized-ledger provider-ingest completion worker. The competing `sorafs_node` book, checkpoint, config, mutation/event surface, settlement publisher, and obsolete runtime-snapshot wire/SDK selectors are deleted. | Native admission sequence/revision/order/fill/trade/channel/escrow/expiry/refund model tests, exact governed matcher/settlement authority negatives, finalized query/cursor tests, provider-ingest retry/restart/tombstone/finality/identity negatives, retired-selector rejection, reference validation, checker/runner, policy/contract bindings, and aggregate tests. | Complete source/SDK validation, resolve `V1-BLOCK-PROVIDER-INGEST-RUNTIME-01`, then collect four-peer simultaneous-submission, provider-ingest restart/rotation, expiry/refund race, single-settlement, and recovery evidence from the reviewed deployment. | open |
 | `pdp` | 6 | `docs/source/sorafs_pdp_plan.md`; `crates/sorafs_node/src/pdp_provider.rs`, PDP manifest modules, authenticated Torii provider routes, challenge-bound proof streaming, exact-chain durable native repair transaction handoff, finalized-lease-gated execution, and deletion of the local repair projection. | Protocol/reference, malformed/canonical/replay/admission/restart, native-handoff failure/retry/reconciliation, stale/wrong lease and restart-deduplication tests, checker/runner negatives, and a static guard that requires the five-route V1 API while rejecting reserved placeholder routes. | Exercise the authenticated protocol across multiple deployed providers and collect cross-peer repair plus live metrics/archive evidence. | open |
 | `pop_credentials` | 9 | `docs/source/sorafs_pop_credentials_plan.md`; native PoP registry, `crates/sorafs_node/src/pop_credentials.rs`, and the canonical authenticated 14-route Torii V1 service. | Durable encrypted enrollment/wallet, dual control, HSM/KMS interfaces, outbox/reconciliation, canonical/depth/allocation/auth/time rollback negatives, privacy, runner, and aggregate tests. | Resolve `V1-BLOCK-POP-RUNTIME-01`: package and wire the governed external-runtime/sidecar provider bundle into standard `irohad`, then exercise HSM issuance, reconciliation/revocation, wallet custody, local proofs, verifier replay defense, restart, and rotation without ledger/log secrets or PII. | open |
 | `por` | 6 | `docs/source/sorafs_por_plan.md`; PoR scheduler/randomness/governance foundations, request-bound sampling, emitted latency/VRF/seed metrics, exact-chain durable native repair handoff, finalized-lease-gated execution, and deletion of the local repair projection. | VRF/seed/request replay, proof/reference, native 32-byte task identity, handoff retry/signature/checkpoint corruption, stale/wrong lease, restart deduplication, metric-label bounds, checker/runner, and aggregate tests. | Run live randomness with provider/auditor scheduling and replay, prove cross-peer exactly-once repair, archive the reporting output, and obtain governed approval. | open |
-| `potr` | 6 | `docs/source/sorafs_potr_plan.md`; `crates/sorafs_node/src/potr.rs`, proof-stream/governance schemas, fail-closed exact-chain durable native repair handoff, finalized-lease-gated execution, deletion of the local repair projection, and Torii's injected `PotrRuntimeSignersV1` boundary. The stream-token issuer no longer owns or derives a provider ML-DSA key. Distinct gateway/provider runtime objects and administrative identities are mandatory. Torii constructs `PotrFinalizedAdmissionReaderV1` from `PotrStateFinalizedPolicySourceV1` and the council-verified admission registry, resolves the exact live policy before every receipt, and rechecks it after both signatures; the startup registry alone is not authorization. The tracker atomically persists provider, policy identity/digest/sequence, finalized height/hash, and exact admission-envelope digest, and exposes that retained anchor as the floor for the next read. | Final receipt/reference, signature-shape, persistence/restart, native repair idempotency, stale/wrong lease, restart deduplication, PQ roster, reputation binding, checker/runner, and aggregate tests; source tests cover shared/drifting signer and reader identities, wrong role/provider/key/algorithm, inactive or untrusted admission, partial invalid output, reader/signer outage, revocation, stale and same-sequence policy substitution, change during signing, governed provider-key rotation, durable-floor restart, and replay rollback. Focused Rust execution remains pending while the shared Cargo lane is occupied. | Resolve `V1-BLOCK-POTR-DUAL-SIGNER-01`: run focused/workspace validation, inject separately administered gateway Ed25519 and provider ML-DSA-65 HSM/KMS adapters into the state/admission-registry-bound reader path, then exercise independent rotation/outage/replay/crash recovery and prove four-peer exactly-once receipt/repair behavior. | open |
-| `reference_sdk_release` | 6 | `docs/source/sorafs_reference_sdk_plan.md`; `sorafs-validate`, Rust reference core, ABI-21 C/Node/Python/JNI/Swift/C# wrappers, canonical fixture-bundle and governance-log-node validators plus Governance DAG block/head and appeal-finance cancellation validation across JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java Android, and C#, and the release packager. | The resealed test-only Ed25519-signed `reference_sdk_validation_inventory_v1.json` binds 82 payload artifacts, 30 exact `ValidationOutcomeV1` files, and 38 negative payload vectors across appeal finance, routing/provider admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. All eight generated `CancelAssetLock` payload files are published, mandatory, byte-bound, and validated by the offline checker. The transparent V1 `EscrowId` hash representation and retired nested binary/JSON representations are frozen by Rust and SDK tests. The fixture checker rejects tamper, missing/extra/duplicate/traversal, noncanonical/nonfinite JSON, symlink/hardlink, and parent-swap attacks. Host C/JNI, C#, Node, and pinned-Python-3.12 native lanes now record and reverify stable artifact bytes, exact clean source identity, exact ABI 21, and required appeal-finance symbols; Apple/Swift and Android packages retain the separate per-slice source-sealed mobile artifact gate. Release-required SDK tests fail rather than count an unavailable/stale bridge as passing. No clean five-target artifact rebuild has yet been recorded. | Rebuild every checked-in and published native artifact for Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64, and execute all six SDK exact-parity suites without capability skips. Then complete clean-consumer packages, SBOM/provenance, published canaries, and genuine reference-deployment evidence. | open |
+| `potr` | 6 | `docs/source/sorafs_potr_plan.md`; `crates/sorafs_node/src/potr.rs`, proof-stream/governance schemas, fail-closed exact-chain durable native repair handoff, finalized-lease-gated execution, deletion of the local repair projection, and Torii's injected `PotrRuntimeSignersV1` boundary. The stream-token issuer no longer owns or derives a provider ML-DSA key. Distinct gateway/provider runtime objects and administrative identities are mandatory. The strict optional `[sorafs.por.potr_runtime]` binding independently pins both signers, their qualifications, the gateway key, distinct reader/source/resolver identities, and the complete baseline finalized admission anchor; enabled startup requires exact equality with injected roles. Torii constructs `PotrFinalizedAdmissionReaderV1` from `PotrStateFinalizedPolicySourceV1` and the council-verified admission registry, resolves the exact live policy before every receipt, and rechecks it after both signatures; the startup registry alone is not authorization. The tracker atomically persists provider, policy identity/digest/sequence, finalized height/hash, and exact admission-envelope digest, and exposes that retained anchor as the floor for the next read. | Final receipt/reference, signature-shape, persistence/restart, native repair idempotency, stale/wrong lease, restart deduplication, PQ roster, reputation binding, checker/runner, and aggregate tests; source tests cover missing/unconfigured/substituted runtime roles, partial/disabled/test-marked/shared config, identity collisions, shared/drifting signer and reader identities, wrong role/provider/key/algorithm, inactive or untrusted admission, partial invalid output, reader/signer outage, revocation, stale and same-sequence policy substitution, change during signing, governed provider-key rotation, durable-floor restart, and replay rollback. Focused Rust execution remains pending while the shared Cargo lane is occupied. | Resolve `V1-BLOCK-POTR-DUAL-SIGNER-01`: run focused/workspace validation, inject separately administered gateway Ed25519 and provider ML-DSA-65 HSM/KMS adapters into the state/admission-registry-bound reader path, then exercise independent rotation/outage/replay/crash recovery and prove four-peer exactly-once receipt/repair behavior. | open |
+| `reference_sdk_release` | 6 | `docs/source/sorafs_reference_sdk_plan.md`; `sorafs-validate`, Rust reference core, ABI-21 C/Node/Python/JNI/Swift/C# wrappers, canonical fixture-bundle and governance-log-node validators plus Governance DAG block/head and appeal-finance cancellation validation across JavaScript/TypeScript, Python, Swift, Kotlin/JVM, mirrored Java Android, and C#, and the release packager. | The resealed test-only Ed25519-signed `reference_sdk_validation_inventory_v1.json` binds 82 payload artifacts, 32 exact `ValidationOutcomeV1` files, and 38 negative payload vectors across appeal finance, routing/provider admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. All eight generated `CancelAssetLock` payload files are published, mandatory, byte-bound, and validated by the offline checker. The transparent V1 `EscrowId` hash representation and retired nested binary/JSON representations are frozen by Rust and SDK tests. The fixture checker rejects tamper, missing/extra/duplicate/traversal, noncanonical/nonfinite JSON, symlink/hardlink, and parent-swap attacks. Host C/JNI, C#, Node, and pinned-Python-3.12 native lanes now record and reverify stable artifact bytes, exact clean source identity, exact ABI 21, and required appeal-finance symbols; Apple/Swift and Android packages retain the separate per-slice source-sealed mobile artifact gate. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed. The mandatory Python 3.12 runner rejects every tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or `.dll`, activates its virtual environment, covers cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects JUnit skips; its static workflow-file contract is green at 9/9. The separate pin-register workflow, runner, and guard are exact Python 3.12 and install only `requirements-ci.lock` with `--require-hashes --only-binary=:all:`. A fresh isolated CPython 3.12.13 venv passed 3/3 tests plus positive static and changed-version/resolver/major/workflow/lock-removal negatives. Release-required SDK tests fail rather than count an unavailable/stale bridge as passing. No clean five-target artifact rebuild or provenance record has yet been recorded. | Rebuild every checked-in and published native artifact for Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64, and execute all six SDK exact-parity suites without capability skips. Then complete clean-consumer packages, SBOM/provenance, published canaries, and genuine reference-deployment evidence. | open |
 | `repair` | 8 | `docs/source/sorafs_repair_plan.md`; native repair records/ISIs/queries/events, Torii caller-signed one-instruction command ingress and finalized query routes, `crates/sorafs_node/src/repair_transaction_forwarder.rs`, the finalized native lease storage executor, bounded full-projection GC/reconciliation, and deletion of the local manager/store/checkpoint/API authority. | Native lifecycle/lease/action/appeal atomicity, exact-chain transaction signing and finality reconciliation, route-specific `202` command and `200` query responses, stale cursor/owner/generation/expiry rejection, malformed finalized-task and unsafe chunk-path rejection, restart deduplication, replay/rate-limit/event, checker/runner, binding, and aggregate tests. | Prove cross-peer exactly-once execution and one terminal outcome. | open |
-| `reputation` | 8 | `docs/source/sorafs_reputation_plan.md`; deterministic reputation/reference/governance foundations; native governed journal policy/history, one global sequence, event/source indexes, typed committed events, fixed-view query, PoR/token append instructions, atomic capacity-dispute `Opened`/`Resolved` integration, and generic signed Torii transaction/query transport; plus the finalized-identity-keyed, single-flight, byte-identical SFM-1 authority join/cache in `sorafs_orchestrator`. The multi-feed finalized projector is exported from `sorafs_node`, consumes the existing proof/journal/repair/orderbook/reserve projections, exposes five restart-safe physical feed cursors, and persists canonical crash reconciliation plus a bounded idempotent unsigned-material retry/dead-letter/ack outbox. Strict `iroha_config` pins the release window, weights, bounds, checkpoint roots, adapter handles, and DAG publisher identity; `irohad` constructs the queue-backed journal submitter, requires an injected immutable historical finalized query plus external threshold-signer and Governance DAG clients, fails startup on missing/null/substituted dependencies, supervises reconciliation and shutdown with freshness deadlines, and exports payload-free status/metrics. Authenticated DAG readback gates the committed Torii projection and is reverified with the signed snapshot on restart. The publication checkpoint retains an immutable authenticated snapshot/readback suffix capped at 1,024 entries and its byte ceiling; snapshot-id reads return the exact retained snapshot, while unknown or evicted ids return `404`. Acknowledgement requires the full public trust-policy digest, quorum, signature, revocation, freshness, future-skew, snapshot, scoring-evidence, and signing-digest verification. The local Torii reputation POST, route catalog/OpenAPI operation, and CLI publication command are removed; rollout collection requires reviewed external publication evidence. | Journal policy predecessor/rotation, exact permission and recorder authority, source/provider/policy/block-time binding, global/source continuity, replay, forged/orphan state, bounded fixed-view pagination, and atomic dispute lifecycle tests; projector cursor gap/fork/reorder/equivocation, crash-stage recovery, checkpoint corruption, replica parity, outbox retry/restart/dead-letter/idempotency, substituted material, forged/revoked/duplicate/insufficient-quorum/stale/future signing result, restart DAG/snapshot forgery, liveness timeout/freshness, stream retention-gap, exact historical snapshot lookup, bounded eviction/unknown-id rejection, and payload-free failure tests; config missing/null/substituted adapter and checkpoint-restart tests; snapshot/consumer determinism, join concurrency/stale/fork/bounds/replica parity, route/CLI publication hard-cut, transport/checker/runner, and aggregate tests. Focused Rust validation remains pending while the shared Cargo lane is occupied. | Resolve `V1-BLOCK-REPUTATION-RUNTIME-01`: run focused/workspace validation; deploy genuine immutable historical-query, external threshold-signing, and authenticated DAG publication/readback/head-inclusion adapters; wire the PoR/token owners to the durable callbacks; add dedicated authenticated committed-event SDK projections; and prove multi-replica byte parity, signer rotation/revocation, retry/failover, recovery, and four-peer consumption. | open |
+| `reputation` | 8 | `docs/source/sorafs_reputation_plan.md`; deterministic reputation/reference/governance foundations; native governed journal policy/history, one global sequence, event/source indexes, typed committed events, fixed-view query, PoR/token append instructions, atomic capacity-dispute `Opened`/`Resolved` integration, and generic signed Torii transaction/query transport; plus the finalized-identity-keyed, single-flight, byte-identical SFM-1 authority join/cache in `sorafs_orchestrator`. The multi-feed finalized projector is exported from `sorafs_node`, consumes the existing proof/journal/repair/orderbook/reserve projections, exposes five restart-safe physical feed cursors, and persists canonical crash reconciliation plus a bounded idempotent unsigned-material retry/dead-letter/ack outbox. Strict `iroha_config` pins the release window, weights, bounds, checkpoint roots, adapter handles, and DAG publisher identity; `irohad` constructs the queue-backed journal submitter, requires an injected immutable historical finalized query plus external threshold-signer and Governance DAG clients, fails startup on missing/null/substituted dependencies, supervises reconciliation and shutdown with freshness deadlines, and exports payload-free status/metrics. Authenticated DAG readback gates the committed Torii projection. Its canonical V1 receipt carries a pinned signed head and a contiguous inclusion suffix bounded by the manifest checkpoint window, requires the exact signed snapshot once, links successor receipts to the previously authenticated head, and persists/reverifies the head and every path block on restart. The publication checkpoint retains an immutable authenticated snapshot/readback suffix capped at 1,024 entries and its byte ceiling; snapshot-id reads return the exact retained snapshot, while unknown or evicted ids return `404`. Acknowledgement requires the full public trust-policy digest, quorum, signature, revocation, freshness, future-skew, snapshot, scoring-evidence, and signing-digest verification. The local Torii reputation POST, route catalog/OpenAPI operation, and CLI publication command are removed; rollout collection requires reviewed external publication evidence. All seven committed GET routes, strict JavaScript/TypeScript, Python, Kotlin/JVM, Java Android, Swift, and C# read clients, plus the canonical-account-signed Rust CLI and collector wiring, are implemented locally. | Journal policy predecessor/rotation, exact permission and recorder authority, source/provider/policy/block-time binding, global/source continuity, replay, forged/orphan state, bounded fixed-view pagination, and atomic dispute lifecycle tests; projector cursor gap/fork/reorder/equivocation, crash-stage recovery, checkpoint corruption, replica parity, outbox retry/restart/dead-letter/idempotency, substituted material, forged/revoked/duplicate/insufficient-quorum/stale/future signing result, signed-head/path tamper, oversize/no-truncation, exact-target, rollback/fork, provider-drift, restart readback, liveness timeout/freshness, stream retention-gap, exact historical snapshot lookup, bounded eviction/unknown-id rejection, and payload-free failure tests; config missing/null/substituted adapter and checkpoint-restart tests; snapshot/consumer determinism, join concurrency/stale/fork/bounds/replica parity, route/CLI publication hard-cut, seven-route canonical-auth/cache/stream tests, strict SDK client and signed CLI/collector tests, transport/checker/runner, and aggregate tests. Focused locked `sorafs_node` and `irohad` source validation is green; full workspace validation remains open. | Resolve `V1-BLOCK-REPUTATION-RUNTIME-01`: complete workspace validation; deploy genuine immutable historical-query, external threshold-signing, and authenticated DAG publication/readback adapters matching the signed-head contract; wire the PoR/token owners to the durable callbacks; execute the complete SDK/native validation matrix; and prove multi-replica byte parity, signer rotation/revocation, retry/failover, recovery, four-peer consumption, and promotion. | open |
 | `reserve_rent` | 11 | `docs/source/sorafs_reserve_rent_plan.md`; native reserve policy/provider/movement/rent/lifecycle/credit/repayment/appeal records and ISIs; exact caller-signed one-instruction Torii mutation ingress; authenticated finalized policy/provider/movement/appeal/event projections; durable native forwarding workers; finalized-event/provider telemetry with bounded labels, reconciliation readiness, and represented height. The process-local `sorafs_node` reserve runtime, checkpoint, scheduler, mutation API, obsolete routes, and telemetry authority are deleted. | Native accounting/conservation/authority/lifecycle/event/query tests; signed-envelope, route/instruction/authority/policy/revision/cursor/authentication negatives; empty-page event-resume and atomic telemetry-rebuild regressions; Prometheus rule tests; fresh scrape digest/reconciled-height evidence negatives; matrix/ledger/policy binding, checker/runner, and aggregate tests. | Complete source validation, then prove custody, fork, retry, signer/failover, projection rebuild, and peer reconciliation on the reviewed deployment. | open |
-| `transparency` | 5 | `docs/source/sorafs_transparency_plan.md`; canonical fixed-population/fixed-metric public aggregates with retired exact source fields rejected; exact integer discrete-Laplace sampling; stable query/window release identity; private tagged source digests; durable hash-chained composition-budget and release ledgers; atomic source deletion/outbox persistence; finalized-head reconciliation; and runtime-only threshold-PRF/release-anchor injection boundaries in `crates/sorafs_manifest/src/transparency.rs`, `crates/sorafs_node/src/transparency.rs`, `crates/sorafs_node/src/lib.rs`, Torii, config, and `irohad`. | Public-schema rejection, clipping, fixed-bucket DP+k, joint-sensitivity, sampler, PRF binding/redaction, release-chain tamper, budget, checkpoint rollback/equivocation, source-ingest response, scheduler, config, checker/runner, and aggregate tests. | Implement and deploy independently administered production `PrivacyCyclePrfProviderV1` and `PrivacyReleaseAnchorV1` adapters; connect every finalized producer; add leader lease/HSM Governance DAG anchoring, public replicas/proofs/pagination/ETags and hardened explorer delivery; then capture multi-replica, differencing/budget-exhaustion, failover, rollback, and genuine rollout evidence. | open |
+| `transparency` | 5 | `docs/source/sorafs_transparency_plan.md`; canonical fixed-population/fixed-metric public aggregates with retired exact source fields rejected; exact integer discrete-Laplace sampling; stable query/window release identity; private tagged source digests; durable hash-chained composition-budget and release ledgers; atomic source deletion/outbox persistence; finalized-head reconciliation; exact non-secret threshold-PRF/release-anchor config pins; production-only runtime traits; and standard Node/Torii/`irohad` construction of qualification wrappers before persistence in `crates/sorafs_manifest/src/transparency.rs`, `crates/sorafs_node/src/transparency.rs`, `crates/sorafs_node/src/lib.rs`, Torii, config, and `irohad`. | Public-schema rejection, clipping, fixed-bucket DP+k, joint-sensitivity, sampler, config pin/mode/partial/disabled negatives, startup substitution/staleness/qualification mismatch/redaction, pre-persistence failure, per-use drift, release-chain tamper, budget, checkpoint rollback/equivocation, source-ingest response, scheduler, checker/runner, and aggregate tests. | Implement and deploy independently administered external threshold-PRF and finalized release-anchor adapters matching the exact config pins; connect every finalized producer; add leader lease/HSM Governance DAG anchoring, public replicas/proofs/pagination/ETags and hardened explorer delivery; then capture multi-replica, differencing/budget-exhaustion, failover, rollback, and genuine rollout evidence. | open |
 
 ## Active local release blockers
 
@@ -162,11 +162,15 @@ immutable bounded finalized replication-order snapshot, retains a monotonic
 finalized cursor/block-time pair, acquires bounded durable source claims,
 verifies and ingests provider content, constructs the exact fee-quoted completion
 transaction, submits through the queue, and reconciles committed completion or
-cancellation. Its process-lifetime no-follow writer lock, retention-only
+cancellation. Its external sealed monotonic checkpoint authority, retention-only
 terminal pruning, retry/dead-letter path, crash recovery, identity-pinned
 runtime seams, blocking-work isolation, payload-free status, and worker-liveness
-readiness fail closed. Storage-only nodes do not open the completion outbox
-unless this worker is explicitly configured.
+readiness fail closed. The configured checkpoint binding contains only the
+stable handle, non-zero adapter/public-policy revision, and non-zero public
+policy digest. Enabled startup requires the authenticated-source,
+governed-signer-resolver, and sealed-checkpoint providers and rejects missing,
+substituted, stale, or test-marked providers. Storage-only nodes do not open the
+completion outbox unless this worker is explicitly configured.
 
 `observe_finalized_snapshot(cursor, finalized_block_time_ms)` is the sole
 durable writer of that cursor/time pair. Transaction rejection, finalized
@@ -176,25 +180,36 @@ absent or different snapshot returns `StaleFinalizedCursor`; a half-populated
 pair or zero retained block time returns `InvalidCheckpoint`. This validation
 runs before record lookup, mutation, or an idempotent early return.
 
+The external sealed head is authoritative. Its canonical record binds the
+namespace/version, monotonic checkpoint sequence, predecessor CAS revision and
+checkpoint digest, exact bounded checkpoint bytes and digest, and deterministic
+content-addressed revision. Every load and CAS receives authoritative pre/post
+provider identity and qualification checks. After a reported-success or
+ambiguous CAS, exact-successor readback proves success and exact-predecessor
+readback produces the explicit safe-retry `CheckpointCasUnchanged`; any other
+head, unavailable readback, or provider drift is ambiguous and fails closed.
+The no-follow atomic local file is a revalidated cache only: it may be absent,
+match the head, or be exactly one predecessor behind it, and it never seeds or
+overrides the external authority.
+
 The repository does not yet provide the production authenticated
 multi-provider source transport or governance-aware HSM/KMS completion-signer
 resolver. The native ledger adapter builds its bounded immutable page set by
 scanning all replication orders; a long-lived deployment therefore still needs
 a provider-indexed committed query or governed terminal-history filter/archive.
-The daemon checks current committed provider ownership before signer
-resolution, on both sides of signing, immediately before durable submission
-authorization, and again before queue exposure. A newer finalized owner/policy
-snapshot invalidates only `Signing` or provably never-exposed `Signed`
-material. `Ambiguous`, `Submitted`, and previously exposed `Signed` bytes are
-retained under their exact hash and reconciled before authority changes can
-affect retry. The durable signing context binds the exact governed signer-policy
-identity, monotonic revision, and digest. A durable policy floor rejects
-revision rollback, same-revision digest equivocation, identity substitution,
-and post-revocation reuse without a strict successor. The deployment resolver
-must supply that exact binding and expose live owner/key/policy eligibility.
-These process-local checks fail closed and narrow the race, but are not
-described as atomic revocation: final closure still requires queue/ledger
-admission to revalidate a policy-bound capability or lease at exposure/commit.
+The six-field `CompleteReplicationOrder` hard cut carries the exact expected
+provider owner and four-part signer-policy chain, assignment revision, and
+finalized anchor into the transaction. Ledger execution atomically revalidates
+all three bindings against the same authoritative state used to commit the
+completion, so owner reassignment, policy rotation/revocation, assignment
+revision, and finalized-anchor changes cannot cross the check-to-commit
+boundary. A newer finalized owner/policy
+invalidates only `Signing` or provably never-exposed `Signed`; exposed bytes
+stay on the reconciliation path before authority changes, including after
+restart. Exact durable replays retain the accepted tuple; legacy or partial
+completion material is rejected. The deployment resolver must still supply the
+governed HSM/KMS identity and live owner/key/policy eligibility used to construct
+that transaction.
 
 Shutdown remains bounded only when the deployment source reader honors the
 required deadline inside each underlying read; the wrapper cannot interrupt an
@@ -202,9 +217,9 @@ inner `Read::read` that blocks indefinitely. Readiness probes fail closed at
 their configured timeout and stop the supervised worker, but a timed-out
 `spawn_blocking` task cannot be force-cancelled and may linger until its
 provider call returns. This blocker closes only when the deployment-owned
-adapters and indexed query/archive are implemented, the final check-to-queue
-policy race is closed by authoritative admission, and focused/workspace and adversarial
-outage/rotation/restart/capacity/deadline tests pass; and the reviewed
+authenticated transport and signer resolver plus the indexed query/archive are
+implemented, focused/workspace and adversarial
+outage/rotation/restart/capacity/deadline tests pass, and the reviewed
 four-validator deployment proves one completion under simultaneous cross-peer
 submission and recovery. A null/test adapter, unauthenticated or file-backed
 source, local software/file/environment signing key, fabricated assignment
@@ -219,25 +234,30 @@ startup/shutdown, fail-closed monotonic freshness, payload-free status, and
 bounded metrics. `QueuedReputationJournalTransactionSubmitterV1` signs and
 enqueues typed PoR and counted stream-token append transactions, and the
 committed projection is exposed to Torii only after authenticated DAG readback
-and a fresh successful reconciliation. Persisted signed snapshots and compact
-signed DAG readback material are reverified on restart. The current-head
-`State` query adapter was removed because it cannot provide immutable
-historical exact-anchor pages; enabling the runtime without an injected exact
-historical query, external threshold signer, or authenticated Governance DAG
-publication/readback adapter fails startup.
+and a fresh successful reconciliation. The canonical V1 readback now carries a
+pinned signed head plus a contiguous inclusion suffix bounded by the manifest
+checkpoint window. It requires the exact threshold result once, validates every
+CID, signature, parent, sequence, and timestamp through the head, links a new
+suffix to the previously authenticated head, rejects rollback/fork/provider
+qualification drift, and persists/reverifies the head and path on restart
+before committed reads. Focused locked `sorafs_node` and `irohad` validation is
+green. The current-head `State` query adapter was removed because it cannot
+provide immutable historical exact-anchor pages; enabling the runtime without
+an injected exact historical query, external threshold signer, or
+authenticated Governance DAG publication/readback adapter fails startup.
 
-This blocker closes only when focused/workspace Rust validation passes,
+This blocker closes only when full workspace validation passes and
 deployment-owned immutable historical-query,
 `ReputationThresholdSignerClientV1`, and
 `ReputationGovernanceDagClientV1` adapters are injected; the PoR terminal and
-stream-token owners invoke the durable journal callbacks; current DAG
-head-chain inclusion is authenticated; the bounded exact retained-history
-snapshot-id contract remains intact; identity/rotation/outage/restart/fork/
-retry negatives pass; and the reviewed four-validator deployment proves one
-committed outcome and recovery. A live current-head view, local snapshot
-database, null adapter, file/environment credential, fabricated ledger page,
-pre-finality submit receipt, or unsigned DAG acknowledgement cannot satisfy
-readiness.
+stream-token owners invoke the durable journal callbacks; the complete
+SDK/native validation matrix passes; the bounded exact retained-history
+snapshot-id contract remains intact; identity/rotation/outage/
+restart/fork/retry negatives pass; and the reviewed four-validator deployment
+proves one committed outcome and recovery before promotion. A live current-head
+view, local snapshot database, null adapter, file/environment credential,
+fabricated ledger page, pre-finality submit receipt, or unsigned DAG
+acknowledgement cannot satisfy readiness.
 
 ### V1-BLOCK-MODERATION-VIEWER-RUNTIME-01 — fenced orchestration and evidence authority
 
@@ -246,49 +266,58 @@ finalized-chain orchestrator, exact transaction outbox, evidence authorization,
 WebAuthn/grant flow, authenticated range decryption, signed hash-chained
 receipts, an Ed25519-signed canonical checkpoint-digest/receipt-count/chain-head
 anchor, exact checkpoint- and predecessor-bound receipt projection, retention,
-legal holds, and erasure WAL are present. Audit requests require the exact
-checkpoint digest and explicit digest-bound page limit, accept one raw query
-ordering, return `409` on checkpoint change, and reuse the retained signature
-without signer calls. Moderation GETs read only a fresh worker-owned
-finalized projection. Maintenance is supervised with deadline, non-overlap,
-monotonic-cursor, dead-letter, freshness, and liveness fencing. The signed
-receipt checkpoint/projection is the sole evidence-access audit authority; the
-old aggregate-audit POSTs are authenticated/authorized `410 Gone` tombstones,
-and their scheduler and local registry calls are removed. Missing or invalid
-runtime dependencies fail through typed payload-free startup errors. These
-source boundaries do not yet make the stock daemon a reference-production
-service. A valid anchor proves integrity and signer identity, but a first-time
-consumer still needs an independently authenticated monotonic public head to
-reject an older validly signed anchor.
+legal holds, and erasure WAL are present. The moderation orchestrator also has
+a supervised payload-free panel-notification delivery pass. It durably claims
+each finalized-event-derived identity before calling an independently
+qualified boundary, requires sink-side canonical-byte idempotency, and
+checkpoints an exact stable receipt or bounded retry/dead-letter result.
+Configuration and the standard daemon/Torii injection path bind that boundary
+to one non-secret production handle, non-zero revision, and non-zero policy
+digest; missing, substituted, stale, unavailable, or test-marked providers fail
+closed.
 
-This blocker closes only when every enabled-service dependency is constructed
-by the reference runtime from runtime-only HSM/KMS/WebAuthn and authenticated
-downstream providers; a durable notification-delivery worker and the
-settlement/publication adapters reconcile exact operation bytes; the signed
+Audit requests require the exact checkpoint digest and explicit digest-bound
+page limit, accept one raw query ordering, return `409` on checkpoint change,
+and reuse the retained signature without signer calls. Moderation GETs read
+only a fresh worker-owned finalized projection. Maintenance is supervised with
+deadline, non-overlap, monotonic-cursor, dead-letter, freshness, and liveness
+fencing. The signed receipt checkpoint/projection is the sole evidence-access
+audit authority; the old aggregate-audit POSTs are authenticated/authorized
+`410 Gone` tombstones, and their scheduler and local registry calls are
+removed. These source boundaries do not supply a deployment-owned messaging
+provider or make the stock daemon a reference-production service. A valid
+anchor proves integrity and signer identity, but a first-time consumer still
+needs an independently authenticated monotonic public head to reject an older
+validly signed anchor.
+
+This blocker closes only when the reference deployment supplies real
+runtime-only HSM/KMS/WebAuthn, messaging, settlement, publication, and
+authenticated downstream providers for every enabled dependency; the signed
 receipt projection is connected to a transparency producer that anchors its
 monotonic checkpoint head for first-contact freshness; semantic operation IDs
 are fenced across replicas; viewer and orchestrator checkpoints have
-predecessor-bound monotonic CAS heads and single-writer fencing; and
-terminal receipts, operations, dead letters, holds, and erasure tombstones have
-a signed replay-safe compaction/archive path. Same-height finalized hash
-substitution, rollback, hung-provider, ambiguous delivery, capacity,
-WebAuthn-replay, IDOR, legal-hold race, restart, and multi-instance takeover
-negatives must pass before four-validator deployment evidence can close the
-lane.
+predecessor-bound monotonic CAS heads and single-writer fencing; and terminal
+receipts, operations, dead letters, holds, and erasure tombstones have a signed
+replay-safe compaction/archive path. Same-height finalized hash substitution,
+rollback, hung-provider, ambiguous delivery, capacity, WebAuthn replay, IDOR,
+legal-hold race, restart, and multi-instance takeover negatives must pass
+before four-validator deployment evidence can close the lane.
 
 ### V1-BLOCK-POP-RUNTIME-01 — standard-daemon PoP provider adapter
 
 The PoP issuer/wallet service, strict `iroha_config` policy, authenticated
-Torii routes, and runtime injection seam are present. The standard `irohad`
-entrypoint does not yet construct `PopCredentialRuntimeSecretsV1`, and the
-repository does not contain a deployable shared external-runtime or sidecar
-adapter for its enrollment/wallet hybrid secrets, governed issuer HSM, KMS key
-wrapper, API authenticator, registry submitter/reader, private issuance/witness
-providers, and finalized-time provider. Enabling PoP without that bundle fails
-startup by design.
+Torii routes, and registry-qualified runtime injection seam are present. The
+standard `irohad` entrypoint does not yet construct and inject a concrete
+`PopCredentialRuntimeProviderRegistryV1`, and the repository does not contain
+a deployable shared external-runtime or sidecar implementation that resolves
+its enrollment/wallet hybrid secrets, governed issuer HSM, KMS key wrapper, API
+authenticator, registry submitter/reader, private issuance/witness providers,
+and finalized-time provider. Enabling PoP without that registry fails startup
+by design.
 
 This blocker closes only when the shared external-runtime lane packages the
-adapter, binds its non-secret handles/public keys to the exact production
+registry implementation, binds its stable handle, exact non-zero policy
+revision/digest, non-secret adapter handles, and public keys to the production
 config, wires it into standard `irohad`, and passes provider-outage,
 config/runtime mismatch, key/time rotation, rollback, restart reconciliation,
 and four-validator reference-deployment tests. No file-key, environment-key,
@@ -331,9 +360,16 @@ one-step execution, or pre-finality local receipt cannot satisfy the lane.
 PoTR receipt encoding, persistence, validation, native repair convergence, and
 the role-separated source boundary are present. Torii accepts only distinct
 injected gateway Ed25519 and provider ML-DSA-65 signer objects with distinct
-stable administrative identities. It also requires a separate stable-identity
-live admission reader and a non-zero exact baseline policy anchor. The reader
-is queried before signing and again after both signatures; unavailable,
+stable administrative identities. The strict optional
+`[sorafs.por.potr_runtime]` configuration independently pins both signer
+handles, identities, revisions and policy digests, the gateway public key,
+distinct reader/source/resolver identities, and the complete non-zero baseline
+finalized policy anchor. Enabled startup compares every public pin exactly
+against the injected roles; configuration without roles, roles without enabled
+configuration, partial or disabled-stale fields, test-marked/shared handles,
+identity collisions, and substitutions fail closed. The provider
+qualification is fixed to the baseline admission sequence/digest. The live
+reader is queried before signing and again after both signatures; unavailable,
 revoked, stale, identity-drifting, same-sequence-substituted, or mid-signature
 changed policy fails closed. The tracker persists the exact policy
 identity/digest/sequence, finalized height/hash, provider, and admission
@@ -344,9 +380,11 @@ admission-registry snapshot alone as receipt authorization.
 The authenticated reader path is concrete:
 `PotrStateFinalizedPolicySourceV1` reads Torii's authoritative state and
 `PotrFinalizedAdmissionReaderV1` combines that policy with the council-verified
-admission registry. The generic launcher intentionally supplies no
-gateway/provider signer roles. This blocker closes only after
-focused/workspace Rust tests pass, the reference deployment injects
+admission registry. Configuration and Torii startup comparison are
+source-complete, but focused/workspace Cargo validation remains pending. The
+generic launcher intentionally supplies no gateway/provider signer roles.
+This blocker closes only after focused/workspace Rust tests pass, the reference
+deployment injects
 independently administered PKCS#11/HSM/KMS gateway and provider adapters, and
 passes wrong-role, cross-provider, revoked/stale/substituted policy, replay,
 partial-signature, reader/signer outage, independent rotation, restart,

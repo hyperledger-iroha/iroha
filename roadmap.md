@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-26
+Last updated: 2026-07-27
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -39,13 +39,22 @@ The remaining work is evidence-driven and must stay in order:
   generation, requester epoch, and per-stream semantic sequence coordinates
   while excluding only monotonic `closed_through` from request identity.
   `GenerationHint` must retain the triggering authenticated reply route, with
-  alternate sources coalesced as independent attempts.
+  alternate sources coalesced as independent attempts. Every frozen target must
+  retain separate `SidecarTopologyProgress` and `SidecarReplyControl` Lane
+  reservations so parked ordinary output and saturated shared capacity cannot
+  starve Request/Close or CloseAck/GenerationHint progress.
   `MergeSidecarLifecycleSnapshotV3` must remain the only durable schema, with
-  V1/V2 rejected and the checked generation increment plus empty responder
-  state committed through an fsynced inactive slot and marker-selected root.
-  Generation rollover is permitted only for a certified changed-roster
-  geometry after every old stream, gate, transfer, and flush is terminal; a
-  full same-roster table rejects without mutation. The focused
+  V1/V2 rejected, a durable generation-zero bootstrap marker, semantic
+  validation before bootstrap adoption or cleanup, selected-state/root
+  directory re-sync before destructive recovery cleanup, fail-closed alias and
+  reparse-point rejection, and the checked generation increment plus empty
+  responder state committed through an fsynced inactive slot and
+  marker-selected root. Ordinary changed-roster rollover requires
+  authenticated predecessor terminality; a sealed move-only handoff or
+  semantically validated restart may durably force-fence active predecessor
+  responder state without synthesizing close prefixes. Same-roster rehydration
+  preserves generation and state, and a new requester against a full
+  same-roster table rejects without mutation. The focused
   route and pipeline generation/epoch TLC traces are
   wired and fresh at 7/7/depth 7 and 11/10/depth 10 respectively; the
   fail-atomic capacity-overflow route/pipeline traces are fresh at 5/5/depth 5
@@ -53,7 +62,7 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 723-test,
+  mutations before promotion, then finish the remaining 733-test,
   38-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
@@ -86,12 +95,28 @@ production-reducer replay tests are fresh and green at exactly 100 normalized
 actions; that trace result alone does not promote a theorem. In particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
-proofless residuals. Adequate-leader closure still needs full-`AsyncNext`
-scheduler-origin preservation, four fixed-target physical handoff families,
-and a non-circular anchored semantic rank. Exact-decision closure still needs
-the request clock/runtime, request head/gate, request ingress-runner, and
-response deadline-prefix leaves; the normal ingress proof must also bound
-claimed-response priority so broad runner fairness cannot starve the target.
+proofless residuals. Adequate-leader closure now freezes one
+target/context/adequate-leader/view/subject corridor, requires Decision
+commands to be target-owned, aggregates durable target Decisions over the
+finite frozen voter roster, and ranks each frontier by semantic rank plus the
+number of distinct logical owners at that rank. Remaining debt includes the
+full-`AsyncNext` scheduler-origin invariant; transport, ordinary runner
+admission, and timeout/view convergence; target-corridor entry and
+producer/transport closure; and a finite or coalesced producer argument.
+Equal-count replacement and count-increasing replenishment are explicitly not
+progress. The certified-response physical-capacity arm already has a source
+proof body.
+
+Exact-Decision closure is pinned to five leaves:
+`ExactDecisionRequestClockOwnerConvergenceProperty`,
+`ExactDecisionRequestRuntimePrefixConvergenceProperty`,
+`ExactDecisionRequestHeadGateOwnerConvergenceProperty`,
+`ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty`, and
+`ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty`.
+The causal, Serve-capacity, and priority-debt audits identify their exact
+producer actions, but simultaneous capacity bounds do not bound repeated
+producer episodes. A durable well-founded producer budget and the remaining
+temporal convergence proofs are still required.
 The independent
 `ResponsiveStrongFairnessToReceiptResidual` now has a SANY-clean proof script
 that derives receipt publication from responsive strong fairness, but it and
@@ -131,6 +156,19 @@ Torii verifies every returned signature before releasing a token. Focused
 Cargo/workspace validation and reviewed reference-HSM deployment evidence
 remain open.
 
+The mandatory SoraFS ABI-21 Python native reference lane is now pinned to exact
+Python 3.12. The obsolete tracked `_crypto.cpython-39-darwin.so` is removed, and
+the runner rejects any tracked package `.so`, `.so.*`, `.dylib`, `.pyd`, or
+`.dll`, activates its selected virtual environment, covers the
+cancel-asset-lock, reference-validation, and provider-ingest suites, and rejects
+JUnit skips. Its static workflow-file contract is green at 9/9. Clean native
+rebuilds and source-bound provenance across all five release targets remain
+open. The separate SoraFS pin-register SDK workflow, runner, and guard are also
+exact Python 3.12 and install only the hash-locked, binary-only
+`requirements-ci.lock`; a fresh isolated CPython 3.12.13 venv is green at 3/3,
+including positive static coverage and version/resolver/major/workflow/lock
+negative controls.
+
 Provider ingest is now an opt-in supervised `irohad` worker over one immutable,
 bounded finalized replication-order snapshot. Its durable single-writer
 outbox, monotonic finalized high-water, bounded claims, retention-only terminal
@@ -163,8 +201,16 @@ accepted policy identity, digest, sequence, finalized cursor, provider, and
 envelope digest as a restart-safe monotonic floor. Torii now constructs
 `PotrFinalizedAdmissionReaderV1` from
 `PotrStateFinalizedPolicySourceV1` and the council-verified admission registry
-when runtime signer roles are supplied. Focused/workspace Rust validation,
-deployment-owned HSM/KMS signer adapters, and four-peer
+only after enabled `[sorafs.por.potr_runtime]` public pins exactly match the
+injected signer roles. The strict optional binding contains both signer
+handles/identities/qualifications, the gateway key, distinct
+reader/source/resolver identities, and the complete baseline finalized
+admission anchor; provider qualification is fixed to that anchor's
+sequence/digest. Partial or disabled-stale configuration, test-marked/shared
+handles, identity reuse, missing injection, unconfigured injection, and any
+substitution fail closed. This configuration/startup boundary is
+source-complete; focused/workspace Rust validation, deployment-owned HSM/KMS
+signer adapters, and four-peer
 rotation/revocation/replay/crash evidence remain open under
 `V1-BLOCK-POTR-DUAL-SIGNER-01`.
 
@@ -188,11 +234,21 @@ trust-policy reuse, supervised fixed-view scheduling, shutdown, status, and
 bounded metrics are now wired through runtime-only finalized-query,
 threshold-signer, and Governance DAG clients. Enabled startup rejects missing,
 null/test-marked, or substituted clients. The queue-backed journal submitter is
-constructed by `irohad`; the immutable historical query, external threshold
-signer, authenticated Governance DAG publication/readback and current-head
-inclusion adapters, PoR/token callback-owner wiring, pending integrated Rust
-validation, and reviewed four-peer deployment evidence remain open. Latest,
-provider, weights, and event reads are gated on the fresh committed projection;
+constructed by `irohad`. Governance publication reconciliation now accepts only
+the canonical versioned signed-head receipt with a bounded inclusion suffix
+whose hard limit aliases the manifest checkpoint window. It verifies the pinned
+head publisher/key before traversing every block, requires the exact signed
+snapshot once, links each successor suffix to the previously authenticated head
+without rollback or fork, and persists/reverifies the head and path before
+restart reads. Focused locked `sorafs_node` and `irohad` validation is green.
+All seven authenticated committed GET routes, strict JavaScript/TypeScript,
+Python, Kotlin/JVM, Java Android, Swift, and C# clients, and the
+canonical-account-signed Rust CLI/rollout collector are implemented locally.
+The genuine immutable historical-query, external threshold-signer, and
+authenticated Governance DAG deployment adapters, PoR/token callback-owner
+wiring, complete SDK/native and workspace validation, reviewed four-peer
+evidence, and promotion remain open. Latest, provider, weights, and event reads
+are gated on the fresh committed projection;
 snapshot-id reads resolve the exact authenticated snapshot from a durable
 immutable suffix capped at 1,024 entries and the publication-checkpoint byte
 ceiling. Unknown or evicted ids return `404` without substituting latest.
@@ -214,11 +270,15 @@ audit authority; the retired local audit POSTs are authenticated `410 Gone`
 tombstones and have no scheduler. The retained checkpoint now exposes an
 Ed25519-signed canonical digest/receipt-count/chain-head anchor; audit pages
 require that exact digest and an explicit digest-bound limit, reject alternate
-query encodings, and return `409` on checkpoint change. Moderation remains open
-for reference runtime construction, durable notification delivery, settlement
-and downstream publication adapters, cross-replica operation/checkpoint
-fencing, signed terminal compaction/archive, a transparency-published monotonic
-head that gives first-contact clients freshness, and four-peer evidence.
+query encodings, and return `409` on checkpoint change. The supervised
+moderation worker now durably claims payload-free panel notifications, calls an
+independently config-qualified idempotent boundary, and checkpoints exact
+receipts or bounded dead letters; standard `irohad` and Torii expose the
+all-or-nothing injection path. Moderation remains open for deployment-owned
+messaging, settlement, downstream publication, HSM/KMS/WebAuthn, and
+transparency providers, cross-replica operation/checkpoint fencing, signed
+terminal compaction/archive, a transparency-published monotonic head that gives
+first-contact clients freshness, and four-peer evidence.
 Its ballot lifecycle is already chain-authoritative and rebuildable from
 finalized events. Taira and Minamoto mutation remains separately authorized
 cutover work.
@@ -4733,14 +4793,16 @@ excluded from the first release.
   boundary, `QueuedReputationJournalTransactionSubmitterV1` PoR/counting
   submission, and supervised finality reconciliation are wired through
   `irohad`. Latest/provider/weights/event routes read the fresh committed
-  projection. Remaining SFM-3 work is integrated Rust validation, production
-  historical-query and producer-owner wiring, external threshold-signing,
-  authenticated Governance DAG publication/readback/head inclusion, a genuine
-  historical snapshot-id route, and reviewed four-peer deployment/recovery
-  evidence. Those
-  remaining components and the regional API must be deployed and produce live
-  evidence that passes the gate. The obsolete local Torii snapshot POST and CLI
-  `reputation publish` path are removed.
+  projection. Focused locked Rust validation, authenticated signed-head
+  inclusion, restart revalidation, and exact retained historical snapshot-id
+  reads are now complete. Remaining SFM-3 work is full-workspace validation,
+  production historical-query and producer-owner wiring, external
+  threshold-signing, genuine authenticated Governance DAG
+  publication/readback adapters matching the signed-head contract, complete
+  SDK/native validation, and reviewed four-peer deployment/recovery evidence.
+  Those remaining components and the regional API must be deployed and produce
+  live evidence that passes the gate. The obsolete local Torii snapshot POST and
+  CLI `reputation publish` path are removed.
   The rollout-gate static contract pins only the still-unshipped supervised
   ingest command, snapshot publisher, regional public API/GraphQL gateway,
   S3/IPFS publication, and production-promotion surfaces with reusable matchers
@@ -5263,7 +5325,8 @@ excluded from the first release.
   observability.
 - SoraFS SF-14 PoTR-Lite is wired locally for ranged gateway receipt capture,
   embedded-node receipt recording, `sorafs_manifest::potr` receipt validation,
-  and `/v1/sorafs/proof/stream` replay with `proof_kind=potr`. The SF-14
+  and exact finalized-outcome lookup through `/v1/sorafs/proof/stream` with
+  `proof_kind=potr`. The SF-14
   rollout evidence gate now validates payload-free multi-provider probe,
   receipt-validation, proof-stream, reputation-integration, observability, and
   governance-approval evidence, and requires validation/proof-stream/reputation/
@@ -5323,7 +5386,7 @@ excluded from the first release.
   PQ key-roster and reputation-weight policy digests on their bound artifacts,
   so validation, proof-stream, reputation, observability, and governance
   evidence all fail against detached probe/governance anchors before promotion.
-  Local receipt capture, validation, and proof-stream replay are implemented,
+  Local receipt capture, validation, and exact finalized proof-stream lookup are implemented,
   and latency breaches use a deterministic exactly-once native repair identity
   through the durable transaction handoff. SF-14 is not evidence-only: it
   still requires removal of residual local repair projections, cross-peer
@@ -5344,7 +5407,8 @@ excluded from the first release.
   `potr governance-approval`, `potr promote`, and `proof stream potr live`
   spellings while preserving ranged gateway receipt capture, `Sora-PoTR-*`
   headers, embedded-node receipt recording, local receipt validation,
-  proof-stream replay through `/v1/sorafs/proof/stream` with `proof_kind=potr`,
+  exact finalized lookup through `/v1/sorafs/proof/stream` with
+  `proof_kind=potr`,
   `sorafs_cli proof stream --proof-kind=potr`, proof-stream metrics,
   deadline-breach alert fixtures, and payload-free canary evidence labels.
 - SoraFS provider admission observability now has a checked-in Grafana board
@@ -5946,7 +6010,11 @@ excluded from the first release.
   X-Iroha-signed, role-gated feed/status/stage/acknowledge/promote/rollback
   routes expose it, and manifest/CID/provider serving evaluates only the
   promoted catalog across global, configured-region, and configured-gateway
-  scopes. Remaining SFM-4 production work is independently audited
+  scopes. ACME and feed transport now have separate exact non-secret
+  `iroha_config` handle/revision/policy-digest bindings; startup and every
+  ACME-order/DNS/HTTPS operation reject unavailable, substituted, stale,
+  malformed, or test-marked providers before accepting returned material.
+  Remaining SFM-4 production work is independently audited
   standard-daemon feed and ACME adapters, finalized precedence/hold catalog
   producers, external threshold signing, deployed SFM-4c receipt publication,
   and genuine staged evidence from both independently administered regional
@@ -6224,8 +6292,17 @@ excluded from the first release.
   `iroha_config` now also exposes the dormant-by-default
   `[sorafs.storage.privacy_aggregates]` cadence, canonical rational privacy
   policy, per-subject cap, suppression threshold, governed digest, and durable
-  composition budget. `sorafs_node::StorageConfig` projects that single
-  production policy, and
+  composition budget. It also requires an exact non-secret release-anchor
+  handle/revision/policy digest whenever enabled and the same exact
+  threshold-PRF binding for DP modes, while rejecting dormant provider fields.
+  `sorafs_node::StorageConfig` projects that single production policy and both
+  provider pins. Standard Node, Torii, and `irohad` launcher paths now accept
+  only production-qualified provider traits and construct the rotation-aware
+  wrappers before persistence; missing, unexpected, substituted, stale,
+  unavailable, test-marked, zero, and config-mismatched qualifications fail
+  closed without provider diagnostics. A prebuilt Node is checked against the
+  exact Torii config bindings and cannot also receive ambiguous raw providers.
+  The
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
   runs due-cycle publication while accepting only runtime threshold-PRF output
   and predecessor hash material. Torii now also exposes
@@ -6261,9 +6338,12 @@ excluded from the first release.
   runner stamps that context onto generated canary artifacts and now validates
   the schema-closed collection-plan envelope, reviewed deployment context,
   evidence contract, and command steps before dry-run output or live canaries.
-  The remaining aggregate work is deployed source-event producers,
-  deployed scheduler jobs, and captured rollout evidence using those wrappers
-  and the canary.
+  The remaining aggregate work is reviewed external threshold-PRF and
+  finalized-anchor adapters, a separately administered leader lease, live HSM
+  Governance DAG anchoring, every finalized source producer, public
+  replicas/proofs/pagination/ETags and hardened explorer delivery, deployed
+  scheduler jobs, and captured rollout evidence using those wrappers and the
+  canary.
 - SoraFS economics/governance plan status is current for the remaining local
   production gaps: SFM-2 now has initial orderbook/streaming-settlement Norito
   payloads and validators in `sorafs_manifest::orderbook` plus Rust reference
@@ -15870,19 +15950,26 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  bytes verifier shortcuts for canonical proof bytes. It must also keep
 	  research catalog labels for Orchard, FCMP++, Miden, Aztec, and PQ MASP
 	  pinned to their dedicated OpenVerify backend tags.
-- Keep privacy, Kagemusha, and SoraFS Python workflow lanes on the Python 3.11
-  contract; their guards now reject Python-version drift and Python SDK test
-  commands that run before setup-python, and the standalone Python SDK scripts
-  must keep printing both selected and venv interpreter versions while rejecting
-  non-3.11 interpreters before pytest. They now prefer documented Python
-  override variables, then available `python3.11`/Homebrew Python 3.11
-  candidates before falling back to `python3` for the existing fail-closed
-  version check, with override and resolver drift pinned by negative controls.
-  The JS meta-tests must also exercise fake non-3.11 Python overrides against
-  the standalone runners so the early interpreter gate is proven before any
-  venv setup or native build can run.
-  All three Python SDK lanes also rebuild stale non-3.11 venvs after selecting
-  a valid 3.11 interpreter, with rebuild drift pinned by the guard workflows.
+- Keep privacy and Kagemusha Python workflow lanes on the Python 3.11
+  contract. Their guards reject Python-version drift and Python SDK test
+  commands that run before setup-python, and their standalone scripts must keep
+  printing both selected and venv interpreter versions while rejecting
+  non-3.11 interpreters before pytest. They prefer documented Python override
+  variables, then available `python3.11`/Homebrew Python 3.11 candidates before
+  falling back to `python3` for the existing fail-closed version check, with
+  override and resolver drift pinned by negative controls. The mandatory SoraFS
+  ABI-21 native reference and pin-register SDK lanes are separately pinned to
+  exact Python 3.12; their runners must activate and report their 3.12 venvs
+  before any native build or pytest execution. Pin-register dependencies must
+  come only from `requirements-ci.lock` under
+  `--require-hashes --only-binary=:all:`. The JS meta-tests must exercise fake
+  non-3.11 overrides against the privacy/Kagemusha runners and fake non-3.12
+  overrides against the SoraFS runners so both early interpreter gates are
+  proven.
+  Privacy and Kagemusha rebuild stale non-3.11 venvs after selecting a valid
+  3.11 interpreter; both SoraFS runners rebuild stale non-3.12 venvs after
+  selecting a valid 3.12 interpreter. Rebuild drift and pin-register lock
+  removal remain pinned by the corresponding guard workflows.
   Privacy and Kagemusha native-backed
   Python lanes must also build the PyO3 extension with that selected venv via
   `maturin develop --release`, cache Rust artifacts, and keep 45-minute
@@ -23502,8 +23589,10 @@ signed ancestor-linked solid-block header proof,
   predecessor on the same controlled runner. The documented predecessor lacks
   `Cargo.lock`, and the available older lock is incompatible, so no
   reproducible locked 5% comparison is claimed.
-- Run the C# SDK gate on a supported .NET 8 environment. `dotnet` is not
-  installed on the current host.
+- Run the Java and Kotlin SDK gates on a host with a usable Java runtime,
+  `kotlinc`, and Gradle; those toolchains are unavailable on the current host.
+- Run the C# SDK gate on a supported .NET 8 environment; `dotnet` is unavailable
+  on the current host.
 
 ## Privacy, ZK, and FHE
 
@@ -25266,6 +25355,15 @@ proceeds through production effective-lock refinement, progress ownership,
 protected service ranks and starvation freedom, then timeout/view/leader,
 application, successor, and indexed-height composition.
 
+The Apply boundary now requires the exact durable current-context Commit
+Decision in both execution and readiness; it no longer permits an old-context
+Decision to retire a non-voter's historical-recovery target. The paired
+deductive assertions, source-fidelity mutations, and bounded repaired/bug model
+are authored. Before this slice can be promoted to machine-checked evidence,
+run the pinned SANY and strict TLAPS checks for the changed modules, execute
+`scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh`, and archive the
+green repaired trace plus the expected missing-guard counterexample.
+
 The exact-output corridor now freezes the height-roster Safety/Lane/Bulk
 reservation set, adds a distinct shared budget, and deterministically matches
 at most one unique reserve to each retained fanout. This closes the discovered
@@ -25314,8 +25412,9 @@ tests; the lane-relay saturation test is a rename in place, not a fifth module
 test. A subsequent adversarial sidecar regression proves a same-tenure route
 redelivery cannot re-emit an in-flight chunk before its writer flush. Three worker
 regressions additionally retain pending and flushed-but-unapplied ownership,
-preserve a terminal zero-reservation route beside live siblings, and reactivate
-an unflushed current item on reconnect only after capacity becomes available.
+preserve a terminal zero-reservation route beside live siblings, and retry an
+unflushed current item on reconnect without resetting its cursor or charging a
+second same-source reservation.
 The subsequent source-authority, immutable-sidecar, runner-race,
 daemon-corridor, shared-byte-budget, cached-Arc admission, and executable-refinement closure adds 22
 exact regressions and moves two peer tests to their actual owning module.
@@ -25790,7 +25889,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-723-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+733-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -25809,9 +25908,11 @@ and run with an isolated configuration-free `CARGO_HOME`; exact tool paths,
 versions, and hashes are receipt-bound.
 
 The current release-support suites are green at 11/11 seed-matrix, 189/189
-release-receipt, and 71/71 protected-bootstrap tests. The complete settled-tree
-proof-fidelity selection remains a separate pending rerun and is not promoted
-as green release evidence.
+release-receipt, and 71/71 protected-bootstrap tests. Mechanical collection
+now pins the proof-fidelity preflight at exactly 1,686 cases and the
+formal-launcher preflight at exactly 24; the latter is green at 24/24. The
+complete settled-tree 1,686-case proof-fidelity execution remains a separate
+pending rerun and is not promoted as green release evidence.
 
 The receipt is published only at the exact bootstrap-owned path with mode
 `0400`, one link, exclusive staging, complete writes, no-clobber linking, and
@@ -25836,9 +25937,18 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 64-entry ledger contains 35 `tlaps_proved`, 22 `specified_unproved`, 6
-`trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
-remains false. In particular,
+The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
+`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entries;
+machine-checked completion remains false. Sixteen source-bound decomposition
+leaves are checked transitively through those reviewed consumers rather than
+being additional release claims. Historical recovery now accounts for exactly
+three proofless temporal leaves—authority acquisition, certificate-rank
+progress, and Decision/body rank progress—plus one proved Decision-stage
+ownership safety leaf. Composition derives that ownership property from
+`IndexedChainSpec`; it is not a fourth temporal premise. The three temporal
+leaves and top-level `height-liveness` remain `specified_unproved`, so this
+accounting repair changes neither the 54-row ledger nor its status counts. In
+particular,
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` remain explicit
 proofless residuals; neither may be promoted through assumption, circular
@@ -25917,18 +26027,18 @@ runtime premise on the final signed source.
   waiters, or persist every returned rank across producer restart;
   current local writer-flush and actor-backlog tests are necessary but not
   sufficient evidence;
-- discharge the ledgered abstract progress-ownership invariant and the Stage-4
-  ready/causal, nonce-unique Serve FIFO, and Stage-5 Consensus-I/O FIFO rank
-  leaves before composing `protected-service-rank`. Progress ownership consumes
-  a freshly reproved async type closure; Stage 4 and Serve FIFO also consume a
-  freshly reproved exact fair-action refinement; Stage 5 still waits for progress
-  ownership. Keep
+- preserve source-bound evidence for the already-`tlaps_proved`
+  async-progress-ownership, Stage-4 ready/causal, nonce-unique Serve FIFO, and
+  Stage-5 Consensus-I/O FIFO leaves. Remaining work at this layer is the
+  aggregate `protected-service-rank`, productive deadlock/starvation
+  composition, Stage-2/3/6 closure, and the production
+  admission/runtime/ingress/actor-to-flush refinements. Historical proof counts
+  must not be reused after source drift. Keep
   production candidate admission, runtime, ingress, and actor-to-flush identity
-  refinement outside these abstract leaves. Rerun the repaired Stage-4 proof
-  strictly and preserve its
+  refinement outside these abstract leaves. Preserve the repaired Stage-4
   counterexample gate (four causal refill lassos, causal replacement,
   Commit-certificate discovery debt, all-I/O indexing, and the 983,041-state
-  ownership check). The historical 196/196 run is superseded because 48
+  ownership check). The historical 196/196 run was superseded because 48
   heterogeneous grouped binders constrained their supporting rank, budget,
   capacity, or position variable to the wrong carrier. The checker and
   representative mutants now reject that form. Extend the repaired proof to
@@ -26011,10 +26121,17 @@ runtime premise on the final signed source.
 - discharge the ledgered
   `SuccessorActivationStarvationFreedomObligation` by proving that every exact
   queued/running activation owned by a responsive validator has an enabled step
-  and the minimal `0..19` decreasing rank, including the one-time pre-failure
-  `+9` offset, until exact publication or legitimate later-height supersession.
+  and the finite `0..21` decreasing rank: Published predecessor ownership uses
+  `11 +` the `0..10` pipeline distance, while recovered/absent ownership uses
+  that distance directly, until exact publication or legitimate later-height
+  supersession.
   Do not strengthen this to validators outside `Responsive`: an honest node may
-  queue work before GST and subsequently become nonresponsive;
+  queue work before GST and subsequently become nonresponsive. The canonical
+  proof now derives the next context's admissibility from the exact durable
+  parent application and chain-epoch receipt invariants before failure/restart
+  progress may preserve the protocol invariant. Its 47-module import closure
+  and fail-closed mutation checks are green, but strict TLAPS for that repaired
+  leaf and the downstream finite-rank chain is still outstanding;
 - discharge
   `SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation`
   by
@@ -26090,7 +26207,7 @@ runtime premise on the final signed source.
   module or leg. Three worker regressions then produce the historical
   443-test checkpoint by pinning pending/unapplied writer-flush deduplication,
   mixed-source terminal-route history, and capacity-checked reconnect
-  reactivation. The subsequent 22-test source-authority and shared-payload
+  cursor preservation. The subsequent 22-test source-authority and shared-payload
   closure plus cached-Arc admission yields the 465-test, 30-module, 53-leg
   checkpoint. The authenticated-non-validator source-cap and
   alternate-route-before-lane-cap regressions yield the 467-test checkpoint.
@@ -26108,7 +26225,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  722-test target above supersedes that checkpoint. The 38-module pre-network
+  733-test target above supersedes that checkpoint. The 38-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

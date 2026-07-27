@@ -26,6 +26,59 @@ SLICE_IDS = (
 BUILD_LOCK_NAME = ".NoritoBridge.build-publish.lockfile"
 
 
+def test_cargo_slice_builds_are_locked_offline_and_single_job() -> None:
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+    call_starts = [
+        index
+        for index, line in enumerate(lines)
+        if line == "  run_hermetic_apple_cargo \\"
+    ]
+    assert len(call_starts) == 4
+
+    calls = []
+    for start in call_starts:
+        end = start
+        while lines[end].endswith("\\"):
+            end += 1
+        calls.append(lines[start : end + 1])
+
+    expected_slices = (
+        (
+            "apple-ios-device",
+            "$CARGO_BUILD_DIR_DEVICE",
+            "$IPHONEOS_SDKROOT",
+            "$DEVICE_TRIPLE",
+        ),
+        (
+            "apple-ios-simulator",
+            "$CARGO_BUILD_DIR_SIM_ARM",
+            "$IPHONESIMULATOR_SDKROOT",
+            "$SIM_ARM_TRIPLE",
+        ),
+        (
+            "apple-ios-simulator",
+            "$CARGO_BUILD_DIR_SIM_X64",
+            "$IPHONESIMULATOR_SDKROOT",
+            "$SIM_X64_TRIPLE",
+        ),
+        (
+            "apple-macos",
+            "$CARGO_BUILD_DIR_MACOS",
+            "$MACOSX_SDKROOT",
+            "$MACOS_TRIPLE",
+        ),
+    )
+    for call, (profile, target_dir, sdkroot, triple) in zip(calls, expected_slices):
+        assert len(call) == 5
+        assert call[1].strip() == f'{profile} "{target_dir}" "{sdkroot}" \\'
+        assert (
+            call[2].strip()
+            == 'build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \\'
+        )
+        assert call[3].strip() == f'--target "{triple}" \\'
+        assert call[4].strip().startswith('"${CARGO_FEATURE_ARGS[@]+')
+
+
 def _write_executable(path: Path, contents: str) -> None:
     path.write_text(contents, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)

@@ -8285,6 +8285,8 @@ impl Default for SorafsGc {
 pub struct SorafsPor {
     /// Enable the verified coordinator runtime.
     pub enabled: bool,
+    /// Exact public bindings for the production PoTR signer and finalized-reader boundary.
+    pub potr_runtime: Option<SorafsPotrRuntimeBinding>,
     /// Duration of a PoR epoch (seconds).
     pub epoch_interval_secs: u64,
     /// Window granted to providers to submit proofs (seconds).
@@ -8311,6 +8313,7 @@ impl Default for SorafsPor {
     fn default() -> Self {
         Self {
             enabled: super::defaults::sorafs::por::ENABLED,
+            potr_runtime: None,
             epoch_interval_secs: super::defaults::sorafs::por::EPOCH_INTERVAL_SECS,
             response_window_secs: super::defaults::sorafs::por::RESPONSE_WINDOW_SECS,
             state_dir: super::defaults::sorafs::por::state_dir(),
@@ -8327,6 +8330,57 @@ impl Default for SorafsPor {
             .expect("default PoR auditor signature threshold must be non-zero"),
         }
     }
+}
+
+/// Exact non-secret production boundary for PoTR signing and finalized policy reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPotrRuntimeBinding {
+    /// Independently administered gateway signer binding.
+    pub gateway_signer: SorafsPotrRuntimeSignerBinding,
+    /// Independently administered provider signer binding.
+    pub provider_signer: SorafsPotrRuntimeSignerBinding,
+    /// Exact Ed25519 gateway verification key.
+    pub gateway_public_key: [u8; 32],
+    /// Stable identity of the admission-reader facade.
+    pub reader_id: [u8; 32],
+    /// Stable identity of the immutable finalized-state source.
+    pub source_id: [u8; 32],
+    /// Stable identity of the admission-material resolver.
+    pub resolver_id: [u8; 32],
+    /// Exact baseline finalized provider-admission policy.
+    pub baseline_admission_policy: SorafsPotrAdmissionPolicyBinding,
+}
+
+/// Public identity and qualification of one PoTR runtime signer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPotrRuntimeSignerBinding {
+    /// Stable opaque HSM/KMS provider handle.
+    pub handle: String,
+    /// Stable signer administration identity.
+    pub signer_id: [u8; 32],
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the signer's public policy.
+    pub policy_digest: [u8; 32],
+}
+
+/// Exact finalized provider-admission policy pinned at PoTR startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsPotrAdmissionPolicyBinding {
+    /// Provider governed by this admission revision.
+    pub provider_id: [u8; 32],
+    /// Stable identity of the provider-admission policy series.
+    pub policy_identity: [u8; 32],
+    /// Digest of the exact provider-admission revision.
+    pub policy_digest: [u8; 32],
+    /// Monotonic revision within the policy series.
+    pub policy_sequence: u64,
+    /// Finalized block height containing this revision.
+    pub finalized_height: u64,
+    /// Exact finalized block hash paired with the height.
+    pub finalized_block_hash: [u8; 32],
+    /// Digest of the exact council-verified admission envelope.
+    pub admission_envelope_digest: [u8; 32],
 }
 
 /// Pinned drand chain and hardened HTTP client configuration for SoraFS PoR.
@@ -8400,6 +8454,8 @@ pub struct SorafsAppealFinanceSettlement {
     pub settlement: SorafsAppealSettlementPolicy,
     /// Non-secret bindings for runtime-only HSM/KMS signer providers.
     pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
+    /// Independent non-secret binding for the checkpoint HSM/KMS provider.
+    pub checkpoint_provider: Option<SorafsAppealFinanceCheckpointBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
     pub worker_scan_interval: Duration,
     /// Maximum signing/submission attempts for one semantic ledger operation.
@@ -8422,6 +8478,7 @@ impl Default for SorafsAppealFinanceSettlement {
             pricing: SorafsAppealPricingPolicy::default(),
             settlement: SorafsAppealSettlementPolicy::default(),
             submitter_signers: Vec::new(),
+            checkpoint_provider: None,
             worker_scan_interval: Duration::from_millis(
                 defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
             ),
@@ -8740,10 +8797,42 @@ pub struct SorafsAppealFinanceSignerBinding {
     pub authority: AccountId,
     /// Exact Ed25519 public key expected from the runtime provider.
     pub public_key: PublicKey,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
     /// First finalized block height at which this binding is active.
     pub valid_from_block_height: u64,
     /// First finalized block height at which this binding is revoked.
     pub revoked_at_block_height: Option<u64>,
+}
+
+/// Public identity and policy of the independent checkpoint HSM/KMS provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsAppealFinanceCheckpointBinding {
+    /// Stable opaque HSM/KMS provider handle.
+    pub handle: String,
+    /// Exact Ed25519 checkpoint verification key.
+    pub public_key: PublicKey,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
+}
+
+/// Public identity and policy of the runtime moderation quarantine-key provider.
+///
+/// The opaque handle is resolved only through runtime dependency injection.
+/// Credentials, key material, tokens, and vendor diagnostics are never valid
+/// configuration inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsModerationQuarantineKeyProviderBinding {
+    /// Stable opaque PKCS#11/HSM/KMS provider handle.
+    pub handle: String,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
 }
 
 /// Embedded SoraFS storage configuration (Torii-owned).
@@ -8773,6 +8862,8 @@ pub struct SorafsStorage {
     pub moderation_screening_authority_bundle_path: Option<PathBuf>,
     /// Reviewed BLAKE3 digest of the exact canonical authority bundle bytes.
     pub moderation_screening_authority_bundle_digest: Option<[u8; 32]>,
+    /// Exact public identity and policy of the runtime quarantine-key provider.
+    pub moderation_quarantine_key_provider: Option<SorafsModerationQuarantineKeyProviderBinding>,
     /// Governed PoP credential-service policy. Runtime key material is injected
     /// separately and is never represented in configuration.
     pub pop_credentials: Option<SorafsPopCredentialService>,
@@ -8797,8 +8888,9 @@ pub struct SorafsStorage {
     pub hedging_billing_runtime: Option<SorafsHedgingBillingRuntime>,
     /// Supervised finalized-ledger provider-ingest policy.
     ///
-    /// Authenticated source fetching and completion signing are resolved from
-    /// runtime-only providers by their configured public identities.
+    /// Authenticated source fetching, completion signing, and sealed monotonic
+    /// checkpointing are resolved from runtime-only providers by their
+    /// configured public identities.
     pub provider_ingest_runtime: Option<SorafsProviderIngestRuntime>,
     /// Durable admission-bound PDP provider protocol policy.
     pub pdp_provider: SorafsPdpProviderPolicy,
@@ -8855,10 +8947,22 @@ pub struct SorafsGovernanceDagService {
     pub ipns_key_name: Option<String>,
     /// Opaque runtime authenticator handle for the IPFS/Kubo API.
     pub ipfs_authenticator_handle: Option<String>,
+    /// Exact non-zero IPFS authenticator provider revision.
+    pub ipfs_authenticator_revision: Option<u64>,
+    /// Exact non-zero digest of the IPFS authenticator public policy.
+    pub ipfs_authenticator_policy_digest: Option<[u8; 32]>,
     /// Opaque runtime authenticator handle for the signed-head endpoint.
     pub head_authenticator_handle: Option<String>,
+    /// Exact non-zero signed-head authenticator provider revision.
+    pub head_authenticator_revision: Option<u64>,
+    /// Exact non-zero digest of the signed-head authenticator public policy.
+    pub head_authenticator_policy_digest: Option<[u8; 32]>,
     /// Opaque runtime sealed-checkpoint store handle.
     pub checkpoint_store_handle: Option<String>,
+    /// Exact non-zero sealed-checkpoint store provider revision.
+    pub checkpoint_store_revision: Option<u64>,
+    /// Exact non-zero digest of the sealed-checkpoint store public policy.
+    pub checkpoint_store_policy_digest: Option<[u8; 32]>,
     /// Canonical lowercase Ed25519 public key expected on every block, node, and head.
     pub publisher_public_key_hex: Option<String>,
     /// Filesystem feed reconciliation interval.
@@ -9066,6 +9170,36 @@ pub struct SorafsModerationOrchestrator {
     pub checkpoint_path: PathBuf,
     /// Governance authority used only for deterministic deadline maintenance.
     pub maintenance_authority: AccountId,
+    /// Identity-pinned runtime-only moderation transaction signer handle.
+    pub transaction_signer_handle: String,
+    /// Exact non-zero moderation transaction signer revision.
+    pub transaction_signer_revision: u64,
+    /// Exact moderation transaction signer public-policy digest.
+    pub transaction_signer_policy_digest: [u8; 32],
+    /// Identity-pinned strict transaction ingress handle.
+    pub strict_ingress_handle: String,
+    /// Exact non-zero strict transaction ingress revision.
+    pub strict_ingress_revision: u64,
+    /// Exact strict transaction ingress public-policy digest.
+    pub strict_ingress_policy_digest: [u8; 32],
+    /// Identity-pinned settlement handoff handle.
+    pub settlement_handoff_handle: String,
+    /// Exact non-zero settlement handoff revision.
+    pub settlement_handoff_revision: u64,
+    /// Exact settlement handoff public-policy digest.
+    pub settlement_handoff_policy_digest: [u8; 32],
+    /// Identity-pinned publication handoff handle.
+    pub publication_handoff_handle: String,
+    /// Exact non-zero publication handoff revision.
+    pub publication_handoff_revision: u64,
+    /// Exact publication handoff public-policy digest.
+    pub publication_handoff_policy_digest: [u8; 32],
+    /// Identity-pinned durable panel-notification handle.
+    pub panel_notification_handle: String,
+    /// Exact non-zero panel-notification adapter revision.
+    pub panel_notification_revision: u64,
+    /// Exact panel-notification adapter public-policy digest.
+    pub panel_notification_policy_digest: [u8; 32],
     /// Maximum appeals and activated cases in one complete finalized snapshot.
     pub max_cases: usize,
     /// Maximum finalized typed events retained in one snapshot.
@@ -9209,16 +9343,40 @@ pub struct SorafsHedgingBillingRuntime {
     pub service_policy_digest: [u8; 32],
     /// Identity-pinned finalized billing query provider handle.
     pub finalized_query_handle: String,
+    /// Exact non-zero finalized-query provider revision.
+    pub finalized_query_revision: u64,
+    /// Exact non-zero digest of the finalized-query provider's public policy.
+    pub finalized_query_policy_digest: [u8; 32],
     /// Identity-pinned consensus journal verifier handle.
     pub journal_verifier_handle: String,
+    /// Exact non-zero journal-verifier provider revision.
+    pub journal_verifier_revision: u64,
+    /// Exact non-zero digest of the journal-verifier provider's public policy.
+    pub journal_verifier_policy_digest: [u8; 32],
     /// Identity-pinned statement HSM/KMS provider handle.
     pub statement_signer_handle: String,
+    /// Exact non-zero statement-signer provider revision.
+    pub statement_signer_revision: u64,
+    /// Exact non-zero digest of the statement-signer provider's public policy.
+    pub statement_signer_policy_digest: [u8; 32],
     /// Identity-pinned immutable statement publisher handle.
     pub statement_publisher_handle: String,
+    /// Exact non-zero statement-publisher provider revision.
+    pub statement_publisher_revision: u64,
+    /// Exact non-zero digest of the statement-publisher provider's public policy.
+    pub statement_publisher_policy_digest: [u8; 32],
     /// Identity-pinned acknowledgement authority handle.
     pub acknowledgement_authority_handle: String,
+    /// Exact non-zero acknowledgement-authority provider revision.
+    pub acknowledgement_authority_revision: u64,
+    /// Exact non-zero digest of the acknowledgement authority's public policy.
+    pub acknowledgement_authority_policy_digest: [u8; 32],
     /// Identity-pinned sealed monotonic epoch-witness store handle.
     pub epoch_witness_store_handle: String,
+    /// Exact non-zero epoch-witness-store provider revision.
+    pub epoch_witness_store_revision: u64,
+    /// Exact non-zero digest of the epoch-witness store's public policy.
+    pub epoch_witness_store_policy_digest: [u8; 32],
     /// Finalized reconciliation and delivery cadence.
     pub poll_interval: Duration,
     /// Maximum finalized journal pages consumed in one worker tick.
@@ -9267,6 +9425,12 @@ pub struct SorafsProviderIngestRuntime {
     pub authenticated_source_fetch_handle: String,
     /// Identity-pinned completion HSM/KMS signer-resolver handle.
     pub completion_signer_resolver_handle: String,
+    /// Identity-pinned sealed monotonic checkpoint-store handle.
+    pub checkpoint_store_handle: String,
+    /// Exact non-zero checkpoint-store adapter and public-policy revision.
+    pub checkpoint_store_revision: u64,
+    /// Exact non-zero digest of the checkpoint store's public policy.
+    pub checkpoint_store_policy_digest: [u8; 32],
     /// Delay between finalized assignment scans, in milliseconds.
     pub scan_interval_ms: u64,
     /// Maximum finalized assignment rows requested in one page.
@@ -9362,6 +9526,17 @@ pub struct SorafsPrivacyAggregateMetric {
     pub unit: String,
 }
 
+/// Exact non-secret identity and public policy of one transparency runtime provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsTransparencyRuntimeProviderBinding {
+    /// Stable opaque deployment-owned provider handle.
+    pub handle: String,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
+}
+
 /// Local SFM-4c privacy aggregate publication scheduler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsPrivacyAggregateSchedule {
@@ -9393,6 +9568,10 @@ pub struct SorafsPrivacyAggregateSchedule {
     pub suppression_threshold: u64,
     /// Reviewed governed privacy-policy digest.
     pub policy_digest: Option<[u8; 32]>,
+    /// Exact production threshold-PRF provider binding for DP modes.
+    pub cycle_prf_provider: Option<SorafsTransparencyRuntimeProviderBinding>,
+    /// Exact production finalized release-anchor binding.
+    pub release_anchor_provider: Option<SorafsTransparencyRuntimeProviderBinding>,
     /// Reduced composed-epsilon budget numerator.
     pub composition_budget_epsilon_numerator: u64,
     /// Reduced composed-epsilon budget denominator.
@@ -9427,6 +9606,7 @@ impl Default for SorafsStorage {
             moderation_screening_enabled: defaults::sorafs::storage::MODERATION_SCREENING_ENABLED,
             moderation_screening_authority_bundle_path: None,
             moderation_screening_authority_bundle_digest: None,
+            moderation_quarantine_key_provider: None,
             pop_credentials: None,
             moderation_orchestrator: None,
             evidence_viewer: None,
@@ -9468,8 +9648,14 @@ impl Default for SorafsGovernanceDagService {
             ipns_name: None,
             ipns_key_name: None,
             ipfs_authenticator_handle: None,
+            ipfs_authenticator_revision: None,
+            ipfs_authenticator_policy_digest: None,
             head_authenticator_handle: None,
+            head_authenticator_revision: None,
+            head_authenticator_policy_digest: None,
             checkpoint_store_handle: None,
+            checkpoint_store_revision: None,
+            checkpoint_store_policy_digest: None,
             publisher_public_key_hex: None,
             poll_interval: Duration::from_secs(service::POLL_INTERVAL_SECS),
             connect_timeout: Duration::from_millis(service::CONNECT_TIMEOUT_MS),
@@ -9583,6 +9769,8 @@ impl Default for SorafsPrivacyAggregateSchedule {
             suppression_threshold:
                 defaults::sorafs::storage::privacy_aggregates::SUPPRESSION_THRESHOLD,
             policy_digest: None,
+            cycle_prf_provider: None,
+            release_anchor_provider: None,
             composition_budget_epsilon_numerator:
                 defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_NUMERATOR,
             composition_budget_epsilon_denominator:
@@ -10101,11 +10289,24 @@ impl Default for SorafsGatewayAcmeChallenges {
     }
 }
 
+/// Exact non-secret identity expected from one injected gateway runtime provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsGatewayRuntimeProviderBinding {
+    /// Stable production provider handle.
+    pub provider_handle: String,
+    /// Non-zero deployed adapter and public-policy revision.
+    pub revision: u64,
+    /// Non-zero digest of the exact public provider policy.
+    pub policy_digest: [u8; 32],
+}
+
 /// ACME automation settings for TLS/ECH management.
 #[derive(Debug, Clone)]
 pub struct SorafsGatewayAcme {
     /// Enable ACME automation.
     pub enabled: bool,
+    /// Exact runtime ACME provider identity required when automation is enabled.
+    pub provider: Option<SorafsGatewayRuntimeProviderBinding>,
     /// Account email registered with the ACME provider.
     pub account_email: Option<String>,
     /// ACME directory URL.
@@ -10130,6 +10331,7 @@ impl Default for SorafsGatewayAcme {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::gateway::acme::ENABLED,
+            provider: None,
             account_email: defaults::sorafs::gateway::acme::account_email(),
             directory_url: defaults::sorafs::gateway::acme::directory_url(),
             hostnames: defaults::sorafs::gateway::acme::hostnames(),
@@ -10179,6 +10381,8 @@ pub struct SorafsGatewayComplianceFeed {
 pub struct SorafsGatewayCompliance {
     /// Absolute durable checkpoint file path.
     pub checkpoint_path: PathBuf,
+    /// Exact authenticated feed-transport identity required at runtime.
+    pub feed_transport_provider: SorafsGatewayRuntimeProviderBinding,
     /// Non-zero governance policy identity.
     pub policy_id: [u8; 32],
     /// Canonical region identity for this gateway.
@@ -10952,6 +11156,8 @@ impl Default for Repo {
 /// Kagemusha escrow and execution policy parameters.
 #[derive(Debug, Clone)]
 pub struct Offline {
+    /// Whether this node profile enables the mandatory offline-cash service.
+    pub enabled: bool,
     /// Whether Kagemusha cash must be escrow-backed.
     pub escrow_required: bool,
     /// Escrow accounts keyed by Kagemusha asset definition.
@@ -10967,6 +11173,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
+            enabled: true,
             escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
@@ -12434,8 +12641,9 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_require_escrow_even_before_release_configuration() {
+    fn offline_defaults_enable_mandatory_escrow_before_release_configuration() {
         let offline = Offline::default();
+        assert!(offline.enabled);
         assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());

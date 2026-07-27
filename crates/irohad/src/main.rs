@@ -28,6 +28,8 @@ mod soracloud_runtime;
 mod soracloud_runtime;
 /// Supervised committed SoraFS hedging/billing projector and delivery worker.
 pub mod sorafs_hedging_billing_runtime;
+/// Fail-closed config-bound SoraFS PoP runtime construction.
+pub mod sorafs_pop_runtime;
 /// Supervised finalized-ledger SoraFS provider-ingest worker.
 pub mod sorafs_provider_ingest_runtime;
 /// Supervised committed SoraFS reputation projector and publisher.
@@ -1303,8 +1305,9 @@ pub struct Iroha {
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
-    privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
-    privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
+    privacy_cycle_prf_provider:
+        Option<Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>>,
+    privacy_release_anchor: Option<Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>>,
     sorafs_governance_dag_signer: Option<Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>>,
     sorafs_stream_token_signer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>>,
     sorafs_appeal_finance_runtime_signers:
@@ -1326,6 +1329,11 @@ pub struct IrohaRuntimeDeps {
     sorafs_moderation_publication_handoff: Option<
         Arc<dyn iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
     >,
+    sorafs_moderation_panel_notification: Option<
+        Arc<
+            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1,
+        >,
+    >,
     sorafs_evidence_viewer_webauthn:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
     sorafs_evidence_viewer_grants:
@@ -1334,7 +1342,8 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1>>,
     sorafs_evidence_viewer_erasure:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1>>,
-    sorafs_pop_credentials: Option<Arc<iroha_torii::sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
+    sorafs_pop_credential_provider_registry:
+        Option<Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>>,
     sorafs_potr_runtime_signer_roles: Option<Arc<iroha_torii::sorafs::PotrRuntimeSignerRolesV1>>,
     sorafs_gateway_acme_client: Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
     sorafs_gateway_compliance_feed_transport:
@@ -1365,6 +1374,8 @@ pub struct IrohaRuntimeDeps {
     sorafs_provider_ingest_signer_resolver: Option<
         Arc<dyn sorafs_provider_ingest_runtime::ProviderIngestGovernedSignerResolverRuntimeV1>,
     >,
+    sorafs_provider_ingest_checkpoint_runtime:
+        Option<Arc<dyn sorafs_node::ProviderIngestCheckpointRuntimeV1>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1384,7 +1395,7 @@ impl IrohaRuntimeDeps {
     #[must_use]
     pub fn with_privacy_cycle_prf_provider(
         mut self,
-        provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
+        provider: Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>,
     ) -> Self {
         self.privacy_cycle_prf_provider = Some(provider);
         self
@@ -1394,7 +1405,7 @@ impl IrohaRuntimeDeps {
     #[must_use]
     pub fn with_privacy_release_anchor(
         mut self,
-        anchor: Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>,
+        anchor: Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>,
     ) -> Self {
         self.privacy_release_anchor = Some(anchor);
         self
@@ -1525,6 +1536,18 @@ impl IrohaRuntimeDeps {
         self
     }
 
+    /// Attach the durable payload-free juror-notification boundary.
+    #[must_use]
+    pub fn with_sorafs_moderation_panel_notification(
+        mut self,
+        boundary: Arc<
+            dyn iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1,
+        >,
+    ) -> Self {
+        self.sorafs_moderation_panel_notification = Some(boundary);
+        self
+    }
+
     /// Attach the production WebAuthn verifier for evidence-viewer sessions.
     #[must_use]
     pub fn with_sorafs_evidence_viewer_webauthn(
@@ -1567,14 +1590,17 @@ impl IrohaRuntimeDeps {
         self
     }
 
-    /// Attach the complete runtime-only PoP enrollment, issuer, registry, and
-    /// wallet dependency bundle.
+    /// Attach the deployment-owned registry for all runtime-only PoP
+    /// enrollment, issuer, finalized-query, wallet, and authentication
+    /// providers.
     #[must_use]
-    pub fn with_sorafs_pop_credentials(
+    pub fn with_sorafs_pop_credential_provider_registry(
         mut self,
-        runtime: Arc<iroha_torii::sorafs::pop_api::PopCredentialToriiRuntimeV1>,
+        provider_registry: Arc<
+            dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1,
+        >,
     ) -> Self {
-        self.sorafs_pop_credentials = Some(runtime);
+        self.sorafs_pop_credential_provider_registry = Some(provider_registry);
         self
     }
 
@@ -1747,6 +1773,16 @@ impl IrohaRuntimeDeps {
         >,
     ) -> Self {
         self.sorafs_provider_ingest_signer_resolver = Some(resolver);
+        self
+    }
+
+    /// Attach the sealed monotonic provider-ingest checkpoint authority.
+    #[must_use]
+    pub fn with_sorafs_provider_ingest_checkpoint_runtime(
+        mut self,
+        runtime: Arc<dyn sorafs_node::ProviderIngestCheckpointRuntimeV1>,
+    ) -> Self {
+        self.sorafs_provider_ingest_checkpoint_runtime = Some(runtime);
         self
     }
 }
@@ -8120,8 +8156,9 @@ impl Iroha {
     /// handoffs, and all hedging/billing query, verification, HSM,
     /// publication, acknowledgement, and witness adapters must be supplied by
     /// an injecting launcher; enabling the dependent path without one fails
-    /// closed. The state-backed reputation query/queue submitter and Torii
-    /// proxy bridge signer remain separate native node roles.
+    /// closed. The immutable historical finalized reputation query and queue
+    /// submitter are separately injected deployment boundaries. The Torii
+    /// proxy bridge signer remains a separate native node role.
     ///
     /// # Errors
     /// - Reading telemetry configs
@@ -8152,6 +8189,15 @@ impl Iroha {
         .map_err(|error| {
             Report::new(StartError::InitKura).attach(format!(
                 "mandatory offline cash configuration failed: {error}"
+            ))
+        })?;
+        let sorafs_pop_credentials = sorafs_pop_runtime::build(
+            config.torii.sorafs_storage.pop_credentials.as_ref(),
+            runtime_deps.sorafs_pop_credential_provider_registry.clone(),
+        )
+        .map_err(|error| {
+            Report::new(StartError::StartTorii).attach(format!(
+                "failed to initialise config-bound SoraFS PoP runtime: {error}"
             ))
         })?;
 
@@ -8397,36 +8443,40 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
-        let kagemusha_release_catalog = match (
-            config
-                .settlement
-                .offline
-                .kagemusha_release_policy_path
-                .as_deref(),
-            config.settlement.offline.kagemusha_artifact_dir.as_deref(),
-        ) {
-            (None, None) => {
-                return Err(Report::new(StartError::InitKura).attach(
-                    "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
-                ));
+        let kagemusha_release_catalog = if config.settlement.offline.enabled {
+            match (
+                config
+                    .settlement
+                    .offline
+                    .kagemusha_release_policy_path
+                    .as_deref(),
+                config.settlement.offline.kagemusha_artifact_dir.as_deref(),
+            ) {
+                (None, None) => {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
+                    ));
+                }
+                (Some(policy_path), Some(artifact_dir)) => {
+                    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
+                        policy_path,
+                        artifact_dir,
+                        config.settlement.offline.kagemusha_max_decoded_bytes,
+                    )
+                    .map_err(|error| {
+                        Report::new(StartError::InitKura).attach(format!(
+                            "failed to authenticate Kagemusha V4 release catalog: {error}"
+                        ))
+                    })?
+                }
+                _ => {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "Kagemusha V4 release policy and artifact directory must be configured together",
+                    ));
+                }
             }
-            (Some(policy_path), Some(artifact_dir)) => {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
-                    policy_path,
-                    artifact_dir,
-                    config.settlement.offline.kagemusha_max_decoded_bytes,
-                )
-                .map_err(|error| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "failed to authenticate Kagemusha V4 release catalog: {error}"
-                    ))
-                })?
-            }
-            _ => {
-                return Err(Report::new(StartError::InitKura).attach(
-                    "Kagemusha V4 release policy and artifact directory must be configured together",
-                ));
-            }
+        } else {
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
         };
         state.set_kagemusha_release_catalog(kagemusha_release_catalog);
         if !loaded_state_from_snapshot {
@@ -9673,12 +9723,13 @@ impl Iroha {
             runtime_deps.sorafs_moderation_settlement_handoff.clone();
         let sorafs_moderation_publication_handoff =
             runtime_deps.sorafs_moderation_publication_handoff.clone();
+        let sorafs_moderation_panel_notification =
+            runtime_deps.sorafs_moderation_panel_notification.clone();
         let sorafs_evidence_viewer_webauthn = runtime_deps.sorafs_evidence_viewer_webauthn.clone();
         let sorafs_evidence_viewer_grants = runtime_deps.sorafs_evidence_viewer_grants.clone();
         let sorafs_evidence_viewer_receipt_signer =
             runtime_deps.sorafs_evidence_viewer_receipt_signer.clone();
         let sorafs_evidence_viewer_erasure = runtime_deps.sorafs_evidence_viewer_erasure.clone();
-        let sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
         let sorafs_potr_runtime_signer_roles =
             runtime_deps.sorafs_potr_runtime_signer_roles.clone();
         let sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
@@ -9714,6 +9765,31 @@ impl Iroha {
             .clone();
         let sorafs_provider_ingest_signer_resolver =
             runtime_deps.sorafs_provider_ingest_signer_resolver.clone();
+        let sorafs_provider_ingest_checkpoint_runtime = runtime_deps
+            .sorafs_provider_ingest_checkpoint_runtime
+            .clone();
+        match sorafs_provider_ingest_config.as_ref() {
+            Some(_) => {
+                if sorafs_provider_ingest_authenticated_source.is_none()
+                    || sorafs_provider_ingest_signer_resolver.is_none()
+                    || sorafs_provider_ingest_checkpoint_runtime.is_none()
+                {
+                    return Err(Report::new(StartError::StartTorii).attach(
+                        "enabled SoraFS provider-ingest runtime requires injected authenticated source, governed signer resolver, and sealed monotonic checkpoint providers",
+                    ));
+                }
+            }
+            None => {
+                if sorafs_provider_ingest_authenticated_source.is_some()
+                    || sorafs_provider_ingest_signer_resolver.is_some()
+                    || sorafs_provider_ingest_checkpoint_runtime.is_some()
+                {
+                    return Err(Report::new(StartError::StartTorii).attach(
+                        "disabled SoraFS provider-ingest runtime rejects unexpected runtime providers",
+                    ));
+                }
+            }
+        }
         let sorafs_gateway_compliance_feed_transport: Option<
             Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
         > = match runtime_deps
@@ -9778,6 +9854,12 @@ impl Iroha {
         } else {
             sorafs_runtime_deps
         };
+        let sorafs_runtime_deps =
+            if let Some(runtime) = sorafs_provider_ingest_checkpoint_runtime.as_ref() {
+                sorafs_runtime_deps.with_provider_ingest_checkpoint_runtime(Arc::clone(runtime))
+            } else {
+                sorafs_runtime_deps
+            };
         let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
             sorafs_storage_config,
             sorafs_repair_config,
@@ -10073,6 +10155,11 @@ impl Iroha {
         } else {
             runtime_deps
         };
+        let runtime_deps = if let Some(boundary) = sorafs_moderation_panel_notification {
+            runtime_deps.with_sorafs_moderation_panel_notification(boundary)
+        } else {
+            runtime_deps
+        };
         let runtime_deps = if let Some(runtime) = sorafs_appeal_finance_checkpoint_runtime {
             runtime_deps.with_sorafs_appeal_finance_checkpoint_runtime(runtime)
         } else {
@@ -10110,16 +10197,6 @@ impl Iroha {
         };
         let runtime_deps = if let Some(key_wrapper) = moderation_quarantine_key_wrapper {
             runtime_deps.with_sorafs_moderation_quarantine_key_wrapper(key_wrapper)
-        } else {
-            runtime_deps
-        };
-        let runtime_deps = if let Some(provider) = privacy_cycle_prf_provider {
-            runtime_deps.with_sorafs_privacy_cycle_prf_provider(provider)
-        } else {
-            runtime_deps
-        };
-        let runtime_deps = if let Some(anchor) = privacy_release_anchor {
-            runtime_deps.with_sorafs_privacy_release_anchor(anchor)
         } else {
             runtime_deps
         };
@@ -14293,6 +14370,7 @@ mod tests {
         assert!(dependencies.sorafs_moderation_transaction_signer.is_none());
         assert!(dependencies.sorafs_moderation_settlement_handoff.is_none());
         assert!(dependencies.sorafs_moderation_publication_handoff.is_none());
+        assert!(dependencies.sorafs_moderation_panel_notification.is_none());
         assert!(
             dependencies
                 .sorafs_appeal_finance_checkpoint_runtime
@@ -14302,7 +14380,16 @@ mod tests {
         assert!(dependencies.sorafs_evidence_viewer_grants.is_none());
         assert!(dependencies.sorafs_evidence_viewer_receipt_signer.is_none());
         assert!(dependencies.sorafs_evidence_viewer_erasure.is_none());
-        assert!(dependencies.sorafs_pop_credentials.is_none());
+        assert!(
+            dependencies
+                .sorafs_pop_credential_provider_registry
+                .is_none()
+        );
+        assert!(
+            dependencies
+                .sorafs_provider_ingest_checkpoint_runtime
+                .is_none()
+        );
     }
 
     #[test]
@@ -14343,6 +14430,10 @@ mod tests {
                 "with_sorafs_evidence_viewer_webauthn",
             ),
             (
+                "sorafs_moderation_panel_notification",
+                "with_sorafs_moderation_panel_notification",
+            ),
+            (
                 "sorafs_evidence_viewer_grants",
                 "with_sorafs_evidence_viewer_grants",
             ),
@@ -14354,7 +14445,6 @@ mod tests {
                 "sorafs_evidence_viewer_erasure",
                 "with_sorafs_evidence_viewer_erasure",
             ),
-            ("sorafs_pop_credentials", "with_sorafs_pop_credentials"),
         ] {
             let clone_from_external = ["runtime_deps.", field, ".clone()"].concat();
             let forward_to_torii = [".", builder, "("].concat();
@@ -14365,6 +14455,56 @@ mod tests {
             assert!(
                 compact_source.contains(&forward_to_torii),
                 "standard launcher must forward `{field}` through `{builder}`"
+            );
+        }
+        assert!(
+            compact_source.contains("runtime_deps.sorafs_pop_credential_provider_registry.clone()"),
+            "standard launcher must clone the deployment-owned PoP provider registry"
+        );
+        assert!(
+            compact_source.contains("sorafs_pop_runtime::build("),
+            "standard launcher must build the config-bound PoP runtime"
+        );
+        assert!(
+            compact_source.contains(".with_sorafs_pop_credentials("),
+            "standard launcher must forward only the qualified PoP runtime to Torii"
+        );
+    }
+
+    #[test]
+    fn standard_launcher_pop_runtime_uses_only_config_and_the_injected_registry() {
+        let compact_source: String = include_str!("main.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let corridor = compact_source
+            .split_once("letsorafs_pop_credentials=sorafs_pop_runtime::build(")
+            .map(|(_, suffix)| suffix)
+            .expect("standard launcher must build the PoP runtime");
+        let corridor = corridor
+            .split_once("//Logdetailedbacktraces")
+            .map(|(corridor, _)| corridor)
+            .expect("PoP startup corridor must end before daemon subsystem startup");
+        assert!(
+            corridor.starts_with(
+                "config.torii.sorafs_storage.pop_credentials.as_ref(),runtime_deps.sorafs_pop_credential_provider_registry.clone(),)"
+            ),
+            "PoP startup must use only public config and the injected registry"
+        );
+        for forbidden in [
+            "config.common.key_pair",
+            "private_key",
+            "std::env",
+            "env::",
+            "std::fs",
+            "fs::",
+            "SystemTime",
+            "PopCredentialRuntimeSecretsV1",
+            "PopCredentialToriiRuntimeV1::open",
+        ] {
+            assert!(
+                !corridor.contains(forbidden),
+                "standard PoP startup corridor must not contain `{forbidden}`"
             );
         }
     }

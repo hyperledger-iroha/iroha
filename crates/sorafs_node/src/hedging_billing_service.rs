@@ -137,6 +137,8 @@ pub const HEDGING_BILLING_RUNTIME_API_MAX_PAGE_ITEMS_V1: u16 = 100;
 pub const HEDGING_BILLING_MAX_DELIVERY_WORK_ITEMS_V1: u32 = 4_096;
 /// Maximum runtime epoch-witness store handle length.
 pub const HEDGING_BILLING_WITNESS_HANDLE_MAX_BYTES_V1: usize = 256;
+/// Maximum opaque production-provider handle length.
+pub const HEDGING_BILLING_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 /// Maximum canonical bytes accepted for one governed service-policy artifact.
 pub const HEDGING_BILLING_SERVICE_POLICY_MAX_BYTES_V1: usize = 64 * 1024;
 /// Fixed canonical wrapper allowance around one embedded checkpoint witness.
@@ -467,6 +469,212 @@ pub struct HedgingBillingQueryPositionV1 {
     pub journal_commitment: Option<HedgingBillingJournalCommitmentV1>,
 }
 
+/// Public, payload-free qualification for one hedging/billing runtime provider.
+///
+/// `revision` identifies the deployment-owned adapter and public policy
+/// revision. `policy_digest` binds that exact public policy. Production
+/// launchers pin both values before opening durable state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HedgingBillingRuntimeProviderQualificationV1 {
+    revision: u64,
+    policy_digest: [u8; 32],
+}
+
+impl HedgingBillingRuntimeProviderQualificationV1 {
+    /// Construct one provider qualification observation.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return the non-zero deployment adapter/policy revision.
+    #[must_use]
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Return the non-zero digest of the public provider policy.
+    #[must_use]
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest != [0; 32]
+    }
+}
+
+/// Stable, payload-free hedging/billing provider-qualification failures.
+///
+/// Provider implementations retain credentials, key identifiers, customer
+/// material, and vendor diagnostics behind the runtime boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum HedgingBillingRuntimeProviderQualificationErrorV1 {
+    /// The configured opaque provider handle is malformed.
+    #[error("configured hedging/billing runtime provider handle is invalid")]
+    InvalidConfiguredHandle,
+    /// The configured handle is explicitly marked for test or development use.
+    #[error("configured hedging/billing runtime provider handle is test-marked")]
+    TestMarkedConfiguredHandle,
+    /// The injected provider's opaque handle is malformed.
+    #[error("injected hedging/billing runtime provider handle is invalid")]
+    InvalidProviderHandle,
+    /// The injected provider advertises a test- or development-marked handle.
+    #[error("injected hedging/billing runtime provider handle is test-marked")]
+    TestMarkedProviderHandle,
+    /// The configured provider revision or public policy digest is zero.
+    #[error("configured hedging/billing runtime provider qualification is invalid")]
+    InvalidConfiguredQualification,
+    /// The injected provider does not match the configured stable handle.
+    #[error("hedging/billing runtime provider handle does not match configuration")]
+    SubstitutedProvider,
+    /// Qualification could not prove that the provider is current and usable.
+    #[error("hedging/billing runtime provider is unavailable, stale, or unqualified")]
+    UnavailableOrStale,
+    /// The provider returned a zero revision or all-zero public policy digest.
+    #[error("hedging/billing runtime provider returned an invalid qualification")]
+    InvalidQualification,
+    /// The provider does not match the independently governed qualification.
+    #[error("hedging/billing runtime provider qualification does not match configuration")]
+    QualificationMismatch,
+    /// The provider identity or public policy changed after it was pinned.
+    #[error("hedging/billing runtime provider identity or policy changed after qualification")]
+    IdentityOrPolicyChanged,
+}
+
+/// Fixed readiness failures returned by a hedging/billing runtime provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum HedgingBillingRuntimeProviderReadinessErrorV1 {
+    /// The provider or a required credential is temporarily unavailable.
+    #[error("hedging/billing runtime provider unavailable")]
+    Unavailable,
+    /// The provider is revoked, stale, unauthorized, or otherwise ineligible.
+    #[error("hedging/billing runtime provider rejected qualification")]
+    Rejected,
+}
+
+/// Stable identity and readiness exposed by an external production provider.
+///
+/// Implementations own credentials, signing keys, authentication material,
+/// and provider-specific diagnostics. `qualification` must fail when the
+/// provider is unavailable, revoked, stale, test-marked, or otherwise not
+/// production-ready.
+pub trait HedgingBillingRuntimeProviderV1: Send + Sync + fmt::Debug {
+    /// Return the stable opaque deployment handle for this provider.
+    fn handle(&self) -> &str;
+
+    /// Qualify the active adapter and its public policy revision.
+    fn qualification(
+        &self,
+    ) -> Result<
+        HedgingBillingRuntimeProviderQualificationV1,
+        HedgingBillingRuntimeProviderReadinessErrorV1,
+    >;
+}
+
+/// Qualify one provider against an independently configured exact binding.
+///
+/// # Errors
+///
+/// Fails for malformed or test-marked handles, unavailable providers, invalid
+/// observations, substitutions, and revision or policy-digest mismatches.
+pub fn qualify_hedging_billing_runtime_provider_v1<P: HedgingBillingRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: HedgingBillingRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), HedgingBillingRuntimeProviderQualificationErrorV1> {
+    validate_hedging_billing_runtime_provider_handle(expected_handle, true)?;
+    if !expected_qualification.is_valid() {
+        return Err(
+            HedgingBillingRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification,
+        );
+    }
+    validate_hedging_billing_runtime_provider_handle(provider.handle(), false)?;
+    if provider.handle() != expected_handle {
+        return Err(HedgingBillingRuntimeProviderQualificationErrorV1::SubstitutedProvider);
+    }
+    let qualification = provider
+        .qualification()
+        .map_err(|_| HedgingBillingRuntimeProviderQualificationErrorV1::UnavailableOrStale)?;
+    if !qualification.is_valid() {
+        return Err(HedgingBillingRuntimeProviderQualificationErrorV1::InvalidQualification);
+    }
+    if qualification != expected_qualification {
+        return Err(HedgingBillingRuntimeProviderQualificationErrorV1::QualificationMismatch);
+    }
+    if provider.handle() != expected_handle {
+        return Err(HedgingBillingRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    Ok(())
+}
+
+/// Revalidate an already pinned provider immediately around external work.
+///
+/// # Errors
+///
+/// Fails when readiness, identity, revision, or public policy differs from the
+/// exact binding qualified at startup.
+pub fn revalidate_hedging_billing_runtime_provider_v1<
+    P: HedgingBillingRuntimeProviderV1 + ?Sized,
+>(
+    expected_handle: &str,
+    expected_qualification: HedgingBillingRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), HedgingBillingRuntimeProviderQualificationErrorV1> {
+    if provider.handle() != expected_handle {
+        return Err(HedgingBillingRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    let qualification = provider
+        .qualification()
+        .map_err(|_| HedgingBillingRuntimeProviderQualificationErrorV1::UnavailableOrStale)?;
+    if !qualification.is_valid() {
+        return Err(HedgingBillingRuntimeProviderQualificationErrorV1::InvalidQualification);
+    }
+    if provider.handle() != expected_handle || qualification != expected_qualification {
+        return Err(HedgingBillingRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged);
+    }
+    Ok(())
+}
+
+fn validate_hedging_billing_runtime_provider_handle(
+    handle: &str,
+    configured: bool,
+) -> Result<(), HedgingBillingRuntimeProviderQualificationErrorV1> {
+    if handle.is_empty()
+        || handle.len() > HEDGING_BILLING_RUNTIME_PROVIDER_HANDLE_MAX_BYTES_V1
+        || !handle.is_ascii()
+        || handle
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(if configured {
+            HedgingBillingRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle
+        } else {
+            HedgingBillingRuntimeProviderQualificationErrorV1::InvalidProviderHandle
+        });
+    }
+    let lowercase = handle.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
+            )
+        })
+    {
+        return Err(if configured {
+            HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedConfiguredHandle
+        } else {
+            HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
+        });
+    }
+    Ok(())
+}
+
 /// Public runtime identity of one non-secret production adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HedgingBillingRuntimeAdapterIdentityV1 {
@@ -484,7 +692,7 @@ pub struct HedgingBillingRuntimeAdapterIdentityV1 {
 /// compaction archive; the bounded local receipt set no longer contains those
 /// older identities. A locally generated hash or an unauthenticated Torii
 /// response is not a valid implementation.
-pub trait HedgingBillingJournalVerifier: Send + Sync + fmt::Debug {
+pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
     /// Return the current verifier identity.
     ///
     /// # Errors
@@ -545,7 +753,7 @@ pub trait HedgingBillingJournalVerifier: Send + Sync + fmt::Debug {
 }
 
 /// Runtime adapter for the native finalized billing-journal query.
-pub trait HedgingBillingFinalizedQuery: Send + Sync + fmt::Debug {
+pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
     /// Return the current exact-view query identity.
     ///
     /// # Errors
@@ -1183,10 +1391,7 @@ impl HedgingBillingEpochWitnessRecordV1 {
 /// [`HedgingBillingEpochWitnessRecordV1::from_canonical_bytes`], and make
 /// `compare_and_swap_latest` linearizable. Revisions and epochs may never roll
 /// back or fork.
-pub trait HedgingBillingEpochWitnessStore: Send + Sync + fmt::Debug {
-    /// Exact non-secret configured provider handle.
-    fn handle(&self) -> &str;
-
+pub trait HedgingBillingEpochWitnessStore: HedgingBillingRuntimeProviderV1 {
     /// Authenticate sealed-store readiness without reading witness bytes.
     ///
     /// # Errors
@@ -1357,7 +1562,7 @@ pub enum HedgingBillingExternalError {
 }
 
 /// Runtime-only HSM/KMS statement signer.
-pub trait BillingStatementRuntimeSigner: Send + Sync + fmt::Debug {
+pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     /// Return the current public signer identity.
     ///
     /// # Errors
@@ -1611,7 +1816,7 @@ pub struct BillingStatementAuthoritativePublicationV1 {
 }
 
 /// Authenticated immutable statement publication and lookup adapter.
-pub trait BillingStatementPublisher: Send + Sync + fmt::Debug {
+pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
     /// Return the currently active publisher identity.
     ///
     /// # Errors
@@ -1700,7 +1905,7 @@ pub struct BillingStatementAcknowledgementAuthorityIdentityV1 {
 }
 
 /// Authoritative verifier and lookup service for account acknowledgements.
-pub trait BillingStatementAcknowledgementAuthority: Send + Sync + fmt::Debug {
+pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProviderV1 {
     /// Return the current acknowledgement-authority identity.
     ///
     /// # Errors
@@ -1753,6 +1958,311 @@ pub trait BillingStatementAcknowledgementAuthority: Send + Sync + fmt::Debug {
         &self,
         statement_id: [u8; 32],
     ) -> Result<Option<BillingStatementAcknowledgementV1>, HedgingBillingExternalError>;
+}
+
+/// Provider wrapper that pins one production identity and public policy.
+///
+/// The wrapper revalidates the exact handle, revision, and policy digest
+/// immediately before and after every external operation. Read-only results
+/// observed across drift are discarded as unavailable. Results from operations
+/// that may have committed externally are classified as ambiguous so callers
+/// reconcile through their existing immutable lookup protocol.
+pub struct QualifiedHedgingBillingRuntimeProviderV1<P: HedgingBillingRuntimeProviderV1 + ?Sized> {
+    handle: String,
+    qualification: HedgingBillingRuntimeProviderQualificationV1,
+    provider: Arc<P>,
+}
+
+impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> QualifiedHedgingBillingRuntimeProviderV1<P> {
+    /// Qualify and pin one deployment-owned provider before durable state opens.
+    ///
+    /// # Errors
+    ///
+    /// Fails for an invalid, unavailable, stale, substituted, or mismatched
+    /// provider binding.
+    pub fn try_new(
+        expected_handle: &str,
+        expected_qualification: HedgingBillingRuntimeProviderQualificationV1,
+        provider: Arc<P>,
+    ) -> Result<Self, HedgingBillingRuntimeProviderQualificationErrorV1> {
+        qualify_hedging_billing_runtime_provider_v1(
+            expected_handle,
+            expected_qualification,
+            provider.as_ref(),
+        )?;
+        Ok(Self {
+            handle: expected_handle.to_owned(),
+            qualification: expected_qualification,
+            provider,
+        })
+    }
+
+    fn revalidate(&self) -> Result<(), HedgingBillingRuntimeProviderQualificationErrorV1> {
+        revalidate_hedging_billing_runtime_provider_v1(
+            &self.handle,
+            self.qualification,
+            self.provider.as_ref(),
+        )
+    }
+
+    fn read<T>(
+        &self,
+        operation: impl FnOnce(&P) -> Result<T, HedgingBillingExternalError>,
+    ) -> Result<T, HedgingBillingExternalError> {
+        self.revalidate()
+            .map_err(|_| HedgingBillingExternalError::Unavailable)?;
+        let result = operation(self.provider.as_ref());
+        self.revalidate()
+            .map_err(|_| HedgingBillingExternalError::Unavailable)?;
+        result
+    }
+
+    fn write<T>(
+        &self,
+        operation: impl FnOnce(&P) -> Result<T, HedgingBillingExternalError>,
+    ) -> Result<T, HedgingBillingExternalError> {
+        self.revalidate()
+            .map_err(|_| HedgingBillingExternalError::Unavailable)?;
+        let result = operation(self.provider.as_ref());
+        self.revalidate()
+            .map_err(|_| HedgingBillingExternalError::Ambiguous)?;
+        result
+    }
+}
+
+impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> fmt::Debug
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedHedgingBillingRuntimeProviderV1")
+            .field("handle", &self.handle)
+            .field("qualification", &self.qualification)
+            .field("provider", &"[RUNTIME-ONLY]")
+            .finish()
+    }
+}
+
+impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> HedgingBillingRuntimeProviderV1
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn handle(&self) -> &str {
+        &self.handle
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<
+        HedgingBillingRuntimeProviderQualificationV1,
+        HedgingBillingRuntimeProviderReadinessErrorV1,
+    > {
+        self.revalidate().map_err(|error| match error {
+            HedgingBillingRuntimeProviderQualificationErrorV1::UnavailableOrStale => {
+                HedgingBillingRuntimeProviderReadinessErrorV1::Unavailable
+            }
+            _ => HedgingBillingRuntimeProviderReadinessErrorV1::Rejected,
+        })?;
+        Ok(self.qualification)
+    }
+}
+
+impl<P: HedgingBillingFinalizedQuery + ?Sized> HedgingBillingFinalizedQuery
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn identity(
+        &self,
+    ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError> {
+        self.read(HedgingBillingFinalizedQuery::identity)
+    }
+
+    fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+        self.read(HedgingBillingFinalizedQuery::check_readiness)
+    }
+
+    fn supplies_period_closes(&self) -> bool {
+        if self.revalidate().is_err() {
+            return false;
+        }
+        let supplies_period_closes =
+            HedgingBillingFinalizedQuery::supplies_period_closes(self.provider.as_ref());
+        if self.revalidate().is_err() {
+            return false;
+        }
+        supplies_period_closes
+    }
+
+    fn finalized_head(
+        &self,
+    ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError> {
+        self.read(HedgingBillingFinalizedQuery::finalized_head)
+    }
+
+    fn query_finalized_page(
+        &self,
+        position: HedgingBillingQueryPositionV1,
+        max_events: u32,
+    ) -> Result<Option<HedgingBillingFinalizedEventPageV1>, HedgingBillingExternalError> {
+        self.read(|provider| provider.query_finalized_page(position, max_events))
+    }
+
+    fn query_finalized_period_close(
+        &self,
+        period_end_unix: u64,
+        position: HedgingBillingQueryPositionV1,
+    ) -> Result<Option<HedgingBillingFinalizedPeriodCloseV1>, HedgingBillingExternalError> {
+        self.read(|provider| provider.query_finalized_period_close(period_end_unix, position))
+    }
+}
+
+impl<P: HedgingBillingJournalVerifier + ?Sized> HedgingBillingJournalVerifier
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn identity(
+        &self,
+    ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError> {
+        self.read(HedgingBillingJournalVerifier::identity)
+    }
+
+    fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+        self.read(HedgingBillingJournalVerifier::check_readiness)
+    }
+
+    fn verify_page(
+        &self,
+        chain_id: &ChainId,
+        previous: Option<HedgingBillingJournalCommitmentV1>,
+        page: &HedgingBillingFinalizedEventPageV1,
+    ) -> Result<(), HedgingBillingExternalError> {
+        self.read(|provider| provider.verify_page(chain_id, previous, page))
+    }
+
+    fn verify_period_close(
+        &self,
+        chain_id: &ChainId,
+        close: &HedgingBillingFinalizedPeriodCloseV1,
+    ) -> Result<(), HedgingBillingExternalError> {
+        self.read(|provider| provider.verify_period_close(chain_id, close))
+    }
+
+    fn verify_epoch_transition(
+        &self,
+        chain_id: &ChainId,
+        transition: &HedgingBillingEpochTransitionV1,
+    ) -> Result<(), HedgingBillingExternalError> {
+        self.read(|provider| provider.verify_epoch_transition(chain_id, transition))
+    }
+}
+
+impl<P: BillingStatementRuntimeSigner + ?Sized> BillingStatementRuntimeSigner
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn identity(&self) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError> {
+        self.read(BillingStatementRuntimeSigner::identity)
+    }
+
+    fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+        self.read(BillingStatementRuntimeSigner::check_readiness)
+    }
+
+    fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError> {
+        self.read(|provider| provider.sign_digest(digest))
+    }
+}
+
+impl<P: BillingStatementPublisher + ?Sized> BillingStatementPublisher
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn identity(&self) -> Result<BillingStatementPublisherIdentityV1, HedgingBillingExternalError> {
+        self.read(BillingStatementPublisher::identity)
+    }
+
+    fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+        self.read(BillingStatementPublisher::check_readiness)
+    }
+
+    fn publish(
+        &self,
+        idempotency_key: [u8; 32],
+        signed_statement_digest: [u8; 32],
+        statement: &SignedGovernedBillingStatementV1,
+    ) -> Result<BillingStatementPublicationReceiptV1, HedgingBillingExternalError> {
+        self.write(|provider| provider.publish(idempotency_key, signed_statement_digest, statement))
+    }
+
+    fn lookup(
+        &self,
+        statement_id: [u8; 32],
+    ) -> Result<Option<BillingStatementAuthoritativePublicationV1>, HedgingBillingExternalError>
+    {
+        self.read(|provider| provider.lookup(statement_id))
+    }
+}
+
+impl<P: BillingStatementAcknowledgementAuthority + ?Sized> BillingStatementAcknowledgementAuthority
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn identity(
+        &self,
+    ) -> Result<BillingStatementAcknowledgementAuthorityIdentityV1, HedgingBillingExternalError>
+    {
+        self.read(BillingStatementAcknowledgementAuthority::identity)
+    }
+
+    fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+        self.read(BillingStatementAcknowledgementAuthority::check_readiness)
+    }
+
+    fn verify(
+        &self,
+        statement: &SignedGovernedBillingStatementV1,
+        acknowledgement: &BillingStatementAcknowledgementV1,
+    ) -> Result<(), HedgingBillingExternalError> {
+        self.read(|provider| provider.verify(statement, acknowledgement))
+    }
+
+    fn record(
+        &self,
+        statement: &SignedGovernedBillingStatementV1,
+        acknowledgement: &BillingStatementAcknowledgementV1,
+    ) -> Result<BillingStatementAcknowledgementV1, HedgingBillingExternalError> {
+        self.write(|provider| provider.record(statement, acknowledgement))
+    }
+
+    fn lookup(
+        &self,
+        statement_id: [u8; 32],
+    ) -> Result<Option<BillingStatementAcknowledgementV1>, HedgingBillingExternalError> {
+        self.read(|provider| provider.lookup(statement_id))
+    }
+}
+
+impl<P: HedgingBillingEpochWitnessStore + ?Sized> HedgingBillingEpochWitnessStore
+    for QualifiedHedgingBillingRuntimeProviderV1<P>
+{
+    fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+        self.read(HedgingBillingEpochWitnessStore::check_readiness)
+    }
+
+    fn load_latest(
+        &self,
+    ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError> {
+        self.read(HedgingBillingEpochWitnessStore::load_latest)
+    }
+
+    fn load_epoch(
+        &self,
+        epoch_sequence: u64,
+    ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError> {
+        self.read(|provider| provider.load_epoch(epoch_sequence))
+    }
+
+    fn compare_and_swap_latest(
+        &self,
+        expected_revision: Option<[u8; 32]>,
+        next: &HedgingBillingEpochWitnessRecordV1,
+    ) -> Result<(), HedgingBillingExternalError> {
+        self.write(|provider| provider.compare_and_swap_latest(expected_revision, next))
+    }
 }
 
 /// Direction of a generated hedge intent.
@@ -7082,7 +7592,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     };
 
     use ed25519_dalek::{Signer as _, SigningKey};
@@ -7103,6 +7613,8 @@ mod tests {
     const PERIOD_SECS: u64 = 3_600;
     const PERIOD_END: u64 = EPOCH + PERIOD_SECS;
     const FINALIZED_HASH: [u8; 32] = [0xA1; 32];
+    const TEST_PROVIDER_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
+        HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
 
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
@@ -7433,6 +7945,21 @@ mod tests {
         witness_fork_on_epoch_lookup: AtomicBool,
     }
 
+    impl HedgingBillingRuntimeProviderV1 for TestJournalVerifier {
+        fn handle(&self) -> &str {
+            "billing-epoch-witness-test"
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(TEST_PROVIDER_QUALIFICATION)
+        }
+    }
+
     impl HedgingBillingJournalVerifier for TestJournalVerifier {
         fn identity(
             &self,
@@ -7493,10 +8020,6 @@ mod tests {
     }
 
     impl HedgingBillingEpochWitnessStore for TestJournalVerifier {
-        fn handle(&self) -> &str {
-            "billing-epoch-witness-test"
-        }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
@@ -7589,6 +8112,21 @@ mod tests {
         }
     }
 
+    impl HedgingBillingRuntimeProviderV1 for TestSigner {
+        fn handle(&self) -> &str {
+            "billing-statement-hsm-test"
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(TEST_PROVIDER_QUALIFICATION)
+        }
+    }
+
     impl BillingStatementRuntimeSigner for TestSigner {
         fn identity(
             &self,
@@ -7657,6 +8195,21 @@ mod tests {
         }
     }
 
+    impl HedgingBillingRuntimeProviderV1 for TestPublisher {
+        fn handle(&self) -> &str {
+            "billing-publisher-test"
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(TEST_PROVIDER_QUALIFICATION)
+        }
+    }
+
     impl BillingStatementPublisher for TestPublisher {
         fn identity(
             &self,
@@ -7721,6 +8274,21 @@ mod tests {
     #[derive(Debug, Default)]
     struct TestAcknowledgementAuthority {
         records: Mutex<BTreeMap<[u8; 32], BillingStatementAcknowledgementV1>>,
+    }
+
+    impl HedgingBillingRuntimeProviderV1 for TestAcknowledgementAuthority {
+        fn handle(&self) -> &str {
+            "billing-acknowledgement-authority-test"
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(TEST_PROVIDER_QUALIFICATION)
+        }
     }
 
     impl BillingStatementAcknowledgementAuthority for TestAcknowledgementAuthority {
@@ -7808,6 +8376,21 @@ mod tests {
         }
     }
 
+    impl HedgingBillingRuntimeProviderV1 for TestFinalizedQuery {
+        fn handle(&self) -> &str {
+            "billing-finalized-query-test"
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(TEST_PROVIDER_QUALIFICATION)
+        }
+    }
+
     impl HedgingBillingFinalizedQuery for TestFinalizedQuery {
         fn identity(
             &self,
@@ -7862,6 +8445,303 @@ mod tests {
         {
             Ok(None)
         }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[repr(u8)]
+    enum DriftingProviderOperation {
+        None = 0,
+        FinalizedQuery = 1,
+        JournalVerification = 2,
+        StatementSigning = 3,
+        StatementPublication = 4,
+        AcknowledgementRecord = 5,
+        EpochWitnessCas = 6,
+    }
+
+    #[derive(Debug)]
+    struct DriftingRuntimeProvider {
+        handle: String,
+        qualification: Mutex<HedgingBillingRuntimeProviderQualificationV1>,
+        drift_on: AtomicU8,
+        calls: AtomicUsize,
+    }
+
+    impl DriftingRuntimeProvider {
+        fn new(handle: &str, drift_on: DriftingProviderOperation) -> Self {
+            Self {
+                handle: handle.to_owned(),
+                qualification: Mutex::new(TEST_PROVIDER_QUALIFICATION),
+                drift_on: AtomicU8::new(drift_on as u8),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn set_qualification(&self, qualification: HedgingBillingRuntimeProviderQualificationV1) {
+            *self.qualification.lock().expect("qualification state") = qualification;
+        }
+
+        fn drift_after(&self, operation: DriftingProviderOperation) {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            if self
+                .drift_on
+                .compare_exchange(
+                    operation as u8,
+                    DriftingProviderOperation::None as u8,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                self.set_qualification(HedgingBillingRuntimeProviderQualificationV1::new(
+                    2, [0xB2; 32],
+                ));
+            }
+        }
+    }
+
+    impl HedgingBillingRuntimeProviderV1 for DriftingRuntimeProvider {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            HedgingBillingRuntimeProviderQualificationV1,
+            HedgingBillingRuntimeProviderReadinessErrorV1,
+        > {
+            Ok(*self.qualification.lock().expect("qualification state"))
+        }
+    }
+
+    impl HedgingBillingFinalizedQuery for DriftingRuntimeProvider {
+        fn identity(
+            &self,
+        ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError> {
+            Ok(HedgingBillingRuntimeAdapterIdentityV1 {
+                handle: self.handle.clone(),
+            })
+        }
+
+        fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn supplies_period_closes(&self) -> bool {
+            true
+        }
+
+        fn finalized_head(
+            &self,
+        ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError> {
+            self.drift_after(DriftingProviderOperation::FinalizedQuery);
+            Ok(cursor(10, FINALIZED_HASH, PERIOD_END))
+        }
+
+        fn query_finalized_page(
+            &self,
+            _position: HedgingBillingQueryPositionV1,
+            _max_events: u32,
+        ) -> Result<Option<HedgingBillingFinalizedEventPageV1>, HedgingBillingExternalError>
+        {
+            Ok(None)
+        }
+
+        fn query_finalized_period_close(
+            &self,
+            _period_end_unix: u64,
+            _position: HedgingBillingQueryPositionV1,
+        ) -> Result<Option<HedgingBillingFinalizedPeriodCloseV1>, HedgingBillingExternalError>
+        {
+            Ok(None)
+        }
+    }
+
+    impl HedgingBillingJournalVerifier for DriftingRuntimeProvider {
+        fn identity(
+            &self,
+        ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError> {
+            Ok(HedgingBillingRuntimeAdapterIdentityV1 {
+                handle: self.handle.clone(),
+            })
+        }
+
+        fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn verify_page(
+            &self,
+            _chain_id: &ChainId,
+            _previous: Option<HedgingBillingJournalCommitmentV1>,
+            _page: &HedgingBillingFinalizedEventPageV1,
+        ) -> Result<(), HedgingBillingExternalError> {
+            self.drift_after(DriftingProviderOperation::JournalVerification);
+            Ok(())
+        }
+
+        fn verify_period_close(
+            &self,
+            _chain_id: &ChainId,
+            _close: &HedgingBillingFinalizedPeriodCloseV1,
+        ) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn verify_epoch_transition(
+            &self,
+            _chain_id: &ChainId,
+            _transition: &HedgingBillingEpochTransitionV1,
+        ) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+    }
+
+    impl BillingStatementRuntimeSigner for DriftingRuntimeProvider {
+        fn identity(
+            &self,
+        ) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError> {
+            Ok(BillingStatementSignerIdentityV1 {
+                provider_handle: self.handle.clone(),
+                signer_id: "billing-hsm-1".to_owned(),
+                public_key: statement_key().verifying_key().to_bytes(),
+            })
+        }
+
+        fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError> {
+            let signature = statement_key().sign(&digest).to_bytes();
+            self.drift_after(DriftingProviderOperation::StatementSigning);
+            Ok(signature)
+        }
+    }
+
+    impl BillingStatementPublisher for DriftingRuntimeProvider {
+        fn identity(
+            &self,
+        ) -> Result<BillingStatementPublisherIdentityV1, HedgingBillingExternalError> {
+            Ok(BillingStatementPublisherIdentityV1 {
+                provider_handle: self.handle.clone(),
+                publisher_id: "billing-publisher-1".to_owned(),
+                route_id: "regional-gateway-1".to_owned(),
+                public_key: publisher_key().verifying_key().to_bytes(),
+            })
+        }
+
+        fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn publish(
+            &self,
+            _idempotency_key: [u8; 32],
+            _signed_statement_digest: [u8; 32],
+            _statement: &SignedGovernedBillingStatementV1,
+        ) -> Result<BillingStatementPublicationReceiptV1, HedgingBillingExternalError> {
+            self.drift_after(DriftingProviderOperation::StatementPublication);
+            Err(HedgingBillingExternalError::Rejected)
+        }
+
+        fn lookup(
+            &self,
+            _statement_id: [u8; 32],
+        ) -> Result<Option<BillingStatementAuthoritativePublicationV1>, HedgingBillingExternalError>
+        {
+            Ok(None)
+        }
+    }
+
+    impl BillingStatementAcknowledgementAuthority for DriftingRuntimeProvider {
+        fn identity(
+            &self,
+        ) -> Result<BillingStatementAcknowledgementAuthorityIdentityV1, HedgingBillingExternalError>
+        {
+            Ok(BillingStatementAcknowledgementAuthorityIdentityV1 {
+                provider_handle: self.handle.clone(),
+            })
+        }
+
+        fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn verify(
+            &self,
+            _statement: &SignedGovernedBillingStatementV1,
+            _acknowledgement: &BillingStatementAcknowledgementV1,
+        ) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn record(
+            &self,
+            _statement: &SignedGovernedBillingStatementV1,
+            acknowledgement: &BillingStatementAcknowledgementV1,
+        ) -> Result<BillingStatementAcknowledgementV1, HedgingBillingExternalError> {
+            self.drift_after(DriftingProviderOperation::AcknowledgementRecord);
+            Ok(acknowledgement.clone())
+        }
+
+        fn lookup(
+            &self,
+            _statement_id: [u8; 32],
+        ) -> Result<Option<BillingStatementAcknowledgementV1>, HedgingBillingExternalError>
+        {
+            Ok(None)
+        }
+    }
+
+    impl HedgingBillingEpochWitnessStore for DriftingRuntimeProvider {
+        fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
+            Ok(())
+        }
+
+        fn load_latest(
+            &self,
+        ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError>
+        {
+            Ok(None)
+        }
+
+        fn load_epoch(
+            &self,
+            _epoch_sequence: u64,
+        ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError>
+        {
+            Ok(None)
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            _expected_revision: Option<[u8; 32]>,
+            _next: &HedgingBillingEpochWitnessRecordV1,
+        ) -> Result<(), HedgingBillingExternalError> {
+            self.drift_after(DriftingProviderOperation::EpochWitnessCas);
+            Ok(())
+        }
+    }
+
+    fn qualified_drifting_provider(
+        operation: DriftingProviderOperation,
+    ) -> (
+        Arc<DriftingRuntimeProvider>,
+        QualifiedHedgingBillingRuntimeProviderV1<DriftingRuntimeProvider>,
+    ) {
+        let provider = Arc::new(DriftingRuntimeProvider::new(
+            "billing.external.primary",
+            operation,
+        ));
+        let qualified = QualifiedHedgingBillingRuntimeProviderV1::try_new(
+            "billing.external.primary",
+            TEST_PROVIDER_QUALIFICATION,
+            Arc::clone(&provider),
+        )
+        .expect("initial provider qualification");
+        (provider, qualified)
     }
 
     fn ready_service(
@@ -7937,6 +8817,167 @@ mod tests {
             )
             .expect("authoritative acknowledgement");
         outcome
+    }
+
+    fn signed_statement_fixture() -> SignedGovernedBillingStatementV1 {
+        let root = tempfile::tempdir().expect("state root");
+        let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
+            ready_service(root.path());
+        let first = page(vec![event(1, "storage:qualification:1", "10")]);
+        let close = period_close(&reference, first.journal_commitment);
+        service
+            .ingest_finalized_page(&first)
+            .expect("committed source page");
+        service
+            .finalize_next_period(&close)
+            .expect("committed close");
+        service
+            .sign_next_statement(&TestSigner::valid())
+            .expect("sign statement")
+            .expect("signed statement")
+    }
+
+    #[test]
+    fn provider_qualification_rejects_unsafe_substituted_and_stale_bindings() {
+        let unsafe_provider =
+            DriftingRuntimeProvider::new("billing.test.primary", DriftingProviderOperation::None);
+        assert_eq!(
+            qualify_hedging_billing_runtime_provider_v1(
+                "billing.external.primary",
+                TEST_PROVIDER_QUALIFICATION,
+                &unsafe_provider,
+            ),
+            Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
+        );
+
+        let provider = DriftingRuntimeProvider::new(
+            "billing.external.primary",
+            DriftingProviderOperation::None,
+        );
+        assert_eq!(
+            qualify_hedging_billing_runtime_provider_v1(
+                "billing.external.secondary",
+                TEST_PROVIDER_QUALIFICATION,
+                &provider,
+            ),
+            Err(HedgingBillingRuntimeProviderQualificationErrorV1::SubstitutedProvider)
+        );
+        provider.set_qualification(HedgingBillingRuntimeProviderQualificationV1::new(
+            2, [0xC2; 32],
+        ));
+        assert_eq!(
+            qualify_hedging_billing_runtime_provider_v1(
+                "billing.external.primary",
+                TEST_PROVIDER_QUALIFICATION,
+                &provider,
+            ),
+            Err(HedgingBillingRuntimeProviderQualificationErrorV1::QualificationMismatch)
+        );
+    }
+
+    #[test]
+    fn provider_drift_before_an_operation_suppresses_the_call() {
+        let (provider, qualified) = qualified_drifting_provider(DriftingProviderOperation::None);
+        provider.set_qualification(HedgingBillingRuntimeProviderQualificationV1::new(
+            2, [0xD2; 32],
+        ));
+
+        assert_eq!(
+            HedgingBillingFinalizedQuery::finalized_head(&qualified),
+            Err(HedgingBillingExternalError::Unavailable)
+        );
+        assert_eq!(provider.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn read_and_signing_drift_discards_provider_results() {
+        let (query, qualified_query) =
+            qualified_drifting_provider(DriftingProviderOperation::FinalizedQuery);
+        assert_eq!(
+            HedgingBillingFinalizedQuery::finalized_head(&qualified_query),
+            Err(HedgingBillingExternalError::Unavailable)
+        );
+        assert_eq!(query.calls.load(Ordering::Relaxed), 1);
+
+        let (verifier, qualified_verifier) =
+            qualified_drifting_provider(DriftingProviderOperation::JournalVerification);
+        assert_eq!(
+            HedgingBillingJournalVerifier::verify_page(
+                &qualified_verifier,
+                &ChainId::from("hedging-billing-test-chain"),
+                None,
+                &page(Vec::new()),
+            ),
+            Err(HedgingBillingExternalError::Unavailable)
+        );
+        assert_eq!(verifier.calls.load(Ordering::Relaxed), 1);
+
+        let (signer, qualified_signer) =
+            qualified_drifting_provider(DriftingProviderOperation::StatementSigning);
+        assert_eq!(
+            BillingStatementRuntimeSigner::sign_digest(&qualified_signer, [0x7A; 32]),
+            Err(HedgingBillingExternalError::Unavailable)
+        );
+        assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn committing_provider_drift_requires_immutable_reconciliation() {
+        let signed = signed_statement_fixture();
+
+        let (publisher, qualified_publisher) =
+            qualified_drifting_provider(DriftingProviderOperation::StatementPublication);
+        assert_eq!(
+            BillingStatementPublisher::publish(
+                &qualified_publisher,
+                signed.governed_statement.statement.statement_id,
+                signed_statement_digest(&signed).expect("signed statement digest"),
+                &signed,
+            ),
+            Err(HedgingBillingExternalError::Ambiguous)
+        );
+        assert_eq!(publisher.calls.load(Ordering::Relaxed), 1);
+
+        let acknowledgement = BillingStatementAcknowledgementV1 {
+            version: BILLING_STATEMENT_ACKNOWLEDGEMENT_VERSION_V1,
+            statement_id: signed.governed_statement.statement.statement_id,
+            account_digest: [0x81; 32],
+            request_binding_digest: [0x82; 32],
+            acknowledged_at_unix: signed.signed_at_unix.saturating_add(1),
+            authentication_proof: vec![0x83],
+            acknowledgement_id: [0x84; 32],
+        };
+        let (authority, qualified_authority) =
+            qualified_drifting_provider(DriftingProviderOperation::AcknowledgementRecord);
+        assert_eq!(
+            BillingStatementAcknowledgementAuthority::record(
+                &qualified_authority,
+                &signed,
+                &acknowledgement,
+            ),
+            Err(HedgingBillingExternalError::Ambiguous)
+        );
+        assert_eq!(authority.calls.load(Ordering::Relaxed), 1);
+
+        let witness = HedgingBillingEpochWitnessRecordV1 {
+            version: HEDGING_BILLING_EPOCH_WITNESS_RECORD_VERSION_V1,
+            epoch_sequence: 1,
+            transition_id: [0x85; 32],
+            checkpoint_digest: [0x86; 32],
+            checkpoint_bytes: vec![0x87],
+            revision: [0x88; 32],
+        };
+        let (store, qualified_store) =
+            qualified_drifting_provider(DriftingProviderOperation::EpochWitnessCas);
+        assert_eq!(
+            HedgingBillingEpochWitnessStore::compare_and_swap_latest(
+                &qualified_store,
+                None,
+                &witness,
+            ),
+            Err(HedgingBillingExternalError::Ambiguous)
+        );
+        assert_eq!(store.calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]

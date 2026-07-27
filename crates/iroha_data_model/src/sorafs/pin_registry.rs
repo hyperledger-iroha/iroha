@@ -4,10 +4,10 @@ use iroha_schema::IntoSchema;
 use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 
+use super::capacity::ProviderId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata};
-use super::capacity::ProviderId;
 
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
@@ -679,6 +679,123 @@ impl ReplicationOrderId {
     }
 }
 
+/// Governance identity of the exact provider-ingest completion signer policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ProviderIngestCompletionSignerPolicyV1 {
+    /// Stable governance identity for this provider-owner signing policy.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub policy_id: [u8; 32],
+    /// Monotonic policy revision beginning at one.
+    pub revision: u64,
+    /// Digest of the preceding tuple's governed leaf policy, absent only at revision one.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub predecessor_digest: Option<[u8; 32]>,
+    /// Digest of the exact governed signer, key, and validity leaf policy.
+    ///
+    /// The canonical chain identity is the complete tuple of policy id, revision,
+    /// predecessor digest, and this leaf-policy digest.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub policy_digest: [u8; 32],
+}
+
+impl ProviderIngestCompletionSignerPolicyV1 {
+    /// Return whether every canonical identity component is non-zero.
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        let mut policy_id_is_nonzero = false;
+        let mut policy_digest_is_nonzero = false;
+        let mut index = 0;
+        while index < 32 {
+            if self.policy_id[index] != 0 {
+                policy_id_is_nonzero = true;
+            }
+            if self.policy_digest[index] != 0 {
+                policy_digest_is_nonzero = true;
+            }
+            index += 1;
+        }
+        let predecessor_is_canonical = match (self.revision, self.predecessor_digest) {
+            (1, None) => true,
+            (2.., Some(digest)) => {
+                let mut nonzero = false;
+                let mut index = 0;
+                while index < 32 {
+                    if digest[index] != 0 {
+                        nonzero = true;
+                    }
+                    index += 1;
+                }
+                nonzero
+            }
+            _ => false,
+        };
+        policy_id_is_nonzero && predecessor_is_canonical && policy_digest_is_nonzero
+    }
+}
+
+/// Chain-authoritative owner and governed signer policy for provider ingest.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ProviderIngestCompletionAuthorityV1 {
+    /// Current registered owner authorized to complete this provider's work.
+    pub provider_owner: AccountId,
+    /// Exact governed completion-signer policy active for this owner.
+    pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
+}
+
+impl ProviderIngestCompletionAuthorityV1 {
+    /// Construct one exact provider-ingest completion authority.
+    #[must_use]
+    pub const fn new(
+        provider_owner: AccountId,
+        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    ) -> Self {
+        Self {
+            provider_owner,
+            signer_policy,
+        }
+    }
+
+    /// Return whether the governed signer policy has a canonical identity.
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        self.signer_policy.is_valid()
+    }
+}
+
+/// Finalized committed-chain anchor carried by a provider completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ProviderIngestFinalizedAnchorV1 {
+    /// One-based committed block height.
+    pub height: u64,
+    /// Exact committed block hash at `height`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+}
+
+impl ProviderIngestFinalizedAnchorV1 {
+    /// Return whether this anchor can identify a committed block.
+    #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        if self.height == 0 {
+            return false;
+        }
+        let mut index = 0;
+        while index < 32 {
+            if self.block_hash[index] != 0 {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+}
+
 /// Lifecycle status for replication orders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -707,7 +824,6 @@ impl ReplicationOrderStatus {
 }
 
 /// Provider-scoped completion recorded for a replication assignment.
-#[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReplicationOrderCompletionRecord {
@@ -717,10 +833,15 @@ pub struct ReplicationOrderCompletionRecord {
     pub completed_by: AccountId,
     /// Epoch (inclusive) when this provider completed ingestion.
     pub completion_epoch: u64,
+    /// Exact order-scoped assignment revision accepted at commit.
+    pub assignment_revision: u64,
+    /// Exact provider owner and governed signer policy accepted at commit.
+    pub completion_authority: ProviderIngestCompletionAuthorityV1,
+    /// Finalized committed-chain prefix on which completion preparation was based.
+    pub finalized_anchor: ProviderIngestFinalizedAnchorV1,
 }
 
 /// Record stored for each issued replication order.
-#[allow(missing_copy_implementations)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct ReplicationOrderRecord {
@@ -739,6 +860,8 @@ pub struct ReplicationOrderRecord {
     /// Canonical Norito payload describing the replication order.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
     pub canonical_order: Vec<u8>,
+    /// Monotonic revision of the canonical provider assignment set.
+    pub assignment_revision: u64,
     /// Provider-scoped completions in authoritative transaction order.
     pub provider_completions: Vec<ReplicationOrderCompletionRecord>,
     /// Current lifecycle status for the order.
@@ -954,6 +1077,60 @@ mod tests {
     }
 
     #[test]
+    fn provider_ingest_completion_context_enforces_canonical_policy_chain_and_anchor() {
+        let revision_one = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0x91; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0x92; 32],
+        };
+        assert!(revision_one.is_valid());
+        assert!(
+            ProviderIngestCompletionAuthorityV1::new(fixture_account(), revision_one).is_valid()
+        );
+
+        let mut revision_one_with_predecessor = revision_one;
+        revision_one_with_predecessor.predecessor_digest = Some([0x90; 32]);
+        assert!(!revision_one_with_predecessor.is_valid());
+        let revision_two = ProviderIngestCompletionSignerPolicyV1 {
+            revision: 2,
+            predecessor_digest: Some(revision_one.policy_digest),
+            policy_digest: [0x93; 32],
+            ..revision_one
+        };
+        assert!(revision_two.is_valid());
+        assert!(
+            !ProviderIngestCompletionSignerPolicyV1 {
+                predecessor_digest: Some([0; 32]),
+                ..revision_two
+            }
+            .is_valid()
+        );
+
+        assert!(
+            ProviderIngestFinalizedAnchorV1 {
+                height: 1,
+                block_hash: [0x94; 32],
+            }
+            .is_valid()
+        );
+        assert!(
+            !ProviderIngestFinalizedAnchorV1 {
+                height: 0,
+                block_hash: [0x94; 32],
+            }
+            .is_valid()
+        );
+        assert!(
+            !ProviderIngestFinalizedAnchorV1 {
+                height: 1,
+                block_hash: [0; 32],
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
     fn replication_order_record_stores_canonical_payload() {
         let payload = vec![0xAA, 0xBB, 0xCC];
         let mut record = ReplicationOrderRecord {
@@ -971,6 +1148,7 @@ mod tests {
             issued_epoch: 10,
             deadline_epoch: 20,
             canonical_order: payload.clone(),
+            assignment_revision: 1,
             provider_completions: Vec::new(),
             status: ReplicationOrderStatus::Pending,
         };
@@ -979,12 +1157,27 @@ mod tests {
         assert_eq!(record.canonical_order, payload);
 
         let provider_id = ProviderId::new([0x66; 32]);
+        let completed_by = record.issued_by.clone();
         record
             .provider_completions
             .push(ReplicationOrderCompletionRecord {
                 provider_id,
-                completed_by: record.issued_by.clone(),
+                completed_by: completed_by.clone(),
                 completion_epoch: 20,
+                assignment_revision: 1,
+                completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    completed_by,
+                    ProviderIngestCompletionSignerPolicyV1 {
+                        policy_id: [0x91; 32],
+                        revision: 1,
+                        predecessor_digest: None,
+                        policy_digest: [0x92; 32],
+                    },
+                ),
+                finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                    height: 20,
+                    block_hash: [0x93; 32],
+                },
             });
         record.status = ReplicationOrderStatus::Completed(20);
         assert_eq!(

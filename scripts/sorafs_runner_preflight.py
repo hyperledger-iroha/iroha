@@ -2338,10 +2338,25 @@ def emit_runner_notice(message: str) -> None:
     print(_runner_notice_message(message), file=sys.stderr)
 
 
-def run_command_plan(plan: Any, out_dir: Path) -> int:
-    """Run a SoraFS collection command plan with structured launch/output errors."""
+def run_command_plan(
+    plan: Any,
+    out_dir: Path,
+    *,
+    prepare_step: Callable[[Any], Sequence[str]] | None = None,
+) -> int:
+    """Run a SoraFS collection command plan with structured launch/output errors.
+
+    ``prepare_step`` is an optional runner-owned callback for creating a
+    validated step's narrowly scoped runtime prerequisites immediately before
+    launch. It must return a sequence of canonical, payload-free diagnostics.
+    """
 
     errors: list[str] = []
+    if prepare_step is not None and not callable(prepare_step):
+        emit_runner_error_lines(
+            ("command-plan step preparation callback must be callable",)
+        )
+        return 1
     shape_errors = validate_command_plan_step_shapes(plan)
     if shape_errors:
         emit_runner_error_lines(shape_errors)
@@ -2379,6 +2394,20 @@ def run_command_plan(plan: Any, out_dir: Path) -> int:
         if command_errors:
             emit_runner_error_lines(command_errors)
             return 1
+        if prepare_step is not None:
+            try:
+                preparation_errors = _runner_error_messages(prepare_step(step))
+            except (OSError, RuntimeError, TypeError, ValueError) as error:
+                emit_runner_error_lines(
+                    (
+                        f"{label} preparation failed: "
+                        f"{error_diagnostic_label(error)}",
+                    )
+                )
+                return 1
+            if preparation_errors:
+                emit_runner_error_lines(preparation_errors)
+                return 1
         emit_runner_notice(f"RUN {label}: {shlex.join(command)}")
         try:
             result = subprocess.run(command, check=False)

@@ -752,6 +752,25 @@ pub mod isi {
         iroha_data_model::offline::offline_escrow_account_id(chain_id, definition_id)
     }
 
+    fn ensure_offline_asset_profile_compatible(
+        asset_definition: &AssetDefinition,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if asset_definition_offline_enabled(asset_definition.metadata())?
+            && !state_transaction.settlement.offline.enabled
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "{}offline_disabled:asset definition metadata `{OFFLINE_ASSET_ENABLED_METADATA_KEY}=true` requires settlement.offline.enabled=true",
+                    iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX,
+                )
+                .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn ensure_offline_escrow_account(
         asset_definition: &AssetDefinition,
         _authority: &AccountId,
@@ -760,6 +779,7 @@ pub mod isi {
         if !asset_definition_offline_enabled(asset_definition.metadata())? {
             return Ok(());
         }
+        ensure_offline_asset_profile_compatible(asset_definition, state_transaction)?;
 
         let definition_id = asset_definition.id();
         let derived = offline_escrow_account_id(state_transaction.chain_id(), definition_id);
@@ -2287,6 +2307,7 @@ pub mod isi {
                 )
                 .into());
             }
+            ensure_offline_asset_profile_compatible(&asset_definition, state_transaction)?;
             let mut stored_definition = asset_definition.clone();
             stored_definition.alias = None;
             state_transaction
@@ -3032,6 +3053,17 @@ pub mod isi {
                 "max_metadata_value_bytes",
                 crate::smartcontracts::limits::DEFAULT_JSON_LIMIT,
             )?;
+
+            if ensure_offline_escrow {
+                let mut proposed_definition = state_transaction
+                    .world
+                    .asset_definition(&asset_definition_id)
+                    .map_err(Error::from)?;
+                proposed_definition
+                    .metadata_mut()
+                    .insert(key.clone(), value.clone());
+                ensure_offline_asset_profile_compatible(&proposed_definition, state_transaction)?;
+            }
 
             state_transaction
                 .world
@@ -9186,6 +9218,59 @@ mod tests {
     }
 
     #[test]
+    fn disabled_profile_rejects_offline_asset_registration_without_state_change() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("offline-disabled", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("asset name"));
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            OFFLINE_ASSET_ENABLED_METADATA_KEY
+                .parse()
+                .expect("metadata key"),
+            Json::new(true),
+        );
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "USD".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata,
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.settlement.offline.enabled = false;
+
+        let error = Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect_err("disabled profile must reject offline-enabled asset registration");
+        assert!(
+            error
+                .to_string()
+                .contains("offline_reason::offline_disabled"),
+            "unexpected disabled-profile rejection: {error}"
+        );
+        assert!(
+            tx.world.asset_definition(&definition_id).is_err(),
+            "rejected registration must not insert the asset definition"
+        );
+        assert!(
+            tx.settlement.offline.escrow_accounts.is_empty(),
+            "rejected registration must not create an escrow binding"
+        );
+    }
+
+    #[test]
     fn register_asset_definition_without_offline_flag_skips_escrow() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -10978,6 +11063,67 @@ mod tests {
         assert!(
             tx.world.account(&escrow_account).is_ok(),
             "escrow account should exist"
+        );
+    }
+
+    #[test]
+    fn disabled_profile_rejects_offline_metadata_without_state_change() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId =
+            DomainId::try_new("offline-metadata-disabled", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "gbp".parse().expect("asset name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "GBP".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register baseline asset definition");
+        tx.settlement.offline.enabled = false;
+
+        let metadata_key: Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
+            .parse()
+            .expect("metadata key");
+        let error = SetKeyValue::asset_definition(
+            definition_id.clone(),
+            metadata_key.clone(),
+            Json::new(true),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("disabled profile must reject offline metadata activation");
+        assert!(
+            error
+                .to_string()
+                .contains("offline_reason::offline_disabled"),
+            "unexpected disabled-profile rejection: {error}"
+        );
+        assert!(
+            tx.world
+                .asset_definition(&definition_id)
+                .expect("baseline definition remains registered")
+                .metadata()
+                .get(&metadata_key)
+                .is_none(),
+            "rejected metadata activation must not change the asset definition"
+        );
+        assert!(
+            tx.settlement.offline.escrow_accounts.is_empty(),
+            "rejected metadata activation must not create an escrow binding"
         );
     }
 

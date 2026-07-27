@@ -218,11 +218,13 @@ through an identity-pinned immutable sink, reconciles ambiguous publications
 and authoritative acknowledgements, and emits payload-free readiness, cursor,
 delivery, dead-letter, and hedge-intent metrics. `iroha_config` contains only
 the public policy path/digest, bounded work cadence, private state directory,
-and opaque adapter handles; missing, test-marked, unready, or identity-drifting
-dependencies fail startup. No worker or timer accepts a hedge-execution
-adapter. Every generated intent sets `automatic_execution=false`, and the
-separate explicitly authorized submission helper rejects adapters that claim
-automatic execution.
+and each adapter's opaque handle, non-zero revision, and public-policy digest;
+missing, test-marked, unready, substituted, stale, or identity-drifting
+dependencies fail before durable state opens and are requalified around every
+external operation. No worker or timer accepts a hedge-execution adapter.
+Every generated intent sets `automatic_execution=false`, and the separate
+explicitly authorized submission helper rejects adapters that claim automatic
+execution.
 
 These source boundaries do not supply live market feeds or concrete production
 implementations of the finalized query, journal verifier, signer, publisher,
@@ -491,14 +493,20 @@ Required before rollout:
   private-key-free external signer/publisher interfaces, and payload-free
   health/alert metrics. Automatic hedge execution is unconditionally disabled
   in the worker.
+- Done locally in source: the Rust client and standard `iroha_cli` expose the
+  seven authenticated billing/reconciliation/exposure/intent routes. They
+  enforce canonical lowercase identifiers, bounded pages and acknowledgement
+  proofs, redact authentication material, use direct identity-bound proof-file
+  reads on Unix and Windows, and create statement outputs without following or
+  replacing existing paths. Focused client/CLI request, validation, filesystem,
+  and exact-byte tests are green.
 - Remaining: run focused Rust verification; deploy the live feed collector and
   genuine finalized-query, journal-verifier, HSM/KMS signer, immutable
   publisher, acknowledgement-authority, sealed-witness, and any manually
-  governed venue adapters; deploy and exercise the shipped authenticated
-  exposure/billing/statement API and add runtime CLI helpers; validate
-  production scrapes and alert routing; release native bridge artifacts;
-  complete governance approval; and capture at least two successful staged
-  billing cycles whose evidence passes the SFM-5 gate.
+  governed venue adapters; deploy and exercise the shipped authenticated API
+  and CLI; validate production scrapes and alert routing; release native bridge
+  artifacts; complete governance approval; and capture at least two successful
+  staged billing cycles whose evidence passes the SFM-5 gate.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
 The shared runner plan guard also rejects non-canonical nested required-kind,

@@ -28,8 +28,8 @@ use iroha_data_model::{
             DvpIsi, SettlementId, SettlementInstructionBox, SettlementLeg, SettlementPlan,
         },
         sorafs::{
-            ApprovePinManifest, CompleteReplicationOrder, IssueReplicationOrder,
-            RegisterPinManifest, RegisterProviderOwner,
+            ApprovePinManifest, IssueReplicationOrder, RegisterPinManifest, RegisterProviderOwner,
+            SetProviderIngestCompletionAuthority,
         },
         space_directory::{
             ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
@@ -51,7 +51,10 @@ use iroha_data_model::{
     prelude::*,
     sorafs::{
         capacity::ProviderId,
-        pin_registry::{ChunkerProfileHandle, ManifestDigest, ReplicationOrderId},
+        pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, ProviderIngestCompletionAuthorityV1,
+            ProviderIngestCompletionSignerPolicyV1, ReplicationOrderId,
+        },
     },
     trigger::{
         Trigger,
@@ -67,8 +70,8 @@ use iroha_executor_data_model::permission::{
     nft::CanRegisterNft,
     role::CanManageRoles,
     sorafs::{
-        CanApproveSorafsPin, CanCompleteSorafsReplicationOrder, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner,
+        CanApproveSorafsPin, CanIssueSorafsReplicationOrder, CanRegisterSorafsPin,
+        CanRegisterSorafsProviderOwner,
     },
     trigger::CanRegisterTrigger,
 };
@@ -663,10 +666,6 @@ pub fn prepare_state(
             CanIssueSorafsReplicationOrder,
             treasury.id.clone(),
         )));
-        genesis_tx.push(InstructionBox::from(Grant::account_permission(
-            CanCompleteSorafsReplicationOrder,
-            treasury.id.clone(),
-        )));
     }
     let initial_float: Quantity = 1_000_000_000_u64.into();
     let initial_user_balance: Quantity = 1_000_000_000_u64.into();
@@ -873,7 +872,6 @@ pub(crate) enum RecipeKind {
     RecordPublicLaneRewards,
     DvpSettlement,
     IssueReplicationOrder,
-    CompleteReplicationOrder,
 }
 
 // Stable runs default to the preallocated hot path only. Contract deployment remains an
@@ -921,6 +919,9 @@ const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
 
 const NEXUS_RECIPES_STABLE: &[RecipeKind] = &[];
 
+// Replication completion is deliberately absent from offline recipe generation:
+// the V1 instruction must bind a fresh committed anchor and the exact
+// chain-authoritative owner, assignment revision, and signer-policy tuple.
 const NEXUS_RECIPES_CHAOS: &[RecipeKind] = &[
     RecipeKind::RegisterPublicLaneValidator,
     RecipeKind::BondPublicLaneStake,
@@ -930,7 +931,6 @@ const NEXUS_RECIPES_CHAOS: &[RecipeKind] = &[
     RecipeKind::RecordPublicLaneRewards,
     RecipeKind::DvpSettlement,
     RecipeKind::IssueReplicationOrder,
-    RecipeKind::CompleteReplicationOrder,
 ];
 
 #[derive(Debug, Clone)]
@@ -1243,7 +1243,6 @@ impl ChaosState {
             RecipeKind::RecordPublicLaneRewards => self.plan_record_public_rewards(rng),
             RecipeKind::DvpSettlement => self.plan_dvp_settlement(rng),
             RecipeKind::IssueReplicationOrder => self.plan_issue_replication_order(rng),
-            RecipeKind::CompleteReplicationOrder => self.plan_complete_replication_order(rng),
         }
     }
 
@@ -2695,6 +2694,15 @@ impl ChaosState {
         };
         let manifest_epoch = self.bump_replication();
         let council_digest = *Hash::new(b"izanami-sorafs-council-digest").as_ref();
+        let completion_authority = ProviderIngestCompletionAuthorityV1::new(
+            self.treasury.id.clone(),
+            ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: *Hash::new(b"izanami-sorafs-completion-policy").as_ref(),
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: *Hash::new(self.treasury.id.to_string().as_bytes()).as_ref(),
+            },
+        );
         let instructions = vec![
             InstructionBox::from(RegisterPinManifest::new(
                 manifest_payload,
@@ -2713,6 +2721,11 @@ impl ChaosState {
                 owner: self.treasury.id.clone(),
             })
             .into_instruction_box(),
+            InstructionBox::from(SetProviderIngestCompletionAuthority::new(
+                provider_id,
+                None,
+                completion_authority,
+            )),
         ];
         self.sorafs_replication_ready = true;
         Ok(TransactionPlan {
@@ -2780,30 +2793,6 @@ impl ChaosState {
                 order_payload: payload,
                 issued_epoch,
                 deadline_epoch,
-            })],
-            signer: self.treasury.clone(),
-            expect_success: true,
-        })
-    }
-
-    fn plan_complete_replication_order(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
-        if self.pending_replication_orders.is_empty() {
-            return self.plan_issue_replication_order(rng);
-        }
-        let order_index = rng.random_range(0..self.pending_replication_orders.len());
-        let order_id = self.pending_replication_orders.swap_remove(order_index);
-        let provider_id = self
-            .sorafs_replication
-            .as_ref()
-            .ok_or_else(|| eyre!("SoraFS replication seed not initialized"))?
-            .provider_id;
-        Ok(TransactionPlan {
-            state_updates: Vec::new(),
-            label: "complete_replication_order",
-            instructions: vec![InstructionBox::from(CompleteReplicationOrder {
-                order_id,
-                provider_id,
-                completion_epoch: self.bump_replication(),
             })],
             signer: self.treasury.clone(),
             expect_success: true,
@@ -3760,6 +3749,17 @@ mod tests {
             .plan_issue_replication_order(&mut rng)
             .expect("replication plan builds");
         assert_eq!(plan.label, "seed_replication_manifest");
+        let authority = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<SetProviderIngestCompletionAuthority>()
+            })
+            .expect("replication seed installs the exact completion authority");
+        assert_eq!(authority.next.provider_owner, state.treasury.id);
+        assert!(authority.next.signer_policy.is_valid());
         assert!(
             state.pending_replication_orders.is_empty(),
             "replication orders should not be tracked before issuance"
@@ -3804,32 +3804,6 @@ mod tests {
         assert_eq!(decoded.chunking_profile, seed.chunker.to_handle());
         let assignment = decoded.assignments.first().expect("assignment");
         assert_eq!(assignment.provider_id, *seed.provider_id.as_bytes());
-    }
-
-    #[test]
-    fn complete_replication_order_clears_pending() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        let PreparedChaos { mut state, .. } =
-            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
-                .expect("state prepared");
-        let mut rng = StdRng::seed_from_u64(91);
-        let seed = state
-            .plan_issue_replication_order(&mut rng)
-            .expect("replication seed builds");
-        assert_eq!(seed.label, "seed_replication_manifest");
-        let plan = state
-            .plan_issue_replication_order(&mut rng)
-            .expect("replication order builds");
-        assert_eq!(plan.label, "issue_replication_order");
-        assert_eq!(state.pending_replication_orders.len(), 1);
-        let complete = state
-            .plan_complete_replication_order(&mut rng)
-            .expect("completion plan builds");
-        assert_eq!(complete.label, "complete_replication_order");
-        assert!(
-            state.pending_replication_orders.is_empty(),
-            "completion should clear the pending order"
-        );
     }
 
     #[test]

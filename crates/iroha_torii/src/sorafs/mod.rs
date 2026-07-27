@@ -79,7 +79,8 @@ pub use potr_signing::{
     PotrAdmissionRegistryResolverV1, PotrAdmissionSnapshotV1,
     PotrFinalizedAdmissionReaderConfigError, PotrFinalizedAdmissionReaderV1,
     PotrFinalizedPolicySnapshotV1, PotrFinalizedPolicySourceV1, PotrGatewaySignerV1,
-    PotrProviderSignerV1, PotrRuntimeSignerConfigError, PotrRuntimeSignerRolesV1,
+    PotrProviderSignerV1, PotrRuntimeProviderBindingV1, PotrRuntimeProviderQualificationV1,
+    PotrRuntimeReaderBindingsV1, PotrRuntimeSignerConfigError, PotrRuntimeSignerRolesV1,
     PotrRuntimeSignersV1, PotrSignerServiceError, PotrStateFinalizedPolicySourceV1,
 };
 pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};

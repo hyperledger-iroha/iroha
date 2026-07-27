@@ -205,7 +205,14 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority,
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority,
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,
@@ -425,10 +432,6 @@ define_instruction_handlers! {
     dispatch_instruction::<verifying_keys::UpdateVerifyingKey>,
     dispatch_instruction::<zk::RegisterZkAsset>,
     dispatch_instruction::<zk::RegisterAssetHiddenZkPool>,
-    dispatch_instruction::<zk::RegisterZkAceIdentityCommitment>,
-    dispatch_instruction::<zk::RotateZkAceIdentityCommitment>,
-    dispatch_instruction::<zk::RevokeZkAceIdentityCommitment>,
-    dispatch_instruction::<zk::SubmitZkAceAuthorizedTransfer>,
     dispatch_instruction::<zk::ScheduleConfidentialPolicyTransition>,
     dispatch_instruction::<zk::CancelConfidentialPolicyTransition>,
     dispatch_instruction::<zk::Shield>,
@@ -478,10 +481,21 @@ define_instruction_handlers! {
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
     >,
     dispatch_instruction::<
+        iroha_data_model::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1
+    >,
+    dispatch_instruction::<
         iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1
     >,
     dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
 }
 
 pub(crate) fn execute_borrowed_instruction(

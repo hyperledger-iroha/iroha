@@ -319,24 +319,6 @@ impl FilesystemGovernancePublisher {
         })
     }
 
-    /// Enable signed runtime Governance DAG block/head assembly through an
-    /// injected runtime-only signer.
-    pub(crate) fn with_runtime_dag_signer_provider(
-        mut self,
-        expected_handle: impl Into<String>,
-        expected_publisher_peer_id: impl Into<Vec<u8>>,
-        expected_public_key: [u8; 32],
-        signer: Arc<dyn GovernanceDagRuntimeSigner>,
-    ) -> Result<Self, GovernancePublishError> {
-        self.runtime_dag_signer = Some(GovernanceRuntimeDagSigner::try_new(
-            expected_handle.into(),
-            expected_publisher_peer_id.into(),
-            expected_public_key,
-            signer,
-        )?);
-        Ok(self)
-    }
-
     /// Attach an already-qualified signer without resetting its pinned policy.
     pub(crate) fn with_qualified_runtime_dag_signer_provider(
         mut self,
@@ -5218,14 +5200,16 @@ mod tests {
             0x31,
         ));
         let public_key = signer.public_key();
+        let signer = GovernanceRuntimeDagSigner::try_new(
+            "pkcs11:governance-dag:primary".to_owned(),
+            peer_id,
+            public_key,
+            signer,
+        )
+        .expect("qualify runtime DAG signer");
         FilesystemGovernancePublisher::try_new(root.to_path_buf())
             .expect("publisher")
-            .with_runtime_dag_signer_provider(
-                "pkcs11:governance-dag:primary",
-                peer_id,
-                public_key,
-                signer,
-            )
+            .with_qualified_runtime_dag_signer_provider(signer)
             .expect("runtime DAG signer")
     }
 

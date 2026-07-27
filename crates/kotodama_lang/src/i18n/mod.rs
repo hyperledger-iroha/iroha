@@ -148,16 +148,20 @@ fn render_template(
     language: Language,
 ) -> Option<String> {
     let mut result = template.to_string();
-    let mut replaced = false;
+    let mut template_remainder = template.to_string();
     for (key, value) in replacements {
         let marker = format!("{{{key}}}");
-        if result.contains(&marker) {
-            let replacement = wrap_placeholder(language, value);
-            result = result.replace(&marker, replacement.as_ref());
-            replaced = true;
+        if !template_remainder.contains(&marker) {
+            return None;
         }
+        let replacement = wrap_placeholder(language, value);
+        result = result.replace(&marker, replacement.as_ref());
+        template_remainder = template_remainder.replace(&marker, "");
     }
-    if replaced && !result.contains('{') {
+    if !replacements.is_empty()
+        && !template_remainder.contains('{')
+        && !template_remainder.contains('}')
+    {
         Some(result)
     } else {
         None
@@ -249,5 +253,44 @@ pub fn translate(lang: Language, msg: Message) -> String {
         Message::LintOk => msgs.lint_ok.to_string(),
         Message::LintUsage => msgs.lint_usage.to_string(),
         Message::LintUsageHelp => msgs.lint_usage_help.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_error_templates_preserve_braces_in_replacement_values() {
+        let rendered = translate(
+            Language::English,
+            Message::SemanticError(r#"invalid JSON literal `{"owner":1}`"#),
+        );
+
+        assert_eq!(
+            rendered,
+            r#"semantic error: invalid JSON literal `{"owner":1}`"#
+        );
+        assert!(!rendered.contains("{error}"));
+    }
+
+    #[test]
+    fn template_rendering_rejects_missing_or_unknown_markers() {
+        assert!(
+            render_template(
+                "semantic error",
+                &[("error", "invalid JSON")],
+                Language::English,
+            )
+            .is_none()
+        );
+        assert!(
+            render_template(
+                "semantic error: {error} {unknown}",
+                &[("error", "invalid JSON")],
+                Language::English,
+            )
+            .is_none()
+        );
     }
 }

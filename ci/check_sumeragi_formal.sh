@@ -44,6 +44,7 @@ bash scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh
 bash scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh
 bash scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh
 bash scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh
+bash scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh
 bash scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh
 bash scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh
 bash scripts/formal/run_sumeragi_v2_certified_response_source_lineage_mutation.sh
@@ -56,6 +57,7 @@ bash scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh
 bash scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh
 bash scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh
 bash scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh
+bash scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
 bash scripts/formal/run_sumeragi_v2_tlc.sh ci
 bash scripts/formal/check_sumeragi_v2_replay_trace.sh
 bash scripts/verify_sumeragi_v2.sh

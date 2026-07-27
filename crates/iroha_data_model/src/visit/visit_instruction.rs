@@ -55,6 +55,13 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
 }
 
 fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    visit_core_setup_instruction(visitor, isi)
+        || visit_core_box_instruction(visitor, isi)
+        || visit_privacy_instruction(visitor, isi)
+        || visit_integrated_instruction(visitor, isi)
+}
+
+fn visit_core_setup_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<SetParameter>() {
         visitor.visit_set_parameter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExecuteTrigger>() {
@@ -109,7 +116,14 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         .downcast_ref::<crate::isi::offline::AuditOfflineNote>()
     {
         visitor.visit_audit_offline_note(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_core_box_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
         visitor.visit_burn(v);
@@ -133,11 +147,28 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_upgrade(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<CustomInstruction>() {
         visitor.visit_custom_instruction(v);
-    } else if let Some(v) = isi
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_privacy_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    if let Some(v) = isi
         .as_any()
         .downcast_ref::<crate::isi::privacy::RegisterPrivacyProtocolActivationV1>()
     {
         visitor.visit_register_privacy_protocol_activation_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1>()
+    {
+        visitor.visit_schedule_privacy_consensus_policy_tightening_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1>()
+    {
+        visitor.visit_schedule_privacy_protocol_limits_tightening_v1(v);
     } else if let Some(v) = isi
         .as_any()
         .downcast_ref::<crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1>()
@@ -155,6 +186,26 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_bootstrap_privacy_pgc_accounts_v1(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1>()
+    {
+        visitor.visit_bootstrap_privacy_zk_ams_registry_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyZkAcePolicyV1>()
+    {
+        visitor.visit_register_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RotatePrivacyZkAcePolicyV1>()
+    {
+        visitor.visit_rotate_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RevokePrivacyZkAcePolicyV1>()
+    {
+        visitor.visit_revoke_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<crate::isi::privacy::SubmitPrivacyProofV1>()
     {
         visitor.visit_submit_privacy_proof_v1(v);
@@ -166,7 +217,14 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_publish_poseidon_params(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<SetPoseidonParamsLifecycle>() {
         visitor.visit_set_poseidon_params_lifecycle(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<ClaimTwitterFollowReward>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_integrated_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<ClaimTwitterFollowReward>() {
         visitor.visit_claim_twitter_follow_reward(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<SendToTwitter>() {
         visitor.visit_send_to_twitter(v);
@@ -593,12 +651,30 @@ macro_rules! instruction_visitors {
             visit_register_privacy_protocol_activation_v1(
                 &$crate::isi::privacy::RegisterPrivacyProtocolActivationV1
             ),
+            visit_schedule_privacy_consensus_policy_tightening_v1(
+                &$crate::isi::privacy::SchedulePrivacyConsensusPolicyTighteningV1
+            ),
+            visit_schedule_privacy_protocol_limits_tightening_v1(
+                &$crate::isi::privacy::SchedulePrivacyProtocolLimitsTighteningV1
+            ),
             visit_transition_privacy_protocol_lifecycle_v1(
                 &$crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1
             ),
             visit_publish_privacy_root_v1(&$crate::isi::privacy::PublishPrivacyRootV1),
             visit_bootstrap_privacy_pgc_accounts_v1(
                 &$crate::isi::privacy::BootstrapPrivacyPgcAccountsV1
+            ),
+            visit_bootstrap_privacy_zk_ams_registry_v1(
+                &$crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1
+            ),
+            visit_register_privacy_zk_ace_policy_v1(
+                &$crate::isi::privacy::RegisterPrivacyZkAcePolicyV1
+            ),
+            visit_rotate_privacy_zk_ace_policy_v1(
+                &$crate::isi::privacy::RotatePrivacyZkAcePolicyV1
+            ),
+            visit_revoke_privacy_zk_ace_policy_v1(
+                &$crate::isi::privacy::RevokePrivacyZkAcePolicyV1
             ),
             visit_submit_privacy_proof_v1(&$crate::isi::privacy::SubmitPrivacyProofV1),
             visit_publish_pedersen_params(&PublishPedersenParams),

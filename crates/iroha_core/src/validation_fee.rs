@@ -4,6 +4,11 @@ use core::fmt;
 
 use hex;
 use iroha_crypto::{Hash, HashOf, blake2::Blake2b512};
+#[cfg(test)]
+use iroha_data_model::validation_fee::{
+    VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
+    ValidationFeePlainElectorateRulesV1,
+};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -1714,6 +1719,7 @@ fn validate_registry_entry_governance(
     let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
         policy: entry.policy.clone(),
         payout_lifecycle_proposal_id: lifecycle_id,
+        plain_electorate_rules: entry.plain_electorate_rules.clone(),
     });
     validate_parliament_authorization(
         &entry.parliament_authorization,
@@ -1730,6 +1736,7 @@ fn validate_registry_entry_governance(
             let lifecycle_kind =
                 ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
                     payout_binding: binding.clone(),
+                    plain_electorate_rules: reference.plain_electorate_rules.clone(),
                 });
             validate_parliament_authorization(
                 &reference.parliament_authorization,
@@ -3297,7 +3304,7 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::staking::SlashPublicLaneValidator,
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
         iroha_data_model::isi::staking::ClaimPublicLaneRewards,
-        iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer,
+        iroha_data_model::isi::privacy::SubmitPrivacyProofV1,
         iroha_data_model::isi::zk::RegisterZkAsset,
         iroha_data_model::isi::zk::RegisterAssetHiddenZkPool,
         iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition,
@@ -3330,13 +3337,17 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
         iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
-        // Privacy governance and the complete PGC bootstrap mutate only typed
-        // protocol registries, root history, and encrypted-account state.
-        // They cannot move, mint, burn, lock, or delete transparent assets.
+        // Privacy governance and bootstrap instructions affect only typed
+        // privacy state and rollback-safe privacy budgets. Proof admission is
+        // classified above because ZK-ACE can authorize a transparent transfer.
         iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1,
         iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
         iroha_data_model::isi::privacy::PublishPrivacyRootV1,
         iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1,
+        iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1,
+        iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1,
+        iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
+        iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
         SetKeyValueBox,
         RemoveKeyValueBox,
         iroha_data_model::isi::SetAssetKeyValue,
@@ -3860,6 +3871,25 @@ mod tests {
         }
     }
 
+    fn test_plain_electorate_rules() -> ValidationFeePlainElectorateRulesV1 {
+        ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
+                .parse()
+                .expect("voting asset id"),
+            ballot_amount: 150_u64.into(),
+            ballot_duration_blocks: 3_600,
+            citizenship_amount: 10_000_u64.into(),
+            max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
+            conviction_step_blocks: 100,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            eligibility_rule:
+                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        }
+    }
+
     fn policy_registry(policies: &[ValidationFeePolicyV1]) -> ValidationFeePolicyRegistryV1 {
         let registered_policies = policies
             .iter()
@@ -3868,6 +3898,7 @@ mod tests {
                     ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
                 };
 
+                let plain_electorate_rules = test_plain_electorate_rules();
                 let payout_lifecycle = policy.treasury_payout_binding.as_ref().map(|binding| {
                     let lifecycle_seal = binding
                         .lifecycle_seal()
@@ -3875,12 +3906,14 @@ mod tests {
                     let lifecycle_kind = ProposalKind::ValidationFeePayoutLifecycle(
                         ValidationFeePayoutLifecycleProposal {
                             payout_binding: binding.clone(),
+                            plain_electorate_rules: plain_electorate_rules.clone(),
                         },
                     );
                     let lifecycle_id = lifecycle_kind.fingerprint();
                     ValidationFeePayoutLifecycleReferenceV1 {
                         lifecycle_seal,
                         parliament_authorization: test_authorization(lifecycle_id),
+                        plain_electorate_rules: plain_electorate_rules.clone(),
                     }
                 });
                 let lifecycle_id = payout_lifecycle
@@ -3889,10 +3922,12 @@ mod tests {
                 let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
                     policy: policy.clone(),
                     payout_lifecycle_proposal_id: lifecycle_id,
+                    plain_electorate_rules: plain_electorate_rules.clone(),
                 });
                 let proposal_id = kind.fingerprint();
                 ValidationFeePolicyRegistryEntryV1::from_enactment(
                     policy.clone(),
+                    plain_electorate_rules,
                     test_authorization(proposal_id),
                     payout_lifecycle,
                 )
@@ -4007,6 +4042,7 @@ mod tests {
                     ProposalKind::ValidationFeePayoutLifecycle(
                         ValidationFeePayoutLifecycleProposal {
                             payout_binding: binding.clone(),
+                            plain_electorate_rules: reference.plain_electorate_rules.clone(),
                         },
                     ),
                     reference.parliament_authorization,
@@ -4020,6 +4056,7 @@ mod tests {
                         .payout_lifecycle
                         .as_ref()
                         .map(|reference| reference.parliament_authorization.proposal_id),
+                    plain_electorate_rules: entry.plain_electorate_rules.clone(),
                 }),
                 entry.parliament_authorization,
                 state_tx,

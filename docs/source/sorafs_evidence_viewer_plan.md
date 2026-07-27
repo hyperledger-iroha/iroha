@@ -32,6 +32,14 @@ no Torii evidence-viewer audit scheduler. The signed receipt checkpoint and the
 exact `(sequence, receipt_digest)` transparency projection derived from it are
 the sole audit authority.
 
+The surrounding finalized moderation workflow now has a supervised,
+payload-free panel-notification path. It durably claims a finalized-event
+identity before calling a separately qualified idempotent provider and records
+the exact receipt or bounded retry/dead-letter result. That source path carries
+no evidence locator, message body, assertion, grant, or bearer secret. A real
+deployment-owned messaging/portal provider and its multi-instance evidence are
+still required.
+
 ## Authoritative Security Model
 
 Every evidence API operation that reads or changes protected state requires
@@ -262,8 +270,9 @@ events to `/v1/evidence/log/{session_id_hex}`.
   signed checkpoint anchor and `(sequence, digest)` cursor, anchors a monotonic
   public head for first-contact freshness, and reconciles publication. A
   Torii-local scheduler is not part of this design.
-- Add durable, retry-safe notification delivery for the surrounding
-  evidence-viewer workflow, including reconciliation and dead-letter handling.
+- Deploy and qualify a real messaging/portal provider for the shipped
+  retry-safe surrounding panel-notification path, then exercise reconciliation,
+  dead-letter handling, outage, restart, and failover with the protected viewer.
 - Replace single-process checkpoint serialization with multi-instance
   compare-and-swap or an equivalent single-writer lease so two Torii instances
   cannot allocate the same receipt sequence or overwrite each other's state.

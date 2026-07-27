@@ -79,7 +79,7 @@ def test_checked_in_inventory_is_valid_signed_and_domain_complete() -> None:
 
     assert MODULE.validate_inventory(MODULE.DEFAULT_INVENTORY) == []
     assert len(MODULE.EXPECTED_PAYLOADS) == 82
-    assert len(MODULE.EXPECTED_OUTCOMES) == 30
+    assert len(MODULE.EXPECTED_OUTCOMES) == 32
     assert {
         row[0] for row in MODULE.EXPECTED_PAYLOADS.values()
     } == MODULE.REQUIRED_DOMAINS - {"reference_sdk"}
@@ -96,7 +96,16 @@ def test_cancel_asset_lock_hard_cut_vectors_are_closed_and_boundary_typed() -> N
         for path, metadata in MODULE.EXPECTED_PAYLOADS.items()
         if path.startswith("appeal_finance/")
     }
-    assert len(rows) == 8
+    assert set(rows) == {
+        "appeal_finance/cancel_asset_lock_v1.json",
+        "appeal_finance/cancel_asset_lock_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+    }
     assert {
         metadata[3]
         for metadata in rows.values()
@@ -109,6 +118,14 @@ def test_cancel_asset_lock_hard_cut_vectors_are_closed_and_boundary_typed() -> N
     }
     assert set(MODULE.EXPECTED_CANCEL_ASSET_LOCK_JSON) == {
         path for path in rows if path.endswith(".json")
+    }
+    assert {
+        path
+        for path, metadata in MODULE.EXPECTED_OUTCOMES.items()
+        if metadata[0] == "appeal_finance"
+    } == {
+        "reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+        "reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
     }
 
 

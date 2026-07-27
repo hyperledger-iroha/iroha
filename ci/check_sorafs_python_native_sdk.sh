@@ -19,8 +19,24 @@ if [[ "${PYTHON_VERSION}" != "3.12" ]]; then
   exit 1
 fi
 
+TRACKED_NATIVE_EXTENSIONS="$(
+  git -C "${ROOT_DIR}" ls-files -- \
+    'python/iroha_python/src/iroha_python/*.so' \
+    'python/iroha_python/src/iroha_python/*.so.*' \
+    'python/iroha_python/src/iroha_python/*.dylib' \
+    'python/iroha_python/src/iroha_python/*.pyd' \
+    'python/iroha_python/src/iroha_python/*.dll'
+)"
+if [[ -n "${TRACKED_NATIVE_EXTENSIONS}" ]]; then
+  echo "error: Python native SDK artifacts must be rebuilt in the ABI-21 lane, not tracked:" >&2
+  printf '%s\n' "${TRACKED_NATIVE_EXTENSIONS}" >&2
+  exit 1
+fi
+
 "${PYTHON_BIN}" -m venv "${SDK_SESSION}/venv"
 VENV_PYTHON="${SDK_SESSION}/venv/bin/python"
+export VIRTUAL_ENV="${SDK_SESSION}/venv"
+export PATH="${VIRTUAL_ENV}/bin:${PATH}"
 "${VENV_PYTHON}" -m pip install \
   --require-hashes \
   --only-binary=:all: \
@@ -57,7 +73,8 @@ JUNIT_REPORT="${SDK_SESSION}/pytest.xml"
 "${VENV_PYTHON}" -m pytest -q -p no:cacheprovider \
   --junitxml "${JUNIT_REPORT}" \
   tests/cancel_asset_lock_v1_test.py \
-  tests/sorafs_reference_validation_test.py
+  tests/sorafs_reference_validation_test.py \
+  tests/sorafs_replication_instruction_test.py
 "${VENV_PYTHON}" -I - "${JUNIT_REPORT}" <<'PY'
 from pathlib import Path
 import sys

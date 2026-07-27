@@ -6,8 +6,8 @@ direction: ltr
 source: docs/source/sorafs_evidence_viewer_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 9e2c7f8907297405bf3caf33bc4e17912a0734ad0218fc5a153fb6d043e92f4c
-source_last_modified: "2026-07-26T21:24:42.645361+00:00"
+source_hash: 2896de7c2385f73834544170c7c3b99663608e853d46c147d2af63fa33f46bf3
+source_last_modified: "2026-07-27T00:15:41.601692+00:00"
 translation_last_reviewed: null
 ---
 

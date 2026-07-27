@@ -2349,6 +2349,57 @@ impl TransparencyRuntimeProviderQualificationV1 {
     }
 }
 
+/// Exact non-secret runtime-provider identity and public-policy pin.
+///
+/// Launchers construct this value only from reviewed `iroha_config` fields.
+/// Credentials, private keys, threshold shares, bearer material, and provider
+/// diagnostics are deliberately absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransparencyRuntimeProviderBindingV1 {
+    handle: String,
+    qualification: TransparencyRuntimeProviderQualificationV1,
+}
+
+impl TransparencyRuntimeProviderBindingV1 {
+    /// Validate one exact configured production-provider binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or test-marked handles, a zero revision, and an
+    /// all-zero public-policy digest.
+    pub fn try_new(
+        handle: impl Into<String>,
+        revision: u64,
+        policy_digest: [u8; 32],
+    ) -> Result<Self, TransparencyRuntimeProviderQualificationErrorV1> {
+        let handle = handle.into();
+        validate_transparency_runtime_provider_handle(&handle, true)?;
+        let qualification =
+            TransparencyRuntimeProviderQualificationV1::new(revision, policy_digest);
+        if !qualification.is_valid() {
+            return Err(
+                TransparencyRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification,
+            );
+        }
+        Ok(Self {
+            handle,
+            qualification,
+        })
+    }
+
+    /// Return the stable opaque deployment-owned handle.
+    #[must_use]
+    pub fn handle(&self) -> &str {
+        &self.handle
+    }
+
+    /// Return the exact configured revision and public-policy digest.
+    #[must_use]
+    pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
+        self.qualification
+    }
+}
+
 /// Stable, payload-free failures while qualifying a transparency provider.
 ///
 /// Provider diagnostics can contain credentials, key-share identifiers, or
@@ -2356,15 +2407,27 @@ impl TransparencyRuntimeProviderQualificationV1 {
 /// provider-returned diagnostic text and expose only these fixed classes.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum TransparencyRuntimeProviderQualificationErrorV1 {
+    /// An enabled service has no exact configured provider binding.
+    #[error("required transparency runtime provider binding is missing")]
+    MissingConfiguredBinding,
     /// No provider was injected for an enabled production service.
     #[error("required transparency runtime provider is missing")]
     MissingProvider,
+    /// A provider binding was configured for a service that does not use it.
+    #[error("transparency runtime provider binding is configured while unused")]
+    UnexpectedConfiguredBinding,
+    /// A provider was injected for a service that does not use it.
+    #[error("transparency runtime provider was injected while unused")]
+    UnexpectedProvider,
     /// The configured opaque provider handle is malformed.
     #[error("configured transparency runtime provider handle is invalid")]
     InvalidConfiguredHandle,
     /// The configured handle is explicitly marked for test or development use.
     #[error("configured transparency runtime provider handle is test-marked")]
     TestMarkedConfiguredHandle,
+    /// The configured provider revision or public-policy digest is zero.
+    #[error("configured transparency runtime provider qualification is invalid")]
+    InvalidConfiguredQualification,
     /// The injected provider's opaque handle is malformed.
     #[error("injected transparency runtime provider handle is invalid")]
     InvalidProviderHandle,
@@ -2380,6 +2443,9 @@ pub enum TransparencyRuntimeProviderQualificationErrorV1 {
     /// The provider returned a zero revision or all-zero public policy digest.
     #[error("transparency runtime provider returned an invalid qualification")]
     InvalidQualification,
+    /// The provider's observed qualification differs from the exact configured pin.
+    #[error("transparency runtime provider qualification does not match configuration")]
+    ConfiguredQualificationMismatch,
     /// The provider handle, revision, or public policy changed after pinning.
     #[error("transparency runtime provider identity or policy changed after qualification")]
     IdentityOrPolicyChanged,
@@ -2507,8 +2573,7 @@ pub trait PrivacyReleaseAnchorV1: Send + Sync {
 /// This wrapper protects finalized-head identity and policy; it does not claim
 /// or emulate leadership.
 pub struct QualifiedPrivacyReleaseAnchorV1 {
-    handle: String,
-    qualification: TransparencyRuntimeProviderQualificationV1,
+    binding: TransparencyRuntimeProviderBindingV1,
     provider: Arc<dyn ProductionPrivacyReleaseAnchorV1>,
 }
 
@@ -2518,35 +2583,42 @@ impl QualifiedPrivacyReleaseAnchorV1 {
     /// # Errors
     ///
     /// Fails closed when the provider is absent, either handle is malformed or
-    /// test-marked, the injected handle differs from `expected_handle`, or the
-    /// provider is unavailable, stale, or returns an invalid qualification.
-    /// Provider diagnostic text is never included in the returned error.
+    /// test-marked, the injected handle or qualification differs from the
+    /// exact configured binding, or the provider is unavailable, stale, or
+    /// returns an invalid qualification. Provider diagnostic text is never
+    /// included in the returned error.
     pub fn try_new(
-        expected_handle: impl Into<String>,
+        binding: TransparencyRuntimeProviderBindingV1,
         provider: Option<Arc<dyn ProductionPrivacyReleaseAnchorV1>>,
     ) -> Result<Self, TransparencyRuntimeProviderQualificationErrorV1> {
-        let handle = expected_handle.into();
-        validate_transparency_runtime_provider_handle(&handle, true)?;
         let provider =
             provider.ok_or(TransparencyRuntimeProviderQualificationErrorV1::MissingProvider)?;
-        let qualification = qualify_transparency_runtime_provider(&handle, provider.as_ref())?;
-        Ok(Self {
-            handle,
-            qualification,
-            provider,
-        })
+        let qualification =
+            qualify_transparency_runtime_provider(binding.handle(), provider.as_ref())?;
+        if qualification != binding.qualification() {
+            return Err(
+                TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch,
+            );
+        }
+        Ok(Self { binding, provider })
     }
 
     /// Return the pinned stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
-        &self.handle
+        self.binding.handle()
     }
 
     /// Return the pinned public provider qualification.
     #[must_use]
     pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
-        self.qualification
+        self.binding.qualification()
+    }
+
+    /// Return the exact configured provider binding retained by this wrapper.
+    #[must_use]
+    pub const fn binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
+        &self.binding
     }
 
     /// Revalidate the pinned provider identity and public policy.
@@ -2557,8 +2629,8 @@ impl QualifiedPrivacyReleaseAnchorV1 {
     /// if its handle, revision, or policy digest changed after startup.
     pub fn revalidate(&self) -> Result<(), TransparencyRuntimeProviderQualificationErrorV1> {
         assert_transparency_runtime_provider_qualification(
-            &self.handle,
-            self.qualification,
+            self.binding.handle(),
+            self.binding.qualification(),
             self.provider.as_ref(),
         )
     }
@@ -2568,8 +2640,7 @@ impl std::fmt::Debug for QualifiedPrivacyReleaseAnchorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("QualifiedPrivacyReleaseAnchorV1")
-            .field("handle", &self.handle)
-            .field("qualification", &self.qualification)
+            .field("binding", &self.binding)
             .field("provider", &"<runtime-only>")
             .finish()
     }
@@ -2677,8 +2748,7 @@ pub trait PrivacyCyclePrfProviderV1: Send + Sync {
 /// the request. This type implements [`PrivacyCyclePrfProviderV1`], so launcher
 /// code can inject only the qualified wrapper into the existing node seam.
 pub struct QualifiedPrivacyCyclePrfProviderV1 {
-    handle: String,
-    qualification: TransparencyRuntimeProviderQualificationV1,
+    binding: TransparencyRuntimeProviderBindingV1,
     provider: Arc<dyn ProductionPrivacyCyclePrfProviderV1>,
 }
 
@@ -2688,35 +2758,42 @@ impl QualifiedPrivacyCyclePrfProviderV1 {
     /// # Errors
     ///
     /// Fails closed when the provider is absent, either handle is malformed or
-    /// test-marked, the injected handle differs from `expected_handle`, or the
-    /// provider is unavailable, stale, or returns an invalid qualification.
-    /// Provider diagnostic text is never included in the returned error.
+    /// test-marked, the injected handle or qualification differs from the
+    /// exact configured binding, or the provider is unavailable, stale, or
+    /// returns an invalid qualification. Provider diagnostic text is never
+    /// included in the returned error.
     pub fn try_new(
-        expected_handle: impl Into<String>,
+        binding: TransparencyRuntimeProviderBindingV1,
         provider: Option<Arc<dyn ProductionPrivacyCyclePrfProviderV1>>,
     ) -> Result<Self, TransparencyRuntimeProviderQualificationErrorV1> {
-        let handle = expected_handle.into();
-        validate_transparency_runtime_provider_handle(&handle, true)?;
         let provider =
             provider.ok_or(TransparencyRuntimeProviderQualificationErrorV1::MissingProvider)?;
-        let qualification = qualify_transparency_runtime_provider(&handle, provider.as_ref())?;
-        Ok(Self {
-            handle,
-            qualification,
-            provider,
-        })
+        let qualification =
+            qualify_transparency_runtime_provider(binding.handle(), provider.as_ref())?;
+        if qualification != binding.qualification() {
+            return Err(
+                TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch,
+            );
+        }
+        Ok(Self { binding, provider })
     }
 
     /// Return the pinned stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
-        &self.handle
+        self.binding.handle()
     }
 
     /// Return the pinned public provider qualification.
     #[must_use]
     pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
-        self.qualification
+        self.binding.qualification()
+    }
+
+    /// Return the exact configured provider binding retained by this wrapper.
+    #[must_use]
+    pub const fn binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
+        &self.binding
     }
 
     /// Revalidate the pinned provider identity and public policy.
@@ -2727,8 +2804,8 @@ impl QualifiedPrivacyCyclePrfProviderV1 {
     /// if its handle, revision, or policy digest changed after startup.
     pub fn revalidate(&self) -> Result<(), TransparencyRuntimeProviderQualificationErrorV1> {
         assert_transparency_runtime_provider_qualification(
-            &self.handle,
-            self.qualification,
+            self.binding.handle(),
+            self.binding.qualification(),
             self.provider.as_ref(),
         )
     }
@@ -2738,8 +2815,7 @@ impl std::fmt::Debug for QualifiedPrivacyCyclePrfProviderV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("QualifiedPrivacyCyclePrfProviderV1")
-            .field("handle", &self.handle)
-            .field("qualification", &self.qualification)
+            .field("binding", &self.binding)
             .field("provider", &"<runtime-only>")
             .finish()
     }
@@ -2782,7 +2858,7 @@ fn validate_transparency_runtime_provider_handle(
         .any(|component| {
             matches!(
                 component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
             )
         })
     {
@@ -4686,6 +4762,16 @@ mod tests {
     const TEST_PRF_PROVIDER_HANDLE: &str = "threshold-prf:transparency:primary";
     const TEST_RELEASE_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
 
+    fn test_prf_provider_binding() -> TransparencyRuntimeProviderBindingV1 {
+        TransparencyRuntimeProviderBindingV1::try_new(TEST_PRF_PROVIDER_HANDLE, 1, [0xC7; 32])
+            .expect("valid threshold-PRF provider binding")
+    }
+
+    fn test_release_anchor_binding() -> TransparencyRuntimeProviderBindingV1 {
+        TransparencyRuntimeProviderBindingV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, 1, [0xD7; 32])
+            .expect("valid release-anchor provider binding")
+    }
+
     struct QualifiedTestPrfProvider {
         handle: &'static str,
         substituted: AtomicBool,
@@ -4837,7 +4923,7 @@ mod tests {
 
     #[test]
     fn qualified_prf_provider_rejects_missing_substituted_test_and_stale_adapters() {
-        let error = QualifiedPrivacyCyclePrfProviderV1::try_new(TEST_PRF_PROVIDER_HANDLE, None)
+        let error = QualifiedPrivacyCyclePrfProviderV1::try_new(test_prf_provider_binding(), None)
             .expect_err("enabled production PRF must reject a missing provider");
         assert_eq!(
             error,
@@ -4848,9 +4934,11 @@ mod tests {
             "threshold-prf:transparency:secondary",
         ));
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = substituted.clone();
-        let error =
-            QualifiedPrivacyCyclePrfProviderV1::try_new(TEST_PRF_PROVIDER_HANDLE, Some(injected))
-                .expect_err("a substituted PRF provider must fail before qualification");
+        let error = QualifiedPrivacyCyclePrfProviderV1::try_new(
+            test_prf_provider_binding(),
+            Some(injected),
+        )
+        .expect_err("a substituted PRF provider must fail before qualification");
         assert_eq!(
             error,
             TransparencyRuntimeProviderQualificationErrorV1::SubstitutedProvider
@@ -4860,9 +4948,11 @@ mod tests {
 
         let test_marked = Arc::new(QualifiedTestPrfProvider::new("test:threshold-prf:primary"));
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = test_marked.clone();
-        let error =
-            QualifiedPrivacyCyclePrfProviderV1::try_new(TEST_PRF_PROVIDER_HANDLE, Some(injected))
-                .expect_err("test-marked PRF provider must fail before qualification");
+        let error = QualifiedPrivacyCyclePrfProviderV1::try_new(
+            test_prf_provider_binding(),
+            Some(injected),
+        )
+        .expect_err("test-marked PRF provider must fail before qualification");
         assert_eq!(
             error,
             TransparencyRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle
@@ -4873,9 +4963,11 @@ mod tests {
         let stale = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         stale.qualification_error.store(true, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = stale.clone();
-        let error =
-            QualifiedPrivacyCyclePrfProviderV1::try_new(TEST_PRF_PROVIDER_HANDLE, Some(injected))
-                .expect_err("stale PRF provider must fail startup qualification");
+        let error = QualifiedPrivacyCyclePrfProviderV1::try_new(
+            test_prf_provider_binding(),
+            Some(injected),
+        )
+        .expect_err("stale PRF provider must fail startup qualification");
         assert_eq!(
             error,
             TransparencyRuntimeProviderQualificationErrorV1::UnavailableOrStale
@@ -4887,23 +4979,41 @@ mod tests {
         let invalid = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         invalid.revision.store(0, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = invalid.clone();
-        let error =
-            QualifiedPrivacyCyclePrfProviderV1::try_new(TEST_PRF_PROVIDER_HANDLE, Some(injected))
-                .expect_err("zero PRF qualification revision must fail closed");
+        let error = QualifiedPrivacyCyclePrfProviderV1::try_new(
+            test_prf_provider_binding(),
+            Some(injected),
+        )
+        .expect_err("zero PRF qualification revision must fail closed");
         assert_eq!(
             error,
             TransparencyRuntimeProviderQualificationErrorV1::InvalidQualification
         );
         assert!(!TransparencyRuntimeProviderQualificationV1::new(1, [0; 32]).is_valid());
+
+        let mismatched = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
+        mismatched.revision.store(2, Ordering::SeqCst);
+        let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = mismatched.clone();
+        let error = QualifiedPrivacyCyclePrfProviderV1::try_new(
+            test_prf_provider_binding(),
+            Some(injected),
+        )
+        .expect_err("a valid but unconfigured PRF revision must fail startup");
+        assert_eq!(
+            error,
+            TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch
+        );
+        assert_eq!(mismatched.derive_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn qualified_prf_provider_revalidates_before_and_after_every_derivation() {
         let provider = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = provider.clone();
-        let qualified =
-            QualifiedPrivacyCyclePrfProviderV1::try_new(TEST_PRF_PROVIDER_HANDLE, Some(injected))
-                .expect("qualify production PRF provider");
+        let qualified = QualifiedPrivacyCyclePrfProviderV1::try_new(
+            test_prf_provider_binding(),
+            Some(injected),
+        )
+        .expect("qualify production PRF provider");
         assert_eq!(qualified.handle(), TEST_PRF_PROVIDER_HANDLE);
         assert_eq!(qualified.qualification().revision(), 1);
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 1);
@@ -4929,9 +5039,11 @@ mod tests {
 
         let provider = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = provider.clone();
-        let qualified =
-            QualifiedPrivacyCyclePrfProviderV1::try_new(TEST_PRF_PROVIDER_HANDLE, Some(injected))
-                .expect("qualify stable PRF provider");
+        let qualified = QualifiedPrivacyCyclePrfProviderV1::try_new(
+            test_prf_provider_binding(),
+            Some(injected),
+        )
+        .expect("qualify stable PRF provider");
         provider.drift_during_derive.store(true, Ordering::SeqCst);
         let error = qualified
             .derive_cycle_output(&request)
@@ -4946,7 +5058,7 @@ mod tests {
 
     #[test]
     fn qualified_release_anchor_rejects_invalid_adapters_before_state_access() {
-        let error = QualifiedPrivacyReleaseAnchorV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, None)
+        let error = QualifiedPrivacyReleaseAnchorV1::try_new(test_release_anchor_binding(), None)
             .expect_err("enabled finalized anchor must reject a missing provider");
         assert_eq!(
             error,
@@ -4958,7 +5070,7 @@ mod tests {
         ));
         let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = test_marked.clone();
         let error =
-            QualifiedPrivacyReleaseAnchorV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, Some(injected))
+            QualifiedPrivacyReleaseAnchorV1::try_new(test_release_anchor_binding(), Some(injected))
                 .expect_err("test-marked finalized anchor must fail before state access");
         assert_eq!(
             error,
@@ -4972,7 +5084,7 @@ mod tests {
         stale.qualification_error.store(true, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = stale.clone();
         let error =
-            QualifiedPrivacyReleaseAnchorV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, Some(injected))
+            QualifiedPrivacyReleaseAnchorV1::try_new(test_release_anchor_binding(), Some(injected))
                 .expect_err("stale finalized anchor must fail startup qualification");
         assert_eq!(
             error,
@@ -4981,6 +5093,18 @@ mod tests {
         assert!(!error.to_string().contains("must-never-escape"));
         assert!(!format!("{error:?}").contains("must-never-escape"));
         assert_eq!(stale.head_calls.load(Ordering::SeqCst), 0);
+
+        let mismatched = Arc::new(QualifiedTestReleaseAnchor::new(TEST_RELEASE_ANCHOR_HANDLE));
+        mismatched.revision.store(2, Ordering::SeqCst);
+        let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = mismatched.clone();
+        let error =
+            QualifiedPrivacyReleaseAnchorV1::try_new(test_release_anchor_binding(), Some(injected))
+                .expect_err("a valid but unconfigured anchor revision must fail startup");
+        assert_eq!(
+            error,
+            TransparencyRuntimeProviderQualificationErrorV1::ConfiguredQualificationMismatch
+        );
+        assert_eq!(mismatched.head_calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -4989,7 +5113,7 @@ mod tests {
         let provider = Arc::new(QualifiedTestReleaseAnchor::new(TEST_RELEASE_ANCHOR_HANDLE));
         let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = provider.clone();
         let qualified =
-            QualifiedPrivacyReleaseAnchorV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, Some(injected))
+            QualifiedPrivacyReleaseAnchorV1::try_new(test_release_anchor_binding(), Some(injected))
                 .expect("qualify finalized anchor");
         let genesis = qualified
             .finalized_head(query_id)
@@ -5022,7 +5146,7 @@ mod tests {
         let provider = Arc::new(QualifiedTestReleaseAnchor::new(TEST_RELEASE_ANCHOR_HANDLE));
         let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = provider.clone();
         let qualified =
-            QualifiedPrivacyReleaseAnchorV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, Some(injected))
+            QualifiedPrivacyReleaseAnchorV1::try_new(test_release_anchor_binding(), Some(injected))
                 .expect("qualify stable finalized anchor");
         provider
             .drift_during_operation
@@ -5041,6 +5165,14 @@ mod tests {
 
     #[test]
     fn transparency_runtime_provider_handles_are_bounded_and_not_test_marked() {
+        assert_eq!(
+            TransparencyRuntimeProviderBindingV1::try_new(TEST_PRF_PROVIDER_HANDLE, 0, [0xC7; 32],),
+            Err(TransparencyRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification)
+        );
+        assert_eq!(
+            TransparencyRuntimeProviderBindingV1::try_new(TEST_PRF_PROVIDER_HANDLE, 1, [0; 32],),
+            Err(TransparencyRuntimeProviderQualificationErrorV1::InvalidConfiguredQualification)
+        );
         assert_eq!(
             validate_transparency_runtime_provider_handle("", true),
             Err(TransparencyRuntimeProviderQualificationErrorV1::InvalidConfiguredHandle)

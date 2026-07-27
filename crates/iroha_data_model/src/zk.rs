@@ -6,19 +6,45 @@ use norito::codec::{Decode, Encode};
 use crate::{
     AssetDefinitionId, ChainId,
     account::{AccountId, address::ChainDiscriminantGuard},
+    privacy::{PrivacyNullifierV1, ZkAcePqAuthorizationStatementV1},
     proof::VerifyingKeyId,
 };
 
 /// Canonical ZK-ACE circuit identifier for post-quantum authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID: &str = "zk_ace_pq_authorization_v0";
 
-/// Production backend label used by ZK-ACE authorization v0.
+/// Canonical verifier-registry label used by ZK-ACE authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND: &str = "stark/fri/sha256-goldilocks";
 
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
 
-const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
+/// Exact verifier-registry labels admitted by native Rust dispatch.
+///
+/// This closed set is intentionally separate from [`BackendTag`]. A registry
+/// label selects one concrete verifier configuration, while [`BackendTag`]
+/// identifies the low-level proof engine encoded in an [`OpenVerifyEnvelope`].
+/// Callers must compare these labels byte-for-byte: aliases, normalization,
+/// case folding, and surrounding whitespace are never accepted.
+pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
+    "halo2/ipa",
+    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-usage-v1",
+    "halo2/pasta/ivm-overlay-bind",
+    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+    "stark/fri",
+    "stark/fri/sha256-goldilocks",
+    "stark/fri/poseidon2-goldilocks",
+    "stark/fri/sha256_goldilocks.v1",
+];
+
+const STARK_FRI_V1_REGISTRY_PROFILES: &[&str] = &[
     "sha256-goldilocks",
     "poseidon2-goldilocks",
     "sha256_goldilocks.v1",
@@ -31,7 +57,7 @@ pub fn is_stark_fri_v1_backend_label(backend: &str) -> bool {
     backend == ZK_BACKEND_STARK_FRI_V1
         || backend
             .strip_prefix("stark/fri/")
-            .is_some_and(|profile| STARK_FRI_V1_PRODUCTION_PROFILES.contains(&profile))
+            .is_some_and(|profile| STARK_FRI_V1_REGISTRY_PROFILES.contains(&profile))
 }
 
 /// Domain tag used when deriving ZK-ACE identity commitments and replay nullifiers.
@@ -99,6 +125,43 @@ impl BackendTag {
             _ => None,
         }
     }
+}
+
+/// Return the low-level engine for one exact verifier-registry label.
+///
+/// This function deliberately has no fallback family matching. Adding a new
+/// verifier configuration therefore requires an explicit consensus-visible
+/// source change and corresponding cross-SDK update.
+#[inline]
+#[must_use]
+pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
+    match label {
+        "halo2/ipa"
+        | "halo2/pasta/kaigi-roster-v1"
+        | "halo2/pasta/kaigi-usage-v1"
+        | "halo2/pasta/ivm-overlay-bind"
+        | "halo2/pasta/ivm-execution-v1"
+        | "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
+        | "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
+        | "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"
+        | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
+        | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
+        | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
+            Some(BackendTag::Halo2IpaPasta)
+        }
+        "stark/fri"
+        | "stark/fri/sha256-goldilocks"
+        | "stark/fri/poseidon2-goldilocks"
+        | "stark/fri/sha256_goldilocks.v1" => Some(BackendTag::Stark),
+        _ => None,
+    }
+}
+
+/// Return whether `label` is one exact native verifier-registry label.
+#[inline]
+#[must_use]
+pub fn is_verifier_backend_registry_label_v1(label: &str) -> bool {
+    verifier_backend_registry_tag_v1(label).is_some()
 }
 
 #[cfg(feature = "json")]
@@ -449,6 +512,14 @@ pub struct ZkAcePublicInputsV1 {
     /// Digest of the visible action fields.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub tx_digest: [u8; 32],
+    /// Digest of the complete typed authorization context.
+    ///
+    /// This separately commits transaction intent, governed artifacts, fee,
+    /// authorization epoch, and trusted genesis. Replay-nullifier derivation
+    /// uses this word; `tx_digest` remains the independently checked visible
+    /// transfer relation.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub authorization_digest: [u8; 32],
     /// Chain id bound into the replay-nullifier domain.
     pub chain_id: ChainId,
     /// Domain separation tag.
@@ -471,6 +542,27 @@ pub struct ZkAcePublicInputsV1 {
     pub amount: u128,
     /// Verifier key that must validate the proof.
     pub verifier_key_id: VerifyingKeyId,
+}
+
+/// Exact public inputs accepted by the native privacy ZK-ACE engine.
+///
+/// The consensus statement is carried without a second, partially overlapping
+/// action schema. `genesis_hash` is supplied by the trusted ledger context and
+/// prevents the same proof from being replayed on a chain that happens to use
+/// the same textual chain identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ZkAcePrivacyPublicInputsV1 {
+    /// Public-input schema version.
+    pub version: u16,
+    /// Exact typed consensus statement being authorized.
+    pub statement: ZkAcePqAuthorizationStatementV1,
+    /// Trusted genesis-block digest.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub genesis_hash: [u8; 32],
 }
 
 /// Private witness used by the ZK-ACE prover.
@@ -510,6 +602,7 @@ impl ZkAcePublicInputsV1 {
     pub fn transparent_transfer(
         identity_commitment: [u8; 32],
         tx_digest: [u8; 32],
+        authorization_digest: [u8; 32],
         chain_id: ChainId,
         replay_nullifier: [u8; 32],
         policy_hash: [u8; 32],
@@ -523,6 +616,7 @@ impl ZkAcePublicInputsV1 {
             version: 1,
             identity_commitment,
             tx_digest,
+            authorization_digest,
             chain_id,
             domain_tag: ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
             action_class: ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
@@ -535,6 +629,86 @@ impl ZkAcePublicInputsV1 {
             verifier_key_id,
         }
     }
+}
+
+impl ZkAcePrivacyPublicInputsV1 {
+    /// Construct the only admitted first-release public-input schema.
+    #[must_use]
+    pub const fn new(statement: ZkAcePqAuthorizationStatementV1, genesis_hash: [u8; 32]) -> Self {
+        Self {
+            version: 1,
+            statement,
+            genesis_hash,
+        }
+    }
+
+    /// Derive the fixed low-level AIR relation inputs.
+    ///
+    /// This is an internal protocol projection, not a second caller-controlled
+    /// wire format. Every field that does not already have a dedicated AIR
+    /// column is committed by `tx_digest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] if the typed statement cannot be encoded
+    /// canonically.
+    pub fn to_air_relation_inputs(&self) -> Result<ZkAcePublicInputsV1, norito::Error> {
+        let statement = &self.statement;
+        let authorization_digest = derive_zk_ace_privacy_authorization_digest(self)?;
+        let transfer_digest = derive_zk_ace_transfer_digest(
+            &statement.source,
+            &statement.destination,
+            &statement.asset_definition_id,
+            statement.amount,
+            &statement.context.chain_id,
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            statement.policy_digest.as_bytes(),
+        );
+        Ok(ZkAcePublicInputsV1::transparent_transfer(
+            statement.identity_commitment.into_bytes(),
+            transfer_digest,
+            authorization_digest,
+            statement.context.chain_id.clone(),
+            statement.replay_nullifier.into_bytes(),
+            statement.policy_digest.into_bytes(),
+            statement.source.clone(),
+            statement.destination.clone(),
+            statement.asset_definition_id.clone(),
+            statement.amount,
+            VerifyingKeyId::new(
+                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+                ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            ),
+        ))
+    }
+}
+
+/// Derive the exact action projection used by the native privacy ZK-ACE AIR.
+///
+/// The replay nullifier is derived from this digest and is therefore zeroed to
+/// avoid a cyclic fixed-point construction. The transaction-intent digest is
+/// already computed from a projection that zeroes this protocol's nullifier,
+/// so it remains committed here together with trusted genesis and every other
+/// typed statement field.
+///
+/// # Errors
+///
+/// Returns [`norito::Error`] if the normalized statement cannot be encoded
+/// canonically.
+pub fn derive_zk_ace_privacy_authorization_digest(
+    public_inputs: &ZkAcePrivacyPublicInputsV1,
+) -> Result<[u8; 32], norito::Error> {
+    let mut normalized = public_inputs.statement.clone();
+    normalized.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
+    let statement_bytes = norito::to_bytes(&normalized)?;
+    Ok(zk_ace_poseidon2_domain_hash(
+        b"zk-ace.privacy-authorization.v1",
+        &[
+            &public_inputs.version.to_be_bytes(),
+            &public_inputs.genesis_hash,
+            &statement_bytes,
+        ],
+    ))
 }
 
 /// Pack arbitrary bytes into canonical 7-byte Goldilocks limbs.
@@ -642,7 +816,7 @@ pub fn derive_zk_ace_identity_commitment(
 /// Derive the ZK-ACE replay nullifier for a specific action.
 pub fn derive_zk_ace_replay_nullifier(
     replay_secret: &[u8; 32],
-    tx_digest: &[u8; 32],
+    authorization_digest: &[u8; 32],
     chain_id: &ChainId,
     action_class: &str,
     domain_tag: &str,
@@ -651,7 +825,7 @@ pub fn derive_zk_ace_replay_nullifier(
         b"zk-ace.replay-nullifier.v1",
         &[
             replay_secret,
-            tx_digest,
+            authorization_digest,
             chain_id.as_str().as_bytes(),
             action_class.as_bytes(),
             domain_tag.as_bytes(),
@@ -724,6 +898,7 @@ pub fn zk_ace_public_inputs_schema_hash_v1() -> [u8; 32] {
             b"version:u32",
             b"identity_commitment:bytes32",
             b"tx_digest:bytes32",
+            b"authorization_digest:bytes32",
             b"chain_id:string",
             b"domain_tag:string",
             b"action_class:string",
@@ -915,6 +1090,65 @@ mod tests {
                 BackendTag::from_canonical_label(label),
                 Some(expected),
                 "{label} must parse exactly",
+            );
+        }
+    }
+
+    #[test]
+    fn verifier_backend_registry_is_closed_exact_and_engine_typed() {
+        assert_eq!(ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1.len(), 15);
+        let mut unique = std::collections::BTreeSet::new();
+        for &label in ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
+            assert!(unique.insert(label), "duplicate registry label: {label}");
+            let tag = verifier_backend_registry_tag_v1(label)
+                .unwrap_or_else(|| panic!("listed registry label must resolve: {label}"));
+            assert!(is_verifier_backend_registry_label_v1(label));
+            if label.starts_with("halo2/") {
+                assert_eq!(tag, BackendTag::Halo2IpaPasta, "{label}");
+            } else {
+                assert!(label.starts_with("stark/fri"), "{label}");
+                assert_eq!(tag, BackendTag::Stark, "{label}");
+            }
+        }
+
+        for rejected in [
+            "",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "HALO2/IPA",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa/ivm-execution-v1",
+            "halo2/pasta/ipa/ivm-execution-v1",
+            "halo2/pasta/ivm_execution_v1",
+            "halo2/pasta/ivm-execution-v1/",
+            "halo2/pasta/ivm-execution-v1\0",
+            "halo2/pasta/ipa-pasta-cycle-v1",
+            "halo2/pasta/tiny-add",
+            "stark",
+            "STARK/FRI",
+            "stark/fri/",
+            "stark/fri/latest",
+            "stark/fri/sha256-goldilocks/extra",
+            "stark/fri/sha256-goldilocks\u{200b}",
+            "groth16",
+            "groth16/bn254",
+            "halo2/bn254",
+            "halo2/kzg",
+            "aztec-plonkish-private-kernel",
+            "zkat",
+            "silent-threshold-anoncred",
+        ] {
+            assert_eq!(
+                verifier_backend_registry_tag_v1(rejected),
+                None,
+                "{rejected:?} must not resolve",
+            );
+            assert!(
+                !is_verifier_backend_registry_label_v1(rejected),
+                "{rejected:?} must be rejected",
             );
         }
     }
@@ -1286,6 +1520,7 @@ mod tests {
         let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
             identity_commitment,
             tx_digest,
+            tx_digest,
             chain_id,
             replay_nullifier,
             policy_hash,
@@ -1317,19 +1552,19 @@ mod tests {
         );
         assert_eq!(
             hex::encode(public_digest),
-            "2873792251b35ebcb9b9357b46bb38d0022dd7e6fb8091f2d5d85677bab52389"
+            "9012f3ca1feff456ef7aced4c1bc95d11e314fedf93a28cd1b4fe182cb98b2fc"
         );
         assert_eq!(
             hex::encode(air_public_digest),
-            "248c2c007fcfd20ab285bdad0490ed7b7b046001614b4d2aa4b6021d6c952bc1"
+            "7a258cd04b6937e68f42927193e91da221b2344623d9f4cadd1ec0b49b703691"
         );
         assert_eq!(
             hex::encode(air_statement_digest),
-            "7c1cfdf8ec0e2a4c1a10eeca670558293c8468dd8ade96bd86bf1f95e2dc34f4"
+            "ee9306cdc6d1bdfd3866449e730c10cb561b4038f5517a85d0e2f670d38acea6"
         );
         assert_eq!(
             hex::encode(schema_hash),
-            "2f265a860aa24df7d6703513fb95cb9b6323eae70203cbb32b53bd6e4fd1325c"
+            "7a0ae407a51b3f376312c81a7cd962d7f50cc8c79b5a3ca0f3df0944689ffc18"
         );
     }
 
@@ -1373,6 +1608,7 @@ mod tests {
         );
         let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
             identity_commitment,
+            tx_digest,
             tx_digest,
             chain_id,
             replay_nullifier,

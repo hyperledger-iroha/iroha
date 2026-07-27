@@ -1808,46 +1808,106 @@ impl MergeSidecarLifecycleRootHighWaterV3 {
 }
 
 #[cfg(unix)]
-type LifecycleDirectoryIdentity = (u64, u64);
+type LifecycleArtifactIdentity = (u64, u64);
 #[cfg(windows)]
-type LifecycleDirectoryIdentity = (Option<u32>, Option<u64>);
+type LifecycleArtifactIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
-type LifecycleDirectoryIdentity = ();
+type LifecycleArtifactIdentity = ();
 
 #[cfg(unix)]
-fn lifecycle_directory_identity(metadata: &fs::Metadata) -> LifecycleDirectoryIdentity {
+type LifecycleArtifactRevision = (u64, i64, i64, i64, i64, u64, u32, u32, u32);
+#[cfg(windows)]
+type LifecycleArtifactRevision = (u64, u64, u64, u32, Option<u32>);
+#[cfg(not(any(unix, windows)))]
+type LifecycleArtifactRevision = ();
+
+#[cfg(unix)]
+fn lifecycle_artifact_identity(metadata: &fs::Metadata) -> LifecycleArtifactIdentity {
     use std::os::unix::fs::MetadataExt as _;
 
     (metadata.dev(), metadata.ino())
 }
 
 #[cfg(windows)]
-fn lifecycle_directory_identity(metadata: &fs::Metadata) -> LifecycleDirectoryIdentity {
+fn lifecycle_artifact_identity(metadata: &fs::Metadata) -> LifecycleArtifactIdentity {
     use std::os::windows::fs::MetadataExt as _;
 
     (metadata.volume_serial_number(), metadata.file_index())
 }
 
 #[cfg(not(any(unix, windows)))]
-fn lifecycle_directory_identity(_metadata: &fs::Metadata) -> LifecycleDirectoryIdentity {}
+fn lifecycle_artifact_identity(_metadata: &fs::Metadata) -> LifecycleArtifactIdentity {}
 
 #[cfg(unix)]
-const fn lifecycle_directory_identity_available(_identity: LifecycleDirectoryIdentity) -> bool {
+fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevision {
+    use std::os::unix::fs::MetadataExt as _;
+
+    (
+        metadata.len(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+        metadata.nlink(),
+        metadata.mode(),
+        metadata.uid(),
+        metadata.gid(),
+    )
+}
+
+#[cfg(windows)]
+fn lifecycle_artifact_revision(metadata: &fs::Metadata) -> LifecycleArtifactRevision {
+    use std::os::windows::fs::MetadataExt as _;
+
+    (
+        metadata.file_size(),
+        metadata.creation_time(),
+        metadata.last_write_time(),
+        metadata.file_attributes(),
+        metadata.number_of_links(),
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn lifecycle_artifact_revision(_metadata: &fs::Metadata) -> LifecycleArtifactRevision {}
+
+#[cfg(unix)]
+const fn lifecycle_artifact_identity_available(_identity: LifecycleArtifactIdentity) -> bool {
     true
 }
 
 #[cfg(windows)]
-const fn lifecycle_directory_identity_available(identity: LifecycleDirectoryIdentity) -> bool {
+const fn lifecycle_artifact_identity_available(identity: LifecycleArtifactIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
 
 #[cfg(not(any(unix, windows)))]
-const fn lifecycle_directory_identity_available(_identity: LifecycleDirectoryIdentity) -> bool {
+const fn lifecycle_artifact_identity_available(_identity: LifecycleArtifactIdentity) -> bool {
     false
 }
 
+fn lifecycle_artifact_is_single_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        metadata.nlink() == 1
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        metadata.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 #[cfg(windows)]
-fn lifecycle_directory_is_reparse_point(metadata: &fs::Metadata) -> bool {
+fn lifecycle_artifact_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
 
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
@@ -1855,29 +1915,36 @@ fn lifecycle_directory_is_reparse_point(metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(windows))]
-fn lifecycle_directory_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+fn lifecycle_artifact_is_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
+}
+
+fn lifecycle_artifact_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    let identity = lifecycle_artifact_identity(left);
+    lifecycle_artifact_identity_available(identity)
+        && identity == lifecycle_artifact_identity(right)
+        && lifecycle_artifact_revision(left) == lifecycle_artifact_revision(right)
 }
 
 fn verify_open_lifecycle_directory(
     path: &Path,
     directory: &File,
-) -> Result<LifecycleDirectoryIdentity, MergeSidecarError> {
+) -> Result<LifecycleArtifactIdentity, MergeSidecarError> {
     let path_metadata = fs::symlink_metadata(path)
         .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
     let opened = directory
         .metadata()
         .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-    let path_identity = lifecycle_directory_identity(&path_metadata);
-    let opened_identity = lifecycle_directory_identity(&opened);
+    let path_identity = lifecycle_artifact_identity(&path_metadata);
+    let opened_identity = lifecycle_artifact_identity(&opened);
     if path_metadata.file_type().is_symlink()
         || opened.file_type().is_symlink()
-        || lifecycle_directory_is_reparse_point(&path_metadata)
-        || lifecycle_directory_is_reparse_point(&opened)
+        || lifecycle_artifact_is_reparse_point(&path_metadata)
+        || lifecycle_artifact_is_reparse_point(&opened)
         || !path_metadata.is_dir()
         || !opened.is_dir()
-        || !lifecycle_directory_identity_available(path_identity)
-        || !lifecycle_directory_identity_available(opened_identity)
+        || !lifecycle_artifact_identity_available(path_identity)
+        || !lifecycle_artifact_identity_available(opened_identity)
         || path_identity != opened_identity
     {
         return Err(MergeSidecarError::LifecycleJournal(format!(
@@ -1925,14 +1992,89 @@ fn open_lifecycle_directory(_path: &Path) -> Result<File, MergeSidecarError> {
     ))
 }
 
+fn verify_open_lifecycle_regular(
+    path: &Path,
+    file: &File,
+    artifact: &str,
+) -> Result<(fs::Metadata, fs::Metadata), MergeSidecarError> {
+    let path_metadata = fs::symlink_metadata(path)
+        .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+    let opened = file
+        .metadata()
+        .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+    let path_identity = lifecycle_artifact_identity(&path_metadata);
+    let opened_identity = lifecycle_artifact_identity(&opened);
+    if path_metadata.file_type().is_symlink()
+        || opened.file_type().is_symlink()
+        || lifecycle_artifact_is_reparse_point(&path_metadata)
+        || lifecycle_artifact_is_reparse_point(&opened)
+        || !path_metadata.is_file()
+        || !opened.is_file()
+        || !lifecycle_artifact_identity_available(path_identity)
+        || !lifecycle_artifact_identity_available(opened_identity)
+    {
+        return Err(MergeSidecarError::LifecycleJournal(format!(
+            "unsafe lifecycle {artifact} artifact {}",
+            path.display()
+        )));
+    }
+    if path_identity != opened_identity {
+        return Err(MergeSidecarError::LifecycleJournal(format!(
+            "lifecycle {artifact} changed identity while its handle was open"
+        )));
+    }
+    if !lifecycle_artifact_is_single_link(&path_metadata)
+        || !lifecycle_artifact_is_single_link(&opened)
+    {
+        return Err(MergeSidecarError::LifecycleJournal(format!(
+            "unsafe lifecycle {artifact} artifact {}",
+            path.display()
+        )));
+    }
+    Ok((path_metadata, opened))
+}
+
+#[cfg(any(unix, windows))]
+fn open_lifecycle_regular(path: &Path, artifact: &str) -> Result<File, MergeSidecarError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+    verify_open_lifecycle_regular(path, &file, artifact)?;
+    Ok(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_lifecycle_regular(_path: &Path, _artifact: &str) -> Result<File, MergeSidecarError> {
+    Err(MergeSidecarError::LifecycleJournal(
+        "durable lifecycle regular-file identity is unsupported on this platform".to_owned(),
+    ))
+}
+
 /// Integrity-bound lifecycle state committed by one root-level high-water.
 ///
 /// Successive snapshots alternate between two state slots. A slot is fsynced
 /// before the root marker selects it, so an interrupted update either reopens
-/// the exact predecessor or the exact successor. Known regular temp files are
-/// discarded only after one selected pair passes transport-level validation;
-/// non-regular artifacts fail closed. One process must own this journal
-/// exclusively.
+/// the exact predecessor or the exact successor. Selected artifacts are read
+/// through no-follow handles and must retain one direct filesystem identity,
+/// revision, and link from open through the bounded read. Known regular temp
+/// files are discarded only after one selected pair passes transport-level
+/// validation; non-regular artifacts fail closed. One process must own this
+/// journal exclusively.
 ///
 /// The root marker is first published as a generation-zero bootstrap sentinel,
 /// before the state directory exists. A missing root is therefore always
@@ -1951,7 +2093,11 @@ struct MergeSidecarLifecycleJournal {
     committed: Option<MergeSidecarLifecycleRootHighWaterV3>,
     poisoned: bool,
     #[cfg(test)]
+    fail_after_state_replace_before_directory_sync: bool,
+    #[cfg(test)]
     fail_after_state_publish: bool,
+    #[cfg(test)]
+    fail_after_root_replace_before_store_sync: bool,
     #[cfg(test)]
     fail_after_root_publish: bool,
 }
@@ -1979,7 +2125,16 @@ impl MergeSidecarLifecycleJournal {
 
         let directory = store_root.join(LIFECYCLE_JOURNAL_DIR);
         let directory_exists = match fs::symlink_metadata(&directory) {
-            Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            Ok(metadata)
+                if metadata.file_type().is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && !lifecycle_artifact_is_reparse_point(&metadata) =>
+            {
+                // Validate the live directory handle even when a no-op reopen
+                // would otherwise perform no directory fsync. In particular,
+                // a Windows junction is a directory but not an admissible
+                // lifecycle owner.
+                drop(open_lifecycle_directory(&directory)?);
                 true
             }
             Ok(_) => {
@@ -2001,7 +2156,11 @@ impl MergeSidecarLifecycleJournal {
             committed: None,
             poisoned: false,
             #[cfg(test)]
+            fail_after_state_replace_before_directory_sync: false,
+            #[cfg(test)]
             fail_after_state_publish: false,
+            #[cfg(test)]
+            fail_after_root_replace_before_store_sync: false,
             #[cfg(test)]
             fail_after_root_publish: false,
         };
@@ -2046,6 +2205,7 @@ impl MergeSidecarLifecycleJournal {
         }
     }
 
+    #[cfg(test)]
     fn state_path(&self) -> PathBuf {
         let generation = self
             .committed
@@ -2145,6 +2305,11 @@ impl MergeSidecarLifecycleJournal {
                         ));
                     }
                     self.validate_known_temps()?;
+                    // The candidate may have survived a crash after its atomic
+                    // slot replacement but before the state-directory fsync.
+                    // Make that directory entry durable before the root adopts
+                    // it.
+                    Self::sync_directory(&self.directory)?;
                     Self::remove_regular_artifact(
                         &self.root_high_water_temp_path(),
                         &self.store_root,
@@ -2195,6 +2360,19 @@ impl MergeSidecarLifecycleJournal {
                 "committed lifecycle pair changed during validation".to_owned(),
             ));
         }
+        self.validate_known_temps()?;
+        Self::validate_regular_artifact_if_present(
+            &self.state_path_for_generation(committed.root_generation ^ 1),
+            "uncommitted state slot",
+        )?;
+        // A prior process may have crashed after atomically replacing either
+        // selected artifact but before syncing its parent. Cement the selected
+        // state first and then its root before deleting the predecessor or any
+        // publication debris. Otherwise a second crash could roll the root
+        // directory entry back after startup has already removed the state it
+        // names.
+        Self::sync_directory(&self.directory)?;
+        Self::sync_directory(&self.store_root)?;
         self.discard_uncommitted_temps()?;
         self.discard_inactive_slot()
     }
@@ -2261,7 +2439,10 @@ impl MergeSidecarLifecycleJournal {
                 return Err(MergeSidecarError::LifecycleJournal(error.to_string()));
             }
         };
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        if metadata.file_type().is_symlink()
+            || lifecycle_artifact_is_reparse_point(&metadata)
+            || !metadata.file_type().is_file()
+        {
             return Err(MergeSidecarError::LifecycleJournal(format!(
                 "unsafe lifecycle {artifact} artifact {}",
                 path.display()
@@ -2326,15 +2507,19 @@ impl MergeSidecarLifecycleJournal {
         max_bytes: usize,
         artifact: &str,
     ) -> Result<Vec<u8>, MergeSidecarError> {
-        let metadata = fs::symlink_metadata(path)
+        let path_before = fs::symlink_metadata(path)
             .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        if path_before.file_type().is_symlink()
+            || lifecycle_artifact_is_reparse_point(&path_before)
+            || !path_before.file_type().is_file()
+            || !lifecycle_artifact_is_single_link(&path_before)
+        {
             return Err(MergeSidecarError::LifecycleJournal(format!(
                 "unsafe lifecycle {artifact} artifact {}",
                 path.display()
             )));
         }
-        let len = usize::try_from(metadata.len()).map_err(|_| {
+        let len = usize::try_from(path_before.len()).map_err(|_| {
             MergeSidecarError::LifecycleJournal(format!(
                 "lifecycle {artifact} length is not representable"
             ))
@@ -2344,7 +2529,37 @@ impl MergeSidecarLifecycleJournal {
                 "lifecycle {artifact} length exceeds its geometry"
             )));
         }
-        fs::read(path).map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))
+        let mut file = open_lifecycle_regular(path, artifact)?;
+        let (path_opened, opened_before) = verify_open_lifecycle_regular(path, &file, artifact)?;
+        if !lifecycle_artifact_metadata_unchanged(&path_before, &path_opened)
+            || !lifecycle_artifact_metadata_unchanged(&path_before, &opened_before)
+        {
+            return Err(MergeSidecarError::LifecycleJournal(format!(
+                "lifecycle {artifact} changed while opening"
+            )));
+        }
+
+        let read_limit = u64::try_from(max_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let mut bytes = Vec::with_capacity(len);
+        Read::by_ref(&mut file)
+            .take(read_limit)
+            .read_to_end(&mut bytes)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        let (path_after, opened_after) = verify_open_lifecycle_regular(path, &file, artifact)?;
+        let bytes_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if bytes.is_empty()
+            || bytes.len() > max_bytes
+            || opened_after.len() != bytes_len
+            || !lifecycle_artifact_metadata_unchanged(&opened_before, &opened_after)
+            || !lifecycle_artifact_metadata_unchanged(&opened_before, &path_after)
+        {
+            return Err(MergeSidecarError::LifecycleJournal(format!(
+                "lifecycle {artifact} changed while reading"
+            )));
+        }
+        Ok(bytes)
     }
 
     fn decode_snapshot(
@@ -2600,6 +2815,13 @@ impl MergeSidecarLifecycleJournal {
             Self::write_new_synced(&self.temp_path(), &snapshot_bytes)?;
             let next_state_path = self.state_path_for_generation(next_generation);
             Self::persist_atomic_replacement(&self.temp_path(), &next_state_path)?;
+            #[cfg(test)]
+            if std::mem::take(&mut self.fail_after_state_replace_before_directory_sync) {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "injected failure after lifecycle state replacement but before directory synchronization"
+                        .to_owned(),
+                ));
+            }
             Self::sync_directory(&self.directory)?;
             #[cfg(test)]
             if std::mem::take(&mut self.fail_after_state_publish) {
@@ -2613,6 +2835,13 @@ impl MergeSidecarLifecycleJournal {
                 &self.root_high_water_temp_path(),
                 &self.root_high_water_path(),
             )?;
+            #[cfg(test)]
+            if std::mem::take(&mut self.fail_after_root_replace_before_store_sync) {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "injected failure after lifecycle root replacement but before store synchronization"
+                        .to_owned(),
+                ));
+            }
             Self::sync_directory(&self.store_root)?;
             #[cfg(test)]
             if std::mem::take(&mut self.fail_after_root_publish) {
@@ -4985,6 +5214,15 @@ impl MergeSidecarTransport {
             .root_high_water_path()
     }
 
+    /// Inject a one-shot failure after state replacement but before its parent fsync.
+    #[cfg(test)]
+    pub(crate) fn fail_after_lifecycle_state_replace_before_sync_for_test(&mut self) {
+        self.lifecycle_journal
+            .as_mut()
+            .expect("durable merge-sidecar transport has a lifecycle journal")
+            .fail_after_state_replace_before_directory_sync = true;
+    }
+
     /// Inject a one-shot failure after state publication but before root publication.
     #[cfg(test)]
     pub(crate) fn fail_after_lifecycle_state_publish_for_test(&mut self) {
@@ -4992,6 +5230,15 @@ impl MergeSidecarTransport {
             .as_mut()
             .expect("durable merge-sidecar transport has a lifecycle journal")
             .fail_after_state_publish = true;
+    }
+
+    /// Inject a one-shot failure after root replacement but before its parent fsync.
+    #[cfg(test)]
+    pub(crate) fn fail_after_lifecycle_root_replace_before_sync_for_test(&mut self) {
+        self.lifecycle_journal
+            .as_mut()
+            .expect("durable merge-sidecar transport has a lifecycle journal")
+            .fail_after_root_replace_before_store_sync = true;
     }
 
     /// Inject a one-shot failure after the root commit is durable but before memory publication.
@@ -17809,7 +18056,7 @@ mod tests {
             let temp = tempfile::tempdir().expect("temp dir");
             let fixture = MergeSidecarTransport::with_limits(DEFAULT_REPLY_SOURCE_CAPACITY, limits)
                 .expect("construct an empty first-commit projection");
-            let (journal, restored) = MergeSidecarLifecycleJournal::open(
+            let (mut journal, restored) = MergeSidecarLifecycleJournal::open(
                 temp.path(),
                 fixture
                     .lifecycle_protocol_max_snapshot_bytes()
@@ -17821,17 +18068,19 @@ mod tests {
                 .decode_root_high_water(&journal.root_high_water_path())
                 .expect("decode the bootstrap sentinel");
             assert!(bootstrap.is_bootstrap());
-            let mut candidate = fixture
+            let candidate = fixture
                 .lifecycle_snapshot()
                 .expect("snapshot the empty first generation");
-            candidate.payload.root_generation = 1;
-            candidate.payload_hash = HashOf::new(&candidate.payload);
+            journal.fail_after_state_replace_before_directory_sync = true;
+            assert!(matches!(
+                journal.persist_next(candidate),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("state replacement but before directory synchronization")
+            ));
             let state_path = journal.state_path_for_generation(1);
-            fs::write(
-                &state_path,
-                norito::to_bytes(&candidate).expect("encode first-generation candidate"),
-            )
-            .expect("simulate state publication before the first root commit");
+            let candidate = journal
+                .decode_snapshot(&state_path)
+                .expect("state replacement leaves the complete first-generation candidate");
             let root_path = journal.root_high_water_path();
             let bootstrap_bytes = fs::read(&root_path).expect("read bootstrap root");
             drop(journal);
@@ -18005,6 +18254,47 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn durable_lifecycle_v3_rejects_windows_reparse_directory_before_noop_open() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let store_root = temp.path().join("store");
+        let junction_target = temp.path().join("junction-target");
+        fs::create_dir(&store_root).expect("create lifecycle store root");
+        fs::create_dir(&junction_target).expect("create junction target");
+        let lifecycle_junction = store_root.join(LIFECYCLE_JOURNAL_DIR);
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&lifecycle_junction)
+            .arg(&junction_target)
+            .output()
+            .expect("invoke the Windows junction creator");
+        assert!(
+            output.status.success(),
+            "create lifecycle junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let fixture = MergeSidecarTransport::with_limits(
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("construct lifecycle geometry");
+        let error = MergeSidecarLifecycleJournal::open(
+            &store_root,
+            fixture
+                .lifecycle_protocol_max_snapshot_bytes()
+                .expect("derive lifecycle snapshot bound"),
+        )
+        .expect_err("a Windows reparse directory cannot own lifecycle state");
+        assert!(matches!(
+            error,
+            MergeSidecarError::LifecycleJournal(ref message)
+                if message.contains("unsafe lifecycle journal directory")
+        ));
+        fs::remove_dir(&lifecycle_junction).expect("remove lifecycle junction");
+    }
+
     #[test]
     fn durable_lifecycle_v3_rejects_crossed_bootstrap_and_committed_root_shapes() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -18155,6 +18445,100 @@ mod tests {
             fs::read(&unknown).expect("unknown artifact remains for operator inspection"),
             b"unknown"
         );
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize cleanup prevalidation fixture");
+        let journal = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable fixture owns its journal");
+        let committed_generation = journal
+            .committed
+            .as_ref()
+            .expect("initialized fixture has a committed root")
+            .root_generation;
+        let inactive = journal.state_path_for_generation(committed_generation ^ 1);
+        let state_temp = journal.temp_path();
+        let root_temp = journal.root_high_water_temp_path();
+        let state_temp_bytes = b"regular state temp retained for inspection";
+        let root_temp_bytes = b"regular root temp retained for inspection";
+        drop(transport);
+        fs::write(&state_temp, state_temp_bytes).expect("install regular state temp");
+        fs::write(&root_temp, root_temp_bytes).expect("install regular root temp");
+        fs::create_dir(&inactive).expect("install unsafe inactive-slot directory");
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                limits,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("uncommitted state slot")
+        ));
+        assert_eq!(
+            fs::read(&state_temp).expect("inactive-slot rejection preserves state temp"),
+            state_temp_bytes
+        );
+        assert_eq!(
+            fs::read(&root_temp).expect("inactive-slot rejection preserves root temp"),
+            root_temp_bytes
+        );
+        assert!(
+            inactive.is_dir(),
+            "unsafe inactive slot remains for operator inspection"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let temp = tempfile::tempdir().expect("temp dir");
+            let direct = temp.path().join("direct.norito");
+            let alias = temp.path().join("alias.norito");
+            fs::write(&direct, b"direct lifecycle bytes").expect("write direct artifact");
+            symlink(&direct, &alias).expect("create lifecycle symlink");
+            assert!(
+                open_lifecycle_regular(&alias, "test alias").is_err(),
+                "the no-follow open cannot acquire a symlink target"
+            );
+            assert!(matches!(
+                MergeSidecarLifecycleJournal::read_bounded_regular(
+                    &alias,
+                    1024,
+                    "test alias",
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("unsafe lifecycle test alias artifact")
+            ));
+
+            fs::remove_file(&alias).expect("remove lifecycle symlink");
+            fs::hard_link(&direct, &alias).expect("create lifecycle hard link");
+            assert!(matches!(
+                MergeSidecarLifecycleJournal::read_bounded_regular(
+                    &direct,
+                    1024,
+                    "test hard link",
+                ),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("unsafe lifecycle test hard link artifact")
+            ));
+            fs::remove_file(&alias).expect("restore single-link lifecycle artifact");
+
+            let opened =
+                open_lifecycle_regular(&direct, "test replacement").expect("open direct artifact");
+            let replacement = temp.path().join("replacement.norito");
+            fs::write(&replacement, b"replacement lifecycle bytes")
+                .expect("write replacement artifact");
+            fs::rename(&replacement, &direct)
+                .expect("atomically replace the lifecycle path behind its open handle");
+            assert!(matches!(
+                verify_open_lifecycle_regular(&direct, &opened, "test replacement"),
+                Err(MergeSidecarError::LifecycleJournal(ref error))
+                    if error.contains("changed identity")
+            ));
+        }
     }
 
     #[test]
@@ -18475,6 +18859,72 @@ mod tests {
     }
 
     #[test]
+    fn durable_lifecycle_v3_recovers_predecessor_before_state_directory_sync() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize pre-state-sync fixture");
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        transport
+            .admit_server_request(&requester, &request, None, &responder, now)
+            .expect("persist active predecessor ownership");
+        let predecessor = transport
+            .lifecycle_snapshot()
+            .expect("snapshot the predecessor in memory");
+        let root_path = transport.lifecycle_root_high_water_path_for_test();
+        let predecessor_root = fs::read(&root_path).expect("read predecessor root");
+        let successor_generation = predecessor
+            .payload
+            .root_generation
+            .checked_add(1)
+            .expect("test generation remains representable");
+        let abandoned_successor_path = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable transport owns its journal")
+            .state_path_for_generation(successor_generation);
+        transport.fail_after_lifecycle_state_replace_before_sync_for_test();
+        let changed_roster = vec![peer(b"pre-state-sync successor roster")];
+        let changed_digest = canonical_merge_sidecar_roster_digest(&changed_roster);
+        assert!(matches!(
+            transport.transition_server_service_generation_after_exact_output_fence(
+                changed_roster.len(),
+                changed_digest,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("state replacement but before directory synchronization")
+        ));
+        assert_eq!(
+            transport
+                .lifecycle_snapshot()
+                .expect("snapshot memory after pre-sync failure"),
+            predecessor
+        );
+        assert_eq!(
+            fs::read(&root_path).expect("reread predecessor root"),
+            predecessor_root
+        );
+        assert!(abandoned_successor_path.is_file());
+        drop(transport);
+
+        let recovered =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("the predecessor root remains authoritative");
+        assert_eq!(
+            recovered
+                .lifecycle_snapshot()
+                .expect("snapshot the recovered predecessor"),
+            predecessor
+        );
+        assert!(
+            !abandoned_successor_path.exists(),
+            "startup cleans the unselected slot only after cementing the selected pair"
+        );
+    }
+
+    #[test]
     fn durable_lifecycle_v3_recovers_predecessor_between_state_and_root_publication() {
         let temp = tempfile::tempdir().expect("temp dir");
         let limits = MergeSidecarLimits::defaults();
@@ -18569,6 +19019,95 @@ mod tests {
             service_generation(2)
         );
         assert!(read_lifecycle_pair(&recovered).1.matches(&committed));
+    }
+
+    #[test]
+    fn durable_lifecycle_v3_resyncs_replaced_root_before_predecessor_cleanup() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let limits = MergeSidecarLimits::defaults();
+        let mut transport =
+            MergeSidecarTransport::open_durable(temp.path(), DEFAULT_REPLY_SOURCE_CAPACITY, limits)
+                .expect("initialize unsynchronized-root fixture");
+        let (_, requester, _, request, now) = start_session(1, 1);
+        let responder = request.responder.clone();
+        transport
+            .admit_server_request(&requester, &request, None, &responder, now)
+            .expect("persist active predecessor ownership");
+        let predecessor = transport
+            .lifecycle_snapshot()
+            .expect("snapshot the predecessor in memory");
+        let predecessor_path = transport.lifecycle_journal_state_path_for_test();
+        let successor_generation = predecessor
+            .payload
+            .root_generation
+            .checked_add(1)
+            .expect("test generation remains representable");
+        let successor_path = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable transport owns its journal")
+            .state_path_for_generation(successor_generation);
+        transport.fail_after_lifecycle_root_replace_before_sync_for_test();
+        let changed_roster = vec![peer(b"unsynchronized root successor roster")];
+        let changed_digest = canonical_merge_sidecar_roster_digest(&changed_roster);
+        assert!(matches!(
+            transport.transition_server_service_generation_after_exact_output_fence(
+                changed_roster.len(),
+                changed_digest.clone(),
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("root replacement but before store synchronization")
+        ));
+        assert_eq!(
+            transport
+                .lifecycle_snapshot()
+                .expect("snapshot memory after unsynchronized root replacement"),
+            predecessor,
+            "a failed durable call cannot publish successor memory"
+        );
+        assert!(predecessor_path.is_file());
+        assert!(successor_path.is_file());
+        drop(transport);
+
+        let recovered = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            limits,
+            changed_roster.len(),
+            changed_digest.clone(),
+        )
+        .expect("startup cements the selected root before cleaning its predecessor");
+        let successor = recovered
+            .lifecycle_snapshot()
+            .expect("snapshot the recovered successor");
+        assert_eq!(successor.payload.root_generation, successor_generation);
+        assert_eq!(
+            successor.payload.server_service_generation,
+            service_generation(2)
+        );
+        assert!(successor.payload.server_streams.is_empty());
+        assert!(successor.payload.server_request_gates.is_empty());
+        assert!(
+            !predecessor_path.exists(),
+            "predecessor cleanup occurs only after startup resynchronizes the selected pair"
+        );
+        assert!(successor_path.is_file());
+        drop(recovered);
+
+        let reopened = MergeSidecarTransport::open_durable_with_server_stream_capacity(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            limits,
+            changed_roster.len(),
+            changed_digest,
+        )
+        .expect("the cleaned successor pair survives a second restart");
+        assert_eq!(
+            reopened
+                .lifecycle_snapshot()
+                .expect("snapshot the twice-reopened successor"),
+            successor
+        );
     }
 
     #[test]

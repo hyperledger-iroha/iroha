@@ -42,6 +42,7 @@ class VerifyingKeyRecordDescription private constructor(
      * embedded verifying key bytes.
      */
     fun toArguments(backend: String): Map<String, String> {
+        requireBackendTagMatchesRegistryLabel(backend, backendTag)
         if (_inlineKeyBytes != null) {
             require(computeCommitmentHex(backend, _inlineKeyBytes) == commitmentHex) {
                 "backend does not match inline key commitment"
@@ -135,7 +136,7 @@ class VerifyingKeyRecordDescription private constructor(
             circuitId: String,
             schemaHashHex: String,
             gasScheduleId: String,
-            backendTag: VerifyingKeyBackendTag = VerifyingKeyBackendTag.UNSUPPORTED,
+            backendTag: VerifyingKeyBackendTag,
             curve: String = "unknown",
             commitmentHex: String? = null,
             inlineKeyBytes: ByteArray? = null,
@@ -147,6 +148,7 @@ class VerifyingKeyRecordDescription private constructor(
             withdrawHeight: Long? = null,
             status: VerifyingKeyStatus = VerifyingKeyStatus.ACTIVE,
         ): VerifyingKeyRecordDescription {
+            requireBackendTagMatchesRegistryLabel(backend, backendTag)
             require(version >= 0) { "version must be non-negative" }
 
             val exactCircuitId = requireExactNonBlank(circuitId, "circuitId")
@@ -261,6 +263,19 @@ class VerifyingKeyRecordDescription private constructor(
             digest.update(backend.toByteArray(Charsets.UTF_8))
             digest.update(bytes)
             return digest.digest().joinToString("") { "%02x".format(it) }
+        }
+
+        private fun requireBackendTagMatchesRegistryLabel(
+            backend: String,
+            backendTag: VerifyingKeyBackendTag,
+        ) {
+            val expected = VerifyingKeyBackendTag.verifierBackendRegistryTagV1(backend)
+                ?: throw IllegalArgumentException(
+                    "backend uses unsupported verifier-registry label $backend",
+                )
+            require(backendTag == expected) {
+                "backendTag ${backendTag.noritoValue} does not match verifier-registry label $backend"
+            }
         }
     }
 }

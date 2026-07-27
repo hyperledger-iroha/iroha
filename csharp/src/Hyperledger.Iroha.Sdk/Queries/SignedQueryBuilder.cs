@@ -99,7 +99,7 @@ public sealed class SignedQueryBuilder
     {
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindProofRecordById;
-        proofBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+        proofBackend = VerifierBackendRegistryLabels.RequireSupportedLabel(
             backend,
             nameof(backend));
         this.proofHash = NormalizeProofHashHex(proofHash, nameof(proofHash));

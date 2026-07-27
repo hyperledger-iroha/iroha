@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
-from ._privacy_backends import _require_production_verify_backend_label
+from ._privacy_backends import _require_verifier_backend_registry_label_v1
 
 __all__ = [
     "EventFilter",
@@ -77,7 +77,7 @@ class VerifyingKeyFilter(EventFilter):
         else:
             if self.backend is None or self.name is None:
                 raise ValueError("both backend and name must be provided for verifying key filters")
-            backend = _require_production_verify_backend_label(
+            backend = _require_verifier_backend_registry_label_v1(
                 self.backend,
                 "verifying_key_filter.backend",
             )
@@ -116,7 +116,7 @@ class ProofEventFilter(EventFilter):
             )
         id_matcher: Optional[Dict[str, Any]]
         if self.backend is not None and self.proof_hash_hex is not None:
-            backend = _require_production_verify_backend_label(
+            backend = _require_verifier_backend_registry_label_v1(
                 self.backend,
                 "proof_filter.backend",
             )
@@ -249,7 +249,7 @@ def _normalize_event_filter_mapping(value: Mapping[str, Any], context: str) -> D
         if not isinstance(matcher, Mapping) or "backend" not in matcher:
             continue
         normalized_matcher = dict(matcher)
-        normalized_matcher["backend"] = _require_production_verify_backend_label(
+        normalized_matcher["backend"] = _require_verifier_backend_registry_label_v1(
             matcher.get("backend"),
             f"{context}.{event_kind}.id_matcher.backend",
         )

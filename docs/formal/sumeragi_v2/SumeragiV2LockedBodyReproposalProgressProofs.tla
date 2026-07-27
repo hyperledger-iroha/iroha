@@ -1,186 +1,400 @@
 ---- MODULE SumeragiV2LockedBodyReproposalProgressProofs ----
-EXTENDS SumeragiV2ProgressWitnessFinalClosureProofs
+EXTENDS SumeragiV2ExactLeaderSemanticRanks,
+        SumeragiV2LockedBodyProposalActionProofs
 
 (***************************************************************************
-Locked-body reproposal temporal composition.
+Direct retained-lock decomposition.
 
-The release outcome is deliberately disjunctive.  A retained lock may leave
-the decision-free frontier through its exact old-round CommitQC, through an
-unchanged later-round proposal, through a higher certified Prepare lock, or
-through the node's durable Decision.  The first three exits can happen before
-global decision convergence; none is required after a durable Decision exists.
+This leaf sits between timeout/view progress and rotating-leader progress.
+It therefore does not use rotating-leader Decision convergence to satisfy the
+terminal disjunct of `LockedBodyReproposalOutcome`.  Instead, one fixed
+`(node, lockedRound, subject)` source is followed through the production
+corridors which can actually discharge it:
 
-Consequently this leaf does not invent a second retained-body scheduler or
-assume that a routing recipient is the archive signer.  The imported
-historical witness proofs continue to preserve the exact PrepareQC and
-route-neutral CertifiedResponse lineages.  The temporal step below uses only
-the fourth, already-declared terminal exit: rotating-leader progress entails
-responsive decision convergence, and the frozen one-height voter projection
-keeps the originally responsive locked node in that convergence domain.
+  1. the node's durable old-round Commit owner may finish at exactly
+     `(lockedRound, subject)`;
+  2. timeout/TC installation either preserves that exact Prepare subject for
+     a later self-leader turn or exposes a higher certified Prepare transfer;
+  3. the retained body is acquired/rebound, stored, and validated at one
+     frozen later proposal origin;
+  4. that same origin runs Assemble -> BeginProposal -> PersistProposal ->
+     replay-safe SignProposal; or
+  5. a higher Prepare/lock or durable Decision legitimately supersedes it.
 
-This dependency is acyclic.  No theorem from
-SumeragiV2AsyncTemporalClosureProofs is imported, and the result below is an
-implication from RotatingLeaderProgressProperty, not an unconditional use of
-its still-separate release obligation.
+The frozen `originView` below is intentionally retained across rank handoffs.
+An old-round Commit rank cannot be combined with a later-round Commit rank,
+and proposal stages from different views cannot be spliced into one progress
+witness.  A later Commit corridor is classified only as higher-lock transfer,
+never as `LockedBodyCommittedInOldRound`.
+
+Three temporal properties remain explicit at the bottom:
+
+  * timeout-fed source exposure to an exact later self-leader/Prepare-transfer
+    frontier;
+  * activation of the exact producer origin at that frontier; and
+  * exact same-origin semantic-rank handoff.
+
+They are premises of a deductive reduction, not asserted theorems.  In
+particular, this module does not replace the source-exposure/leader-turn gap
+with broad responsive Decision convergence.
+***************************************************************************)
+
+(***************************************************************************
+Generic convergence vocabulary remains visible to the higher rotating-leader
+leaf.  It is not used anywhere in the locked-body reduction below.
 ***************************************************************************)
 
 ResponsiveDecisionConvergenceProperty(specification) ==
   specification
     => (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide
 
-(***************************************************************************
-Static entry and exit facts for one fixed responsive-voter projection.
+RetainedLockModeSource(node, lockedRound, subject) ==
+  StableAvailableRetainedLock(node, lockedRound, subject)
 
-Outside every declared locked-body outcome, the stable source's node has no
-Decision.  Because that node is responsive, aggregate responsive decision
-cannot yet hold.  Conversely, once the same fixed responsive set has decided,
-that node's Decision is exactly the terminal outcome already admitted by the
-release predicate.
+RetainedLockModeGoal(node, lockedRound, subject) ==
+  LockedBodyReproposalOutcome(node, lockedRound, subject)
+
+RetainedLockModeActive(node, lockedRound, subject) ==
+  /\ RetainedLockModeSource(node, lockedRound, subject)
+  /\ ~RetainedLockModeGoal(node, lockedRound, subject)
+
+(***************************************************************************
+Exact timeout/TC frontiers.
+
+`LockedBodyProposalAttemptStableFrame` fixes the retained source node as the
+honest leader of one later view, requires that view's preceding TC to be
+installed, and requires the proposal subject selected by the exact installed
+high Prepare evidence to remain the retained subject.  The alternative
+certified-transfer frontier is the action proof's exact higher PrepareQC exit;
+if its lock has already been installed, the release goal is already true.
 ***************************************************************************)
 
-THEOREM StableLockedBodyOutsideOutcomeCreatesDecisionDebt ==
-  \A initialContext, node, lockedRound, subject:
-    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
-    /\ StableAvailableRetainedLock(node, lockedRound, subject)
-    /\ ~LockedBodyReproposalOutcome(node, lockedRound, subject)
-    => /\ node \in AsyncVotersAt(initialContext)
-       /\ gst
-       /\ ~ResponsiveNodesDecide
+RetainedLockExactLeaderTurn(
+    node, lockedRound, subject, originView) ==
+  /\ originView \in Views
+  /\ originView > lockedRound
+  /\ LockedBodyProposalAttemptStableFrame(
+       node, originView, lockedRound, subject)
+
+RetainedLockCertifiedPrepareTransfer(
+    node, lockedRound, subject, originView) ==
+  /\ originView \in Views
+  /\ originView = highestRank[node]
+  /\ ~RetainedLockModeGoal(node, lockedRound, subject)
+  /\ LockedBodyProposalCertifiedHighExit(
+       node, lockedRound, subject)
+
+(***************************************************************************
+One exact producer origin.
+
+Every candidate below is current-consumer protected work owned by the retained
+source node.  Besides `(context, height, originView, subject)`, the three
+adapter identity fields must still name the exact subject carried by the
+candidate.  This excludes a fabricated same-kind candidate and prevents a
+later rank handoff from silently changing body/manifest/commitment origin.
+***************************************************************************)
+
+RetainedLockFrozenCandidateOrigin(candidate, node, originView) ==
+  /\ candidate.node = node
+  /\ candidate.consumerContext = context
+  /\ candidate.height = context.height
+  /\ candidate.view = originView
+  /\ candidate.subject \in Subjects
+  /\ candidate.bodyIdentity = candidate.subject
+  /\ candidate.manifestIdentity = candidate.subject
+  /\ candidate.commitmentIdentity = candidate.subject
+
+RetainedLockProposalIngressOrigin(candidate, originView, subject) ==
+  \/ candidate.kind
+       \notin {"DeliverProposal", "DeliverChunk"}
+  \/ /\ candidate.kind = "DeliverProposal"
+        /\ candidate.item.kind = "Proposal"
+        /\ candidate.item.envelope.recipient = candidate.node
+        /\ candidate.item.envelope.proposal.context = context
+        /\ candidate.item.envelope.proposal.height = context.height
+        /\ candidate.item.envelope.proposal.view = originView
+        /\ candidate.item.envelope.proposal.subject = subject
+        /\ candidate.item.envelope.proposal.proposer =
+             Leader(context, originView)
+  \/ /\ candidate.kind = "DeliverChunk"
+        /\ candidate.item.kind = "Chunk"
+        /\ candidate.item.envelope.recipient = candidate.node
+        /\ candidate.item.envelope.height = context.height
+        /\ candidate.item.envelope.view = originView
+        /\ candidate.item.envelope.subject = subject
+
+RetainedLockOldRoundCommitCandidateRank(
+    node, lockedRound, subject, originView, candidate, rank) ==
+  /\ originView = lockedRound
+  /\ RetainedLockFrozenCandidateOrigin(candidate, node, originView)
+  /\ candidate.subject = subject
+  /\ ExactLeaderCommitRank(candidate, rank)
+
+RetainedLockLaterProposalKinds ==
+  {"AssembleBody", "BeginProposal", "PersistProposal", "SignProposal",
+   "DeliverProposal", "DeliverChunk", "FetchBody", "RebindRetainedBody",
+   "FetchCertifiedBody", "StoreBody", "ValidateBody"}
+
+RetainedLockLaterProposalCandidateRank(
+    node, lockedRound, subject, originView, candidate, rank) ==
+  /\ originView > lockedRound
+  /\ RetainedLockFrozenCandidateOrigin(candidate, node, originView)
+  /\ candidate.subject = subject
+  /\ candidate.kind \in RetainedLockLaterProposalKinds
+  /\ RetainedLockProposalIngressOrigin(candidate, originView, subject)
+  /\ ExactLeaderProposalRank(candidate, rank)
+
+RetainedLockHigherPrepareCandidateRank(
+    node, lockedRound, originView, candidate, rank) ==
+  /\ originView > lockedRound
+  /\ RetainedLockFrozenCandidateOrigin(candidate, node, originView)
+  /\ ExactLeaderPrepareRank(candidate, rank)
+
+RetainedLockHigherLockCandidateRank(
+    node, lockedRound, originView, candidate, rank) ==
+  /\ originView > lockedRound
+  /\ RetainedLockFrozenCandidateOrigin(candidate, node, originView)
+  /\ ExactLeaderCommitRank(candidate, rank)
+
+RetainedLockDecisionCandidateRank(
+    node, originView, candidate, rank) ==
+  /\ RetainedLockFrozenCandidateOrigin(candidate, node, originView)
+  /\ ExactLeaderDecisionRank(candidate, rank)
+
+RetainedLockExactCandidateRank(
+    node, lockedRound, subject, originView, candidate, rank) ==
+  /\ ExactLeaderCandidateRank(candidate, rank)
+  /\ \/ RetainedLockOldRoundCommitCandidateRank(
+          node, lockedRound, subject, originView, candidate, rank)
+     \/ RetainedLockLaterProposalCandidateRank(
+          node, lockedRound, subject, originView, candidate, rank)
+     \/ RetainedLockHigherPrepareCandidateRank(
+          node, lockedRound, originView, candidate, rank)
+     \/ RetainedLockHigherLockCandidateRank(
+          node, lockedRound, originView, candidate, rank)
+     \/ RetainedLockDecisionCandidateRank(
+          node, originView, candidate, rank)
+
+RetainedLockCandidateRankFrontier(
+    node, lockedRound, subject, originView, rank) ==
+  /\ RetainedLockModeActive(node, lockedRound, subject)
+  /\ originView \in Views
+  /\ rank \in ExactLeaderSemanticRankCarrier
+  /\ \E candidate \in AsyncCandidateSet:
+       RetainedLockExactCandidateRank(
+         node, lockedRound, subject, originView, candidate, rank)
+
+RetainedLockRankedOriginFrontier(
+    node, lockedRound, subject, originView) ==
+  \E rank \in ExactLeaderSemanticRankCarrier:
+    RetainedLockCandidateRankFrontier(
+      node, lockedRound, subject, originView, rank)
+
+RetainedLockRankedFrontier(node, lockedRound, subject) ==
+  \E originView \in Views:
+    RetainedLockRankedOriginFrontier(
+      node, lockedRound, subject, originView)
+
+RetainedLockSourceExposureFrontier(node, lockedRound, subject) ==
+  \E originView \in Views:
+    \/ RetainedLockExactLeaderTurn(
+         node, lockedRound, subject, originView)
+    \/ RetainedLockCertifiedPrepareTransfer(
+         node, lockedRound, subject, originView)
+    \/ RetainedLockRankedOriginFrontier(
+         node, lockedRound, subject, originView)
+
+(***************************************************************************
+Static safety anchors.
+***************************************************************************)
+
+THEOREM RetainedLockLaterProposalIsSafeForDurableLock ==
+  \A node \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects:
+    \A proposal:
+      /\ StableAvailableRetainedLock(node, lockedRound, subject)
+      /\ proposal.view > lockedRound
+      /\ proposal.subject = subject
+      => DurableProposalSafeForLock(node, proposal)
 BY Isa
    DEF StableAvailableRetainedLock,
-       LockedBodyReproposalOutcome,
-       LockedBodyLegitimatelyDecidedOrSuperseded,
-       ResponsiveNodesDecide
+       DurableProposalSafeForLock
 
-THEOREM FixedResponsiveDecisionIsLockedBodyOutcome ==
-  \A initialContext, node, lockedRound, subject:
-    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
-    /\ node \in AsyncVotersAt(initialContext)
-    /\ ResponsiveNodesDecide
-    => LockedBodyReproposalOutcome(node, lockedRound, subject)
-BY Isa
-   DEF ResponsiveNodesDecide,
-       LockedBodyReproposalOutcome,
-       LockedBodyLegitimatelyDecidedOrSuperseded
+THEOREM OldRoundCommitFrontierRejectsSplitRoundCommit ==
+  \A node \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, originView \in Views:
+    \A candidate, rank:
+      /\ originView # lockedRound
+      => ~RetainedLockOldRoundCommitCandidateRank(
+            node, lockedRound, subject, originView, candidate, rank)
+BY DEF RetainedLockOldRoundCommitCandidateRank
 
 (***************************************************************************
-The two rotating-leader clauses compose to aggregate responsive decision.
-GST monotonicity is essential: if the first clause reaches an honest leader
-view rather than Decision directly, GST remains true while the second clause
-discharges that leader frontier.
+Reuse of the lower exact action-preservation proof.
+
+While one exact retained-body leader frame is active, a post-GST asynchronous
+step preserves the same frame, changes that exact node's view, reaches a
+legitimate release outcome, or exposes the authenticated higher PrepareQC
+frontier.  This is an action theorem only; it does not claim that a leader
+frame is eventually reached or that a producer is eventually scheduled.
 ***************************************************************************)
 
-THEOREM RotatingLeaderProgressSuppliesResponsiveDecisionConvergence ==
-  \A initialContext:
-    RotatingLeaderProgressProperty(AsyncLiveSpecAt(initialContext))
-      => ResponsiveDecisionConvergenceProperty(
-           AsyncLiveSpecAt(initialContext))
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                RotatingLeaderProgressProperty(
-                  AsyncLiveSpecAt(initialContext))
-         PROVE ResponsiveDecisionConvergenceProperty(
-                 AsyncLiveSpecAt(initialContext))
-    <2>1. ASSUME AsyncLiveSpecAt(initialContext)
-           PROVE (gst /\ ~ResponsiveNodesDecide)
-                   ~> ResponsiveNodesDecide
-      <3>1. AsyncSpecAt(initialContext)
-        BY <2>1, AsyncLiveSpecProjectsAsyncSpec
-      <3>2. AsyncSpecAt(initialContext) => [](gst => []gst)
-        BY AsyncSpecKeepsGstOnceSet
-      <3>3. (gst /\ ~ResponsiveNodesDecide)
-               ~> (ResponsiveHonestLeaderViewReached
-                     \/ ResponsiveNodesDecide)
-        BY <1>1, <2>1 DEF RotatingLeaderProgressProperty
-      <3>4. (gst /\ ResponsiveHonestLeaderViewReached
-                    /\ ~ResponsiveNodesDecide)
-               ~> ResponsiveNodesDecide
-        BY <1>1, <2>1 DEF RotatingLeaderProgressProperty
-      <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
-    <2> QED BY <2>1
-         DEF ResponsiveDecisionConvergenceProperty
-  <1> QED BY <1>1
+THEOREM PostGstAsyncNextPreservesRetainedLockLeaderOriginOrExits ==
+  \A node \in ValidatorIds, originView \in Views,
+     lockedRound \in Views, subject \in Subjects:
+    /\ StrongInductiveInvariant
+    /\ RetainedLockExactLeaderTurn(
+         node, lockedRound, subject, originView)
+    /\ AsyncNext
+    => \/ RetainedLockExactLeaderTurn(
+            node, lockedRound, subject, originView)'
+       \/ LockedBodyProposalAttemptViewExit(node, originView)'
+       \/ RetainedLockModeGoal(node, lockedRound, subject)'
+       \/ LockedBodyProposalCertifiedHighExit(
+            node, lockedRound, subject)'
+BY PostGstAsyncNextPreservesLockedBodyProposalAttemptOrExits, Isa
+   DEF RetainedLockExactLeaderTurn,
+       RetainedLockModeGoal,
+       LockedBodyReproposalOutcome
 
 (***************************************************************************
-Decision convergence closes every stable locked-body source.
+Explicit temporal proof boundaries.
 
-The initial stable-source state fixes the node in AsyncVotersAt.  The
-one-height context invariant keeps AsyncCurrentResponsiveVoters equal to that
-set until convergence.  A source which has not already reached one of the
-three stronger exits therefore reaches the fourth exit, NodeHasDecision.
+Timeout/view progress is consumed first.  It guarantees each individual
+undecided responsive view eventually advances or decides, but does not by
+itself prove that the retained source reaches a later view which selects that
+same node as leader while preserving the exact TC-selected subject.  The first
+property names precisely that remaining source-exposure/leader-turn bridge.
+It is deliberately an operator declaration, not a theorem.
 ***************************************************************************)
 
-THEOREM ResponsiveDecisionConvergenceClosesLockedBodyReproposal ==
-  \A initialContext:
-    ResponsiveDecisionConvergenceProperty(
-      AsyncLiveSpecAt(initialContext))
-      => LockedBodyReproposalProgressProperty(
-           AsyncLiveSpecAt(initialContext))
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                ResponsiveDecisionConvergenceProperty(
-                  AsyncLiveSpecAt(initialContext))
-         PROVE LockedBodyReproposalProgressProperty(
-                 AsyncLiveSpecAt(initialContext))
-    <2>1. ASSUME AsyncLiveSpecAt(initialContext)
-           PROVE \A node \in ValidatorIds,
-                     lockedRound \in Views,
-                     subject \in Subjects:
-              StableAvailableRetainedLock(node, lockedRound, subject)
-                ~> LockedBodyReproposalOutcome(
-                     node, lockedRound, subject)
-      <3>1. AsyncSpecAt(initialContext)
-        BY <2>1, AsyncLiveSpecProjectsAsyncSpec
-      <3>2. [](AsyncCurrentResponsiveVoters
-                 = AsyncVotersAt(initialContext))
-        BY <3>1, AsyncSpecAlwaysUsesFixedResponsiveVoters
-      <3>3. (gst /\ ~ResponsiveNodesDecide)
-               ~> ResponsiveNodesDecide
-        BY <1>1, <2>1
-           DEF ResponsiveDecisionConvergenceProperty
-      <3>4. ASSUME NEW node \in ValidatorIds,
-                    NEW lockedRound \in Views,
-                    NEW subject \in Subjects
-             PROVE StableAvailableRetainedLock(
+RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(specification) ==
+  TimeoutViewProgressProperty(specification)
+    => (specification
+          => \A node \in ValidatorIds,
+                lockedRound \in Views,
+                subject \in Subjects:
+               RetainedLockModeSource(node, lockedRound, subject)
+                 ~> (RetainedLockModeGoal(
                        node, lockedRound, subject)
-                     ~> LockedBodyReproposalOutcome(
-                          node, lockedRound, subject)
-        <4>1. [](StableAvailableRetainedLock(
-                    node, lockedRound, subject)
-                   /\ ~LockedBodyReproposalOutcome(
-                        node, lockedRound, subject)
-                  => /\ node \in AsyncVotersAt(initialContext)
-                     /\ gst
-                     /\ ~ResponsiveNodesDecide)
-          BY <3>2,
-             StableLockedBodyOutsideOutcomeCreatesDecisionDebt, PTL
-        <4>2. [](AsyncCurrentResponsiveVoters
-                    = AsyncVotersAt(initialContext)
-                   /\ node \in AsyncVotersAt(initialContext)
-                   /\ ResponsiveNodesDecide
-                  => LockedBodyReproposalOutcome(
-                       node, lockedRound, subject))
-          BY FixedResponsiveDecisionIsLockedBodyOutcome, PTL
-        <4> QED BY <3>2, <3>3, <4>1, <4>2, PTL
-      <3> QED BY <3>4
-    <2> QED BY <2>1
-         DEF LockedBodyReproposalProgressProperty
-  <1> QED BY <1>1
+                      \/ RetainedLockSourceExposureFrontier(
+                           node, lockedRound, subject)))
+
+\* TODO: prove the timeout-fed source-exposure/leader-turn property by
+\* composing exact per-node view advancement, cyclic leader selection,
+\* retained-lock preservation, and TC-selected Prepare ownership.
+
+RetainedLockLeaderTurnProducerOriginProperty(specification) ==
+  specification
+    => \A node \in ValidatorIds,
+          lockedRound \in Views,
+          subject \in Subjects,
+          originView \in Views:
+         (RetainedLockExactLeaderTurn(
+             node, lockedRound, subject, originView)
+           \/ RetainedLockCertifiedPrepareTransfer(
+                node, lockedRound, subject, originView))
+           ~> (RetainedLockModeGoal(node, lockedRound, subject)
+                \/ RetainedLockRankedOriginFrontier(
+                     node, lockedRound, subject, originView))
+
+\* TODO: prove exact producer-origin activation for old Commit ownership,
+\* retained-body acquire/rebind/store/validate, and the later-view
+\* Assemble/Begin/Persist/safe-Sign Proposal corridor.
+
+RetainedLockRankHandoffProperty(specification) ==
+  specification
+    => \A node \in ValidatorIds,
+          lockedRound \in Views,
+          subject \in Subjects,
+          originView \in Views,
+          rank \in ExactLeaderSemanticRankCarrier:
+         RetainedLockCandidateRankFrontier(
+           node, lockedRound, subject, originView, rank)
+           ~> (RetainedLockModeGoal(node, lockedRound, subject)
+                \/ \E lowerRank \in
+                       SetLessThan(
+                         rank,
+                         ExactLeaderSemanticRankOrdering,
+                         ExactLeaderSemanticRankCarrier):
+                     RetainedLockCandidateRankFrontier(
+                       node, lockedRound, subject,
+                       originView, lowerRank))
+
+\* TODO: prove the exact same-origin semantic handoff from protected
+\* candidate exit, causal successor, and durable/wire milestone theorems.
 
 (***************************************************************************
-Release-facing dependency theorem.
+Deductive rank closure.
 
-Once the independent rotating-leader leaf is supplied, this theorem closes
-the exact locked-body reproposal property without an additional temporal
-assumption or an unproved declaration in this module.
+The finite lexicographic carrier closes a supplied exact same-origin handoff
+property.  These theorems do not supply any of the three temporal properties
+above; they only show that those narrower premises are sufficient for the
+release-facing locked-body property.
 ***************************************************************************)
 
-THEOREM RotatingLeaderProgressClosesLockedBodyReproposal ==
+THEOREM RetainedLockSemanticRankOrderingWellFounded ==
+  IsWellFoundedOn(
+    ExactLeaderSemanticRankOrdering,
+    ExactLeaderSemanticRankCarrier)
+BY NatLessThanWellFounded, IsWellFoundedOnSubset,
+   WFLexPairOrdering, SMT
+   DEF ExactLeaderSemanticRankOrdering,
+       ExactLeaderSemanticRankCarrier
+
+THEOREM RetainedLockRankHandoffClosesExactOrigin ==
   \A initialContext:
-    RotatingLeaderProgressProperty(AsyncLiveSpecAt(initialContext))
-      => LockedBodyReproposalProgressProperty(
-           AsyncLiveSpecAt(initialContext))
-BY RotatingLeaderProgressSuppliesResponsiveDecisionConvergence,
-   ResponsiveDecisionConvergenceClosesLockedBodyReproposal
+    RetainedLockRankHandoffProperty(
+      AsyncLiveSpecAt(initialContext))
+      => (AsyncLiveSpecAt(initialContext)
+            => \A node \in ValidatorIds,
+                  lockedRound \in Views,
+                  subject \in Subjects,
+                  originView \in Views,
+                  rank \in ExactLeaderSemanticRankCarrier:
+                 RetainedLockCandidateRankFrontier(
+                   node, lockedRound, subject, originView, rank)
+                   ~> RetainedLockModeGoal(
+                        node, lockedRound, subject))
+BY RetainedLockSemanticRankOrderingWellFounded,
+   WellFoundedLeadsTo
+   DEF RetainedLockRankHandoffProperty
+
+THEOREM RetainedLockRankHandoffClosesRankedFrontier ==
+  \A initialContext:
+    RetainedLockRankHandoffProperty(
+      AsyncLiveSpecAt(initialContext))
+      => (AsyncLiveSpecAt(initialContext)
+            => \A node \in ValidatorIds,
+                  lockedRound \in Views,
+                  subject \in Subjects:
+                 RetainedLockRankedFrontier(
+                   node, lockedRound, subject)
+                   ~> RetainedLockModeGoal(
+                        node, lockedRound, subject))
+BY RetainedLockRankHandoffClosesExactOrigin, PTL
+   DEF RetainedLockRankedFrontier,
+       RetainedLockRankedOriginFrontier
+
+THEOREM DirectRetainedLockDecompositionClosesLockedBodyReproposal ==
+  \A initialContext:
+    /\ TimeoutViewProgressProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockLeaderTurnProducerOriginProperty(
+         AsyncLiveSpecAt(initialContext))
+    /\ RetainedLockRankHandoffProperty(
+         AsyncLiveSpecAt(initialContext))
+    => LockedBodyReproposalProgressProperty(
+         AsyncLiveSpecAt(initialContext))
+BY RetainedLockRankHandoffClosesRankedFrontier, PTL
+   DEF RetainedLockTimeoutFedSourceExposureLeaderTurnProperty,
+       RetainedLockLeaderTurnProducerOriginProperty,
+       RetainedLockSourceExposureFrontier,
+       RetainedLockRankedFrontier,
+       RetainedLockModeSource,
+       RetainedLockModeGoal,
+       LockedBodyReproposalProgressProperty
 
 =============================================================================

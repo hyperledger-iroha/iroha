@@ -1823,7 +1823,7 @@ fn validate_soracloud_fhe_stark_verifier_key_payload(
                 "{label} verifier-key has invalid STARK payload: {err}"
             ))
         })?;
-    crate::zk_stark::validate_stark_fri_production_verifying_key_payload(
+    crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
         &payload,
         expected_circuit_id,
         label,
@@ -4475,7 +4475,7 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
             payload
         }
     };
-    crate::zk_stark::validate_stark_fri_production_verifying_key_payload(
+    crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
         &payload,
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
         "FHE full-bootstrap execution verifier-key artifact",
@@ -4525,7 +4525,7 @@ fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
                 "{label} verifier-key has invalid STARK payload: {err}"
             ))
         })?;
-    crate::zk_stark::validate_stark_fri_production_verifying_key_payload(
+    crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
         &payload,
         expected_circuit_id,
         label,
@@ -20595,10 +20595,10 @@ mod tests {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -22660,10 +22660,10 @@ mod tests {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_string(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -32144,7 +32144,7 @@ mod tests {
         let mut weak_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
             norito::decode_from_bytes(&weak_vk.bytes).expect("decode sample STARK VK");
         weak_payload.n_log2 =
-            crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2.saturating_sub(1);
+            crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2.saturating_sub(1);
         let canonical_native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
             norito::decode_from_bytes(
                 &iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(

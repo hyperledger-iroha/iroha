@@ -1573,8 +1573,10 @@ mod tests {
         account::AccountId,
         sorafs::{
             pin_registry::{
-                ManifestDigest, ManifestRootCid, ReplicationOrderCompletionRecord,
-                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
+                ManifestDigest, ManifestRootCid, ProviderIngestCompletionAuthorityV1,
+                ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+                ReplicationOrderCompletionRecord, ReplicationOrderId, ReplicationOrderRecord,
+                ReplicationOrderStatus,
             },
             prelude::ProviderId,
         },
@@ -1666,6 +1668,7 @@ mod tests {
             issued_epoch: 5,
             deadline_epoch: 6,
             canonical_order: to_bytes(order).expect("encode replication order"),
+            assignment_revision: 1,
             provider_completions: Vec::new(),
             status,
         }
@@ -1964,12 +1967,27 @@ mod tests {
         order.validate().expect("valid multi-provider order");
 
         let mut order_record = make_order_record(&order, ReplicationOrderStatus::Pending);
+        let completed_by = order_record.issued_by.clone();
         order_record
             .provider_completions
             .push(ReplicationOrderCompletionRecord {
                 provider_id: declaration.provider_id,
-                completed_by: order_record.issued_by.clone(),
+                completed_by: completed_by.clone(),
                 completion_epoch: 6,
+                assignment_revision: 1,
+                completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                    completed_by,
+                    ProviderIngestCompletionSignerPolicyV1 {
+                        policy_id: [0xA1; 32],
+                        revision: 1,
+                        predecessor_digest: None,
+                        policy_digest: [0xA2; 32],
+                    },
+                ),
+                finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                    height: 6,
+                    block_hash: [0xA6; 32],
+                },
             });
 
         let outcome = manager

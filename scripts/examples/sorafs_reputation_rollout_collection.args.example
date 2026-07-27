@@ -14,10 +14,19 @@
 target/debug/sorafs_cli
 --torii-url
 https://validator.example.invalid
+# Set this to the deployment's exact canonical single-key I105 account. Keep
+# the matching key file runtime-only, regular, single-linked, owner-readable
+# only, and at a path whose parents are not symlinks.
+--auth-account
+sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53
+--auth-private-key-file
+/runtime/sorafs/reputation/reader.key
 --snapshot
 /runtime/sorafs/reputation/reputation-snapshot.to
 --publish-evidence
 /runtime/sorafs/reputation/reputation-publication-canary.json
+# Provider ids are exact 1..=256-byte ASCII values from [A-Za-z0-9_.:-];
+# the whole values "." and ".." are reserved URL dot segments and are rejected.
 --provider-id
 provider-a
 --provider-proof

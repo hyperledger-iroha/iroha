@@ -13,7 +13,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     isi::sorafs::{
         ApprovePinManifest, BindManifestAlias, CompleteReplicationOrder, IssueReplicationOrder,
-        RegisterPinManifest, RegisterProviderOwner,
+        RegisterPinManifest, RegisterProviderOwner, SetProviderIngestCompletionAuthority,
     },
     prelude::*,
     sorafs::{
@@ -21,7 +21,9 @@ use iroha_data_model::{
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy, PinStatus,
-            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestFinalizedAnchorV1, ReplicationOrderId, ReplicationOrderRecord,
+            ReplicationOrderStatus, StorageClass,
         },
     },
 };
@@ -45,7 +47,8 @@ const FIXTURE_PATH: &str = "crates/iroha_core/tests/fixtures/sorafs_pin_registry
 
 fn main() -> Result<(), Box<dyn Error>> {
     let state = make_state();
-    let mut block = state.block(default_block_header());
+    commit_completion_anchor(&state)?;
+    let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
 
@@ -85,6 +88,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             order_id,
             provider_id,
             completion_epoch: 25,
+            expected_authority: completion_authority(&alice()),
+            expected_assignment_revision: 1,
+            finalized_anchor: completion_anchor(),
         }
         .execute(&alice(), &mut tx)?;
     }
@@ -168,6 +174,18 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
         }
         .execute(&alice, tx)
         .expect("register provider owner");
+        let expected_current = tx
+            .world()
+            .provider_ingest_completion_authorities()
+            .get(&provider_id)
+            .cloned();
+        SetProviderIngestCompletionAuthority::new(
+            provider_id,
+            expected_current,
+            completion_authority(&alice),
+        )
+        .execute(&alice, tx)
+        .expect("register provider completion authority");
     }
 }
 
@@ -365,6 +383,10 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
     );
     order_obj.insert("issued_epoch".into(), Value::from(order.issued_epoch));
     order_obj.insert("deadline_epoch".into(), Value::from(order.deadline_epoch));
+    order_obj.insert(
+        "assignment_revision".into(),
+        Value::from(order.assignment_revision),
+    );
     let (status_label, status_epoch) = match order.status {
         ReplicationOrderStatus::Pending => ("pending", None),
         ReplicationOrderStatus::Completed(epoch) => ("completed", Some(epoch)),
@@ -391,6 +413,46 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
             map.insert(
                 "completion_epoch".into(),
                 Value::from(completion.completion_epoch),
+            );
+            map.insert(
+                "assignment_revision".into(),
+                Value::from(completion.assignment_revision),
+            );
+            map.insert(
+                "expected_owner".into(),
+                Value::String(completion.completion_authority.provider_owner.to_string()),
+            );
+            map.insert(
+                "signer_policy_id_hex".into(),
+                Value::String(hex::encode(
+                    completion.completion_authority.signer_policy.policy_id,
+                )),
+            );
+            map.insert(
+                "signer_policy_revision".into(),
+                Value::from(completion.completion_authority.signer_policy.revision),
+            );
+            map.insert(
+                "signer_policy_predecessor_digest_hex".into(),
+                completion
+                    .completion_authority
+                    .signer_policy
+                    .predecessor_digest
+                    .map_or(Value::Null, |digest| Value::String(hex::encode(digest))),
+            );
+            map.insert(
+                "signer_policy_digest_hex".into(),
+                Value::String(hex::encode(
+                    completion.completion_authority.signer_policy.policy_digest,
+                )),
+            );
+            map.insert(
+                "finalized_height".into(),
+                Value::from(completion.finalized_anchor.height),
+            );
+            map.insert(
+                "finalized_block_hash_hex".into(),
+                Value::String(hex::encode(completion.finalized_anchor.block_hash)),
             );
             Value::Object(map)
         })
@@ -457,6 +519,38 @@ fn make_state() -> State {
     State::new_for_testing(world, kura, live)
 }
 
+fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 42, 0)
+}
+
+fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
+    ProviderIngestFinalizedAnchorV1 {
+        height: 1,
+        block_hash: *iroha_crypto::HashOf::new(&completion_anchor_header()).as_ref(),
+    }
+}
+
+fn commit_completion_anchor(state: &State) -> Result<(), Box<dyn Error>> {
+    let mut block = state.block(completion_anchor_header());
+    block
+        .block_hashes
+        .push_for_tests(iroha_crypto::HashOf::new(&completion_anchor_header()));
+    block.commit()?;
+    Ok(())
+}
+
+fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {
+    ProviderIngestCompletionAuthorityV1::new(
+        owner.clone(),
+        ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0xA1; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0xA2; 32],
+        },
+    )
+}
+
 fn seed_public_pin_fee_assets(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let fee_asset_id = tx.gov.sorafs_pin_fee_asset_id.clone();
     if let Some(domain_id) = fee_asset_id.try_domain().cloned()
@@ -508,8 +602,15 @@ fn default_chunker() -> ChunkerProfileHandle {
     }
 }
 
-fn default_block_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0)
+fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("height must be non-zero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    )
 }
 
 fn default_digest() -> ManifestDigest {

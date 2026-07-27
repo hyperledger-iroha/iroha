@@ -28,7 +28,7 @@ fn telemetry_for(profile: TelemetryProfile, configure: impl Fn(&Arc<Metrics>)) -
 async fn disabled_profile_hides_status_and_metrics() {
     let telemetry = telemetry_disabled();
 
-    let status_err = handle_status(&telemetry, None, None, true, None)
+    let status_err = handle_status(&telemetry, None, None, true, None, None)
         .await
         .unwrap_err();
     assert_eq!(
@@ -47,7 +47,7 @@ async fn disabled_profile_hides_status_and_metrics() {
 async fn operator_profile_exposes_status_only() {
     let telemetry = telemetry_for(TelemetryProfile::Operator, |_| {});
 
-    let status_resp = handle_status(&telemetry, None, None, true, None)
+    let status_resp = handle_status(&telemetry, None, None, true, None, None)
         .await
         .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);
@@ -65,7 +65,7 @@ async fn extended_profile_exposes_prometheus_metrics() {
         metrics.sumeragi_new_view_publish_total.inc();
     });
 
-    let status_resp = handle_status(&telemetry, None, None, true, None)
+    let status_resp = handle_status(&telemetry, None, None, true, None, None)
         .await
         .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);

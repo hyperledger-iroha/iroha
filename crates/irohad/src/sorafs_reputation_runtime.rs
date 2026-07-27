@@ -587,8 +587,8 @@ impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
 
 /// Assemble and start the committed reputation runtime.
 ///
-/// Missing, null/test-marked, or identity-mismatched adapters fail startup
-/// before any worker is spawned.
+/// Missing, test-marked, stale, or identity/revision/policy-mismatched adapters
+/// fail startup before durable state is opened or any worker is spawned.
 pub(crate) fn start(
     config: SorafsReputationRuntime,
     chain_id: ChainId,
@@ -850,6 +850,9 @@ fn assemble(
         .revalidate_governance_dag(dependencies.governance_dag.as_ref())
         .wrap_err("committed reputation Governance DAG adapter is not qualified")?;
 
+    query_policy
+        .revalidate_provider(dependencies.finalized_query.as_ref())
+        .wrap_err("revalidate exact finalized reputation query before bootstrap read")?;
     let bootstrap_delivery_view_result = dependencies
         .finalized_query
         .reputation_journal_delivery_view(
@@ -901,6 +904,19 @@ fn assemble(
             bail!("reputation journal submitter does not own a governed recorder identity");
         }
     }
+    query_policy
+        .revalidate_provider(dependencies.finalized_query.as_ref())
+        .wrap_err("finalized-query qualification changed before durable state")?;
+    journal_delivery_policy
+        .revalidate_submitter_provider(dependencies.journal_transaction_submitter.as_ref())
+        .wrap_err("journal-submitter qualification changed before durable state")?;
+    publication_policy
+        .revalidate_threshold_signer(dependencies.threshold_signer.as_ref())
+        .wrap_err("threshold-signer qualification changed before durable state")?;
+    publication_policy
+        .revalidate_governance_dag(dependencies.governance_dag.as_ref())
+        .wrap_err("Governance DAG qualification changed before durable state")?;
+
     let projector = Arc::new(
         ReputationIngestService::open(&config.state_dir, ingest_policy.clone())
             .wrap_err("open committed reputation projector")?,
@@ -1067,7 +1083,7 @@ mod tests {
         },
     };
     use sorafs_manifest::{
-        GovernanceDagBlockV1, SignedReputationSnapshotV1,
+        SignedReputationSnapshotV1,
         reputation::signed::{
             REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1, REPUTATION_TRUSTED_SIGNER_VERSION_V1,
             ReputationTrustedSignerV1,
@@ -1075,8 +1091,8 @@ mod tests {
     };
     use sorafs_node::reputation::runtime::{
         ReputationExternalFailureV1, ReputationFinalizedAnchorV1,
-        ReputationGovernanceDagPublicationRequestV1, ReputationJournalDeliveryFinalizedViewV1,
-        ReputationThresholdSigningRequestV1,
+        ReputationGovernanceDagPublicationRequestV1, ReputationGovernanceDagReadbackV1,
+        ReputationJournalDeliveryFinalizedViewV1, ReputationThresholdSigningRequestV1,
     };
     use tempfile::TempDir;
 
@@ -1310,7 +1326,8 @@ mod tests {
         fn reconcile_publication(
             &self,
             _request: &ReputationGovernanceDagPublicationRequestV1,
-        ) -> Result<Option<GovernanceDagBlockV1>, ReputationExternalFailureV1> {
+        ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>
+        {
             Ok(None)
         }
     }
@@ -1604,7 +1621,71 @@ mod tests {
         assert!(error.to_string().contains("not qualified"));
         assert!(
             !state_dir.exists(),
-            "adapter readiness must be verified before state is opened"
+            "adapter qualification must be verified before state is opened"
+        );
+    }
+
+    #[test]
+    fn assembly_rejects_policy_mismatched_and_test_marked_providers_before_state_open() {
+        let temp = TempDir::new().expect("tempdir");
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let trust_policy = trust_policy();
+
+        let mismatched_state_dir = temp.path().join("mismatched-must-not-exist");
+        let mismatched_config = config(mismatched_state_dir.clone());
+        let mut mismatched_dependencies = dependencies(
+            &mismatched_config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
+        mismatched_dependencies.threshold_signer = Arc::new(PendingThresholdSigner {
+            handle: mismatched_config.threshold_signer_handle.clone(),
+            qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                [0xE1; 32],
+            ),
+        });
+        let mismatch = assemble(
+            mismatched_config,
+            chain_id.clone(),
+            Arc::clone(&trust_policy),
+            mismatched_dependencies,
+        )
+        .expect_err("policy-substituted signer must fail startup");
+        assert!(mismatch.to_string().contains("not qualified"));
+        assert!(
+            !mismatched_state_dir.exists(),
+            "qualification mismatch must fail before durable state"
+        );
+
+        let test_marked_state_dir = temp.path().join("test-marked-must-not-exist");
+        let test_marked_config = config(test_marked_state_dir.clone());
+        let mut test_marked_dependencies = dependencies(
+            &test_marked_config,
+            &chain_id,
+            trust_policy.as_ref(),
+            "ledger.finalized.primary",
+        );
+        let query_qualification = test_marked_dependencies
+            .finalized_query
+            .qualification()
+            .expect("query qualification");
+        test_marked_dependencies.finalized_query = Arc::new(UnavailableQuery {
+            handle: "test:ledger-finalized".to_owned(),
+            ready: true,
+            qualification: query_qualification,
+        });
+        let _ = assemble(
+            test_marked_config,
+            chain_id,
+            trust_policy,
+            test_marked_dependencies,
+        )
+        .expect_err("test-marked provider must fail startup");
+        assert!(
+            !test_marked_state_dir.exists(),
+            "test-marked provider must fail before durable state"
         );
     }
 

@@ -12651,6 +12651,19 @@ pub fn ensure_mandatory_offline_configuration(
     offline_config: &iroha_config::parameters::actual::Offline,
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
 ) -> Result<(), String> {
+    if !offline_config.enabled {
+        if !offline_config.escrow_accounts.is_empty()
+            || offline_config.kagemusha_release_policy_path.is_some()
+            || offline_config.kagemusha_artifact_dir.is_some()
+            || command_config.is_some()
+        {
+            return Err(
+                "settlement.offline.enabled=false forbids dormant escrow, release, and command configuration"
+                    .to_owned(),
+            );
+        }
+        return Ok(());
+    }
     if !offline_config.escrow_required {
         return Err("settlement.offline.escrow_required must be true".to_owned());
     }
@@ -12802,6 +12815,9 @@ pub fn ensure_mandatory_offline_startup_readiness(
     fee_asset_selector: &str,
 ) -> Result<(), String> {
     ensure_mandatory_offline_configuration(offline_config, command_config)?;
+    if !offline_config.enabled {
+        return Ok(());
+    }
     let command_config = command_config
         .cloned()
         .ok_or_else(|| "torii.kagemusha_commands is mandatory for offline cash".to_owned())?;
@@ -13395,13 +13411,18 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn mandatory_health_and_readyz_status_fail_closed_with_http_503() {
         assert_eq!(
-            mandatory_offline_probe_status(false),
+            mandatory_offline_probe_status(true, false),
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "both mandatory offline readiness probes must reject an offline-incomplete node",
         );
         assert_eq!(
-            mandatory_offline_probe_status(true),
+            mandatory_offline_probe_status(true, true),
             axum::http::StatusCode::OK,
+        );
+        assert_eq!(
+            mandatory_offline_probe_status(false, false),
+            axum::http::StatusCode::OK,
+            "an explicitly disabled optional service cannot fail node readiness",
         );
     }
 
@@ -13478,6 +13499,27 @@ mod offline_kagemusha_readiness_tests {
         let error = ensure_mandatory_offline_configuration(&offline, None)
             .expect_err("missing issuer command authority must fail closed");
         assert!(error.contains("torii.kagemusha_commands is mandatory"));
+    }
+
+    #[test]
+    fn explicit_disabled_offline_profile_is_empty_and_accepted() {
+        let mut offline = iroha_config::parameters::actual::Offline {
+            enabled: false,
+            ..iroha_config::parameters::actual::Offline::default()
+        };
+        ensure_mandatory_offline_configuration(&offline, None)
+            .expect("an explicit empty disabled profile is valid");
+
+        let asset_definition_id = AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("boi", "is").expect("fixture asset domain"),
+            "ds".parse().expect("fixture asset name"),
+        );
+        offline
+            .escrow_accounts
+            .insert(asset_definition_id, iroha_test_samples::ALICE_ID.clone());
+        let error = ensure_mandatory_offline_configuration(&offline, None)
+            .expect_err("disabled profiles must reject dormant escrow configuration");
+        assert!(error.contains("enabled=false"));
     }
 
     #[test]
@@ -17280,6 +17322,19 @@ fn mandatory_offline_status_snapshot(
     app: &AppState,
 ) -> iroha_torii_shared::offline_api::OfflineStatus {
     let offline_config = app.state.view().settlement.offline.clone();
+    if !offline_config.enabled {
+        return iroha_torii_shared::offline_api::OfflineStatus {
+            mandatory: false,
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
+            required_bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+            ready: false,
+            assets: Vec::new(),
+            blockers: Vec::new(),
+        };
+    }
     let command_config = app
         .offline_commands
         .as_deref()
@@ -17351,8 +17406,8 @@ fn mandatory_offline_status_snapshot(
 }
 
 #[cfg(feature = "app_api")]
-fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
-    if ready {
+fn mandatory_offline_probe_status(mandatory: bool, ready: bool) -> StatusCode {
+    if !mandatory || ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
@@ -17362,6 +17417,7 @@ fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
 #[cfg(feature = "app_api")]
 fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
     let offline_config = app.state.view().settlement.offline.clone();
+    let mandatory = offline_config.enabled;
     let command_config = app
         .offline_commands
         .as_deref()
@@ -17374,12 +17430,17 @@ fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
         command_config.as_ref(),
         &fee_asset_selector,
     );
-    let ready = result.is_ok();
-    let blockers = result.err().into_iter().collect::<Vec<_>>();
+    let ready = mandatory && result.is_ok();
+    let blockers = if mandatory {
+        result.err().into_iter().collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     crate::utils::respond_json_value_with_status(
-        mandatory_offline_probe_status(ready),
+        mandatory_offline_probe_status(mandatory, ready),
         json_object([
             json_entry("live", true),
+            json_entry("mandatory", mandatory),
             json_entry("ready", ready),
             json_entry(
                 "cash_handoff_capability",
@@ -17542,6 +17603,23 @@ async fn handler_node_capabilities(
         Err(resp) => return Ok(resp),
     };
     let payload = crate::runtime::handle_node_capabilities(app.state.clone()).await?;
+    Ok(crate::utils::respond_with_format(payload, format))
+}
+
+/// GET /v1/privacy/capabilities — authoritative committed privacy snapshot.
+async fn handler_privacy_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/privacy/capabilities").await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let payload = crate::runtime::handle_privacy_capabilities(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
@@ -51304,7 +51382,8 @@ impl SoraFsAppealSettlementSubmitter {
         use sorafs_node::appeal_finance_transaction_forwarder::{
             APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
             APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
-            AppealFinanceCheckpointAuthenticationPolicyV1, AppealFinanceTransactionForwarder,
+            AppealFinanceCheckpointAuthenticationPolicyV1,
+            AppealFinanceRuntimeProviderQualificationV1, AppealFinanceTransactionForwarder,
             AppealFinanceTransactionForwarderPolicyV1,
         };
 
@@ -51317,6 +51396,57 @@ impl SoraFsAppealSettlementSubmitter {
             panic!("SoraFS appeal-finance runtime signer inventory is invalid: {error:?}")
         });
 
+        let checkpoint_binding = config.checkpoint_provider.as_ref().unwrap_or_else(|| {
+            panic!(
+                "SoraFS appeal-finance submitters require an independent configured checkpoint HSM/KMS binding"
+            )
+        });
+        if config.submitter_signers.iter().any(|binding| {
+            binding.handle == checkpoint_binding.handle
+                || binding.public_key == checkpoint_binding.public_key
+        }) {
+            panic!(
+                "SoraFS appeal-finance checkpoint and transaction signer bindings must be independently administered"
+            );
+        }
+        let checkpoint_public_key = checkpoint_binding
+            .public_key
+            .try_to_bytes()
+            .ok()
+            .and_then(|(algorithm, bytes)| {
+                if algorithm != iroha_crypto::Algorithm::Ed25519 {
+                    return None;
+                }
+                <[u8; 32]>::try_from(bytes).ok()
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "SoraFS appeal-finance checkpoint binding must carry a strict Ed25519 public key"
+                )
+            });
+        let expected_checkpoint_qualification = AppealFinanceRuntimeProviderQualificationV1::new(
+            checkpoint_binding.revision,
+            checkpoint_binding.policy_digest,
+        );
+        let authentication_policy = AppealFinanceCheckpointAuthenticationPolicyV1 {
+            version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
+            provider_handle: checkpoint_binding.handle.clone(),
+            public_key: checkpoint_public_key,
+            revision: checkpoint_binding.revision,
+            policy_digest: checkpoint_binding.policy_digest,
+        };
+        authentication_policy.validate().unwrap_or_else(|error| {
+            panic!("SoraFS appeal-finance checkpoint HSM/KMS binding is invalid: {error}")
+        });
+        let checkpoint_identity = checkpoint_runtime.identity().unwrap_or_else(|_| {
+            panic!("SoraFS appeal-finance checkpoint HSM/KMS identity is unavailable")
+        });
+        if checkpoint_identity.provider_handle != checkpoint_binding.handle
+            || checkpoint_identity.public_key != checkpoint_public_key
+            || checkpoint_identity.qualification != expected_checkpoint_qualification
+        {
+            panic!("SoraFS appeal-finance checkpoint HSM/KMS binding is substituted or stale");
+        }
         let state_dir = storage_data_dir.join("appeal-finance-transaction-forwarder");
         let policy = AppealFinanceTransactionForwarderPolicyV1 {
             max_pending: config.worker_max_pending,
@@ -51325,29 +51455,6 @@ impl SoraFsAppealSettlementSubmitter {
             max_attempts: config.worker_max_retry_attempts,
             max_transaction_bytes: APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
             checkpoint_max_bytes: config.worker_checkpoint_max_bytes,
-        };
-        let checkpoint_identity = checkpoint_runtime.identity().unwrap_or_else(|_| {
-            panic!("SoraFS appeal-finance checkpoint HSM/KMS identity is unavailable")
-        });
-        let configured_public_key = PublicKey::from_bytes(
-            iroha_crypto::Algorithm::Ed25519,
-            &checkpoint_identity.public_key,
-        )
-        .unwrap_or_else(|_| {
-            panic!("SoraFS appeal-finance checkpoint HSM/KMS identity is not strict Ed25519")
-        });
-        if !config.submitter_signers.iter().any(|binding| {
-            binding.handle == checkpoint_identity.provider_handle
-                && binding.public_key == configured_public_key
-        }) {
-            panic!(
-                "SoraFS appeal-finance checkpoint HSM/KMS identity is not bound by configuration"
-            );
-        }
-        let authentication_policy = AppealFinanceCheckpointAuthenticationPolicyV1 {
-            version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
-            provider_handle: checkpoint_identity.provider_handle,
-            public_key: checkpoint_identity.public_key,
         };
         let forwarder = AppealFinanceTransactionForwarder::open(
             &state_dir,
@@ -51407,22 +51514,14 @@ impl SoraFsAppealSettlementSubmitter {
         &self,
         authority: &AccountId,
         finalized_height: u64,
-    ) -> Result<
-        Arc<dyn SoraFsAppealFinanceTransactionSigner>,
-        SoraFsAppealFinanceSignerSelectionError,
-    > {
+    ) -> Result<SoraFsAppealFinanceQualifiedSignerV1, SoraFsAppealFinanceSignerSelectionError> {
         let binding = self.active_binding_for(authority, finalized_height)?;
         let provider = self
             .runtime_signers
             .as_ref()
             .and_then(|registry| registry.get(&binding.handle))
             .ok_or(SoraFsAppealFinanceSignerSelectionError::ProviderMissing)?;
-        if provider.public_key() != binding.public_key
-            || AccountId::new(provider.public_key()) != binding.authority
-        {
-            return Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch);
-        }
-        Ok(provider)
+        SoraFsAppealFinanceQualifiedSignerV1::try_new(binding, provider)
     }
 
     fn signer_count(&self, finalized_height: u64) -> usize {
@@ -51453,7 +51552,15 @@ pub trait SoraFsAppealFinanceTransactionSigner: Send + Sync {
     fn handle(&self) -> &str;
 
     /// Exact public key controlled by this provider.
-    fn public_key(&self) -> PublicKey;
+    fn public_key(&self) -> Result<PublicKey, SoraFsAppealFinanceSigningError>;
+
+    /// Qualify the active adapter and exact public-policy revision.
+    fn qualification(
+        &self,
+    ) -> Result<
+        sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
+        SoraFsAppealFinanceSigningError,
+    >;
 
     /// Sign the exact transaction payload.
     fn sign(
@@ -51470,6 +51577,88 @@ pub enum SoraFsAppealFinanceSigningError {
     Unavailable,
     /// Provider refused or failed the signing operation.
     Refused,
+    /// Provider identity, revision, or public policy changed around the request.
+    QualificationChanged,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct SoraFsAppealFinanceQualifiedSignerV1 {
+    signer: Arc<dyn SoraFsAppealFinanceTransactionSigner>,
+    handle: String,
+    public_key: PublicKey,
+    qualification:
+        sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
+}
+
+#[cfg(feature = "app_api")]
+impl SoraFsAppealFinanceQualifiedSignerV1 {
+    fn try_new(
+        binding: &iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding,
+        signer: Arc<dyn SoraFsAppealFinanceTransactionSigner>,
+    ) -> Result<Self, SoraFsAppealFinanceSignerSelectionError> {
+        let qualified = Self {
+            signer,
+            handle: binding.handle.clone(),
+            public_key: binding.public_key.clone(),
+            qualification:
+                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                    binding.revision,
+                    binding.policy_digest,
+                ),
+        };
+        qualified.revalidate()?;
+        if AccountId::new(qualified.public_key.clone()) != binding.authority {
+            return Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch);
+        }
+        Ok(qualified)
+    }
+
+    fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+
+    fn revalidate(&self) -> Result<(), SoraFsAppealFinanceSignerSelectionError> {
+        if self.signer.handle() != self.handle {
+            return Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch);
+        }
+        let qualification = self
+            .signer
+            .qualification()
+            .map_err(|_| SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable)?;
+        qualification
+            .validate()
+            .map_err(|_| SoraFsAppealFinanceSignerSelectionError::IdentityMismatch)?;
+        if self.signer.handle() != self.handle || qualification != self.qualification {
+            return Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch);
+        }
+        let public_key_result = self.signer.public_key();
+        let qualification_after_key = self
+            .signer
+            .qualification()
+            .map_err(|_| SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable)?;
+        let public_key = public_key_result
+            .map_err(|_| SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable)?;
+        if self.signer.handle() != self.handle
+            || qualification_after_key != self.qualification
+            || public_key != self.public_key
+        {
+            return Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch);
+        }
+        Ok(())
+    }
+
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsAppealFinanceSigningError> {
+        self.revalidate()
+            .map_err(|_| SoraFsAppealFinanceSigningError::QualificationChanged)?;
+        let result = self.signer.sign(payload);
+        self.revalidate()
+            .map_err(|_| SoraFsAppealFinanceSigningError::QualificationChanged)?;
+        result
+    }
 }
 
 /// Validated runtime registry of opaque appeal-finance signer providers.
@@ -51487,18 +51676,35 @@ impl SoraFsAppealFinanceRuntimeSignersV1 {
     ) -> Result<Self, SoraFsAppealFinanceRuntimeSignerRegistryError> {
         let mut registry = BTreeMap::new();
         for signer in signers {
-            let handle = signer.handle();
-            if !is_production_appeal_finance_runtime_handle(handle) {
+            let handle = signer.handle().to_owned();
+            if !is_production_appeal_finance_runtime_handle(&handle) {
                 return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::InvalidHandle);
             }
-            let public_key = signer.public_key();
+            let qualification = signer
+                .qualification()
+                .map_err(|_| SoraFsAppealFinanceRuntimeSignerRegistryError::ProviderUnavailable)?;
+            qualification
+                .validate()
+                .map_err(|_| SoraFsAppealFinanceRuntimeSignerRegistryError::InvalidQualification)?;
+            if signer.handle() != handle.as_str() {
+                return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::IdentityDrift);
+            }
+            let public_key_result = signer.public_key();
+            let qualification_after_key = signer
+                .qualification()
+                .map_err(|_| SoraFsAppealFinanceRuntimeSignerRegistryError::ProviderUnavailable)?;
+            let public_key = public_key_result
+                .map_err(|_| SoraFsAppealFinanceRuntimeSignerRegistryError::ProviderUnavailable)?;
+            if signer.handle() != handle.as_str() || qualification_after_key != qualification {
+                return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::IdentityDrift);
+            }
             if !matches!(
                 public_key.try_algorithm(),
                 Ok(iroha_crypto::Algorithm::Ed25519)
             ) {
                 return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::InvalidPublicKey);
             }
-            if registry.insert(handle.to_owned(), signer).is_some() {
+            if registry.insert(handle, signer).is_some() {
                 return Err(SoraFsAppealFinanceRuntimeSignerRegistryError::DuplicateHandle);
             }
         }
@@ -51527,7 +51733,7 @@ fn is_production_appeal_finance_runtime_handle(value: &str) -> bool {
         .any(|component| {
             matches!(
                 component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
             )
         })
 }
@@ -51542,6 +51748,12 @@ pub enum SoraFsAppealFinanceRuntimeSignerRegistryError {
     DuplicateHandle,
     /// Provider key is not Ed25519.
     InvalidPublicKey,
+    /// Provider could not prove current production readiness.
+    ProviderUnavailable,
+    /// Provider returned a zero or unsupported public qualification.
+    InvalidQualification,
+    /// Provider identity or public policy changed during registry construction.
+    IdentityDrift,
 }
 
 #[cfg(feature = "app_api")]
@@ -51572,7 +51784,42 @@ fn qualify_appeal_finance_runtime_signer_inventory(
                 },
             );
         }
-        let public_key = provider.public_key();
+        let qualification = provider.qualification().map_err(|_| {
+            SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderUnavailable {
+                handle: binding.handle.clone(),
+            }
+        })?;
+        let expected_qualification =
+            sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                binding.revision,
+                binding.policy_digest,
+            );
+        if qualification.validate().is_err() || qualification != expected_qualification {
+            return Err(
+                SoraFsAppealFinanceRuntimeSignerQualificationError::QualificationMismatch {
+                    handle: binding.handle.clone(),
+                },
+            );
+        }
+        let public_key_result = provider.public_key();
+        let qualification_after_key = provider.qualification().map_err(|_| {
+            SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderUnavailable {
+                handle: binding.handle.clone(),
+            }
+        })?;
+        let public_key = public_key_result.map_err(|_| {
+            SoraFsAppealFinanceRuntimeSignerQualificationError::ProviderUnavailable {
+                handle: binding.handle.clone(),
+            }
+        })?;
+        if provider.handle() != binding.handle || qualification_after_key != expected_qualification
+        {
+            return Err(
+                SoraFsAppealFinanceRuntimeSignerQualificationError::QualificationChanged {
+                    handle: binding.handle.clone(),
+                },
+            );
+        }
         if public_key != binding.public_key {
             return Err(
                 SoraFsAppealFinanceRuntimeSignerQualificationError::PublicKeyMismatch {
@@ -51599,6 +51846,9 @@ enum SoraFsAppealFinanceRuntimeSignerQualificationError {
     HandleMismatch { handle: String },
     PublicKeyMismatch { handle: String },
     AccountIdMismatch { handle: String },
+    ProviderUnavailable { handle: String },
+    QualificationMismatch { handle: String },
+    QualificationChanged { handle: String },
 }
 
 #[cfg(feature = "app_api")]
@@ -51607,12 +51857,16 @@ enum SoraFsAppealFinanceSignerSelectionError {
     NotYetActive,
     NoActiveBinding,
     ProviderMissing,
+    ProviderUnavailable,
     IdentityMismatch,
 }
 
 #[cfg(all(test, feature = "app_api"))]
 mod appeal_finance_runtime_signer_tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use super::*;
     use iroha_data_model::transaction::TransactionBuilder;
@@ -51626,6 +51880,7 @@ mod appeal_finance_runtime_signer_tests {
     struct TestSigner {
         handle: String,
         keypair: KeyPair,
+        qualification: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
     }
 
     impl SoraFsAppealFinanceTransactionSigner for TestSigner {
@@ -51633,8 +51888,17 @@ mod appeal_finance_runtime_signer_tests {
             &self.handle
         }
 
-        fn public_key(&self) -> PublicKey {
-            self.keypair.public_key().clone()
+        fn public_key(&self) -> Result<PublicKey, SoraFsAppealFinanceSigningError> {
+            Ok(self.keypair.public_key().clone())
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
+            SoraFsAppealFinanceSigningError,
+        >{
+            Ok(self.qualification)
         }
 
         fn sign(
@@ -51647,6 +51911,50 @@ mod appeal_finance_runtime_signer_tests {
         }
     }
 
+    struct PostSignQualificationDriftingSigner {
+        handle: String,
+        keypair: KeyPair,
+        qualification: Mutex<
+            sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
+        >,
+    }
+
+    impl SoraFsAppealFinanceTransactionSigner for PostSignQualificationDriftingSigner {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn public_key(&self) -> Result<PublicKey, SoraFsAppealFinanceSigningError> {
+            Ok(self.keypair.public_key().clone())
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
+            SoraFsAppealFinanceSigningError,
+        >{
+            self.qualification
+                .lock()
+                .map(|qualification| *qualification)
+                .map_err(|_| SoraFsAppealFinanceSigningError::Unavailable)
+        }
+
+        fn sign(
+            &self,
+            _payload: TransactionPayload,
+        ) -> Result<SignedTransaction, SoraFsAppealFinanceSigningError> {
+            *self
+                .qualification
+                .lock()
+                .map_err(|_| SoraFsAppealFinanceSigningError::Unavailable)? =
+                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                    2, [0xA2; 32],
+                );
+            Err(SoraFsAppealFinanceSigningError::Refused)
+        }
+    }
+
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("test Ed25519 key")
@@ -51656,6 +51964,10 @@ mod appeal_finance_runtime_signer_tests {
         Arc::new(TestSigner {
             handle: handle.to_owned(),
             keypair,
+            qualification:
+                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                    1, [0xA1; 32],
+                ),
         })
     }
 
@@ -51671,6 +51983,44 @@ mod appeal_finance_runtime_signer_tests {
         {
             self.identity_called.store(true, Ordering::SeqCst);
             Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+
+        fn sign_digest(
+            &self,
+            _digest: [u8; 32],
+        ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
+            Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+
+        fn load_latest(
+            &self,
+        ) -> Result<
+            Option<AppealFinanceSealedCheckpointRecordV1>,
+            AppealFinanceCheckpointExternalError,
+        > {
+            Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            _expected_revision: Option<[u8; 32]>,
+            _next: &AppealFinanceSealedCheckpointRecordV1,
+        ) -> Result<(), AppealFinanceCheckpointExternalError> {
+            Err(AppealFinanceCheckpointExternalError::Unavailable)
+        }
+    }
+
+    #[derive(Debug)]
+    struct IdentityOnlyCheckpointRuntime {
+        identity: AppealFinanceCheckpointRuntimeIdentityV1,
+    }
+
+    impl AppealFinanceCheckpointRuntime for IdentityOnlyCheckpointRuntime {
+        fn identity(
+            &self,
+        ) -> Result<AppealFinanceCheckpointRuntimeIdentityV1, AppealFinanceCheckpointExternalError>
+        {
+            Ok(self.identity.clone())
         }
 
         fn sign_digest(
@@ -51746,6 +52096,49 @@ mod appeal_finance_runtime_signer_tests {
     }
 
     #[test]
+    fn post_sign_qualification_drift_discards_transaction_bytes() {
+        let configured = key(12);
+        let authority = AccountId::new(configured.public_key().clone());
+        let binding = iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+            handle: "hsm:appeal-qualified".to_owned(),
+            authority: authority.clone(),
+            public_key: configured.public_key().clone(),
+            revision: 1,
+            policy_digest: [0xA1; 32],
+            valid_from_block_height: 1,
+            revoked_at_block_height: None,
+        };
+        let signer: Arc<dyn SoraFsAppealFinanceTransactionSigner> =
+            Arc::new(PostSignQualificationDriftingSigner {
+                handle: binding.handle.clone(),
+                keypair: configured,
+                qualification: Mutex::new(
+                    sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                        binding.revision,
+                        binding.policy_digest,
+                    ),
+                ),
+            });
+        let signer = SoraFsAppealFinanceQualifiedSignerV1::try_new(&binding, signer)
+            .expect("initial signer qualification");
+        let chain_id: ChainId = "appeal-finance-qualification-drift"
+            .parse()
+            .expect("chain id");
+        let payload = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .into_payload()
+        .expect("transaction payload");
+
+        assert!(matches!(
+            signer.sign(payload),
+            Err(SoraFsAppealFinanceSigningError::QualificationChanged)
+        ));
+    }
+
+    #[test]
     fn startup_qualification_rejects_missing_registry() {
         let configured = key(6);
         let authority = AccountId::new(configured.public_key().clone());
@@ -51754,6 +52147,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-current".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 1,
                 revoked_at_block_height: None,
             },
@@ -51775,6 +52170,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-current".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 1,
                 revoked_at_block_height: None,
             },
@@ -51810,6 +52207,77 @@ mod appeal_finance_runtime_signer_tests {
     }
 
     #[test]
+    fn construction_rejects_substituted_checkpoint_binding_before_state_access() {
+        let transaction_key = key(13);
+        let checkpoint_key = key(14);
+        let authority = AccountId::new(transaction_key.public_key().clone());
+        let mut config = iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default();
+        config.submitter_signers = vec![
+            iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
+                handle: "hsm:appeal-current".to_owned(),
+                authority,
+                public_key: transaction_key.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
+                valid_from_block_height: 1,
+                revoked_at_block_height: None,
+            },
+        ];
+        config.checkpoint_provider = Some(
+            iroha_config::parameters::actual::SorafsAppealFinanceCheckpointBinding {
+                handle: "kms:appeal-checkpoint".to_owned(),
+                public_key: checkpoint_key.public_key().clone(),
+                revision: 4,
+                policy_digest: [0xC4; 32],
+            },
+        );
+        let runtime_signers = Arc::new(
+            SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
+                "hsm:appeal-current",
+                transaction_key,
+            )])
+            .expect("qualified transaction signer"),
+        );
+        let checkpoint_public_key: [u8; 32] = checkpoint_key
+            .public_key()
+            .try_to_bytes()
+            .expect("checkpoint public key bytes")
+            .1
+            .try_into()
+            .expect("Ed25519 public key width");
+        let checkpoint_runtime = Arc::new(IdentityOnlyCheckpointRuntime {
+            identity: AppealFinanceCheckpointRuntimeIdentityV1 {
+                provider_handle: "kms:appeal-checkpoint-substituted".to_owned(),
+                public_key: checkpoint_public_key,
+                qualification:
+                    sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                        4, [0xC4; 32],
+                    ),
+            },
+        });
+        let storage_dir = tempfile::tempdir().expect("temporary storage directory");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            SoraFsAppealSettlementSubmitter::from_config(
+                &config,
+                storage_dir.path(),
+                Some(runtime_signers),
+                1,
+                checkpoint_runtime,
+            )
+        }));
+
+        assert!(result.is_err(), "substituted checkpoint must fail startup");
+        assert!(
+            !storage_dir
+                .path()
+                .join("appeal-finance-transaction-forwarder")
+                .exists(),
+            "state must not be opened before checkpoint qualification"
+        );
+    }
+
+    #[test]
     fn startup_qualification_rejects_missing_active_or_future_provider() {
         let configured = key(7);
         let authority = AccountId::new(configured.public_key().clone());
@@ -51818,6 +52286,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-current".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 1,
                 revoked_at_block_height: Some(10),
             },
@@ -51825,6 +52295,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-future".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 10,
                 revoked_at_block_height: None,
             },
@@ -51875,6 +52347,8 @@ mod appeal_finance_runtime_signer_tests {
             handle: "hsm:appeal-current".to_owned(),
             authority: authority.clone(),
             public_key: configured.public_key().clone(),
+            revision: 1,
+            policy_digest: [0xA1; 32],
             valid_from_block_height: 1,
             revoked_at_block_height: None,
         };
@@ -51921,6 +52395,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-retired".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 1,
                 revoked_at_block_height: Some(10),
             },
@@ -51928,6 +52404,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-current".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 10,
                 revoked_at_block_height: None,
             },
@@ -51951,6 +52429,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-retired".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 1,
                 revoked_at_block_height: Some(10),
             },
@@ -51958,6 +52438,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-current".to_owned(),
                 authority: authority.clone(),
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 10,
                 revoked_at_block_height: Some(20),
             },
@@ -51965,6 +52447,8 @@ mod appeal_finance_runtime_signer_tests {
                 handle: "hsm:appeal-future".to_owned(),
                 authority,
                 public_key: configured.public_key().clone(),
+                revision: 1,
+                policy_digest: [0xA1; 32],
                 valid_from_block_height: 20,
                 revoked_at_block_height: None,
             },
@@ -51989,6 +52473,8 @@ mod appeal_finance_runtime_signer_tests {
                     handle: "hsm:appeal".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
+                    revision: 1,
+                    policy_digest: [0xA1; 32],
                     valid_from_block_height: 1,
                     revoked_at_block_height: None,
                 },
@@ -52011,6 +52497,8 @@ mod appeal_finance_runtime_signer_tests {
                     handle: "hsm:appeal-offline".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
+                    revision: 1,
+                    policy_digest: [0xA1; 32],
                     valid_from_block_height: 1,
                     revoked_at_block_height: None,
                 },
@@ -52040,6 +52528,8 @@ mod appeal_finance_runtime_signer_tests {
                     handle: "hsm:appeal-old".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
+                    revision: 1,
+                    policy_digest: [0xA1; 32],
                     valid_from_block_height: 1,
                     revoked_at_block_height: Some(10),
                 },
@@ -52047,6 +52537,8 @@ mod appeal_finance_runtime_signer_tests {
                     handle: "hsm:appeal-new".to_owned(),
                     authority: authority.clone(),
                     public_key: configured.public_key().clone(),
+                    revision: 1,
+                    policy_digest: [0xA1; 32],
                     valid_from_block_height: 10,
                     revoked_at_block_height: Some(20),
                 },
@@ -52064,14 +52556,14 @@ mod appeal_finance_runtime_signer_tests {
             submitter
                 .signer_for(&authority, 9)
                 .expect("old signer active")
-                .handle(),
+                .handle,
             "hsm:appeal-old"
         );
         assert_eq!(
             submitter
                 .signer_for(&authority, 10)
                 .expect("new signer active")
-                .handle(),
+                .handle,
             "hsm:appeal-new"
         );
         assert!(matches!(
@@ -52583,6 +53075,9 @@ pub struct ToriiRuntimeDeps {
     sorafs_moderation_publication_handoff:
         Option<Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>>,
     #[cfg(feature = "app_api")]
+    sorafs_moderation_panel_notification:
+        Option<Arc<dyn sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_evidence_viewer_webauthn:
         Option<Arc<dyn sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1>>,
     #[cfg(feature = "app_api")]
@@ -52600,9 +53095,10 @@ pub struct ToriiRuntimeDeps {
     sorafs_moderation_quarantine_key_wrapper:
         Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     #[cfg(feature = "app_api")]
-    sorafs_privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
+    sorafs_privacy_cycle_prf_provider:
+        Option<Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>>,
     #[cfg(feature = "app_api")]
-    sorafs_privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
+    sorafs_privacy_release_anchor: Option<Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>>,
     #[cfg(feature = "app_api")]
     sorafs_gateway_acme_client: Option<Arc<dyn sorafs::gateway::AcmeClient>>,
     #[cfg(feature = "app_api")]
@@ -52648,6 +53144,8 @@ impl ToriiRuntimeDeps {
             sorafs_moderation_settlement_handoff: None,
             #[cfg(feature = "app_api")]
             sorafs_moderation_publication_handoff: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_panel_notification: None,
             #[cfg(feature = "app_api")]
             sorafs_evidence_viewer_webauthn: None,
             #[cfg(feature = "app_api")]
@@ -52812,6 +53310,8 @@ impl ToriiRuntimeDeps {
     ///
     /// Torii constructs the admission reader itself after its authoritative
     /// finalized state and council-verified admission material are available.
+    /// Startup accepts these roles only when every public pin exactly matches
+    /// `sorafs.por.potr_runtime`.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_potr_runtime_signer_roles(
@@ -52852,6 +53352,17 @@ impl ToriiRuntimeDeps {
         boundary: Arc<dyn sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1>,
     ) -> Self {
         self.sorafs_moderation_publication_handoff = Some(boundary);
+        self
+    }
+
+    /// Attach the durable payload-free juror-notification boundary.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_panel_notification(
+        mut self,
+        boundary: Arc<dyn sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1>,
+    ) -> Self {
+        self.sorafs_moderation_panel_notification = Some(boundary);
         self
     }
 
@@ -52932,7 +53443,7 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_privacy_cycle_prf_provider(
         mut self,
-        provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
+        provider: Arc<dyn sorafs_node::ProductionPrivacyCyclePrfProviderV1>,
     ) -> Self {
         self.sorafs_privacy_cycle_prf_provider = Some(provider);
         self
@@ -52943,7 +53454,7 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_privacy_release_anchor(
         mut self,
-        anchor: Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>,
+        anchor: Arc<dyn sorafs_node::ProductionPrivacyReleaseAnchorV1>,
     ) -> Self {
         self.sorafs_privacy_release_anchor = Some(anchor);
         self
@@ -53002,6 +53513,46 @@ impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
     fn from(telemetry: routing::MaybeTelemetry) -> Self {
         Self::new(telemetry)
     }
+}
+
+#[cfg(feature = "app_api")]
+fn assert_prebuilt_sorafs_quarantine_key_provider_binding(
+    node: &sorafs_node::NodeHandle,
+    storage_config: &sorafs_node::config::StorageConfig,
+) {
+    assert!(
+        node.matches_moderation_quarantine_key_provider_binding(
+            storage_config.moderation_quarantine_key_provider(),
+        ),
+        "injected SoraFS node quarantine-key provider binding does not match torii.sorafs.storage"
+    );
+}
+
+#[cfg(feature = "app_api")]
+fn assert_prebuilt_sorafs_privacy_provider_bindings(
+    node: &sorafs_node::NodeHandle,
+    storage_config: &sorafs_node::config::StorageConfig,
+    raw_cycle_prf_provider_injected: bool,
+    raw_release_anchor_injected: bool,
+) {
+    assert_eq!(
+        node.privacy_cycle_prf_provider_binding(),
+        storage_config.privacy_cycle_prf_provider_binding(),
+        "injected SoraFS node threshold-PRF provider binding does not match torii.sorafs.storage"
+    );
+    assert_eq!(
+        node.privacy_release_anchor_provider_binding(),
+        storage_config.privacy_release_anchor_provider_binding(),
+        "injected SoraFS node release-anchor provider binding does not match torii.sorafs.storage"
+    );
+    assert!(
+        !raw_cycle_prf_provider_injected,
+        "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii"
+    );
+    assert!(
+        !raw_release_anchor_injected,
+        "a prebuilt SoraFS node must not also receive a raw finalized release anchor through Torii"
+    );
 }
 
 impl Torii {
@@ -55487,6 +56038,19 @@ impl Torii {
                 );
             };
         }
+        macro_rules! capacity_authenticated_get {
+            ($descriptor:ident, $handler:path) => {
+                builder.route(
+                    &route_catalog::sorafs::$descriptor,
+                    catalog_get($handler)
+                        .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                        .layer(axum::middleware::from_fn(
+                            sorafs::api::harden_reputation_route_responses,
+                        ))
+                        .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+                );
+            };
+        }
 
         capacity_get!(
             CAPACITY_STATE,
@@ -55661,23 +56225,23 @@ impl Torii {
             GOVERNANCE_DAG_RUNTIME_KIND,
             sorafs::api::handle_get_sorafs_governance_dag_runtime_kind
         );
-        capacity_get!(
+        capacity_authenticated_get!(
             REPUTATION_LATEST_GET,
             sorafs::api::handle_get_sorafs_reputation_latest
         );
-        capacity_get!(
+        capacity_authenticated_get!(
             REPUTATION_SNAPSHOT,
             sorafs::api::handle_get_sorafs_reputation_snapshot
         );
-        capacity_get!(
+        capacity_authenticated_get!(
             REPUTATION_PROVIDER,
             sorafs::api::handle_get_sorafs_reputation_provider
         );
-        capacity_get!(
+        capacity_authenticated_get!(
             REPUTATION_WEIGHTS,
             sorafs::api::handle_get_sorafs_reputation_weights
         );
-        capacity_get!(
+        capacity_authenticated_get!(
             REPUTATION_EVENTS,
             sorafs::api::handle_get_sorafs_reputation_events
         );
@@ -55685,13 +56249,19 @@ impl Torii {
             &route_catalog::sorafs::REPUTATION_EVENTS_STREAM,
             catalog_get(sorafs::api::handle_get_sorafs_reputation_events_stream)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                .layer(axum::middleware::from_fn(
+                    sorafs::api::harden_reputation_route_responses,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::sorafs::REPUTATION_EVENTS_WEBSOCKET,
             catalog_get(sorafs::api::handle_get_sorafs_reputation_events_ws)
                 .layer(DefaultBodyLimit::max(sorafs_body_limit))
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                .layer(axum::middleware::from_fn(
+                    sorafs::api::harden_reputation_route_responses,
+                ))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         capacity_get!(PIN_REGISTRY, sorafs::api::handle_get_sorafs_pin_registry);
         capacity_get!(PIN_MANIFEST, sorafs::api::handle_get_sorafs_pin_manifest);
@@ -55920,6 +56490,7 @@ impl Torii {
         mount_get!(RUNTIME_ABI_HASH, handler_runtime_abi_hash);
         mount_get!(RUNTIME_METRICS, handler_runtime_metrics);
         mount_get!(NODE_CAPABILITIES, handler_node_capabilities);
+        mount_get!(PRIVACY_CAPABILITIES, handler_privacy_capabilities);
         mount_get!(
             NODE_PROJECTION_CHECKPOINT,
             handler_node_query_projection_checkpoint
@@ -56194,6 +56765,9 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_moderation_publication_handoff =
             runtime_deps.sorafs_moderation_publication_handoff.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_panel_notification =
+            runtime_deps.sorafs_moderation_panel_notification.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_evidence_viewer_webauthn =
             runtime_deps.sorafs_evidence_viewer_webauthn.clone();
@@ -56569,13 +57143,13 @@ impl Torii {
         let sorafs_admission = load_sorafs_admission(&config);
         #[cfg(feature = "app_api")]
         let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
+            config.sorafs_por.enabled,
+            config.sorafs_por.potr_runtime.as_ref(),
             shared_sorafs_potr_runtime_signer_roles,
             sorafs_admission.clone(),
         )
-        .unwrap_or_else(|_| {
-            panic!(
-                "PoTR runtime signer roles require a council-verified SoraFS provider admission registry"
-            )
+        .unwrap_or_else(|error| {
+            panic!("invalid production PoTR runtime configuration: {error}")
         })
         .map(|(roles, admission_registry)| {
             Arc::new(
@@ -56600,11 +57174,9 @@ impl Torii {
                 && storage_config.privacy_aggregate_policy().is_some_and(
                     sorafs_node::config::PrivacyAggregatePolicyConfig::requires_cycle_prf,
                 );
-            let privacy_release_anchor_required =
-                storage_config.privacy_aggregate_schedule().is_some()
-                    && storage_config.privacy_aggregate_policy().is_some();
             match shared_sorafs_node {
                 Some(node) => {
+                    assert_prebuilt_sorafs_quarantine_key_provider_binding(&node, &storage_config);
                     assert_eq!(
                         node.moderation_screening_enabled(),
                         storage_config.moderation_screening_enabled(),
@@ -56619,6 +57191,12 @@ impl Torii {
                         node.privacy_cycle_prf_required(),
                         privacy_cycle_prf_required,
                         "injected SoraFS node privacy-cycle PRF requirement does not match torii.sorafs.storage"
+                    );
+                    assert_prebuilt_sorafs_privacy_provider_bindings(
+                        &node,
+                        &storage_config,
+                        shared_sorafs_privacy_cycle_prf_provider.is_some(),
+                        shared_sorafs_privacy_release_anchor.is_some(),
                     );
                     if storage_config.moderation_screening_enabled()
                         && shared_sorafs_moderation_quarantine_key_wrapper.is_none()
@@ -56638,32 +57216,6 @@ impl Torii {
                             node.moderation_quarantine_key_id(),
                             Some(key_wrapper.active_key_id()),
                             "injected SoraFS node quarantine key wrapper does not match the Torii runtime dependency"
-                        );
-                    }
-                    if privacy_cycle_prf_required
-                        && shared_sorafs_privacy_cycle_prf_provider.is_none()
-                    {
-                        panic!(
-                            "torii.sorafs.storage differential-privacy aggregates are enabled but their runtime-only threshold PRF provider was not injected"
-                        );
-                    }
-                    if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider.as_ref() {
-                        assert!(
-                            node.uses_privacy_cycle_prf_provider(provider),
-                            "injected SoraFS node does not retain the exact Torii privacy-cycle PRF runtime dependency"
-                        );
-                    }
-                    if privacy_release_anchor_required
-                        && shared_sorafs_privacy_release_anchor.is_none()
-                    {
-                        panic!(
-                            "torii.sorafs.storage privacy aggregates are enabled but their finalized privacy release anchor was not injected"
-                        );
-                    }
-                    if let Some(anchor) = shared_sorafs_privacy_release_anchor.as_ref() {
-                        assert!(
-                            node.uses_privacy_release_anchor(anchor),
-                            "injected SoraFS node does not retain the exact Torii privacy release anchor runtime dependency"
                         );
                     }
                     node
@@ -56794,16 +57346,47 @@ impl Torii {
             shared_sorafs_moderation_transaction_signer,
             shared_sorafs_moderation_settlement_handoff,
             shared_sorafs_moderation_publication_handoff,
+            shared_sorafs_moderation_panel_notification,
         ) {
-            (None, None, None, None) => (None, None),
+            (None, None, None, None, None) => (None, None),
             (
                 Some(config),
                 Some(transaction_signer),
                 Some(settlement_handoff),
                 Some(publication_handoff),
+                Some(panel_notification),
             ) => {
-                let orchestrator_config =
-                    sorafs_node::moderation_orchestrator::ModerationOrchestratorConfigV1 {
+                let runtime = (|| {
+                    use sorafs_node::moderation_orchestrator::{
+                        ModerationOrchestratorConfigV1, ModerationRuntimeProviderQualificationV1,
+                    };
+
+                    let transaction_signer_qualification =
+                        ModerationRuntimeProviderQualificationV1::new(
+                            config.transaction_signer_revision,
+                            config.transaction_signer_policy_digest,
+                        );
+                    let strict_ingress_qualification =
+                        ModerationRuntimeProviderQualificationV1::new(
+                            config.strict_ingress_revision,
+                            config.strict_ingress_policy_digest,
+                        );
+                    let settlement_handoff_qualification =
+                        ModerationRuntimeProviderQualificationV1::new(
+                            config.settlement_handoff_revision,
+                            config.settlement_handoff_policy_digest,
+                        );
+                    let publication_handoff_qualification =
+                        ModerationRuntimeProviderQualificationV1::new(
+                            config.publication_handoff_revision,
+                            config.publication_handoff_policy_digest,
+                        );
+                    let panel_notification_qualification =
+                        ModerationRuntimeProviderQualificationV1::new(
+                            config.panel_notification_revision,
+                            config.panel_notification_policy_digest,
+                        );
+                    let orchestrator_config = ModerationOrchestratorConfigV1 {
                         checkpoint_path: config.checkpoint_path.clone(),
                         max_cases: config.max_cases,
                         max_events: config.max_events,
@@ -56812,72 +57395,110 @@ impl Torii {
                         max_handoffs: config.max_handoffs,
                         max_submit_attempts: config.max_submit_attempts,
                         checkpoint_max_bytes: config.checkpoint_max_bytes.0,
+                        transaction_signer_handle: config.transaction_signer_handle.clone(),
+                        expected_transaction_signer_qualification: transaction_signer_qualification,
+                        strict_ingress_handle: config.strict_ingress_handle.clone(),
+                        expected_strict_ingress_qualification: strict_ingress_qualification,
+                        settlement_handoff_handle: config.settlement_handoff_handle.clone(),
+                        expected_settlement_handoff_qualification: settlement_handoff_qualification,
+                        publication_handoff_handle: config.publication_handoff_handle.clone(),
+                        expected_publication_handoff_qualification:
+                            publication_handoff_qualification,
+                        panel_notification_handle: config.panel_notification_handle.clone(),
+                        expected_panel_notification_qualification: panel_notification_qualification,
                     };
-                let adapter_chain_id = Arc::new(chain_id.clone());
-                let fee_quoter =
-                    Arc::new(sorafs::moderation_runtime::ToriiModerationFeeQuoterV1::new(
-                        Arc::clone(&adapter_chain_id),
-                        Arc::clone(&queue),
-                        Arc::clone(&state),
-                    ));
-                let ingress = Arc::new(
-                    sorafs::moderation_runtime::ToriiModerationStrictTransactionIngressV1::new(
-                        Arc::clone(&adapter_chain_id),
-                        Arc::clone(&queue),
-                        Arc::clone(&state),
-                        telemetry.clone(),
-                        Arc::clone(&pipeline_status_cache),
-                    ),
-                );
-                let submitter = Arc::new(
-                    sorafs::moderation_runtime::ModerationTransactionSubmitterAdapterV1::new(
-                        adapter_chain_id.as_ref().clone(),
-                        transaction_signer,
-                        fee_quoter,
-                        ingress,
-                    ),
-                );
-                let snapshot_reader = Arc::new(
-                    sorafs::moderation_runtime::ModerationStateSnapshotReaderV1::new(Arc::clone(
-                        &state,
-                    )),
-                );
-                let settlement_sink = Arc::new(
-                    sorafs::moderation_runtime::ModerationTerminalHandoffSinkAdapterV1::settlement(
-                        settlement_handoff,
-                    ),
-                );
-                let publication_sink = Arc::new(
-                    sorafs::moderation_runtime::ModerationTerminalHandoffSinkAdapterV1::publication(
-                        publication_handoff,
-                    ),
-                );
-                let deps = sorafs_node::moderation_orchestrator::ModerationOrchestratorDepsV1 {
-                    submitter,
-                    snapshot_reader,
-                    settlement_sink,
-                    publication_sink,
-                };
-                match sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
-                    orchestrator_config,
-                    deps,
-                ) {
-                    Ok(orchestrator) => (
-                        Some(Arc::new(
-                            sorafs::moderation_runtime::ModerationOrchestratorRuntimeV1::new(
-                                Arc::new(orchestrator),
-                                sorafs::moderation_runtime::moderation_projection_freshness_limit(
-                                    config.worker_interval,
-                                ),
+                    let adapter_chain_id = Arc::new(chain_id.clone());
+                    let fee_quoter =
+                        Arc::new(sorafs::moderation_runtime::ToriiModerationFeeQuoterV1::new(
+                            Arc::clone(&adapter_chain_id),
+                            Arc::clone(&queue),
+                            Arc::clone(&state),
+                        ));
+                    let ingress = Arc::new(
+                        sorafs::moderation_runtime::ToriiModerationStrictTransactionIngressV1::new(
+                            config.strict_ingress_handle.clone(),
+                            strict_ingress_qualification,
+                            Arc::clone(&adapter_chain_id),
+                            Arc::clone(&queue),
+                            Arc::clone(&state),
+                            telemetry.clone(),
+                            Arc::clone(&pipeline_status_cache),
+                        ),
+                    );
+                    let submitter = Arc::new(
+                        sorafs::moderation_runtime::ModerationTransactionSubmitterAdapterV1::try_new(
+                            adapter_chain_id.as_ref().clone(),
+                            &config.transaction_signer_handle,
+                            transaction_signer_qualification,
+                            transaction_signer,
+                            fee_quoter,
+                            &config.strict_ingress_handle,
+                            strict_ingress_qualification,
+                            ingress,
+                        )
+                        .map_err(|_| ())?,
+                    );
+                    let snapshot_reader = Arc::new(
+                        sorafs::moderation_runtime::ModerationStateSnapshotReaderV1::new(
+                            Arc::clone(&state),
+                        ),
+                    );
+                    let settlement_sink = Arc::new(
+                        sorafs::moderation_runtime::ModerationTerminalHandoffSinkAdapterV1::
+                            try_settlement(
+                                &config.settlement_handoff_handle,
+                                settlement_handoff_qualification,
+                                settlement_handoff,
+                            )
+                            .map_err(|_| ())?,
+                    );
+                    let publication_sink = Arc::new(
+                        sorafs::moderation_runtime::ModerationTerminalHandoffSinkAdapterV1::
+                            try_publication(
+                                &config.publication_handoff_handle,
+                                publication_handoff_qualification,
+                                publication_handoff,
+                            )
+                            .map_err(|_| ())?,
+                    );
+                    let panel_notification_sink = Arc::new(
+                        sorafs::moderation_runtime::ModerationPanelNotificationSinkAdapterV1::
+                            try_new(
+                                &config.panel_notification_handle,
+                                panel_notification_qualification,
+                                panel_notification,
+                            )
+                            .map_err(|_| ())?,
+                    );
+                    let deps = sorafs_node::moderation_orchestrator::ModerationOrchestratorDepsV1 {
+                        submitter,
+                        snapshot_reader,
+                        settlement_sink,
+                        publication_sink,
+                        panel_notification_sink,
+                    };
+                    let orchestrator =
+                        sorafs_node::moderation_orchestrator::ModerationOrchestratorV1::open(
+                            orchestrator_config,
+                            deps,
+                        )
+                        .map_err(|_| ())?;
+                    Ok::<_, ()>(Arc::new(
+                        sorafs::moderation_runtime::ModerationOrchestratorRuntimeV1::new(
+                            Arc::new(orchestrator),
+                            sorafs::moderation_runtime::moderation_projection_freshness_limit(
+                                config.worker_interval,
                             ),
-                        )),
-                        None,
-                    ),
-                    Err(_) => (None, Some("initialization_failed")),
+                        ),
+                    ))
+                })();
+                match runtime {
+                    Ok(runtime) => (Some(runtime), None),
+                    Err(()) => (None, Some("initialization_failed")),
                 }
             }
-            (Some(_), _, _, _) => (None, Some("missing_runtime_dependencies")),
-            (None, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
+            (Some(_), _, _, _, _) => (None, Some("missing_runtime_dependencies")),
+            (None, _, _, _, _) => (None, Some("unexpected_runtime_dependencies")),
         };
         #[cfg(feature = "app_api")]
         let sorafs_pop_credentials = match (
@@ -58468,7 +59089,46 @@ fn build_sorafs_cache(
 }
 
 #[cfg(feature = "app_api")]
+fn sorafs_potr_runtime_roles_match_config(
+    configured: &iroha_config::parameters::actual::SorafsPotrRuntimeBinding,
+    roles: &sorafs::PotrRuntimeSignerRolesV1,
+) -> bool {
+    let gateway = roles.gateway_binding();
+    let gateway_qualification = gateway.qualification();
+    let provider = roles.provider_binding();
+    let provider_qualification = provider.qualification();
+    let readers = roles.reader_bindings();
+    let baseline = roles.baseline_admission_policy();
+
+    gateway.handle() == configured.gateway_signer.handle.as_str()
+        && gateway.signer_id() == configured.gateway_signer.signer_id
+        && gateway_qualification.revision() == configured.gateway_signer.revision
+        && gateway_qualification.policy_digest() == configured.gateway_signer.policy_digest
+        && provider.handle() == configured.provider_signer.handle.as_str()
+        && provider.signer_id() == configured.provider_signer.signer_id
+        && provider_qualification.revision() == configured.provider_signer.revision
+        && provider_qualification.policy_digest() == configured.provider_signer.policy_digest
+        && roles.expected_gateway_public_key() == configured.gateway_public_key
+        && readers.reader_id() == configured.reader_id
+        && readers.source_id() == configured.source_id
+        && readers.resolver_id() == configured.resolver_id
+        && baseline.provider_id == configured.baseline_admission_policy.provider_id
+        && baseline.policy_identity == configured.baseline_admission_policy.policy_identity
+        && baseline.policy_digest == configured.baseline_admission_policy.policy_digest
+        && baseline.policy_sequence == configured.baseline_admission_policy.policy_sequence
+        && baseline.finalized_height == configured.baseline_admission_policy.finalized_height
+        && baseline.finalized_block_hash
+            == configured.baseline_admission_policy.finalized_block_hash
+        && baseline.admission_envelope_digest
+            == configured
+                .baseline_admission_policy
+                .admission_envelope_digest
+}
+
+#[cfg(feature = "app_api")]
 fn require_sorafs_potr_finalized_reader_inputs(
+    enabled: bool,
+    configured: Option<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>,
     roles: Option<Arc<sorafs::PotrRuntimeSignerRolesV1>>,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
 ) -> Result<
@@ -58478,10 +59138,29 @@ fn require_sorafs_potr_finalized_reader_inputs(
     )>,
     sorafs::PotrRuntimeSignerConfigError,
 > {
-    match (roles, admission) {
-        (None, _) => Ok(None),
-        (Some(roles), Some(admission)) => Ok(Some((roles, admission))),
-        (Some(_), None) => Err(sorafs::PotrRuntimeSignerConfigError::MissingAdmissionRegistry),
+    match (enabled, configured, roles, admission) {
+        (false, None, None, _) => Ok(None),
+        (false, Some(_), _, _) => {
+            Err(sorafs::PotrRuntimeSignerConfigError::DisabledRuntimeConfiguration)
+        }
+        (false, None, Some(_), _) => {
+            Err(sorafs::PotrRuntimeSignerConfigError::RuntimeSignerRolesNotConfigured)
+        }
+        (true, None, _, _) => {
+            Err(sorafs::PotrRuntimeSignerConfigError::MissingRuntimeConfiguration)
+        }
+        (true, Some(_), None, _) => {
+            Err(sorafs::PotrRuntimeSignerConfigError::MissingRuntimeSignerRoles)
+        }
+        (true, Some(configured), Some(roles), _)
+            if !sorafs_potr_runtime_roles_match_config(configured, roles.as_ref()) =>
+        {
+            Err(sorafs::PotrRuntimeSignerConfigError::RuntimeConfigurationMismatch)
+        }
+        (true, Some(_), Some(_), None) => {
+            Err(sorafs::PotrRuntimeSignerConfigError::MissingAdmissionRegistry)
+        }
+        (true, Some(_), Some(roles), Some(admission)) => Ok(Some((roles, admission))),
     }
 }
 
@@ -58591,6 +59270,20 @@ fn gateway_acme_config(
 }
 
 #[cfg(feature = "app_api")]
+fn gateway_runtime_provider_binding(
+    config: &iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding,
+) -> sorafs::gateway::GatewayProviderBindingV1 {
+    sorafs::gateway::GatewayProviderBindingV1::try_new(
+        config.provider_handle.clone(),
+        config.revision,
+        config.policy_digest,
+    )
+    .unwrap_or_else(|_| {
+        panic!("invalid non-secret SoraFS gateway runtime provider binding in iroha_config")
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn gateway_compliance_controller_config(
     config: &iroha_config::parameters::actual::SorafsGatewayCompliance,
 ) -> sorafs::gateway::GatewayComplianceControllerConfig {
@@ -58637,6 +59330,9 @@ fn gateway_compliance_controller_config(
         region_scope: format!("region:{}", config.region_id),
         gateway_scope: format!("gateway:{}", config.gateway_id),
         feeds,
+        feed_transport_provider: Some(gateway_runtime_provider_binding(
+            &config.feed_transport_provider,
+        )),
         fetch_limits: GatewayComplianceFetchLimits {
             max_encoded_bytes: usize::try_from(config.max_encoded_bytes.0).unwrap_or_else(|_| {
                 panic!("torii.sorafs.gateway.compliance.max_encoded_bytes exceeds platform usize")
@@ -58685,12 +59381,32 @@ fn build_sorafs_gateway_security(
     let policy = Arc::new(GatewayPolicy::new(policy_config, admission, rate_limiter));
     let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(config.acme.ech_enabled)));
 
+    if config.acme.enabled != config.acme.provider.is_some() {
+        panic!(
+            "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
+        );
+    }
     let tls_automation = match (config.acme.enabled, acme_client) {
-        (true, Some(client)) => Some(Arc::new(TlsAutomationHandle::new(
-            gateway_acme_config(&config.acme),
-            client,
-            Arc::clone(&tls_state),
-        ))),
+        (true, Some(client)) => {
+            let binding = gateway_runtime_provider_binding(
+                config
+                    .acme
+                    .provider
+                    .as_ref()
+                    .expect("ACME provider presence was checked"),
+            );
+            Some(Arc::new(
+                TlsAutomationHandle::try_new(
+                    gateway_acme_config(&config.acme),
+                    binding,
+                    client,
+                    Arc::clone(&tls_state),
+                )
+                .unwrap_or_else(|_| {
+                    panic!("injected SoraFS gateway ACME client failed exact startup qualification")
+                }),
+            ))
+        }
         (true, None) => {
             panic!("torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected")
         }
@@ -58773,13 +59489,23 @@ mod gateway_runtime_config_tests {
     struct TestAcmeClient;
 
     impl sorafs::gateway::AcmeClient for TestAcmeClient {
+        fn qualification(
+            &self,
+        ) -> Result<sorafs::gateway::AcmeClientIdentityV1, sorafs::gateway::AcmeClientProbeError>
+        {
+            Ok(sorafs::gateway::AcmeClientIdentityV1 {
+                provider_handle: "hsm://gateway/acme/primary".into(),
+                revision: 17,
+                policy_digest: [0x51; 32],
+                test_marked: false,
+            })
+        }
+
         fn order_certificate(
             &self,
             _order: &sorafs::gateway::CertificateOrder,
         ) -> Result<sorafs::gateway::CertificateBundle, sorafs::gateway::AcmeClientError> {
-            Err(sorafs::gateway::AcmeClientError::Rejected {
-                reason: "test client must not be invoked".into(),
-            })
+            Err(sorafs::gateway::AcmeClientError::Rejected)
         }
     }
 
@@ -58866,11 +59592,37 @@ mod gateway_runtime_config_tests {
         }
     }
 
+    fn acme_provider_binding()
+    -> iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
+        iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
+            provider_handle: "hsm://gateway/acme/primary".into(),
+            revision: 17,
+            policy_digest: [0x51; 32],
+        }
+    }
+
+    fn compliance_feed_provider_binding()
+    -> iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
+        let pins_by_hostname = BTreeMap::from([(
+            "feed.example.test".to_owned(),
+            BTreeSet::from([[0x71; 32], [0x72; 32]]),
+        )]);
+        iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
+            provider_handle: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into(),
+            revision: sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1,
+            policy_digest: sorafs::gateway::gateway_compliance_feed_transport_policy_digest(
+                &pins_by_hostname,
+            )
+            .expect("test feed transport policy digest"),
+        }
+    }
+
     fn compliance_config(
         checkpoint_path: PathBuf,
     ) -> iroha_config::parameters::actual::SorafsGatewayCompliance {
         iroha_config::parameters::actual::SorafsGatewayCompliance {
             checkpoint_path,
+            feed_transport_provider: compliance_feed_provider_binding(),
             policy_id: [0xA5; 32],
             region_id: "apac".into(),
             gateway_id: "gateway-apac".into(),
@@ -58918,6 +59670,7 @@ mod gateway_runtime_config_tests {
     fn acme_runtime_mapping_preserves_every_resolved_field() {
         let source = iroha_config::parameters::actual::SorafsGatewayAcme {
             enabled: true,
+            provider: Some(acme_provider_binding()),
             account_email: Some("gateway-ops@example.test".into()),
             directory_url: "https://acme.example.test/directory".into(),
             hostnames: vec![
@@ -58947,6 +59700,20 @@ mod gateway_runtime_config_tests {
         assert_eq!(mapped.retry_jitter, source.retry_jitter);
         assert_eq!(mapped.challenge.dns01, source.challenges.dns01);
         assert_eq!(mapped.challenge.tls_alpn_01, source.challenges.tls_alpn_01);
+        let source_provider = source
+            .provider
+            .as_ref()
+            .expect("test ACME provider binding");
+        let mapped_provider = gateway_runtime_provider_binding(source_provider);
+        assert_eq!(
+            mapped_provider.provider_handle(),
+            source_provider.provider_handle.as_str()
+        );
+        assert_eq!(mapped_provider.revision(), source_provider.revision);
+        assert_eq!(
+            mapped_provider.policy_digest(),
+            source_provider.policy_digest
+        );
     }
 
     #[test]
@@ -59044,6 +59811,22 @@ mod gateway_runtime_config_tests {
             source.max_catalog_validity.as_secs()
         );
         assert_eq!(mapped.max_history_entries, source.max_history_entries);
+        let mapped_provider = mapped
+            .feed_transport_provider
+            .as_ref()
+            .expect("mapped feed transport provider");
+        assert_eq!(
+            mapped_provider.provider_handle(),
+            source.feed_transport_provider.provider_handle.as_str()
+        );
+        assert_eq!(
+            mapped_provider.revision(),
+            source.feed_transport_provider.revision
+        );
+        assert_eq!(
+            mapped_provider.policy_digest(),
+            source.feed_transport_provider.policy_digest
+        );
         mapped.validate().expect("mapped policy must remain valid");
     }
 
@@ -59099,6 +59882,7 @@ mod gateway_runtime_config_tests {
             Arc::new(TestComplianceFeedTransport);
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
+        config.acme.provider = Some(acme_provider_binding());
         config.acme.ech_enabled = true;
         config.compliance = Some(compliance_config(checkpoint_dir.join("checkpoint.norito")));
 
@@ -59135,8 +59919,34 @@ mod gateway_runtime_config_tests {
     fn acme_enabled_without_runtime_client_fails_closed() {
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
+        config.acme.provider = Some(acme_provider_binding());
 
         let _ = build_sorafs_gateway_security(&config, None, None, None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
+    )]
+    fn acme_enabled_without_configured_provider_binding_fails_closed() {
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.acme.enabled = true;
+
+        let _ = build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "injected SoraFS gateway ACME client failed exact startup qualification"
+    )]
+    fn stale_acme_runtime_provider_fails_closed_without_provider_details() {
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.acme.enabled = true;
+        let mut provider = acme_provider_binding();
+        provider.revision += 1;
+        config.acme.provider = Some(provider);
+
+        let _ = build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None);
     }
 
     #[test]
@@ -85344,6 +86154,7 @@ mod tests {
         collections::HashSet,
         net::SocketAddr,
         num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        path::PathBuf,
         str::FromStr,
         sync::Arc,
         time::Duration,
@@ -85400,6 +86211,250 @@ mod tests {
     #[cfg(feature = "app_api")]
     use jsonwebtoken::EncodingKey;
     use nonzero_ext::nonzero;
+
+    const PREBUILT_QUARANTINE_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
+    const PREBUILT_QUARANTINE_PROVIDER_QUALIFICATION:
+        sorafs_node::ModerationQuarantineKeyProviderQualificationV1 =
+        sorafs_node::ModerationQuarantineKeyProviderQualificationV1::new(1, [0x51; 32]);
+
+    #[derive(Debug)]
+    struct PrebuiltQuarantineKeyWrapper;
+
+    impl sorafs_node::ModerationQuarantineKeyWrapper for PrebuiltQuarantineKeyWrapper {
+        fn provider_handle(&self) -> &str {
+            PREBUILT_QUARANTINE_PROVIDER_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::ModerationQuarantineKeyProviderQualificationV1,
+            sorafs_node::ModerationQuarantineKeyProviderReadinessErrorV1,
+        > {
+            Ok(PREBUILT_QUARANTINE_PROVIDER_QUALIFICATION)
+        }
+
+        fn active_key_id(&self) -> &str {
+            "kms:test/torii-prebuilt-quarantine"
+        }
+
+        fn wrap_dek(&self, _context_digest: [u8; 32], _dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+            Err("test wrapper does not wrap".to_owned())
+        }
+
+        fn unwrap_dek(
+            &self,
+            _key_id: &str,
+            _context_digest: [u8; 32],
+            _wrapped_dek: &[u8],
+        ) -> Result<[u8; 32], String> {
+            Err("test wrapper does not unwrap".to_owned())
+        }
+    }
+
+    fn prebuilt_quarantine_provider_config(
+        qualification: sorafs_node::ModerationQuarantineKeyProviderQualificationV1,
+    ) -> actual::SorafsModerationQuarantineKeyProviderBinding {
+        actual::SorafsModerationQuarantineKeyProviderBinding {
+            handle: PREBUILT_QUARANTINE_PROVIDER_HANDLE.to_owned(),
+            revision: qualification.revision(),
+            policy_digest: qualification.policy_digest(),
+        }
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "injected SoraFS node quarantine-key provider binding does not match torii.sorafs.storage"
+    )]
+    fn prebuilt_sorafs_node_rejects_mismatched_quarantine_key_provider_binding() {
+        let temp_dir = tempfile::tempdir().expect("create prebuilt SoraFS node temp dir");
+        let root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical prebuilt SoraFS node temp dir");
+        let retained_config = sorafs_node::config::StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .moderation_quarantine_key_provider(Some(prebuilt_quarantine_provider_config(
+                PREBUILT_QUARANTINE_PROVIDER_QUALIFICATION,
+            )))
+            .build();
+        let key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper> =
+            Arc::new(PrebuiltQuarantineKeyWrapper);
+        let node = sorafs_node::NodeHandle::try_new_with_quarantine_key_wrapper(
+            retained_config,
+            Arc::clone(&key_wrapper),
+        )
+        .expect("start prebuilt SoraFS node with exact provider binding");
+        assert!(node.uses_moderation_quarantine_key_wrapper(&key_wrapper));
+
+        let substituted_config = sorafs_node::config::StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .moderation_quarantine_key_provider(Some(prebuilt_quarantine_provider_config(
+                sorafs_node::ModerationQuarantineKeyProviderQualificationV1::new(2, [0x52; 32]),
+            )))
+            .build();
+        assert_prebuilt_sorafs_quarantine_key_provider_binding(&node, &substituted_config);
+    }
+
+    const PREBUILT_PRIVACY_PRF_HANDLE: &str = "threshold-prf:transparency:primary";
+    const PREBUILT_PRIVACY_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
+
+    struct PrebuiltPrivacyPrfProvider;
+
+    impl sorafs_node::PrivacyCyclePrfProviderV1 for PrebuiltPrivacyPrfProvider {
+        fn derive_cycle_output(
+            &self,
+            _request: &sorafs_node::PrivacyCyclePrfRequestV1,
+        ) -> Result<sorafs_node::PrivacyCyclePrfOutputV1, sorafs_node::PrivacyCyclePrfProviderErrorV1>
+        {
+            sorafs_node::PrivacyCyclePrfOutputV1::new([0xA5; 32])
+                .map_err(|_| sorafs_node::PrivacyCyclePrfProviderErrorV1::Internal)
+        }
+    }
+
+    impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for PrebuiltPrivacyPrfProvider {
+        fn handle(&self) -> &str {
+            PREBUILT_PRIVACY_PRF_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String> {
+            Ok(sorafs_node::TransparencyRuntimeProviderQualificationV1::new(1, [0xC7; 32]))
+        }
+    }
+
+    struct PrebuiltPrivacyReleaseAnchor;
+
+    impl sorafs_node::PrivacyReleaseAnchorV1 for PrebuiltPrivacyReleaseAnchor {
+        fn finalized_head(
+            &self,
+            query_id: [u8; 32],
+        ) -> Result<sorafs_node::PrivacyReleaseAnchorHeadV1, sorafs_node::PrivacyReleaseAnchorErrorV1>
+        {
+            Ok(sorafs_node::PrivacyReleaseAnchorHeadV1::genesis(query_id))
+        }
+
+        fn compare_and_set_finalized_head(
+            &self,
+            _expected: sorafs_node::PrivacyReleaseAnchorHeadV1,
+            _next: sorafs_node::PrivacyReleaseAnchorHeadV1,
+        ) -> Result<(), sorafs_node::PrivacyReleaseAnchorErrorV1> {
+            Ok(())
+        }
+    }
+
+    impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for PrebuiltPrivacyReleaseAnchor {
+        fn handle(&self) -> &str {
+            PREBUILT_PRIVACY_ANCHOR_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String> {
+            Ok(sorafs_node::TransparencyRuntimeProviderQualificationV1::new(1, [0xD7; 32]))
+        }
+    }
+
+    fn prebuilt_privacy_storage_config(
+        data_dir: PathBuf,
+        prf_revision: u64,
+    ) -> sorafs_node::config::StorageConfig {
+        let mut storage = actual::SorafsStorage::default();
+        storage.enabled = true;
+        storage.data_dir = data_dir;
+        storage.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
+            enabled: true,
+            cycle_seconds: 100,
+            first_cycle_start_unix: 100,
+            publish_delay_seconds: 10,
+            query_id: Some([0xB0; 32]),
+            population_inventory: vec![actual::SorafsPrivacyAggregatePopulation {
+                label: "jurisdiction-a".to_owned(),
+                digest: [0xA0; 32],
+            }],
+            metric_schema: vec![actual::SorafsPrivacyAggregateMetric {
+                key: "moderation_actions".to_owned(),
+                unit: "count".to_owned(),
+            }],
+            policy_digest: Some([0xC0; 32]),
+            cycle_prf_provider: Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: PREBUILT_PRIVACY_PRF_HANDLE.to_owned(),
+                revision: prf_revision,
+                policy_digest: [0xC7; 32],
+            }),
+            release_anchor_provider: Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: PREBUILT_PRIVACY_ANCHOR_HANDLE.to_owned(),
+                revision: 1,
+                policy_digest: [0xD7; 32],
+            }),
+            ..actual::SorafsPrivacyAggregateSchedule::default()
+        };
+        sorafs_node::config::StorageConfig::from(&storage)
+    }
+
+    #[test]
+    fn prebuilt_sorafs_node_accepts_exact_privacy_provider_bindings() {
+        let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
+        let root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical prebuilt privacy temp dir");
+        let config = prebuilt_privacy_storage_config(root.join("storage"), 1);
+        let node = sorafs_node::NodeHandle::try_new_with_runtime_deps(
+            config.clone(),
+            sorafs_node::NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(Arc::new(PrebuiltPrivacyPrfProvider))
+                .with_privacy_release_anchor(Arc::new(PrebuiltPrivacyReleaseAnchor)),
+        )
+        .expect("start prebuilt SoraFS node with exact privacy bindings");
+        assert_prebuilt_sorafs_privacy_provider_bindings(&node, &config, false, false);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "injected SoraFS node threshold-PRF provider binding does not match torii.sorafs.storage"
+    )]
+    fn prebuilt_sorafs_node_rejects_mismatched_privacy_provider_binding() {
+        let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
+        let root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical prebuilt privacy temp dir");
+        let retained_config = prebuilt_privacy_storage_config(root.join("storage"), 1);
+        let node = sorafs_node::NodeHandle::try_new_with_runtime_deps(
+            retained_config,
+            sorafs_node::NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(Arc::new(PrebuiltPrivacyPrfProvider))
+                .with_privacy_release_anchor(Arc::new(PrebuiltPrivacyReleaseAnchor)),
+        )
+        .expect("start prebuilt SoraFS node with exact privacy bindings");
+        let substituted_config = prebuilt_privacy_storage_config(root.join("storage"), 2);
+        assert_prebuilt_sorafs_privacy_provider_bindings(&node, &substituted_config, false, false);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "a prebuilt SoraFS node must not also receive a raw threshold-PRF provider through Torii"
+    )]
+    fn prebuilt_sorafs_node_rejects_ambiguous_raw_privacy_provider() {
+        let temp_dir = tempfile::tempdir().expect("create prebuilt privacy temp dir");
+        let root = temp_dir
+            .path()
+            .canonicalize()
+            .expect("canonical prebuilt privacy temp dir");
+        let config = prebuilt_privacy_storage_config(root.join("storage"), 1);
+        let node = sorafs_node::NodeHandle::try_new_with_runtime_deps(
+            config.clone(),
+            sorafs_node::NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(Arc::new(PrebuiltPrivacyPrfProvider))
+                .with_privacy_release_anchor(Arc::new(PrebuiltPrivacyReleaseAnchor)),
+        )
+        .expect("start prebuilt SoraFS node with exact privacy bindings");
+        assert_prebuilt_sorafs_privacy_provider_bindings(&node, &config, true, false);
+    }
 
     fn proof_json_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -86316,10 +87371,10 @@ mod tests {
         let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn,
         };

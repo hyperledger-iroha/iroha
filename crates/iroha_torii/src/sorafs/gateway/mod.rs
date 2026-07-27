@@ -5,12 +5,13 @@ mod compliance;
 mod controller;
 mod feed_transport;
 mod policy;
+mod provider;
 mod rate_limit;
 mod telemetry;
 
 pub use acme::{
-    AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeConfig,
-    CertificateBundle, CertificateOrder, ChallengeProfile,
+    AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeClientIdentityV1,
+    AcmeClientProbeError, AcmeConfig, CertificateBundle, CertificateOrder, ChallengeProfile,
 };
 #[cfg(test)]
 pub(crate) use compliance::allow_all_gateway_compliance_controller_for_tests;
@@ -47,6 +48,7 @@ pub use policy::{
     GatewayPolicy, GatewayPolicyConfig, PolicyDecision, PolicyViolation, RequestContext,
     build_gar_violation_event,
 };
+pub use provider::{GatewayProviderBindingErrorV1, GatewayProviderBindingV1};
 pub use rate_limit::{
     ClientFingerprint, GatewayRateLimitConfig, GatewayRateLimiter, RateLimitError,
 };

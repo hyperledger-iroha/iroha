@@ -4046,7 +4046,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 return Err(ivm::VMError::NoritoInvalid);
             }
             let Some(registry_backend_tag) =
-                crate::zk::production_verify_backend_tag(id.backend.as_str())
+                crate::zk::verifier_backend_registry_tag_v1(id.backend.as_str())
             else {
                 return Err(ivm::VMError::NoritoInvalid);
             };
@@ -4200,7 +4200,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         backend_tag: BackendTag,
     ) -> bool {
         matches!(backend_tag, BackendTag::Halo2IpaPasta | BackendTag::Stark)
-            && crate::zk::production_verify_backend_tag(backend_label)
+            && crate::zk::verifier_backend_registry_tag_v1(backend_label)
                 .is_some_and(|expected| expected == backend_tag)
     }
 
@@ -4392,7 +4392,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let prepared = self.load_vk_record_any_namespace(env.vk_hash)?;
         let vk_rec = prepared.record.as_ref();
         let backend_label = prepared.backend_label.as_ref();
-        let expected_env_backend = crate::zk::production_verify_backend_tag(backend_label)
+        let expected_env_backend = crate::zk::verifier_backend_registry_tag_v1(backend_label)
             .ok_or(ivm::host::ERR_BACKEND)?;
         if env.backend != expected_env_backend {
             return Err(ivm::host::ERR_BACKEND);
@@ -26807,7 +26807,7 @@ seiyaku DurableOwner {
     }
 
     #[test]
-    fn set_verifying_keys_rejects_production_claim_and_unsupported_backend_labels() {
+    fn set_verifying_keys_rejects_readiness_claim_and_unsupported_backend_labels() {
         crate::test_alias::ensure();
         for (backend, backend_tag) in [
             ("halo2/ipa:production-ready", BackendTag::Halo2IpaPasta),
@@ -29983,10 +29983,10 @@ seiyaku DurableOwner {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_string(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };

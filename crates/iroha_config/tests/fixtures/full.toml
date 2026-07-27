@@ -103,7 +103,7 @@ max_bytes = 4096
 max_sites = 7
 
 [sorafs.appeal_finance_settlement]
-asset_definition_id = "xor#sora.universal"
+asset_definition_id = "5PgFjEiWr1iqE2a7Wp1R2gB4eVEB"
 asset_scale = 9
 submitter_signers = []
 worker_scan_interval_ms = 30_000

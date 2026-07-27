@@ -16,7 +16,8 @@ use tokio::{
 #[cfg(feature = "telemetry")]
 use super::telemetry::record_renewal_metrics;
 use super::{
-    acme::{AcmeAutomation, AcmeClient, AcmeConfig, CertificateBundle},
+    acme::{AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeConfig, CertificateBundle},
+    provider::GatewayProviderBindingV1,
     telemetry::{TlsRenewalResult, TlsStateSnapshot},
 };
 use crate::routing::MaybeTelemetry;
@@ -33,21 +34,26 @@ pub struct TlsAutomationHandle {
 }
 
 impl TlsAutomationHandle {
-    /// Construct a new automation handle for the given configuration.
-    #[must_use]
-    pub fn new(
+    /// Construct a new automation handle after exact client qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free error when the injected ACME client is
+    /// unavailable, substituted, stale, invalid, or test-marked.
+    pub fn try_new(
         config: AcmeConfig,
+        client_binding: GatewayProviderBindingV1,
         client: Arc<dyn AcmeClient>,
         tls_state: Arc<RwLock<TlsStateSnapshot>>,
-    ) -> Self {
+    ) -> Result<Self, AcmeAutomationError> {
         let hostnames = config.hostnames.clone();
-        let automation = AcmeAutomation::new(config, client);
-        Self {
+        let automation = AcmeAutomation::try_new(config, client_binding, client)?;
+        Ok(Self {
             automation: Mutex::new(automation),
             tls_state,
             hostnames,
             poll_interval: DEFAULT_POLL_INTERVAL,
-        }
+        })
     }
 
     /// Spawn the automation loop on the Tokio runtime.
@@ -170,7 +176,9 @@ impl TlsAutomationHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::super::acme::{AcmeClientError, CertificateOrder};
+    use super::super::acme::{
+        AcmeClientError, AcmeClientIdentityV1, AcmeClientProbeError, CertificateOrder,
+    };
     use super::*;
     use crate::sorafs::gateway::ChallengeProfile;
 
@@ -179,6 +187,15 @@ mod tests {
     struct SelfSignedAcmeClient;
 
     impl AcmeClient for SelfSignedAcmeClient {
+        fn qualification(&self) -> Result<AcmeClientIdentityV1, AcmeClientProbeError> {
+            Ok(AcmeClientIdentityV1 {
+                provider_handle: "kms://gateway/acme/primary".to_owned(),
+                revision: 1,
+                policy_digest: [0x51; 32],
+                test_marked: false,
+            })
+        }
+
         fn order_certificate(
             &self,
             order: &CertificateOrder,
@@ -188,9 +205,7 @@ mod tests {
                 .iter()
                 .any(|hostname| hostname.trim().is_empty())
             {
-                return Err(AcmeClientError::Rejected {
-                    reason: "hostname entries may not be blank".to_string(),
-                });
+                return Err(AcmeClientError::Rejected);
             }
             Ok(CertificateBundle {
                 certificate_pem: "TEST CERTIFICATE".to_string(),
@@ -199,6 +214,11 @@ mod tests {
                 not_after: SystemTime::now() + Duration::from_hours(90 * 24),
             })
         }
+    }
+
+    fn sample_binding() -> GatewayProviderBindingV1 {
+        GatewayProviderBindingV1::try_new("kms://gateway/acme/primary".to_owned(), 1, [0x51; 32])
+            .expect("valid test ACME provider binding")
     }
 
     fn sample_config() -> AcmeConfig {
@@ -221,11 +241,15 @@ mod tests {
     #[tokio::test]
     async fn automation_updates_snapshot_on_success() {
         let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
-        let handle = Arc::new(TlsAutomationHandle::new(
-            sample_config(),
-            Arc::new(SelfSignedAcmeClient),
-            Arc::clone(&tls_state),
-        ));
+        let handle = Arc::new(
+            TlsAutomationHandle::try_new(
+                sample_config(),
+                sample_binding(),
+                Arc::new(SelfSignedAcmeClient),
+                Arc::clone(&tls_state),
+            )
+            .expect("qualified TLS automation"),
+        );
         handle.poll_once_for_tests().await;
 
         let snapshot = tls_state.read().await.clone();
@@ -238,11 +262,15 @@ mod tests {
         let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
         let mut config = sample_config();
         config.hostnames = vec![String::new()];
-        let handle = Arc::new(TlsAutomationHandle::new(
-            config,
-            Arc::new(SelfSignedAcmeClient),
-            Arc::clone(&tls_state),
-        ));
+        let handle = Arc::new(
+            TlsAutomationHandle::try_new(
+                config,
+                sample_binding(),
+                Arc::new(SelfSignedAcmeClient),
+                Arc::clone(&tls_state),
+            )
+            .expect("qualified TLS automation"),
+        );
         handle.poll_once_for_tests().await;
 
         let snapshot = tls_state.read().await.clone();

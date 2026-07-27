@@ -993,16 +993,41 @@ ExactDecisionRequestIngressOwned(
        SequenceSet(
          IngressLane(archive, IngressResourceSource(request)))
 
+ExactDecisionServeLifecycleIdentity(archive, request) ==
+  AsyncServeLogicalRequestIdentity(archive, request)
+
+ExactDecisionServeAdmissionOwned(archive, request) ==
+  LET identity ==
+        ExactDecisionServeLifecycleIdentity(archive, request)
+  IN /\ AsyncServeLiveReservationOwned(archive, identity)
+     /\ AsyncServeAdmissionOrdinal(archive, identity) \in Nat \ {0}
+
 ExactDecisionServeOccurrenceOwned(archive, request, job) ==
-  /\ job \in SequenceSet(asyncIoQueues[archive])
-  /\ job.class = "Serve"
-  /\ job.candidate.item = request
-  /\ job.nonce \in 0..AsyncIoAuxCapacity
+  LET identity ==
+        ExactDecisionServeLifecycleIdentity(archive, request)
+  IN /\ ExactDecisionServeAdmissionOwned(archive, request)
+     /\ AsyncServeJobQueued(archive, identity)
+     /\ job \in SequenceSet(asyncIoQueues[archive])
+     /\ job.class = "Serve"
+     /\ job.candidate.item = request
+     /\ AsyncIoServeJobIdentity(archive, job) = identity
+     /\ job.nonce \in 0..AsyncIoAuxCapacity
 
 ExactDecisionServeJobOwned(
     node, qc, archive, request, job) ==
   /\ ExactDecisionBodyHoldingAlias(node, qc, archive, request)
   /\ ExactDecisionServeOccurrenceOwned(archive, request, job)
+
+ExactDecisionServeTombstoneOwned(
+    node, qc, archive, request) ==
+  LET identity ==
+        ExactDecisionServeLifecycleIdentity(archive, request)
+  IN /\ ExactDecisionBodyHoldingAlias(node, qc, archive, request)
+     /\ AsyncServeLifecycleTombstone(archive, identity)
+     /\ AsyncServeTombstoneOutputs(archive, identity) # {}
+     /\ \A response \in
+          AsyncServeTombstoneOutputs(archive, identity):
+          DecisionCertifiedResponseLineageExact(node, qc, response)
 
 ExactDecisionAuthenticatedResponse(
     node, qc, archive, request, response) ==
@@ -1279,6 +1304,34 @@ BY SentCertifiedResponseAuthenticatesEveryRelayOccurrence,
        ServiceIoWorkerWork, CertifiedServeCanRespond,
        CertifiedResponseItem, PublishEphemeralItems,
        PacketsForItems, DecisionCertifiedResponseLineageExact
+
+THEOREM ExactDecisionAdmittedServeProducesNonemptyTombstone ==
+  \A node, qc, archive, request, job:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionServeJobOwned(
+         node, qc, archive, request, job)
+    /\ Head(asyncIoQueues[archive]) = job
+    /\ ServiceIoWorkerWork(archive)
+    => /\ AsyncServeLifecycleTombstone(
+            archive,
+            ExactDecisionServeLifecycleIdentity(
+              archive, request))'
+       /\ AsyncServeTombstoneOutputs(
+            archive,
+            ExactDecisionServeLifecycleIdentity(
+              archive, request))' # {}
+BY ExactServeHeadCreatesAuthenticatedResponsePacket, IsaT(180)
+   DEF ExactDecisionServeJobOwned,
+       ExactDecisionServeOccurrenceOwned,
+       ExactDecisionServeAdmissionOwned,
+       ExactDecisionServeLifecycleIdentity,
+       ServiceIoWorkerWork,
+       AsyncServeLifecycleTombstone,
+       AsyncServeTombstoneOutputs,
+       AsyncServeTombstoneRecords,
+       AsyncServeReservationRecord,
+       AsyncServeTombstonesWithoutFamily,
+       AsyncServeTombstone
 
 THEOREM FreshExactResponsePacketAdmissionAcquiresRecipientClaim ==
   \A node, qc, archive, request, response, packet:
@@ -1954,6 +2007,9 @@ ExactDecisionRequestIngressGoal(node, qc, archive, request) ==
   \/ \E job:
        ExactDecisionServeJobOwned(
          node, qc, archive, request, job)
+  \/ \E response, packet:
+       ExactDecisionResponsePacketOwned(
+         node, qc, archive, request, response, packet)
 
 ExactDecisionServeResponseGoal(node, qc, archive, request) ==
   \/ ExactDecisionExecutableFrontier(node, qc)
@@ -3703,6 +3759,79 @@ handoff is proved above.  Neither kernel assumes the broad Decision-stage
 service theorem or the residual convergence property which they discharge.
 ***************************************************************************)
 
+(***************************************************************************
+The retransmission clock frame used by the exact request corridor records
+monotone time and preservation of both target-local clock owners.  Tick is
+factored through a structural projection of `AsyncNonClockVars` and a scalar
+natural-number successor leaf so callers do not unfold the full scheduler
+tuple.
+***************************************************************************)
+
+ExactDecisionRequestClockFrame(node) ==
+  /\ asyncNow' >= asyncNow
+  /\ asyncRetransmitDeadlines[node]' =
+       asyncRetransmitDeadlines[node]
+  /\ ("RetransmitElapsed" \in asyncOutstandingTags[node]
+        => "RetransmitElapsed" \in asyncOutstandingTags[node]')
+
+THEOREM ExactDecisionRequestAsyncNonClockVarsStuttersClockPayload ==
+  UNCHANGED AsyncNonClockVars
+    => UNCHANGED <<asyncRetransmitDeadlines, asyncOutstandingTags>>
+BY ONLY Isa DEF AsyncNonClockVars
+
+THEOREM ExactDecisionRequestNaturalSuccessorIsMonotone ==
+  \A now \in Nat: now + 1 >= now
+BY ONLY SMT
+
+THEOREM ExactDecisionRequestTypedTickAdvancesClock ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncTick
+  => asyncNow' >= asyncNow
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+                AsyncTick
+         PROVE asyncNow' >= asyncNow
+    <2>1. asyncNow \in Nat
+      BY <1>1
+         DEF AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+    <2>2. asyncNow' = asyncNow + 1
+      BY <1>1 DEF AsyncTick
+    <2> QED BY <2>1, <2>2,
+                 ExactDecisionRequestNaturalSuccessorIsMonotone
+  <1> QED BY <1>1
+
+THEOREM ExactDecisionRequestTickStuttersClockPayload ==
+  AsyncTick
+    => UNCHANGED <<asyncRetransmitDeadlines, asyncOutstandingTags>>
+BY ExactDecisionRequestAsyncNonClockVarsStuttersClockPayload
+   DEF AsyncTick
+
+THEOREM ExactDecisionRequestTypedTickFramesClock ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncTick
+    => ExactDecisionRequestClockFrame(node)
+PROOF
+  <1>1. ASSUME NEW node,
+                AsyncStrongTypeInvariant,
+                AsyncTick
+         PROVE ExactDecisionRequestClockFrame(node)
+    <2>1. asyncNow' >= asyncNow
+      BY <1>1, ExactDecisionRequestTypedTickAdvancesClock
+    <2>2. UNCHANGED
+             <<asyncRetransmitDeadlines, asyncOutstandingTags>>
+      BY <1>1, ExactDecisionRequestTickStuttersClockPayload
+    <2>3. asyncRetransmitDeadlines[node]' =
+             asyncRetransmitDeadlines[node]
+      BY <2>2, Isa
+    <2>4. "RetransmitElapsed" \in asyncOutstandingTags[node]
+             => "RetransmitElapsed" \in asyncOutstandingTags[node]'
+      BY <2>2, Isa
+    <2> QED BY <2>1, <2>3, <2>4
+               DEF ExactDecisionRequestClockFrame
+  <1> QED BY <1>1
+
 ExactDecisionRequestRetransmitArmedResidual(node, qc) ==
   /\ ExactDecisionRequestPacketEmissionResidual(node, qc)
   /\ \/ RetransmitDue(node)
@@ -3910,6 +4039,2241 @@ THEOREM ExactDecisionRequestAdmissionHandoffConvergence ==
       AsyncSpecAt(initialContext))
 BY FairExactDecisionRequestAdmissionHandoff
    DEF ExactDecisionRequestAdmissionHandoffConvergenceProperty
+
+(***************************************************************************
+Exact request-ingress runner boundary.
+
+The lane residual alone is not an enabled exact drain.  Before Apply, the
+archive runner may still be in Local or Runtime, the exact request may be
+blocked by Completion causal debt or the Serve reservation, and a claimed
+response or request-fenced physical completion may own selector priority.
+After Apply, the historical server has no runner-phase prefix, but the exact
+request may still be blocked by the Serve reservation or a different
+historically drainable item may be selected.
+
+The two readiness predicates below therefore state the complete concrete
+head/action guards.  Their exact selected actions are enabled and create a
+fresh nonce-owned Serve occurrence.  What is deliberately not asserted is
+that the broad lane residual implies either readiness predicate: that step
+needs a per-item well-founded rank which bounds selector priority, earlier
+source/lane owners, causal debt, and Serve-capacity owners.  Weak fairness of
+the per-archive runner cannot replace that missing rank because a fair runner
+occurrence may drain another item (and an idle historical-server occurrence
+may stutter while the Serve reservation is full).
+***************************************************************************)
+
+ExactDecisionNormalRequestIngressRunnerReady(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ~NodeHasApplication(archive)
+  /\ asyncRunnerPhase[archive] = "Ingress"
+  /\ asyncRunnerBudget[archive] > 0
+  /\ IngressItemCanDrain(archive, request)
+  /\ DrainableIngressIndices(archive) # {}
+  /\ SelectedIngressItemAt(
+       archive, FirstDrainableIngressIndex(archive)) = request
+
+ExactDecisionHistoricalRequestIngressRunnerReady(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ NodeHasApplication(archive)
+  /\ HistoricalIngressItemCanDrain(archive, request)
+  /\ HistoricalDrainableIngressIndices(archive) # {}
+  /\ HistoricalSelectedIngressItemAt(
+       archive,
+       FirstHistoricalDrainableIngressIndex(archive)) = request
+
+ExactDecisionRequestIngressRunnerReady(
+    node, qc, archive, request) ==
+  \/ ExactDecisionNormalRequestIngressRunnerReady(
+       node, qc, archive, request)
+  \/ ExactDecisionHistoricalRequestIngressRunnerReady(
+       node, qc, archive, request)
+
+ExactDecisionRequestIngressRunnerBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ~ExactDecisionRequestIngressRunnerReady(
+       node, qc, archive, request)
+
+THEOREM ExactDecisionRequestIngressLaneSplitsAtRunnerReadiness ==
+  \A node, qc, archive, request:
+    ExactDecisionRequestIngressLaneResidual(
+      node, qc, archive, request)
+      => \/ ExactDecisionRequestIngressRunnerReady(
+              node, qc, archive, request)
+         \/ ExactDecisionRequestIngressRunnerBlocked(
+              node, qc, archive, request)
+BY Isa DEF ExactDecisionRequestIngressRunnerBlocked
+
+ExactDecisionNormalRequestIngressRunnerAction(archive, request) ==
+  /\ PostGstRunNode(archive)
+  /\ DrainFairIngressSelected(archive)
+  /\ SelectedIngressItemAt(
+       archive, FirstDrainableIngressIndex(archive)) = request
+
+ExactDecisionHistoricalRequestIngressRunnerAction(archive, request) ==
+  /\ PostGstRunHistoricalServer(archive)
+  /\ DrainHistoricalIngressSelected(archive)
+  /\ HistoricalSelectedIngressItemAt(
+       archive,
+       FirstHistoricalDrainableIngressIndex(archive)) = request
+
+ExactDecisionRequestIngressRunnerAction(archive, request) ==
+  \/ ExactDecisionNormalRequestIngressRunnerAction(archive, request)
+  \/ ExactDecisionHistoricalRequestIngressRunnerAction(archive, request)
+
+THEOREM ExactDecisionNormalRequestIngressRunnerCreatesFreshServeOwner ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionServeAdmissionOwned(archive, request)
+    /\ ExactDecisionNormalRequestIngressRunnerAction(archive, request)
+    => \E job \in SequenceSet(asyncIoQueues'[archive]):
+         ExactDecisionServeJobOwned(
+           node, qc, archive, request, job)'
+BY NormalExactRequestIngressCreatesFreshServeOwner, Isa
+   DEF ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionNormalRequestIngressRunnerAction,
+       PostGstRunNode, RunNode
+
+THEOREM ExactDecisionHistoricalRequestIngressRunnerCreatesFreshServeOwner ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionServeAdmissionOwned(archive, request)
+    /\ ExactDecisionHistoricalRequestIngressRunnerAction(
+         archive, request)
+    => \E job \in SequenceSet(asyncIoQueues'[archive]):
+         ExactDecisionServeJobOwned(
+           node, qc, archive, request, job)'
+BY HistoricalExactRequestIngressCreatesFreshServeOwner, Isa
+   DEF ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionHistoricalRequestIngressRunnerAction,
+       PostGstRunHistoricalServer, RunHistoricalServer
+
+THEOREM ExactDecisionCachedRequestIngressRunnerCreatesResponseOwner ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionServeTombstoneOwned(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestIngressRunnerAction(archive, request)
+    => \E response, packet:
+         ExactDecisionResponsePacketOwned(
+           node, qc, archive, request, response, packet)'
+BY IsaT(180)
+   DEF ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressRunnerAction,
+       ExactDecisionNormalRequestIngressRunnerAction,
+       ExactDecisionHistoricalRequestIngressRunnerAction,
+       ExactDecisionServeTombstoneOwned,
+       ExactDecisionResponsePacketOwned,
+       ExactDecisionAuthenticatedResponse,
+       ExactDecisionBodyHoldingAlias,
+       AsyncServeCachedReplayItems,
+       AsyncServeTombstoneOutputs,
+       DrainFairIngressSelected,
+       DrainHistoricalIngressSelected,
+       PublishEphemeralItems, PacketsForItems
+
+THEOREM ExactDecisionRequestIngressRunnerActionCreatesGoal ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestIngressRunnerAction(archive, request)
+    => ExactDecisionRequestIngressGoal(
+         node, qc, archive, request)'
+BY ExactDecisionNormalRequestIngressRunnerCreatesFreshServeOwner,
+   ExactDecisionHistoricalRequestIngressRunnerCreatesFreshServeOwner,
+   ExactDecisionCachedRequestIngressRunnerCreatesResponseOwner, IsaT(180)
+   DEF ExactDecisionRequestIngressRunnerAction,
+       ExactDecisionRequestIngressGoal,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionServeAdmissionOwned,
+       ExactDecisionServeTombstoneOwned,
+       AsyncServeLifecyclePartitionInvariant,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncServeLifecycleTypeInvariant
+
+THEOREM ExactDecisionRequestIngressRunnerActionPersistsOrGoals ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ [ExactDecisionRequestIngressRunnerAction(
+          archive, request)]_AsyncAllVars
+    => \/ ExactDecisionRequestIngressLaneResidual(
+            node, qc, archive, request)'
+       \/ ExactDecisionRequestIngressGoal(
+            node, qc, archive, request)'
+BY ExactDecisionRequestIngressRunnerActionCreatesGoal, Isa
+   DEF ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressRunnerAction,
+       AsyncAllVars
+
+THEOREM ExactDecisionNormalRequestIngressReadyEnablesExactAction ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionNormalRequestIngressRunnerReady(
+         node, qc, archive, request)
+    => ENABLED
+         <<ExactDecisionNormalRequestIngressRunnerAction(
+             archive, request)>>_AsyncAllVars
+BY GstResponsiveUnappliedRunNodeIsEnabled,
+   AsyncStrongTypeProjectsAsyncType,
+   RunNodeIsNonstuttering, ENABLEDaxioms, IsaT(180)
+   DEF ExactDecisionNormalRequestIngressRunnerReady,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       ExactDecisionNormalRequestIngressRunnerAction,
+       PostGstRunNode, RunNode, RunNodeWork, IngressDrainStep,
+       AsyncAllVars
+
+THEOREM ExactDecisionHistoricalRequestIngressReadyEnablesExactAction ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionHistoricalRequestIngressRunnerReady(
+         node, qc, archive, request)
+    => ENABLED
+         <<ExactDecisionHistoricalRequestIngressRunnerAction(
+             archive, request)>>_AsyncAllVars
+BY GstHistoricalServerIsEnabled,
+   GstResponsiveNodesAreUp,
+   HistoricalExactRequestIngressCreatesFreshServeOwner,
+   ENABLEDaxioms, ExpandENABLED, IsaT(300)
+   DEF ExactDecisionHistoricalRequestIngressRunnerReady,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressGoal,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       ExactDecisionServeJobOwned,
+       ExactDecisionServeOccurrenceOwned,
+       ExactDecisionHistoricalRequestIngressRunnerAction,
+       AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers,
+       AsyncArchiveServerIds,
+       PostGstRunHistoricalServer, RunHistoricalServer,
+       DrainHistoricalIngressSelected, PopSelectedIngress,
+       AsyncAllVars, AsyncSchedulerVars, SequenceSet
+
+(***************************************************************************
+Small exact per-item ingress rank interface.
+
+This rank is an ownership interface, not a convergence claim.  Apply is the
+outer mode decrease.  Before Apply, Completion causal debt precedes the Serve
+capacity owner because admitting the owed Completion may itself append I/O
+work.  Selector-priority occurrences precede the exact lane and source
+positions because a priority drain may rotate a source which follows the
+target.  The target lane position precedes the target source position because
+draining an earlier item from the target lane rotates that source to the
+ready-list tail.  The finite runner-phase reach is last.
+
+The priority component counts concrete lane occurrences, rather than merely
+ready sources: one source may retain several request-fenced physical owners
+after one drain.  The request lane itself is not known to have unique values,
+so its component is the least matching occurrence rather than an arbitrary
+value-based CHOOSE.  All components are state-based and every exact lane
+residual has a rank in the explicit well-founded carrier.
+***************************************************************************)
+
+ExactDecisionRequestIngressModeRank(archive) ==
+  IF NodeHasApplication(archive) THEN 0 ELSE 1
+
+ExactDecisionRequestIngressCausalDebt(archive) ==
+  IF ~NodeHasApplication(archive)
+       /\ CompletionCausalAdmissionDebt(archive)
+  THEN 1
+  ELSE 0
+
+ExactDecisionRequestIngressServeCapacityDebt(archive) ==
+  IF CanEnqueueIoClass(archive, "Serve")
+  THEN 0
+  ELSE AsyncIoQueueDepth(archive) - AsyncIoAuxCapacity + 1
+
+ExactDecisionRequestIngressPriorityOwners(archive) ==
+  {pair \in AsyncIngressSources \X (1..AsyncIngressCapacity):
+     \/ pair[2] \in
+          DrainableClaimedResponseLaneIndices(archive, pair[1])
+     \/ pair[2] \in
+          DrainableRequestFencedCompletionLaneIndices(
+            archive, pair[1])}
+
+ExactDecisionRequestIngressPriorityDebt(archive) ==
+  Cardinality(ExactDecisionRequestIngressPriorityOwners(archive))
+
+ExactDecisionRequestIngressLaneIndices(archive, request) ==
+  {index \in
+       1..Len(IngressLane(
+                archive, IngressResourceSource(request))):
+     IngressLane(
+       archive, IngressResourceSource(request))[index] = request}
+
+ExactDecisionRequestIngressLanePosition(archive, request) ==
+  CHOOSE least \in
+      ExactDecisionRequestIngressLaneIndices(archive, request):
+    \A other \in
+        ExactDecisionRequestIngressLaneIndices(archive, request):
+      least <= other
+
+ExactDecisionRequestIngressOccurrenceMultiplicityResidual(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ Cardinality(
+       ExactDecisionRequestIngressLaneIndices(archive, request)) > 1
+
+ExactDecisionRequestIngressSourcePosition(archive, request) ==
+  IngressSourceServiceRank(
+    archive, IngressResourceSource(request))
+
+ExactDecisionRequestIngressReachRank(archive) ==
+  IF NodeHasApplication(archive)
+  THEN 0
+  ELSE DrainableIngressTurnReachRank(archive)
+
+ExactDecisionRequestIngressSourceReachRank(archive, request) ==
+  <<ExactDecisionRequestIngressSourcePosition(archive, request),
+    ExactDecisionRequestIngressReachRank(archive)>>
+
+ExactDecisionRequestIngressLaneRank(archive, request) ==
+  <<ExactDecisionRequestIngressLanePosition(archive, request),
+    ExactDecisionRequestIngressSourceReachRank(archive, request)>>
+
+ExactDecisionRequestIngressSelectorRank(archive, request) ==
+  <<ExactDecisionRequestIngressPriorityDebt(archive),
+    ExactDecisionRequestIngressLaneRank(archive, request)>>
+
+ExactDecisionRequestIngressCapacityRank(archive, request) ==
+  <<ExactDecisionRequestIngressServeCapacityDebt(archive),
+    ExactDecisionRequestIngressSelectorRank(archive, request)>>
+
+ExactDecisionRequestIngressCausalRank(archive, request) ==
+  <<ExactDecisionRequestIngressCausalDebt(archive),
+    ExactDecisionRequestIngressCapacityRank(archive, request)>>
+
+ExactDecisionRequestIngressRank(archive, request) ==
+  <<ExactDecisionRequestIngressModeRank(archive),
+    ExactDecisionRequestIngressCausalRank(archive, request)>>
+
+ExactDecisionRequestIngressSourceReachCarrier == Nat \X Nat
+ExactDecisionRequestIngressLaneCarrier ==
+  Nat \X ExactDecisionRequestIngressSourceReachCarrier
+ExactDecisionRequestIngressSelectorCarrier ==
+  Nat \X ExactDecisionRequestIngressLaneCarrier
+ExactDecisionRequestIngressCapacityCarrier ==
+  Nat \X ExactDecisionRequestIngressSelectorCarrier
+ExactDecisionRequestIngressCausalCarrier ==
+  (0..1) \X ExactDecisionRequestIngressCapacityCarrier
+ExactDecisionRequestIngressRankCarrier ==
+  (0..1) \X ExactDecisionRequestIngressCausalCarrier
+
+ExactDecisionRequestIngressSourceReachOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), OpToRel(<, Nat),
+    Nat, Nat)
+
+ExactDecisionRequestIngressLaneOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionRequestIngressSourceReachOrdering,
+    Nat, ExactDecisionRequestIngressSourceReachCarrier)
+
+ExactDecisionRequestIngressSelectorOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionRequestIngressLaneOrdering,
+    Nat, ExactDecisionRequestIngressLaneCarrier)
+
+ExactDecisionRequestIngressCapacityOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionRequestIngressSelectorOrdering,
+    Nat, ExactDecisionRequestIngressSelectorCarrier)
+
+ExactDecisionRequestIngressCausalOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionRequestIngressCapacityOrdering,
+    0..1, ExactDecisionRequestIngressCapacityCarrier)
+
+ExactDecisionRequestIngressRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionRequestIngressCausalOrdering,
+    0..1, ExactDecisionRequestIngressCausalCarrier)
+
+THEOREM ExactDecisionRequestIngressRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    ExactDecisionRequestIngressRankOrdering,
+    ExactDecisionRequestIngressRankCarrier)
+PROOF
+  <1>1. IsWellFoundedOn(
+           ExactDecisionRequestIngressSourceReachOrdering,
+           ExactDecisionRequestIngressSourceReachCarrier)
+    BY NatLessThanWellFounded, WFLexPairOrdering
+       DEF ExactDecisionRequestIngressSourceReachOrdering,
+           ExactDecisionRequestIngressSourceReachCarrier
+  <1>2. IsWellFoundedOn(
+           ExactDecisionRequestIngressLaneOrdering,
+           ExactDecisionRequestIngressLaneCarrier)
+    BY NatLessThanWellFounded, <1>1, WFLexPairOrdering
+       DEF ExactDecisionRequestIngressLaneOrdering,
+           ExactDecisionRequestIngressLaneCarrier
+  <1>3. IsWellFoundedOn(
+           ExactDecisionRequestIngressSelectorOrdering,
+           ExactDecisionRequestIngressSelectorCarrier)
+    BY NatLessThanWellFounded, <1>2, WFLexPairOrdering
+       DEF ExactDecisionRequestIngressSelectorOrdering,
+           ExactDecisionRequestIngressSelectorCarrier
+  <1>4. IsWellFoundedOn(
+           ExactDecisionRequestIngressCapacityOrdering,
+           ExactDecisionRequestIngressCapacityCarrier)
+    BY NatLessThanWellFounded, <1>3, WFLexPairOrdering
+       DEF ExactDecisionRequestIngressCapacityOrdering,
+           ExactDecisionRequestIngressCapacityCarrier
+  <1>5. IsWellFoundedOn(
+           ExactDecisionRequestIngressCausalOrdering,
+           ExactDecisionRequestIngressCausalCarrier)
+    BY NatLessThanWellFounded, IsWellFoundedOnSubset,
+       <1>4, WFLexPairOrdering, Isa
+       DEF ExactDecisionRequestIngressCausalOrdering,
+           ExactDecisionRequestIngressCausalCarrier
+  <1> QED BY NatLessThanWellFounded, IsWellFoundedOnSubset,
+       <1>5, WFLexPairOrdering, Isa
+       DEF ExactDecisionRequestIngressRankOrdering,
+           ExactDecisionRequestIngressRankCarrier
+
+THEOREM ExactDecisionRequestIngressPriorityDebtIsNatural ==
+  \A archive \in ValidatorIds:
+    AsyncStrongTypeInvariant
+      => /\ IsFiniteSet(
+              ExactDecisionRequestIngressPriorityOwners(archive))
+         /\ ExactDecisionRequestIngressPriorityDebt(archive) \in Nat
+BY FS_Product, FS_Interval, FS_Subset, FS_CardinalityType, Isa
+   DEF ExactDecisionRequestIngressPriorityOwners,
+       ExactDecisionRequestIngressPriorityDebt,
+       AsyncStrongTypeInvariant, AsyncConfiguration
+
+THEOREM ExactDecisionRequestIngressServeCapacityDebtIsNatural ==
+  \A archive \in ValidatorIds:
+    AsyncStrongTypeInvariant
+      => ExactDecisionRequestIngressServeCapacityDebt(archive) \in Nat
+BY AsyncStrongTypeProjectsAsyncType, SMT
+   DEF ExactDecisionRequestIngressServeCapacityDebt,
+       CanEnqueueIoClass, AsyncIoAdmissionLimit,
+       AsyncIoQueueDepth, AsyncStrongTypeInvariant,
+       AsyncSchedulerTypeInvariant, AsyncIoTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncConfiguration
+
+THEOREM ExactDecisionRequestIngressLanePositionIsEarliestOccurrence ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    => /\ ExactDecisionRequestIngressLaneIndices(archive, request) # {}
+       /\ ExactDecisionRequestIngressLanePosition(archive, request)
+            \in ExactDecisionRequestIngressLaneIndices(archive, request)
+       /\ ExactDecisionRequestIngressLanePosition(archive, request)
+            \in 1..Len(
+                 IngressLane(
+                   archive, IngressResourceSource(request)))
+       /\ IngressLane(
+            archive, IngressResourceSource(request))[
+              ExactDecisionRequestIngressLanePosition(
+                archive, request)] = request
+       /\ \A other \in
+              ExactDecisionRequestIngressLaneIndices(archive, request):
+            ExactDecisionRequestIngressLanePosition(archive, request)
+              <= other
+PROOF
+  <1>1. ASSUME NEW node, NEW qc, NEW archive, NEW request,
+                AsyncStrongTypeInvariant,
+                ExactDecisionRequestIngressLaneResidual(
+                  node, qc, archive, request)
+         PROVE /\ ExactDecisionRequestIngressLaneIndices(
+                    archive, request) # {}
+               /\ ExactDecisionRequestIngressLanePosition(
+                    archive, request)
+                    \in ExactDecisionRequestIngressLaneIndices(
+                          archive, request)
+               /\ ExactDecisionRequestIngressLanePosition(
+                    archive, request)
+                    \in 1..Len(
+                         IngressLane(
+                           archive, IngressResourceSource(request)))
+               /\ IngressLane(
+                    archive, IngressResourceSource(request))[
+                      ExactDecisionRequestIngressLanePosition(
+                        archive, request)] = request
+               /\ \A other \in
+                      ExactDecisionRequestIngressLaneIndices(
+                        archive, request):
+                    ExactDecisionRequestIngressLanePosition(
+                      archive, request) <= other
+    <2> DEFINE Indices ==
+           ExactDecisionRequestIngressLaneIndices(archive, request)
+    <2>1. PICK witness \in
+                    1..Len(
+                         IngressLane(
+                           archive, IngressResourceSource(request))):
+             IngressLane(
+               archive, IngressResourceSource(request))[witness] = request
+      BY <1>1
+         DEF ExactDecisionRequestIngressLaneResidual,
+             ExactDecisionRequestIngressOwned,
+             ExactDecisionBodyHoldingAlias,
+             ExactDecisionActiveRequestOwner,
+             ExactDecisionServiceSource,
+             SequenceSet
+    <2>2. /\ witness \in Indices
+           /\ witness \in Nat
+           /\ Indices # {}
+      BY <2>1, FS_EmptySet, Isa
+         DEF Indices, ExactDecisionRequestIngressLaneIndices
+    <2>3. \E least \in Nat:
+             /\ least \in Indices
+             /\ \A prior \in 0..(least - 1): prior \notin Indices
+      BY <2>2, SmallestNatural, SMTT(30)
+    <2>4. PICK least \in Nat:
+             /\ least \in Indices
+             /\ \A prior \in 0..(least - 1): prior \notin Indices
+      BY <2>3
+    <2>5. \A other \in Indices: least <= other
+      BY <2>4, SMT
+         DEF Indices, ExactDecisionRequestIngressLaneIndices
+    <2>6. /\ ExactDecisionRequestIngressLanePosition(
+                  archive, request) \in Indices
+           /\ \A other \in Indices:
+                ExactDecisionRequestIngressLanePosition(
+                  archive, request) <= other
+      BY <2>4, <2>5, Zenon
+         DEF ExactDecisionRequestIngressLanePosition, Indices
+    <2> QED BY <2>2, <2>6
+         DEF Indices, ExactDecisionRequestIngressLaneIndices
+  <1> QED BY <1>1
+
+THEOREM ExactDecisionRequestIngressRankComponentsAreTyped ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    => /\ archive \in ValidatorIds
+       /\ ExactDecisionRequestIngressModeRank(archive) \in 0..1
+       /\ ExactDecisionRequestIngressCausalDebt(archive) \in 0..1
+       /\ ExactDecisionRequestIngressServeCapacityDebt(archive) \in Nat
+       /\ ExactDecisionRequestIngressPriorityDebt(archive) \in Nat
+       /\ ExactDecisionRequestIngressLanePosition(archive, request)
+            \in Nat \ {0}
+       /\ ExactDecisionRequestIngressSourcePosition(archive, request)
+            \in Nat \ {0}
+       /\ ExactDecisionRequestIngressReachRank(archive) \in Nat
+BY AsyncStrongTypeProjectsAsyncType,
+   AsyncCurrentResponsiveVotersAreValidators,
+   ExactDecisionRequestIngressPriorityDebtIsNatural,
+   ExactDecisionRequestIngressServeCapacityDebtIsNatural,
+   ExactDecisionRequestIngressLanePositionIsEarliestOccurrence,
+   CandidateSequenceIndexIsPosition,
+   DrainableIngressTurnReachRankIsNatural, IsaT(180)
+   DEF ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressCausalDebt,
+       ExactDecisionRequestIngressSourcePosition,
+       IngressSourceServiceRank,
+       ExactDecisionRequestIngressReachRank,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
+       AsyncIngressContentTypeInvariant,
+       IngressResourceSource, IngressLane, SequenceSet
+
+THEOREM ExactDecisionRequestIngressRankInCarrier ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    => ExactDecisionRequestIngressRank(archive, request)
+         \in ExactDecisionRequestIngressRankCarrier
+BY ExactDecisionRequestIngressRankComponentsAreTyped, Isa
+   DEF ExactDecisionRequestIngressRank,
+       ExactDecisionRequestIngressCausalRank,
+       ExactDecisionRequestIngressCapacityRank,
+       ExactDecisionRequestIngressSelectorRank,
+       ExactDecisionRequestIngressLaneRank,
+       ExactDecisionRequestIngressSourceReachRank,
+       ExactDecisionRequestIngressRankCarrier,
+       ExactDecisionRequestIngressCausalCarrier,
+       ExactDecisionRequestIngressCapacityCarrier,
+       ExactDecisionRequestIngressSelectorCarrier,
+       ExactDecisionRequestIngressLaneCarrier,
+       ExactDecisionRequestIngressSourceReachCarrier
+
+(***************************************************************************
+Admission-lifecycle rank.
+
+The old per-lane rank remains the nested runner component.  The outer rank
+now follows the immutable Serve lifecycle identity across the atomic hidden
+admission cut, its logical future-slot ticket, the frozen I/O and ingress
+predecessor prefixes, the queued Serve occurrence, and cached-output replay.
+A tombstone is not requester success: it only owns exact response bytes.
+After packet loss the active request retransmits with the same logical
+identity, reaches the tombstone through ordinary ingress, and re-emits those
+bytes without allocating a new ordinal or Serve job.
+***************************************************************************)
+
+ExactDecisionRequestLifecycleGoal(node, qc, archive, request) ==
+  \/ ExactDecisionExecutableFrontier(node, qc)
+  \/ \E response, packet:
+       ExactDecisionResponsePacketOwned(
+         node, qc, archive, request, response, packet)
+
+ExactDecisionRequestLifecycleResidual(
+    node, qc, archive, request) ==
+  /\ ExactDecisionBodyHoldingAlias(node, qc, archive, request)
+  /\ ~ExactDecisionRequestLifecycleGoal(
+       node, qc, archive, request)
+  /\ \/ ExactDecisionRequestIngressOwned(
+          node, qc, archive, request)
+     \/ ExactDecisionServeAdmissionOwned(archive, request)
+     \/ ExactDecisionServeTombstoneOwned(
+          node, qc, archive, request)
+
+ExactDecisionRequestLifecycleStage(
+    node, qc, archive, request) ==
+  IF ExactDecisionRequestLifecycleGoal(
+       node, qc, archive, request)
+  THEN 0
+  ELSE IF \E job:
+            ExactDecisionServeJobOwned(
+              node, qc, archive, request, job)
+       THEN 2
+       ELSE IF ExactDecisionServeTombstoneOwned(
+                 node, qc, archive, request)
+            THEN 1
+            ELSE IF ExactDecisionServeAdmissionOwned(
+                      archive, request)
+                 THEN 3
+                 ELSE 4
+
+ExactDecisionRequestLifecycleFrozenPredecessorSet(
+    archive, request) ==
+  LET identity ==
+        ExactDecisionServeLifecycleIdentity(archive, request)
+  IN ({"Io"} \X AsyncServeFrozenPredecessorSet(
+                    archive, identity))
+       \cup
+     ({"Ingress"} \X AsyncServeFrozenIngressPredecessorSet(
+                         archive, identity))
+       \cup
+     ({"EarlierServe"} \X
+        AsyncServeEarlierLiveReservationIdentities(
+          archive, identity))
+
+ExactDecisionRequestLifecycleFrozenPredecessorDebt(
+    archive, request) ==
+  Cardinality(
+    ExactDecisionRequestLifecycleFrozenPredecessorSet(
+      archive, request))
+
+ExactDecisionRequestIngressZeroSourceReachRank == <<0, 0>>
+ExactDecisionRequestIngressZeroLaneRank ==
+  <<0, ExactDecisionRequestIngressZeroSourceReachRank>>
+ExactDecisionRequestIngressZeroSelectorRank ==
+  <<0, ExactDecisionRequestIngressZeroLaneRank>>
+ExactDecisionRequestIngressZeroCapacityRank ==
+  <<0, ExactDecisionRequestIngressZeroSelectorRank>>
+ExactDecisionRequestIngressZeroCausalRank ==
+  <<0, ExactDecisionRequestIngressZeroCapacityRank>>
+ExactDecisionRequestIngressZeroRank ==
+  <<0, ExactDecisionRequestIngressZeroCausalRank>>
+
+ExactDecisionRequestLifecycleNestedIngressRank(
+    node, qc, archive, request) ==
+  IF ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  THEN ExactDecisionRequestIngressRank(archive, request)
+  ELSE ExactDecisionRequestIngressZeroRank
+
+ExactDecisionRequestLifecycleIngressRank(
+    node, qc, archive, request) ==
+  <<ExactDecisionRequestLifecycleStage(
+      node, qc, archive, request),
+    <<ExactDecisionRequestLifecycleFrozenPredecessorDebt(
+        archive, request),
+      ExactDecisionRequestLifecycleNestedIngressRank(
+        node, qc, archive, request)>>>>
+
+ExactDecisionRequestLifecycleDebtCarrier ==
+  Nat \X ExactDecisionRequestIngressRankCarrier
+
+ExactDecisionRequestLifecycleIngressRankCarrier ==
+  (0..4) \X ExactDecisionRequestLifecycleDebtCarrier
+
+ExactDecisionRequestLifecycleDebtOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionRequestIngressRankOrdering,
+    Nat, ExactDecisionRequestIngressRankCarrier)
+
+ExactDecisionRequestLifecycleIngressRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat),
+    ExactDecisionRequestLifecycleDebtOrdering,
+    0..4, ExactDecisionRequestLifecycleDebtCarrier)
+
+THEOREM ExactDecisionRequestLifecycleIngressRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    ExactDecisionRequestLifecycleIngressRankOrdering,
+    ExactDecisionRequestLifecycleIngressRankCarrier)
+BY NatLessThanWellFounded, IsWellFoundedOnSubset,
+   ExactDecisionRequestIngressRankOrderingIsWellFounded,
+   WFLexPairOrdering, Isa
+   DEF ExactDecisionRequestLifecycleIngressRankOrdering,
+       ExactDecisionRequestLifecycleIngressRankCarrier,
+       ExactDecisionRequestLifecycleDebtOrdering,
+       ExactDecisionRequestLifecycleDebtCarrier
+
+ExactDecisionRequestIngressAtRank(
+    node, qc, archive, request, rank) ==
+  /\ AsyncStrongTypeInvariant
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ rank = ExactDecisionRequestIngressRank(archive, request)
+  /\ rank \in ExactDecisionRequestIngressRankCarrier
+
+THEOREM ExactDecisionRequestIngressRankCoversEveryLaneResidual ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    => \E rank \in ExactDecisionRequestIngressRankCarrier:
+         ExactDecisionRequestIngressAtRank(
+           node, qc, archive, request, rank)
+BY ExactDecisionRequestIngressRankInCarrier
+   DEF ExactDecisionRequestIngressAtRank
+
+(***************************************************************************
+Exact blocked-case decomposition.
+
+The guards are ordered so the cases are disjoint within each runner mode.
+The ordinary runner first owes its phase prefix, then Completion causal debt,
+then Serve capacity, then claimed-response/request-fenced priority, then the
+source and lane positions.  The historical server has only Serve capacity
+and its minimum source/lane positions.  Lane position means the least equal
+request occurrence, so this decomposition does not assume that retransmitted
+request values are unique.  The named occurrence-multiplicity residual above
+records why no action-local lane-position descent theorem is asserted here.
+***************************************************************************)
+
+THEOREM ExactDecisionNormalRequestIngressDrainability ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ~NodeHasApplication(archive)
+    => (IngressItemCanDrain(archive, request)
+          <=> ExactServeIngressCanAdvance(archive, request))
+BY IsaT(180)
+   DEF ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       IngressItemCanDrain,
+       AsyncServeLifecycleDrainRequired,
+       CertifiedRequestAuthorized, CertifiedRequestAuthority
+
+THEOREM ExactDecisionHistoricalRequestIngressDrainability ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ NodeHasApplication(archive)
+    => (HistoricalIngressItemCanDrain(archive, request)
+          <=> ExactServeIngressCanAdvance(archive, request))
+BY IsaT(180)
+   DEF ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       HistoricalIngressItemCanDrain,
+       AsyncServeLifecycleDrainRequired,
+       CertifiedRequestAuthorized, CertifiedRequestAuthority
+
+ExactDecisionNormalRequestIngressPhaseBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ~NodeHasApplication(archive)
+  /\ ~(/\ asyncRunnerPhase[archive] = "Ingress"
+       /\ asyncRunnerBudget[archive] > 0)
+
+ExactDecisionNormalRequestIngressCausalBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ~NodeHasApplication(archive)
+  /\ asyncRunnerPhase[archive] = "Ingress"
+  /\ asyncRunnerBudget[archive] > 0
+  /\ CompletionCausalAdmissionDebt(archive)
+
+ExactDecisionNormalRequestIngressServeCapacityBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ~NodeHasApplication(archive)
+  /\ asyncRunnerPhase[archive] = "Ingress"
+  /\ asyncRunnerBudget[archive] > 0
+  /\ ~CompletionCausalAdmissionDebt(archive)
+  /\ ~CanEnqueueIoClass(archive, "Serve")
+
+ExactDecisionNormalRequestIngressSelectable(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ~NodeHasApplication(archive)
+  /\ asyncRunnerPhase[archive] = "Ingress"
+  /\ asyncRunnerBudget[archive] > 0
+  /\ ~CompletionCausalAdmissionDebt(archive)
+  /\ CanEnqueueIoClass(archive, "Serve")
+
+ExactDecisionNormalRequestIngressClaimedPriorityBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionNormalRequestIngressSelectable(
+       node, qc, archive, request)
+  /\ DrainableClaimedResponseReadyIndices(archive) # {}
+
+ExactDecisionNormalRequestIngressFencedPriorityBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionNormalRequestIngressSelectable(
+       node, qc, archive, request)
+  /\ DrainableClaimedResponseReadyIndices(archive) = {}
+  /\ DrainableRequestFencedCompletionReadyIndices(archive) # {}
+
+ExactDecisionNormalRequestIngressSourcePositionBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionNormalRequestIngressSelectable(
+       node, qc, archive, request)
+  /\ DrainableClaimedResponseReadyIndices(archive) = {}
+  /\ DrainableRequestFencedCompletionReadyIndices(archive) = {}
+  /\ FirstDrainableIngressIndex(archive)
+       < ExactDecisionRequestIngressSourcePosition(archive, request)
+
+ExactDecisionNormalRequestIngressLanePositionBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionNormalRequestIngressSelectable(
+       node, qc, archive, request)
+  /\ DrainableClaimedResponseReadyIndices(archive) = {}
+  /\ DrainableRequestFencedCompletionReadyIndices(archive) = {}
+  /\ FirstDrainableIngressIndex(archive)
+       = ExactDecisionRequestIngressSourcePosition(archive, request)
+  /\ SelectedIngressLaneIndex(
+       archive, FirstDrainableIngressIndex(archive))
+       < ExactDecisionRequestIngressLanePosition(archive, request)
+
+ExactDecisionHistoricalRequestIngressServeCapacityBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ NodeHasApplication(archive)
+  /\ ~CanEnqueueIoClass(archive, "Serve")
+
+ExactDecisionHistoricalRequestIngressSelectable(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ NodeHasApplication(archive)
+  /\ CanEnqueueIoClass(archive, "Serve")
+
+ExactDecisionHistoricalRequestIngressSourcePositionBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionHistoricalRequestIngressSelectable(
+       node, qc, archive, request)
+  /\ FirstHistoricalDrainableIngressIndex(archive)
+       < ExactDecisionRequestIngressSourcePosition(archive, request)
+
+ExactDecisionHistoricalRequestIngressLanePositionBlocked(
+    node, qc, archive, request) ==
+  /\ ExactDecisionHistoricalRequestIngressSelectable(
+       node, qc, archive, request)
+  /\ FirstHistoricalDrainableIngressIndex(archive)
+       = ExactDecisionRequestIngressSourcePosition(archive, request)
+  /\ HistoricalSelectedIngressLaneIndex(
+       archive, FirstHistoricalDrainableIngressIndex(archive))
+       < ExactDecisionRequestIngressLanePosition(archive, request)
+
+ExactDecisionRequestIngressConcreteBlockedCase(
+    node, qc, archive, request) ==
+  \/ ExactDecisionNormalRequestIngressPhaseBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionNormalRequestIngressCausalBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionNormalRequestIngressServeCapacityBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionNormalRequestIngressClaimedPriorityBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionNormalRequestIngressFencedPriorityBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionNormalRequestIngressSourcePositionBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionNormalRequestIngressLanePositionBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionHistoricalRequestIngressServeCapacityBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionHistoricalRequestIngressSourcePositionBlocked(
+       node, qc, archive, request)
+  \/ ExactDecisionHistoricalRequestIngressLanePositionBlocked(
+       node, qc, archive, request)
+
+THEOREM ExactDecisionRequestIngressBlockedCaseDecomposition ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    => (ExactDecisionRequestIngressRunnerBlocked(
+          node, qc, archive, request)
+          <=> ExactDecisionRequestIngressConcreteBlockedCase(
+                node, qc, archive, request))
+BY ExactDecisionNormalRequestIngressDrainability,
+   ExactDecisionHistoricalRequestIngressDrainability,
+   ExactDecisionRequestIngressLanePositionIsEarliestOccurrence,
+   ExactDecisionRequestIngressRankComponentsAreTyped,
+   FirstDrainableSourceNeverFollowsAnotherDrainableSource,
+   FirstDrainableIngressIndexIsDrainable,
+   FirstDrainableIngressLaneIndexIsDrainable, IsaT(300)
+   DEF ExactDecisionRequestIngressRunnerBlocked,
+       ExactDecisionRequestIngressRunnerReady,
+       ExactDecisionNormalRequestIngressRunnerReady,
+       ExactDecisionHistoricalRequestIngressRunnerReady,
+       ExactDecisionRequestIngressConcreteBlockedCase,
+       ExactDecisionNormalRequestIngressPhaseBlocked,
+       ExactDecisionNormalRequestIngressCausalBlocked,
+       ExactDecisionNormalRequestIngressServeCapacityBlocked,
+       ExactDecisionNormalRequestIngressSelectable,
+       ExactDecisionNormalRequestIngressClaimedPriorityBlocked,
+       ExactDecisionNormalRequestIngressFencedPriorityBlocked,
+       ExactDecisionNormalRequestIngressSourcePositionBlocked,
+       ExactDecisionNormalRequestIngressLanePositionBlocked,
+       ExactDecisionHistoricalRequestIngressServeCapacityBlocked,
+       ExactDecisionHistoricalRequestIngressSelectable,
+       ExactDecisionHistoricalRequestIngressSourcePositionBlocked,
+       ExactDecisionHistoricalRequestIngressLanePositionBlocked,
+       ExactDecisionRequestIngressLanePosition,
+       ExactDecisionRequestIngressLaneIndices,
+       ExactDecisionRequestIngressSourcePosition,
+       HistoricalDrainableIngressIndices,
+       HistoricalDrainableIngressLaneIndices,
+       FirstHistoricalDrainableIngressIndex,
+       FirstHistoricalDrainableIngressLaneIndex,
+       HistoricalSelectedIngressLaneIndex,
+       HistoricalSelectedIngressItemAt,
+       DrainableIngressIndices, DrainableIngressLaneIndices,
+       DrainableClaimedResponseReadyIndices,
+       DrainableRequestFencedCompletionReadyIndices,
+       SelectedIngressLaneIndex, SelectedIngressItemAt,
+       IngressResourceSource, IngressLane, SequenceSet
+
+(***************************************************************************
+Sound local rank edges.
+
+The structural lemma below is the only generic decrease rule: one component
+strictly decreases while every earlier component is unchanged.  The concrete
+causal-admission and I/O-worker leaves then establish two actual owner
+transfers.  They are deliberately stated only while the exact lane residual
+persists; the selected exact drain instead reaches the goal by
+`ExactDecisionRequestIngressRunnerActionCreatesGoal`.
+***************************************************************************)
+
+ExactDecisionRequestIngressStrictComponentDecrease(archive, request) ==
+  \/ ExactDecisionRequestIngressModeRank(archive)'
+       < ExactDecisionRequestIngressModeRank(archive)
+  \/ /\ ExactDecisionRequestIngressModeRank(archive)'
+          = ExactDecisionRequestIngressModeRank(archive)
+     /\ ExactDecisionRequestIngressCausalDebt(archive)'
+          < ExactDecisionRequestIngressCausalDebt(archive)
+  \/ /\ ExactDecisionRequestIngressModeRank(archive)'
+          = ExactDecisionRequestIngressModeRank(archive)
+     /\ ExactDecisionRequestIngressCausalDebt(archive)'
+          = ExactDecisionRequestIngressCausalDebt(archive)
+     /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+          < ExactDecisionRequestIngressServeCapacityDebt(archive)
+  \/ /\ ExactDecisionRequestIngressModeRank(archive)'
+          = ExactDecisionRequestIngressModeRank(archive)
+     /\ ExactDecisionRequestIngressCausalDebt(archive)'
+          = ExactDecisionRequestIngressCausalDebt(archive)
+     /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+          = ExactDecisionRequestIngressServeCapacityDebt(archive)
+     /\ ExactDecisionRequestIngressPriorityDebt(archive)'
+          < ExactDecisionRequestIngressPriorityDebt(archive)
+  \/ /\ ExactDecisionRequestIngressModeRank(archive)'
+          = ExactDecisionRequestIngressModeRank(archive)
+     /\ ExactDecisionRequestIngressCausalDebt(archive)'
+          = ExactDecisionRequestIngressCausalDebt(archive)
+     /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+          = ExactDecisionRequestIngressServeCapacityDebt(archive)
+     /\ ExactDecisionRequestIngressPriorityDebt(archive)'
+          = ExactDecisionRequestIngressPriorityDebt(archive)
+     /\ ExactDecisionRequestIngressLanePosition(archive, request)'
+          < ExactDecisionRequestIngressLanePosition(archive, request)
+  \/ /\ ExactDecisionRequestIngressModeRank(archive)'
+          = ExactDecisionRequestIngressModeRank(archive)
+     /\ ExactDecisionRequestIngressCausalDebt(archive)'
+          = ExactDecisionRequestIngressCausalDebt(archive)
+     /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+          = ExactDecisionRequestIngressServeCapacityDebt(archive)
+     /\ ExactDecisionRequestIngressPriorityDebt(archive)'
+          = ExactDecisionRequestIngressPriorityDebt(archive)
+     /\ ExactDecisionRequestIngressLanePosition(archive, request)'
+          = ExactDecisionRequestIngressLanePosition(archive, request)
+     /\ ExactDecisionRequestIngressSourcePosition(archive, request)'
+          < ExactDecisionRequestIngressSourcePosition(archive, request)
+  \/ /\ ExactDecisionRequestIngressModeRank(archive)'
+          = ExactDecisionRequestIngressModeRank(archive)
+     /\ ExactDecisionRequestIngressCausalDebt(archive)'
+          = ExactDecisionRequestIngressCausalDebt(archive)
+     /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+          = ExactDecisionRequestIngressServeCapacityDebt(archive)
+     /\ ExactDecisionRequestIngressPriorityDebt(archive)'
+          = ExactDecisionRequestIngressPriorityDebt(archive)
+     /\ ExactDecisionRequestIngressLanePosition(archive, request)'
+          = ExactDecisionRequestIngressLanePosition(archive, request)
+     /\ ExactDecisionRequestIngressSourcePosition(archive, request)'
+          = ExactDecisionRequestIngressSourcePosition(archive, request)
+     /\ ExactDecisionRequestIngressReachRank(archive)'
+          < ExactDecisionRequestIngressReachRank(archive)
+
+THEOREM ExactDecisionRequestIngressStrictComponentLowersRank ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ AsyncStrongTypeInvariant'
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)'
+    /\ ExactDecisionRequestIngressStrictComponentDecrease(
+         archive, request)
+    => <<ExactDecisionRequestIngressRank(archive, request)',
+          ExactDecisionRequestIngressRank(archive, request)>>
+         \in ExactDecisionRequestIngressRankOrdering
+BY ExactDecisionRequestIngressRankInCarrier, Isa
+   DEF ExactDecisionRequestIngressStrictComponentDecrease,
+       ExactDecisionRequestIngressRank,
+       ExactDecisionRequestIngressCausalRank,
+       ExactDecisionRequestIngressCapacityRank,
+       ExactDecisionRequestIngressSelectorRank,
+       ExactDecisionRequestIngressLaneRank,
+       ExactDecisionRequestIngressSourceReachRank,
+       ExactDecisionRequestIngressRankOrdering,
+       ExactDecisionRequestIngressCausalOrdering,
+       ExactDecisionRequestIngressCapacityOrdering,
+       ExactDecisionRequestIngressSelectorOrdering,
+       ExactDecisionRequestIngressLaneOrdering,
+       ExactDecisionRequestIngressSourceReachOrdering,
+       LexPairOrdering, OpToRel
+
+THEOREM ExactDecisionRequestIngressStutterPreservesRank ==
+  \A node, qc, archive, request:
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ UNCHANGED AsyncAllVars
+    => /\ ExactDecisionRequestIngressLaneResidual(
+            node, qc, archive, request)'
+       /\ ExactDecisionRequestIngressRank(archive, request)'
+            = ExactDecisionRequestIngressRank(archive, request)
+BY Isa
+   DEF ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressRank,
+       ExactDecisionRequestIngressCausalRank,
+       ExactDecisionRequestIngressCapacityRank,
+       ExactDecisionRequestIngressSelectorRank,
+       ExactDecisionRequestIngressLaneRank,
+       ExactDecisionRequestIngressSourceReachRank,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressCausalDebt,
+       ExactDecisionRequestIngressServeCapacityDebt,
+       ExactDecisionRequestIngressPriorityDebt,
+       ExactDecisionRequestIngressPriorityOwners,
+       ExactDecisionRequestIngressLanePosition,
+       ExactDecisionRequestIngressLaneIndices,
+       ExactDecisionRequestIngressSourcePosition,
+       IngressSourceServiceRank,
+       ExactDecisionRequestIngressReachRank,
+       AsyncAllVars, AsyncSchedulerVars, vars
+
+ExactDecisionRequestIngressCausalAdmissionAction(archive) ==
+  /\ ~NodeHasApplication(archive)
+  /\ PostGstRunNode(archive)
+  /\ LocalAdmissionStep(archive)
+  /\ AdmitCausalHead(archive)
+  /\ UpdateLocalAdmissionMetadata(archive, "Causal")
+
+THEOREM ExactDecisionRequestIngressCausalAdmissionPersistsAndLowers ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ CompletionCausalAdmissionDebt(archive)
+    /\ ExactDecisionRequestIngressCausalAdmissionAction(archive)
+    /\ [AsyncNext]_AsyncAllVars
+    => /\ ExactDecisionRequestIngressLaneResidual(
+            node, qc, archive, request)'
+       /\ ExactDecisionRequestIngressStrictComponentDecrease(
+            archive, request)
+       /\ <<ExactDecisionRequestIngressRank(archive, request)',
+             ExactDecisionRequestIngressRank(archive, request)>>
+            \in ExactDecisionRequestIngressRankOrdering
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   ExactDecisionRequestIngressStrictComponentLowersRank, IsaT(300)
+   DEF ExactDecisionRequestIngressStrictComponentDecrease,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressCausalDebt,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressGoal,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       ExactDecisionServeJobOwned,
+       ExactDecisionServeOccurrenceOwned,
+       CompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ExactDecisionRequestIngressCausalAdmissionAction,
+       AdmitCausalHead, UpdateLocalAdmissionMetadata,
+       IngressResourceSource, IngressLane, SequenceSet
+
+THEOREM ExactDecisionRequestIngressIoServiceLowersCapacityDebt ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ~CanEnqueueIoClass(archive, "Serve")
+    /\ ServiceIoWorkerWork(archive)
+    => /\ ExactDecisionRequestIngressLaneResidual(
+            node, qc, archive, request)'
+       /\ ExactDecisionRequestIngressServeCapacityDebt(archive)' + 1
+            = ExactDecisionRequestIngressServeCapacityDebt(archive)
+BY AsyncStrongTypeProjectsAsyncType,
+   AsyncCurrentResponsiveVotersAreValidators,
+   ServiceIoWorkerDropsQueueDepth,
+   HeadTailProperties, SMT, IsaT(300)
+   DEF ExactDecisionRequestIngressServeCapacityDebt,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressGoal,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       ExactDecisionServeJobOwned,
+       ExactDecisionServeOccurrenceOwned,
+       CanEnqueueIoClass, AsyncIoAdmissionLimit, AsyncIoQueueDepth,
+       ServiceIoWorkerWork, PublishEphemeralItems,
+       IngressResourceSource, IngressLane, SequenceSet
+
+THEOREM ExactDecisionRequestIngressIoServicePersistsAndLowers ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ~CanEnqueueIoClass(archive, "Serve")
+    /\ ServiceIoWorkerWork(archive)
+    /\ [AsyncNext]_AsyncAllVars
+    => /\ ExactDecisionRequestIngressLaneResidual(
+            node, qc, archive, request)'
+       /\ ExactDecisionRequestIngressStrictComponentDecrease(
+            archive, request)
+       /\ <<ExactDecisionRequestIngressRank(archive, request)',
+             ExactDecisionRequestIngressRank(archive, request)>>
+            \in ExactDecisionRequestIngressRankOrdering
+BY ExactDecisionRequestIngressIoServiceLowersCapacityDebt,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   ExactDecisionRequestIngressStrictComponentLowersRank, IsaT(180)
+   DEF ExactDecisionRequestIngressStrictComponentDecrease,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressCausalDebt
+
+(***************************************************************************
+Named replenishment residuals.
+
+These are state predicates because they expose an enabled concrete
+counter-transition.  Local admission can create Completion causal debt, any
+I/O producer can refill the Serve-capacity component, and admission of a new
+claimed response or request-fenced physical completion can increase selector
+priority.  Until a non-replenishment invariant or an outer generation budget
+rules these states out, the rank above cannot be promoted to a global
+`[AsyncNext]` descent theorem.
+***************************************************************************)
+
+ExactDecisionRequestIngressCausalReplenishmentAction(
+    node, qc, archive, request) ==
+  /\ AsyncNext
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)'
+  /\ ExactDecisionRequestIngressModeRank(archive)'
+       = ExactDecisionRequestIngressModeRank(archive)
+  /\ ExactDecisionRequestIngressCausalDebt(archive)'
+       > ExactDecisionRequestIngressCausalDebt(archive)
+
+ExactDecisionRequestIngressServeReplenishmentAction(
+    node, qc, archive, request) ==
+  /\ AsyncNext
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)'
+  /\ ExactDecisionRequestIngressModeRank(archive)'
+       = ExactDecisionRequestIngressModeRank(archive)
+  /\ ExactDecisionRequestIngressCausalDebt(archive)'
+       = ExactDecisionRequestIngressCausalDebt(archive)
+  /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+       > ExactDecisionRequestIngressServeCapacityDebt(archive)
+
+ExactDecisionRequestIngressPriorityReplenishmentAction(
+    node, qc, archive, request) ==
+  /\ AsyncNext
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)'
+  /\ ExactDecisionRequestIngressModeRank(archive)'
+       = ExactDecisionRequestIngressModeRank(archive)
+  /\ ExactDecisionRequestIngressCausalDebt(archive)'
+       = ExactDecisionRequestIngressCausalDebt(archive)
+  /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+       = ExactDecisionRequestIngressServeCapacityDebt(archive)
+  /\ ExactDecisionRequestIngressPriorityDebt(archive)'
+       > ExactDecisionRequestIngressPriorityDebt(archive)
+
+ExactDecisionRequestIngressCausalReplenishmentResidual(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ENABLED
+       <<ExactDecisionRequestIngressCausalReplenishmentAction(
+           node, qc, archive, request)>>_AsyncAllVars
+
+ExactDecisionRequestIngressServeReplenishmentResidual(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ENABLED
+       <<ExactDecisionRequestIngressServeReplenishmentAction(
+           node, qc, archive, request)>>_AsyncAllVars
+
+ExactDecisionRequestIngressPriorityReplenishmentResidual(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestIngressLaneResidual(
+       node, qc, archive, request)
+  /\ ENABLED
+       <<ExactDecisionRequestIngressPriorityReplenishmentAction(
+           node, qc, archive, request)>>_AsyncAllVars
+
+(***************************************************************************
+Concrete replenishment-producer audit.
+
+The three residuals above are now classified against the executable
+`AsyncNext` inventory.  The classifications are intentionally action-local:
+
+  * Completion causal debt can be created by the two Local-admission bit
+    setters.  `AsyncStrongTypeInvariant` does not contain the stronger
+    reachable-state fact `owed => causal queue nonempty`; without that fact,
+    a serialized runtime successor append can also turn an already-owed empty
+    queue into Completion debt.  The local Init/Next induction below proves
+    the fact for `AsyncSpecAt`, eliminating that successor arm on reachable
+    traces while retaining it as an explicit Strong-type counterexample.
+  * Serve-capacity debt can be increased only by an ordinary/historical
+    request drain, a fresh causal Completion admission, or the one-slot local
+    Control producer.  Every such action appends one I/O job.
+  * selector priority can gain only a concrete claimed or request-fenced lane
+    occurrence.  Network admission can create the claimed occurrence;
+    only the same archive's normal, historical-recovery, or historical-server
+    runner can change its remaining priority inputs.  The historical-server
+    witness is not discarded under `AsyncStrongTypeInvariant`: that invariant
+    deliberately permits stale duplicate response occurrences, so removing
+    the singleton claim owner can make a remaining duplicate unauthorized,
+    drainable, and request-fenced.
+
+Apart from the two Control-producer wrappers, the remaining non-runner arms
+(`AsyncSetGST`, `AsyncTick`, historical opening and certificate discovery,
+both I/O workers, and `AsyncFaultStep`) frame the relevant producer state.
+The pre-GST crash/restart/replay arms are inconsistent with the `gst` fact
+carried by the exact lane residual.  The source theorems below therefore
+cover every concrete `AsyncNext` arm without asserting that any witness
+action is fair or that the number of witness episodes is finite.
+***************************************************************************)
+
+ExactDecisionRequestIngressCausalLocalDebtProducerAction(archive) ==
+  /\ \/ RunNode(archive)
+     \/ RunHistoricalRecoveryNode(archive)
+  /\ LocalAdmissionStep(archive)
+  /\ CausalQueueNonempty(archive)
+  /\ HeadCausalCandidate(archive).class = "Completion"
+  /\ ~asyncCausalAdmissionOwed[archive]
+  /\ asyncCausalAdmissionOwed'[archive]
+  /\ \/ /\ LocalAdmissionCanAdvance(archive)
+        /\ SelectedLocalSource(archive) = "Producer"
+        /\ AdmitProducerCompletion(archive)
+        /\ UpdateLocalAdmissionMetadata(archive, "Producer")
+     \/ /\ ~LocalAdmissionCanAdvance(archive)
+        /\ RecordBlockedCausalDebt(archive)
+
+ExactDecisionRequestIngressCausalSuccessorProducerAction(archive) ==
+  /\ \/ RunNode(archive)
+     \/ RunHistoricalRecoveryNode(archive)
+  /\ SerializedRuntimeStep(archive)
+  /\ asyncCausalAdmissionOwed[archive]
+  /\ ~CausalQueueNonempty(archive)
+  /\ CompletionCausalAdmissionDebt(archive)'
+  /\ \/ DirectTimeoutStep(archive)
+     \/ DirectRetransmitStep(archive)
+     \/ DeferredTimeoutStep(archive)
+     \/ DeferredRetransmitStep(archive)
+     \/ FifoRuntimeStep(archive)
+     \/ DeferredDrainStep(archive)
+
+ExactDecisionRequestIngressCausalConcreteProducerAction(archive) ==
+  \/ ExactDecisionRequestIngressCausalLocalDebtProducerAction(archive)
+  \/ ExactDecisionRequestIngressCausalSuccessorProducerAction(archive)
+
+ExactDecisionRequestIngressCausalOwedQueueConsistency(archive) ==
+  asyncCausalAdmissionOwed[archive] => CausalQueueNonempty(archive)
+
+ExactDecisionRequestIngressCausalOwedQueueInvariant ==
+  \A archive \in ValidatorIds:
+    ExactDecisionRequestIngressCausalOwedQueueConsistency(archive)
+
+THEOREM AsyncInitEstablishesExactDecisionRequestIngressCausalOwedQueue ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => ExactDecisionRequestIngressCausalOwedQueueInvariant
+BY Isa
+   DEF ExactDecisionRequestIngressCausalOwedQueueInvariant,
+       ExactDecisionRequestIngressCausalOwedQueueConsistency,
+       AsyncInitAt, AsyncBaseInitAt, AsyncRuntimeInit
+
+THEOREM AsyncBracketNextPreservesExactDecisionRequestIngressCausalOwedQueue ==
+  /\ AsyncStrongTypeInvariant
+  /\ ExactDecisionRequestIngressCausalOwedQueueInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => ExactDecisionRequestIngressCausalOwedQueueInvariant'
+BY IsaT(300)
+   DEF ExactDecisionRequestIngressCausalOwedQueueInvariant,
+       ExactDecisionRequestIngressCausalOwedQueueConsistency,
+       CausalQueueNonempty,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
+       OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       EnqueueIoLocalControlWork,
+       AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       AsyncFaultStep, PreGstLosePacket,
+       InjectByzantineNoise, InjectUntrustedTransportCompletion,
+       InjectAuthenticatedJunk, InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, RuntimeStep,
+       DirectTimeoutStep, DirectRetransmitStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       FifoRuntimeStep, DeferredDrainStep, IdleRuntimeStep,
+       AdmitProducerCompletion, AdmitCausalHead,
+       UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
+       AppendCausalSuccessors,
+       AppendHistoricalLockedRetransmitSuccessors,
+       LeaveCausalQueues,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       RearmResponsiveRecovery,
+       AsyncAllVars, AsyncSchedulerVars,
+       AsyncLocalAdmissionVars, AsyncIoVars
+
+THEOREM AsyncSpecAlwaysExactDecisionRequestIngressCausalOwedQueue ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []ExactDecisionRequestIngressCausalOwedQueueInvariant
+BY AsyncInitEstablishesExactDecisionRequestIngressCausalOwedQueue,
+   AsyncBracketNextPreservesExactDecisionRequestIngressCausalOwedQueue,
+   AsyncSpecAlwaysStrongTypeInvariant, PTL
+   DEF AsyncSpecAt
+
+THEOREM ExactDecisionRequestIngressCausalReplenishmentHasConcreteProducer ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestIngressCausalReplenishmentAction(
+         node, qc, archive, request)
+    => ExactDecisionRequestIngressCausalConcreteProducerAction(archive)
+BY AsyncBracketStepPreservesNodeApplication, IsaT(300)
+   DEF ExactDecisionRequestIngressCausalReplenishmentAction,
+       ExactDecisionRequestIngressCausalConcreteProducerAction,
+       ExactDecisionRequestIngressCausalLocalDebtProducerAction,
+       ExactDecisionRequestIngressCausalSuccessorProducerAction,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressCausalDebt,
+       CompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       CausalQueueNonempty, HeadCausalCandidate,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       RunHistoricalServer, RunNodeWork, LocalAdmissionStep,
+       SerializedRuntimeStep, RuntimeStep,
+       DirectTimeoutStep, DirectRetransmitStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       FifoRuntimeStep, DeferredDrainStep, IdleRuntimeStep,
+       UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
+       ResetNodeSchedulerForRestart, DriveResponsiveReplayHead,
+       FinishResponsiveReplay, PreGstResponsiveReplay
+
+THEOREM ExactDecisionRequestIngressCausalConsistencyExcludesSuccessorProducer ==
+  \A archive:
+    /\ ExactDecisionRequestIngressCausalOwedQueueConsistency(archive)
+    /\ ExactDecisionRequestIngressCausalSuccessorProducerAction(archive)
+    => FALSE
+BY Isa
+   DEF ExactDecisionRequestIngressCausalOwedQueueConsistency,
+       ExactDecisionRequestIngressCausalSuccessorProducerAction
+
+THEOREM ExactDecisionRequestIngressReachableCausalReplenishmentIsLocal ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressCausalOwedQueueInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestIngressCausalReplenishmentAction(
+         node, qc, archive, request)
+    => ExactDecisionRequestIngressCausalLocalDebtProducerAction(archive)
+BY ExactDecisionRequestIngressCausalReplenishmentHasConcreteProducer,
+   ExactDecisionRequestIngressCausalConsistencyExcludesSuccessorProducer,
+   AsyncCurrentResponsiveVotersAreValidators, Isa
+   DEF ExactDecisionRequestIngressCausalConcreteProducerAction,
+       ExactDecisionRequestIngressCausalOwedQueueInvariant,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias
+
+THEOREM ExactDecisionRequestIngressReachableCausalResidualHasLocalWitness ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressCausalOwedQueueInvariant
+    /\ ExactDecisionRequestIngressCausalReplenishmentResidual(
+         node, qc, archive, request)
+    => ENABLED
+         <<ExactDecisionRequestIngressCausalReplenishmentAction(
+             node, qc, archive, request)
+           /\ ExactDecisionRequestIngressCausalLocalDebtProducerAction(
+                archive)>>_AsyncAllVars
+BY ExactDecisionRequestIngressReachableCausalReplenishmentIsLocal,
+   ExpandENABLED, Isa
+   DEF ExactDecisionRequestIngressCausalReplenishmentResidual,
+       AsyncAllVars
+
+THEOREM AsyncSpecAlwaysExactDecisionRequestIngressCausalResidualIsLocal ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => [](\A node, qc, archive, request:
+             ExactDecisionRequestIngressCausalReplenishmentResidual(
+               node, qc, archive, request)
+               => ENABLED
+                    <<ExactDecisionRequestIngressCausalReplenishmentAction(
+                        node, qc, archive, request)
+                      /\ ExactDecisionRequestIngressCausalLocalDebtProducerAction(
+                           archive)>>_AsyncAllVars)
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysExactDecisionRequestIngressCausalOwedQueue,
+   ExactDecisionRequestIngressReachableCausalResidualHasLocalWitness, PTL
+
+THEOREM ExactDecisionRequestIngressCausalNonProducerDoesNotIncrease ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ AsyncNext
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)'
+    /\ ExactDecisionRequestIngressModeRank(archive)'
+         = ExactDecisionRequestIngressModeRank(archive)
+    /\ ~ExactDecisionRequestIngressCausalConcreteProducerAction(archive)
+    => ExactDecisionRequestIngressCausalDebt(archive)'
+         <= ExactDecisionRequestIngressCausalDebt(archive)
+BY ExactDecisionRequestIngressCausalReplenishmentHasConcreteProducer, SMT
+   DEF ExactDecisionRequestIngressCausalReplenishmentAction
+
+THEOREM ExactDecisionRequestIngressFreshCommandSuccessorBatchIsBounded ==
+  \A command:
+    Len(FreshCommandSuccessors(command)) \in 0..3
+BY CommandSuccessorsHaveBoundedLength, Isa
+   DEF FreshCommandSuccessors, FreshCandidateSequence
+
+THEOREM ExactDecisionRequestIngressHistoricalSuccessorBatchIsBounded ==
+  \A archive:
+    Len(HistoricalLockedRetransmitSuccessors(archive)) \in 0..1
+BY Isa
+   DEF HistoricalLockedRetransmitSuccessors, FreshCandidateSequence
+
+ExactDecisionRequestIngressServeIngressProducerAction(archive) ==
+  /\ AsyncIoQueueDepth(archive)' = AsyncIoQueueDepth(archive) + 1
+  /\ \/ /\ RunNode(archive)
+        /\ DrainFairIngressSelected(archive)
+     \/ /\ RunHistoricalRecoveryNode(archive)
+        /\ DrainFairIngressSelected(archive)
+     \/ /\ RunHistoricalServer(archive)
+        /\ DrainHistoricalIngressSelected(archive)
+
+ExactDecisionRequestIngressServeCausalProducerAction(archive) ==
+  /\ AsyncIoQueueDepth(archive)' = AsyncIoQueueDepth(archive) + 1
+  /\ \/ RunNode(archive)
+     \/ RunHistoricalRecoveryNode(archive)
+  /\ LocalAdmissionStep(archive)
+  /\ AdmitCausalHead(archive)
+
+ExactDecisionRequestIngressServeControlProducerAction(archive) ==
+  /\ AsyncIoQueueDepth(archive)' = AsyncIoQueueDepth(archive) + 1
+  /\ \/ EnqueueIoLocalControl(archive)
+     \/ EnqueueHistoricalRecoveryIoLocalControl(archive)
+
+ExactDecisionRequestIngressServeConcreteProducerAction(archive) ==
+  \/ ExactDecisionRequestIngressServeIngressProducerAction(archive)
+  \/ ExactDecisionRequestIngressServeCausalProducerAction(archive)
+  \/ ExactDecisionRequestIngressServeControlProducerAction(archive)
+
+THEOREM ExactDecisionRequestIngressServeCapacityDebtIsBounded ==
+  \A archive \in ValidatorIds:
+    AsyncStrongTypeInvariant
+      => ExactDecisionRequestIngressServeCapacityDebt(archive)
+           <= AsyncIoWorkCapacity + 2
+BY AsyncStrongTypeProjectsAsyncType, SMT
+   DEF ExactDecisionRequestIngressServeCapacityDebt,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoCapacityTypeInvariant,
+       AsyncIoCapacity, AsyncIoAdmissionLimit,
+       CanEnqueueIoClass, AsyncIoQueueDepth, AsyncConfiguration
+
+THEOREM ExactDecisionRequestIngressServeReplenishmentHasConcreteProducer ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestIngressServeReplenishmentAction(
+         node, qc, archive, request)
+    => ExactDecisionRequestIngressServeConcreteProducerAction(archive)
+BY IsaT(300)
+   DEF ExactDecisionRequestIngressServeReplenishmentAction,
+       ExactDecisionRequestIngressServeConcreteProducerAction,
+       ExactDecisionRequestIngressServeIngressProducerAction,
+       ExactDecisionRequestIngressServeCausalProducerAction,
+       ExactDecisionRequestIngressServeControlProducerAction,
+       ExactDecisionRequestIngressServeCapacityDebt,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       AsyncIoQueueDepth, CanEnqueueIoClass, AsyncIoAdmissionLimit,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       RunHistoricalServer, RunNodeWork, LocalAdmissionStep,
+       IngressDrainStep, SerializedRuntimeStep,
+       DrainFairIngressSelected, DrainHistoricalIngressSelected,
+       AdmitCausalHead, ServiceIoWorker, ServiceIoWorkerWork,
+       ServiceHistoricalRecoveryIoWorker,
+       EnqueueIoLocalControl, EnqueueIoLocalControlWork,
+       EnqueueHistoricalRecoveryIoLocalControl,
+       ResetNodeSchedulerForRestart
+
+THEOREM ExactDecisionRequestIngressServeReplenishmentAddsOneJob ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestIngressServeReplenishmentAction(
+         node, qc, archive, request)
+    => /\ AsyncIoQueueDepth(archive)'
+            = AsyncIoQueueDepth(archive) + 1
+       /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+            = ExactDecisionRequestIngressServeCapacityDebt(archive) + 1
+BY ExactDecisionRequestIngressServeReplenishmentHasConcreteProducer, SMT
+   DEF ExactDecisionRequestIngressServeConcreteProducerAction,
+       ExactDecisionRequestIngressServeIngressProducerAction,
+       ExactDecisionRequestIngressServeCausalProducerAction,
+       ExactDecisionRequestIngressServeControlProducerAction,
+       ExactDecisionRequestIngressServeReplenishmentAction,
+       ExactDecisionRequestIngressServeCapacityDebt,
+       AsyncIoQueueDepth, CanEnqueueIoClass, AsyncIoAdmissionLimit
+
+THEOREM ExactDecisionRequestIngressServeNonProducerDoesNotIncrease ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ AsyncNext
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)'
+    /\ ExactDecisionRequestIngressModeRank(archive)'
+         = ExactDecisionRequestIngressModeRank(archive)
+    /\ ExactDecisionRequestIngressCausalDebt(archive)'
+         = ExactDecisionRequestIngressCausalDebt(archive)
+    /\ ~ExactDecisionRequestIngressServeConcreteProducerAction(archive)
+    => ExactDecisionRequestIngressServeCapacityDebt(archive)'
+         <= ExactDecisionRequestIngressServeCapacityDebt(archive)
+BY ExactDecisionRequestIngressServeReplenishmentHasConcreteProducer, SMT
+   DEF ExactDecisionRequestIngressServeReplenishmentAction
+
+ExactDecisionRequestIngressClaimedPriorityOwners(archive) ==
+  {pair \in AsyncIngressSources \X (1..AsyncIngressCapacity):
+     pair[2] \in
+       DrainableClaimedResponseLaneIndices(archive, pair[1])}
+
+ExactDecisionRequestIngressFencedPriorityOwners(archive) ==
+  {pair \in AsyncIngressSources \X (1..AsyncIngressCapacity):
+     pair[2] \in
+       DrainableRequestFencedCompletionLaneIndices(
+         archive, pair[1])}
+
+ExactDecisionRequestIngressInsertedPriorityOwners(archive) ==
+  ExactDecisionRequestIngressPriorityOwners(archive)'
+    \ ExactDecisionRequestIngressPriorityOwners(archive)
+
+ExactDecisionRequestIngressInsertedClaimedPriorityOwners(archive) ==
+  ExactDecisionRequestIngressInsertedPriorityOwners(archive)
+    \cap ExactDecisionRequestIngressClaimedPriorityOwners(archive)'
+
+ExactDecisionRequestIngressInsertedFencedPriorityOwners(archive) ==
+  ExactDecisionRequestIngressInsertedPriorityOwners(archive)
+    \cap ExactDecisionRequestIngressFencedPriorityOwners(archive)'
+
+(*
+For a runner, a fenced insertion has exactly two state-level sources.  An
+empty local fence can become nonempty only through
+`PublishCertifiedRequests`, reached by successful `FifoRuntimeStep` or
+`DeferredDrainStep` execution of `ExecuteRequestCertifiedBody` /
+`ExecuteDecisionFetch`.  If the fence was already active, the insertion is a
+drainability opening: a normal/recovery runner can open the command slot or
+retire a claim while an independent fence remains, while the historical
+server can remove the singleton claim and expose permitted stale duplicates
+as unauthorized, drainable fenced occurrences.
+*)
+ExactDecisionRequestIngressPriorityFenceActivationWitnessAction(archive) ==
+  /\ ActiveCertifiedRequestHashesAt(archive) = {}
+  /\ ActiveCertifiedRequestHashesAt(archive)' # {}
+  /\ ExactDecisionRequestIngressInsertedFencedPriorityOwners(archive)
+       # {}
+
+ExactDecisionRequestIngressPriorityExistingFenceWitnessAction(archive) ==
+  /\ ActiveCertifiedRequestHashesAt(archive) # {}
+  /\ ExactDecisionRequestIngressInsertedFencedPriorityOwners(archive)
+       # {}
+
+ExactDecisionRequestIngressPriorityNetworkClaimProducerAction(archive) ==
+  /\ AsyncNetworkStep
+  /\ ExactDecisionRequestIngressInsertedClaimedPriorityOwners(archive)
+       # {}
+  /\ \E source \in AsyncIngressSources:
+       AdmitHiddenPacket(archive, source)
+
+ExactDecisionRequestIngressPriorityNormalRunnerWitnessAction(archive) ==
+  /\ RunNode(archive)
+  /\ \/ ExactDecisionRequestIngressInsertedClaimedPriorityOwners(archive)
+          # {}
+     \/ ExactDecisionRequestIngressPriorityFenceActivationWitnessAction(
+          archive)
+     \/ ExactDecisionRequestIngressPriorityExistingFenceWitnessAction(
+          archive)
+
+ExactDecisionRequestIngressPriorityRecoveryRunnerWitnessAction(archive) ==
+  /\ RunHistoricalRecoveryNode(archive)
+  /\ \/ ExactDecisionRequestIngressInsertedClaimedPriorityOwners(archive)
+          # {}
+     \/ ExactDecisionRequestIngressPriorityFenceActivationWitnessAction(
+          archive)
+     \/ ExactDecisionRequestIngressPriorityExistingFenceWitnessAction(
+          archive)
+
+ExactDecisionRequestIngressPriorityHistoricalRunnerWitnessAction(archive) ==
+  /\ RunHistoricalServer(archive)
+  /\ \/ ExactDecisionRequestIngressInsertedClaimedPriorityOwners(archive)
+          # {}
+     \/ ExactDecisionRequestIngressPriorityExistingFenceWitnessAction(
+          archive)
+
+ExactDecisionRequestIngressPriorityConcreteProducerAction(archive) ==
+  \/ ExactDecisionRequestIngressPriorityNetworkClaimProducerAction(archive)
+  \/ ExactDecisionRequestIngressPriorityNormalRunnerWitnessAction(archive)
+  \/ ExactDecisionRequestIngressPriorityRecoveryRunnerWitnessAction(archive)
+  \/ ExactDecisionRequestIngressPriorityHistoricalRunnerWitnessAction(archive)
+
+THEOREM ExactDecisionRequestIngressPriorityDebtIsCapacityBounded ==
+  \A archive \in ValidatorIds:
+    AsyncStrongTypeInvariant
+      => ExactDecisionRequestIngressPriorityDebt(archive)
+           <= IngressDepth(archive)
+         /\ IngressDepth(archive) <= AsyncIngressCapacity
+         /\ Cardinality(CertifiedResponseClaimsAt(archive)) <= 1
+BY FS_Product, FS_Interval, FS_Subset, FS_CardinalityType, IsaT(180)
+   DEF ExactDecisionRequestIngressPriorityDebt,
+       ExactDecisionRequestIngressPriorityOwners,
+       IngressDepth, IngressLaneDepth, IngressLane,
+       DrainableClaimedResponseLaneIndices,
+       DrainableRequestFencedCompletionLaneIndices,
+       DrainableIngressLaneIndices,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
+       AsyncTransportHistoryTypeInvariant,
+       AsyncCertifiedResponseClaimInvariant,
+       AsyncIngressTypeInvariant, AsyncIngressCapacityTypeInvariant,
+       AsyncIngressContentTypeInvariant
+
+THEOREM ExactDecisionRequestIngressPriorityIncreaseHasInsertedWitness ==
+  \A archive \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncStrongTypeInvariant'
+    /\ ExactDecisionRequestIngressPriorityDebt(archive)'
+         > ExactDecisionRequestIngressPriorityDebt(archive)
+    => /\ ExactDecisionRequestIngressInsertedPriorityOwners(archive)
+            # {}
+       /\ \/ ExactDecisionRequestIngressInsertedClaimedPriorityOwners(
+                 archive) # {}
+          \/ ExactDecisionRequestIngressInsertedFencedPriorityOwners(
+                 archive) # {}
+BY ExactDecisionRequestIngressPriorityDebtIsNatural,
+   FS_CardinalityType, FS_Subset, Isa
+   DEF ExactDecisionRequestIngressPriorityDebt,
+       ExactDecisionRequestIngressPriorityOwners,
+       ExactDecisionRequestIngressClaimedPriorityOwners,
+       ExactDecisionRequestIngressFencedPriorityOwners,
+       ExactDecisionRequestIngressInsertedPriorityOwners,
+       ExactDecisionRequestIngressInsertedClaimedPriorityOwners,
+       ExactDecisionRequestIngressInsertedFencedPriorityOwners
+
+THEOREM ExactDecisionRequestIngressFencedInsertionSplitsAtActiveFence ==
+  \A archive:
+    ExactDecisionRequestIngressInsertedFencedPriorityOwners(archive) # {}
+      => \/ ExactDecisionRequestIngressPriorityFenceActivationWitnessAction(
+              archive)
+         \/ ExactDecisionRequestIngressPriorityExistingFenceWitnessAction(
+              archive)
+BY Isa
+   DEF ExactDecisionRequestIngressPriorityFenceActivationWitnessAction,
+       ExactDecisionRequestIngressPriorityExistingFenceWitnessAction,
+       ExactDecisionRequestIngressInsertedFencedPriorityOwners,
+       ExactDecisionRequestIngressFencedPriorityOwners,
+       DrainableRequestFencedCompletionLaneIndices
+
+THEOREM ExactDecisionRequestIngressPriorityReplenishmentHasConcreteProducer ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestIngressPriorityReplenishmentAction(
+         node, qc, archive, request)
+    => ExactDecisionRequestIngressPriorityConcreteProducerAction(archive)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   ExactDecisionRequestIngressPriorityIncreaseHasInsertedWitness,
+   ExactDecisionRequestIngressFencedInsertionSplitsAtActiveFence, IsaT(300)
+   DEF ExactDecisionRequestIngressPriorityReplenishmentAction,
+       ExactDecisionRequestIngressPriorityConcreteProducerAction,
+       ExactDecisionRequestIngressPriorityNetworkClaimProducerAction,
+       ExactDecisionRequestIngressPriorityNormalRunnerWitnessAction,
+       ExactDecisionRequestIngressPriorityRecoveryRunnerWitnessAction,
+       ExactDecisionRequestIngressPriorityHistoricalRunnerWitnessAction,
+       ExactDecisionRequestIngressPriorityFenceActivationWitnessAction,
+       ExactDecisionRequestIngressPriorityExistingFenceWitnessAction,
+       ExactDecisionRequestIngressInsertedClaimedPriorityOwners,
+       ExactDecisionRequestIngressInsertedFencedPriorityOwners,
+       ExactDecisionRequestIngressInsertedPriorityOwners,
+       ExactDecisionRequestIngressClaimedPriorityOwners,
+       ExactDecisionRequestIngressFencedPriorityOwners,
+       ExactDecisionRequestIngressLaneResidual,
+       ExactDecisionRequestIngressOwned,
+       ExactDecisionBodyHoldingAlias,
+       ExactDecisionActiveRequestOwner,
+       ExactDecisionServiceSource,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       OpenHistoricalRecovery, DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       AsyncFaultStep, PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       RearmResponsiveRecovery, ResetNodeSchedulerForRestart
+
+THEOREM ExactDecisionRequestIngressPriorityNonProducerDoesNotIncrease ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ AsyncNext
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)'
+    /\ ExactDecisionRequestIngressModeRank(archive)'
+         = ExactDecisionRequestIngressModeRank(archive)
+    /\ ExactDecisionRequestIngressCausalDebt(archive)'
+         = ExactDecisionRequestIngressCausalDebt(archive)
+    /\ ExactDecisionRequestIngressServeCapacityDebt(archive)'
+         = ExactDecisionRequestIngressServeCapacityDebt(archive)
+    /\ ~ExactDecisionRequestIngressPriorityConcreteProducerAction(archive)
+    => ExactDecisionRequestIngressPriorityDebt(archive)'
+         <= ExactDecisionRequestIngressPriorityDebt(archive)
+BY ExactDecisionRequestIngressPriorityReplenishmentHasConcreteProducer, SMT
+   DEF ExactDecisionRequestIngressPriorityReplenishmentAction
+
+(***************************************************************************
+Finite producer-episode accounting.
+
+Hidden admission now owns a logical future I/O slot even when the physical
+queue is full.  Its immutable ordinal freezes the current I/O jobs and one
+prefix length for every ingress source.  Off-queue ownership saturates
+ordinary I/O admission; the normal and historical selectors admit only the
+least ordinal's remaining frozen prefixes or that exact request.  Later
+causal, Control, Completion, claimed-response, fenced-completion, and Serve
+production therefore cannot join this episode.
+
+The episode owner set below is entirely state-derived.  It combines those
+frozen occurrences with the already-defined mode/capacity/selector/lane/
+source/runner components.  Service can consume an owner, preserve the exact
+target while consuming one finite owner, or reach the lifecycle goal.  A
+cached tombstone remains an outstanding replay stage until its exact bytes
+are back in transport; it is never counted as requester completion.
+***************************************************************************)
+
+ExactDecisionRequestIngressProducerClasses ==
+  {"Causal", "Serve", "Priority"}
+
+ExactDecisionRequestIngressConcreteReplenishmentAction(
+    node, qc, archive, request, producerClass) ==
+  CASE producerClass = "Causal" ->
+         /\ ExactDecisionRequestIngressCausalReplenishmentAction(
+              node, qc, archive, request)
+         /\ ExactDecisionRequestIngressCausalConcreteProducerAction(
+              archive)
+    [] producerClass = "Serve" ->
+         /\ ExactDecisionRequestIngressServeReplenishmentAction(
+              node, qc, archive, request)
+         /\ ExactDecisionRequestIngressServeConcreteProducerAction(
+              archive)
+    [] producerClass = "Priority" ->
+         /\ ExactDecisionRequestIngressPriorityReplenishmentAction(
+              node, qc, archive, request)
+         /\ ExactDecisionRequestIngressPriorityConcreteProducerAction(
+              archive)
+    [] OTHER -> FALSE
+
+ExactDecisionRequestIngressProducerEpisodeOwnerSet(
+    node, qc, archive, request) ==
+  LET laneOwners ==
+        IF ExactDecisionRequestIngressLaneResidual(
+             node, qc, archive, request)
+        THEN ({"Lane"} \X
+                (1..ExactDecisionRequestIngressLanePosition(
+                      archive, request)))
+             \cup
+             ({"Source"} \X
+                (1..ExactDecisionRequestIngressSourcePosition(
+                      archive, request)))
+             \cup
+             ({"Runner"} \X
+                (1..ExactDecisionRequestIngressReachRank(archive)))
+        ELSE {}
+  IN ExactDecisionRequestLifecycleFrozenPredecessorSet(
+       archive, request)
+       \cup
+     ({"Mode"} \X
+        (1..ExactDecisionRequestIngressModeRank(archive)))
+       \cup
+     ({"Causal"} \X
+        (1..ExactDecisionRequestIngressCausalDebt(archive)))
+       \cup
+     ({"Capacity"} \X
+        (1..ExactDecisionRequestIngressServeCapacityDebt(archive)))
+       \cup
+     ({"Selector"} \X
+        (1..ExactDecisionRequestIngressPriorityDebt(archive)))
+       \cup laneOwners
+
+ExactDecisionRequestIngressProducerEpisodeBudget(
+    node, qc, archive, request) ==
+  Cardinality(
+    ExactDecisionRequestIngressProducerEpisodeOwnerSet(
+      node, qc, archive, request))
+
+ExactDecisionRequestIngressProducerEpisodeStaticBound ==
+  AsyncIoCapacity
+    + 4 * Cardinality(AsyncIngressSources) * AsyncIngressCapacity
+    + AsyncServeLifecycleFamilyBudget
+    + AsyncRunnerCycleBudget + AsyncIoCapacity + 4
+
+THEOREM ExactDecisionRequestIngressProducerEpisodeBudgetIsFinite ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestLifecycleResidual(
+         node, qc, archive, request)
+    => /\ IsFiniteSet(
+            ExactDecisionRequestIngressProducerEpisodeOwnerSet(
+              node, qc, archive, request))
+       /\ ExactDecisionRequestIngressProducerEpisodeBudget(
+            node, qc, archive, request) \in Nat
+       /\ ExactDecisionRequestIngressProducerEpisodeBudget(
+            node, qc, archive, request)
+            <= ExactDecisionRequestIngressProducerEpisodeStaticBound
+BY FS_Union, FS_Product, FS_Interval, FS_Subset,
+   FS_CardinalityType, IsaT(180)
+   DEF ExactDecisionRequestIngressProducerEpisodeOwnerSet,
+       ExactDecisionRequestIngressProducerEpisodeBudget,
+       ExactDecisionRequestIngressProducerEpisodeStaticBound,
+       ExactDecisionRequestLifecycleFrozenPredecessorSet,
+       ExactDecisionRequestLifecycleResidual,
+       ExactDecisionServeAdmissionOwned,
+       ExactDecisionServeLifecycleIdentity,
+       ExactDecisionRequestIngressLaneResidual,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncServeLifecycleTypeInvariant,
+       AsyncServeReservationTyped,
+       AsyncServeFrozenPredecessorSet,
+       AsyncServeFrozenIngressPredecessorSet,
+       AsyncServeFrozenIngressPredecessorCounts,
+       AsyncServeEarlierLiveReservationIdentities,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressCausalDebt,
+       ExactDecisionRequestIngressServeCapacityDebt,
+       ExactDecisionRequestIngressPriorityDebt,
+       ExactDecisionRequestIngressPriorityOwners,
+       ExactDecisionRequestIngressLanePosition,
+       ExactDecisionRequestIngressLaneIndices,
+       ExactDecisionRequestIngressSourcePosition,
+       IngressSourceServiceRank,
+       ExactDecisionRequestIngressReachRank,
+       AsyncConfiguration
+
+THEOREM ExactDecisionRequestLifecycleIngressRankInCarrier ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestLifecycleResidual(
+         node, qc, archive, request)
+    => ExactDecisionRequestLifecycleIngressRank(
+         node, qc, archive, request)
+         \in ExactDecisionRequestLifecycleIngressRankCarrier
+BY ExactDecisionRequestIngressRankInCarrier,
+   FS_Union, FS_Product, FS_CardinalityType, IsaT(180)
+   DEF ExactDecisionRequestLifecycleIngressRank,
+       ExactDecisionRequestLifecycleIngressRankCarrier,
+       ExactDecisionRequestLifecycleDebtCarrier,
+       ExactDecisionRequestLifecycleStage,
+       ExactDecisionRequestLifecycleFrozenPredecessorDebt,
+       ExactDecisionRequestLifecycleFrozenPredecessorSet,
+       ExactDecisionRequestLifecycleNestedIngressRank,
+       ExactDecisionRequestIngressZeroRank,
+       ExactDecisionRequestIngressZeroCausalRank,
+       ExactDecisionRequestIngressZeroCapacityRank,
+       ExactDecisionRequestIngressZeroSelectorRank,
+       ExactDecisionRequestIngressZeroLaneRank,
+       ExactDecisionRequestIngressZeroSourceReachRank,
+       ExactDecisionRequestIngressRankCarrier,
+       ExactDecisionRequestIngressCausalCarrier,
+       ExactDecisionRequestIngressCapacityCarrier,
+       ExactDecisionRequestIngressSelectorCarrier,
+       ExactDecisionRequestIngressLaneCarrier,
+       ExactDecisionRequestIngressSourceReachCarrier
+
+ExactDecisionRequestLifecycleFrozenOwnerServiceAction(
+    archive, request) ==
+  LET identity ==
+        ExactDecisionServeLifecycleIdentity(archive, request)
+      head == Head(asyncIoQueues[archive])
+  IN \/ /\ ServiceIoWorkerWork(archive)
+           /\ \/ head
+                  \in AsyncServeFrozenPredecessorSet(
+                       archive, identity)
+              \/ /\ head.class = "Serve"
+                    /\ AsyncIoServeJobIdentity(archive, head)
+                         \in
+                           AsyncServeEarlierLiveReservationIdentities(
+                             archive, identity)
+     \/ \E source \in AsyncIngressSources:
+          \E index \in
+               1..AsyncServeFrozenIngressPredecessorCounts(
+                    archive, identity)[source]:
+            /\ \/ DrainFairIngressSelected(archive)
+               \/ DrainHistoricalIngressSelected(archive)
+            /\ asyncIngressLanes[archive][source][index]
+                 = IF NodeHasApplication(archive)
+                   THEN HistoricalSelectedIngressItemAt(
+                          archive,
+                          FirstHistoricalDrainableIngressIndex(archive))
+                   ELSE SelectedIngressItemAt(
+                          archive,
+                          FirstDrainableIngressIndex(archive))
+
+THEOREM ExactDecisionRequestLifecycleFrozenOwnerServiceConsumesBudget ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestLifecycleResidual(
+         node, qc, archive, request)
+    /\ ExactDecisionRequestLifecycleFrozenOwnerServiceAction(
+         archive, request)
+    /\ ExactDecisionRequestLifecycleResidual(
+         node, qc, archive, request)'
+    => ExactDecisionRequestIngressProducerEpisodeBudget(
+         node, qc, archive, request)'
+         < ExactDecisionRequestIngressProducerEpisodeBudget(
+             node, qc, archive, request)
+BY IsaT(300)
+   DEF ExactDecisionRequestLifecycleFrozenOwnerServiceAction,
+       ExactDecisionRequestIngressProducerEpisodeBudget,
+       ExactDecisionRequestIngressProducerEpisodeOwnerSet,
+       ExactDecisionRequestLifecycleFrozenPredecessorSet,
+       AsyncServeFrozenPredecessorSet,
+       AsyncServeFrozenIngressPredecessorSet,
+       AsyncServeFrozenIngressPredecessorCounts,
+       AsyncServeEarlierLiveReservationIdentities,
+       AsyncServeReservationsAfterIoService,
+       AsyncServeReservationsAfterIngressDrain,
+       ServiceIoWorkerWork, PopSelectedIngress
+
+THEOREM ExactDecisionRequestLifecycleFrozenOwnersDoNotReplenish ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestLifecycleResidual(
+         node, qc, archive, request)
+    /\ AsyncNext
+    /\ ExactDecisionRequestLifecycleResidual(
+         node, qc, archive, request)'
+    => ExactDecisionRequestLifecycleFrozenPredecessorSet(
+         archive, request)'
+         \subseteq
+           ExactDecisionRequestLifecycleFrozenPredecessorSet(
+             archive, request)
+BY IsaT(300)
+   DEF ExactDecisionRequestLifecycleResidual,
+       ExactDecisionRequestLifecycleFrozenPredecessorSet,
+       ExactDecisionServeLifecycleIdentity,
+       AsyncServeFrozenPredecessorSet,
+       AsyncServeFrozenIngressPredecessorSet,
+       AsyncServeFrozenIngressPredecessorCounts,
+       AsyncServeEarlierLiveReservationIdentities,
+       AsyncServeReservationsAfterIoService,
+       AsyncServeReservationsAfterIngressDrain,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart
+
+THEOREM ExactDecisionRequestLifecycleOrdinalCannotResurrect ==
+  \A node, qc, archive, request:
+    LET identity ==
+          ExactDecisionServeLifecycleIdentity(archive, request)
+    IN /\ AsyncStrongTypeInvariant
+       /\ ExactDecisionRequestLifecycleResidual(
+            node, qc, archive, request)
+       /\ AsyncServeLifecycleOwned(archive, identity)
+       /\ AsyncNext
+       /\ AsyncServeLifecycleOwned(archive, identity)'
+       => AsyncServeAdmissionOrdinal(archive, identity)'
+            = AsyncServeAdmissionOrdinal(archive, identity)
+BY IsaT(300)
+   DEF ExactDecisionRequestLifecycleResidual,
+       ExactDecisionServeLifecycleIdentity,
+       AsyncServeAdmissionOrdinal,
+       AsyncServeLifecycleOwned,
+       AsyncServeLiveReservationOwned,
+       AsyncServeLifecycleTombstone,
+       AsyncServeReservationRecord,
+       AsyncServeTombstoneRecord,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart
+
+ExactDecisionRequestIngressFiniteProducerEpisodeAction(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestLifecycleResidual(
+       node, qc, archive, request)
+  /\ AsyncNext
+  /\ ExactDecisionRequestLifecycleResidual(
+       node, qc, archive, request)'
+  /\ ~<<ExactDecisionRequestLifecycleIngressRank(
+          node, qc, archive, request)',
+        ExactDecisionRequestLifecycleIngressRank(
+          node, qc, archive, request)>>
+       \in ExactDecisionRequestLifecycleIngressRankOrdering
+  /\ ExactDecisionRequestIngressProducerEpisodeBudget(
+       node, qc, archive, request)'
+       < ExactDecisionRequestIngressProducerEpisodeBudget(
+           node, qc, archive, request)
+
+ExactDecisionRequestLifecycleNoninterferenceAction(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestLifecycleResidual(
+       node, qc, archive, request)
+  /\ AsyncNext
+  /\ ExactDecisionRequestLifecycleResidual(
+       node, qc, archive, request)'
+  /\ ExactDecisionRequestLifecycleIngressRank(
+       node, qc, archive, request)'
+       = ExactDecisionRequestLifecycleIngressRank(
+           node, qc, archive, request)
+  /\ ExactDecisionRequestIngressProducerEpisodeBudget(
+       node, qc, archive, request)'
+       = ExactDecisionRequestIngressProducerEpisodeBudget(
+           node, qc, archive, request)
+
+ExactDecisionRequestLifecycleStepClassification(
+    node, qc, archive, request) ==
+  /\ ExactDecisionRequestLifecycleResidual(
+       node, qc, archive, request)
+  /\ AsyncNext
+  => \/ ExactDecisionRequestLifecycleGoal(
+          node, qc, archive, request)'
+     \/ <<ExactDecisionRequestLifecycleIngressRank(
+             node, qc, archive, request)',
+           ExactDecisionRequestLifecycleIngressRank(
+             node, qc, archive, request)>>
+          \in ExactDecisionRequestLifecycleIngressRankOrdering
+     \/ ExactDecisionRequestIngressFiniteProducerEpisodeAction(
+          node, qc, archive, request)
+     \/ ExactDecisionRequestLifecycleNoninterferenceAction(
+          node, qc, archive, request)
+
+THEOREM ExactDecisionRequestLifecycleStepClassificationIsExhaustive ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ ExactDecisionRequestLifecycleResidual(
+         node, qc, archive, request)
+    /\ AsyncNext
+    => ExactDecisionRequestLifecycleStepClassification(
+         node, qc, archive, request)
+BY ExactDecisionRequestLifecycleFrozenOwnersDoNotReplenish,
+   ExactDecisionRequestLifecycleFrozenOwnerServiceConsumesBudget,
+   ExactDecisionRequestLifecycleOrdinalCannotResurrect, IsaT(300)
+   DEF ExactDecisionRequestLifecycleStepClassification,
+       ExactDecisionRequestIngressFiniteProducerEpisodeAction,
+       ExactDecisionRequestLifecycleNoninterferenceAction,
+       ExactDecisionRequestLifecycleIngressRank,
+       ExactDecisionRequestLifecycleStage,
+       ExactDecisionRequestLifecycleFrozenPredecessorDebt,
+       ExactDecisionRequestLifecycleNestedIngressRank
+
+ExactDecisionRequestLifecycleAtRank(
+    node, qc, archive, request, rank) ==
+  /\ ExactDecisionRequestLifecycleResidual(
+       node, qc, archive, request)
+  /\ ExactDecisionRequestLifecycleIngressRank(
+       node, qc, archive, request) = rank
+
+ExactDecisionRequestLifecycleOwnedFairAction(
+    node, qc, archive, request) ==
+  \/ ExactDecisionRequestIngressRunnerAction(archive, request)
+  \/ ExactDecisionRequestLifecycleFrozenOwnerServiceAction(
+       archive, request)
+  \/ \E job:
+       /\ ExactDecisionServeJobOwned(
+            node, qc, archive, request, job)
+       /\ Head(asyncIoQueues[archive]) = job
+       /\ ServiceIoWorkerWork(archive)
+  \/ /\ ExactDecisionServeTombstoneOwned(
+          node, qc, archive, request)
+     /\ DirectRetransmitStep(node)
+
+ExactDecisionRequestLifecycleOwnedFairActionClosureProperty(
+    specification) ==
+  specification
+    => \A node, qc, archive, request,
+          rank \in ExactDecisionRequestLifecycleIngressRankCarrier:
+         ExactDecisionRequestLifecycleAtRank(
+           node, qc, archive, request, rank)
+           ~> (ExactDecisionRequestLifecycleGoal(
+                 node, qc, archive, request)
+                \/ <<ExactDecisionRequestLifecycleIngressRank(
+                       node, qc, archive, request),
+                     rank>>
+                     \in
+                       ExactDecisionRequestLifecycleIngressRankOrdering)
+
+ExactDecisionRequestLifecycleRankDescentProperty(specification) ==
+  /\ specification
+       => [](\A node, qc, archive, request:
+              ExactDecisionRequestLifecycleStepClassification(
+                node, qc, archive, request))
+  /\ specification
+       => \A node, qc, archive, request:
+            WF_AsyncAllVars(
+              ExactDecisionRequestLifecycleOwnedFairAction(
+                node, qc, archive, request))
+  /\ ExactDecisionRequestLifecycleOwnedFairActionClosureProperty(
+       specification)
+
+THEOREM ExactDecisionRequestLifecycleRankDescentUsesOwnedFairAction ==
+  \A specification:
+    ExactDecisionRequestLifecycleRankDescentProperty(specification)
+      => ExactDecisionRequestLifecycleOwnedFairActionClosureProperty(
+           specification)
+BY DEF ExactDecisionRequestLifecycleRankDescentProperty
+
+ExactDecisionRequestIngressRankReplenishmentResidual(
+    node, qc, archive, request) ==
+  \/ ExactDecisionRequestIngressCausalReplenishmentResidual(
+       node, qc, archive, request)
+  \/ ExactDecisionRequestIngressServeReplenishmentResidual(
+       node, qc, archive, request)
+  \/ ExactDecisionRequestIngressPriorityReplenishmentResidual(
+       node, qc, archive, request)
+
+THEOREM ExactDecisionRequestIngressReplenishmentHasConcreteActionWitness ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressRankReplenishmentResidual(
+         node, qc, archive, request)
+    => \E producerClass
+           \in ExactDecisionRequestIngressProducerClasses:
+         ENABLED
+           <<ExactDecisionRequestIngressConcreteReplenishmentAction(
+               node, qc, archive, request,
+               producerClass)>>_AsyncAllVars
+BY ExactDecisionRequestIngressCausalReplenishmentHasConcreteProducer,
+   ExactDecisionRequestIngressServeReplenishmentHasConcreteProducer,
+   ExactDecisionRequestIngressPriorityReplenishmentHasConcreteProducer,
+   ExpandENABLED, IsaT(300)
+   DEF ExactDecisionRequestIngressRankReplenishmentResidual,
+       ExactDecisionRequestIngressCausalReplenishmentResidual,
+       ExactDecisionRequestIngressServeReplenishmentResidual,
+       ExactDecisionRequestIngressPriorityReplenishmentResidual,
+       ExactDecisionRequestIngressConcreteReplenishmentAction,
+       ExactDecisionRequestIngressProducerClasses,
+       AsyncAllVars
 
 ExactDecisionRequestIngressLaneRunnerConvergenceProperty(
     specification) ==

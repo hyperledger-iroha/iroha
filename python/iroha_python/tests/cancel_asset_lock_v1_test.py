@@ -18,6 +18,7 @@ from iroha_python import (
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FIXTURE_ROOT = _REPO_ROOT / "fixtures" / "sorafs_manifest" / "appeal_finance"
+_PROFILE_ROOT = _FIXTURE_ROOT.parent / "reference_sdk"
 _REQUIRED_FIXTURE_NAMES = (
     "cancel_asset_lock_v1.json",
     "cancel_asset_lock_v1.to",
@@ -278,6 +279,31 @@ def test_appeal_finance_validation_profiles_are_stable() -> None:
             category=category,
             label=label,
             generated_at=generated_at,
+        )
+
+
+def test_appeal_finance_profiles_match_the_signed_inventory_fixtures() -> None:
+    profiles = (
+        (
+            "cancel_asset_lock_v1.to",
+            "cancel_asset_lock_v1.to",
+            "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+        ),
+        (
+            "negative/cancel_asset_lock_zero_expected_v1.to",
+            "cancel_asset_lock_zero_expected_v1.to",
+            "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+        ),
+    )
+    for fixture_name, label, expected_name in profiles:
+        expected = json.loads((_PROFILE_ROOT / expected_name).read_text(encoding="utf-8"))
+        assert (
+            validate_appeal_finance_cancel_asset_lock(
+                _FIXTURES[fixture_name],
+                label=label,
+                generated_at_unix=123,
+            )
+            == expected
         )
 
 

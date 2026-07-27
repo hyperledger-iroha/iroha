@@ -597,28 +597,28 @@ else
   # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
   run_hermetic_apple_cargo \
     apple-ios-device "$CARGO_BUILD_DIR_DEVICE" "$IPHONEOS_SDKROOT" \
-    build --locked --offline -p "$LIB_CRATE_NAME" --lib --release \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
     --target "$DEVICE_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the iOS device build"
   LIB_DEV=$(stage_cargo_library "$CARGO_BUILD_DIR_DEVICE" "$DEVICE_TRIPLE" "iOS device")
   run_hermetic_apple_cargo \
     apple-ios-simulator "$CARGO_BUILD_DIR_SIM_ARM" "$IPHONESIMULATOR_SDKROOT" \
-    build --locked --offline -p "$LIB_CRATE_NAME" --lib --release \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
     --target "$SIM_ARM_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the arm64 simulator build"
   LIB_SIM_ARM=$(stage_cargo_library "$CARGO_BUILD_DIR_SIM_ARM" "$SIM_ARM_TRIPLE" "arm64 simulator")
   run_hermetic_apple_cargo \
     apple-ios-simulator "$CARGO_BUILD_DIR_SIM_X64" "$IPHONESIMULATOR_SDKROOT" \
-    build --locked --offline -p "$LIB_CRATE_NAME" --lib --release \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
     --target "$SIM_X64_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the x86_64 simulator build"
   LIB_SIM_X64=$(stage_cargo_library "$CARGO_BUILD_DIR_SIM_X64" "$SIM_X64_TRIPLE" "x86_64 simulator")
   run_hermetic_apple_cargo \
     apple-macos "$CARGO_BUILD_DIR_MACOS" "$MACOSX_SDKROOT" \
-    build --locked --offline -p "$LIB_CRATE_NAME" --lib --release \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
     --target "$MACOS_TRIPLE" \
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the macOS build"

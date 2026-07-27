@@ -420,10 +420,15 @@ actor-to-flush trace, later custody transitions, and decreasing service rank
 remain unassigned production-refinement propositions, so the abstract packet
 action cannot by itself discharge starvation freedom. The Sumeragi-side queue
 is bounded by the frozen height roster crossed with all three reliable output
-classes plus separate shared capacity. A deterministic matching gives each
-retained fanout at most one unique frozen reservation and is recomputed after
-partial progress. Non-roster replies and repeated target/class output
-therefore cannot spend unopened validator reservations. Concretely, a reliable
+classes, one `SidecarTopologyProgress` Lane reservation, and one
+`SidecarReplyControl` Lane reservation per frozen target, plus separate shared
+capacity. A deterministic matching gives each retained fanout at most one
+unique frozen target/class/kind reservation and is recomputed after partial
+progress. Parked ordinary same-target output and saturated shared capacity
+cannot consume the topology-progress or reply-control opportunity. Alternate
+authenticated Hint routes coalesce without multiplying reservations.
+Non-roster replies and repeated target/class/kind output therefore cannot spend
+unopened validator reservations. Concretely, a reliable
 broadcast snapshots the actor-accepted relay-aware topology and acquires each
 target's ordinary `(target, class)` lane independently. An existing target
 child coalesces only a retry with the identical canonical request digest and
@@ -435,12 +440,14 @@ This removes the known local parent-residual obstruction, but no production
 refinement or theorem currently establishes remote receipt, downstream
 consumption, or broadcast starvation freedom.
 
-Local admission alternates a producer-completion source with the causal-work
-source. A producer selection while causal work waits records sticky causal
-debt and advances the source cursor; only causal selection clears that debt.
-Once the causal head is admissible, the debt makes it the deterministic
-preference under fair `RunNode` service, so repeated producer replenishment
-cannot reset the causal owner's position.
+Local admission alternates producer-completion and causal-work sources. The
+current proof source gives an Init/full-action induction for
+`asyncCausalAdmissionOwed[node] => CausalQueueNonempty(node)` on `AsyncSpecAt`
+traces; `AsyncStrongTypeInvariant` alone does not imply this fact. Reachable
+causal-debt replenishment therefore reduces to the two local metadata setters,
+and owed admissible causal work receives deterministic preference under fair
+runner service. This does not bound how often distinct causal heads can
+replenish the debt, so it is not yet a temporal convergence proof.
 
 An individual signed Vote cannot establish its own execution-commitment
 authority. It is serviceable only after a local validated receipt, verified WAL
@@ -621,15 +628,19 @@ theorems; a fresh strict run against the current proof source remains pending.
 `SumeragiV2TypedRolloverHandoff.tla` isolates one changed- or same-roster
 handoff with two initial exact-output workers, a move-only service/transport
 owner pair, an empty-corridor seal, an exact predecessor receipt, an immediate
-successor, retry preservation, and late-callback isolation. This applied-height
-model is orthogonal to the production responder lifecycle and does not
-authorize advancing service generation. Production permits that transition
-only for a certified changed-roster geometry after terminal responder state,
-then commits the checked successor generation and empty server state as one
-marker-selected `MergeSidecarLifecycleSnapshotV3` postimage in the inactive
-alternating slot. Active predecessor state or counter overflow returns
-`Capacity` without mutation. No Rust-to-TLA refinement for that production
-relation is claimed.
+successor, retry preservation, and late-callback isolation. Production has
+three changed-roster authorities. The ordinary path requires authenticated
+predecessor terminality. A move-only handoff issued after the exact-output
+corridor is durably sealed, or a private fence issued after complete semantic
+V3 restoration, may supersede active predecessor responder state. Both forced
+paths require the lifecycle journal, commit the checked successor generation
+and empty responder projection before clearing memory, retire responder/output
+debt, and do not manufacture requester-authenticated close prefixes.
+Same-roster rehydration preserves responder generation and ownership, including
+the retained current chunk; a new requester against a full same-roster table
+receives fail-atomic `Capacity`. Counter overflow and unauthorized active-state
+replacement likewise fail without mutation. No Rust-to-TLA refinement for
+that production relation is claimed.
 
 The model records an inductive control partition over the reachable healthy
 handoff stages and keeps `NoRolloverFailure` explicit. That structure is a
@@ -641,8 +652,12 @@ The conditional local handoff result is not a proof of the final compaction
 relation. It begins after finality validation and does not cover network
 delivery, reply-writer flush, recovery after a fail-stop rejection, repeated
 rollover, or a Rust-to-TLA semantic refinement. Historical bounded and strict
-receipts predate the V3 two-slot persistence relation; both typed-handoff ledger
-entries remain `specified_unproved` until fresh strict TLAPS succeeds.
+receipts predate the authority-gated force fence, V3 two-slot persistence,
+bootstrap adoption, validation-before-cleanup ordering, and the root trust
+boundary. Both typed-handoff declarations remain source-bound support leaves
+consumed by the top-level successor-activation production-refinement debt; they
+are not independent ledger rows. No filesystem refinement claim follows from
+the abstract model.
 
 ## Mechanization ledger
 
@@ -655,11 +670,12 @@ source/log/tool-bound evidence under `target/formal/sumeragi_v2/`. Checked-in
 backend counts are intentionally prohibited because they become stale as
 proofs change.
 
-The reviewed source inventory contains exactly 70 obligations: 35
-`tlaps_proved`, 28 `specified_unproved`, 6 `trusted_contract`, and 1
-`out_of_scope`. Machine-checked completion projects exactly 60 targets and
-retains 10 reviewed exclusions in the source ledger. The completed projection
-must contain 50 `tlaps_proved`, 3 `cross_tool_proved`, 6
+The reviewed top-level inventory contains exactly 54 obligations: 35
+`tlaps_proved`, 12 `specified_unproved`, 6 `trusted_contract`, and 1
+`out_of_scope`. Sixteen source-bound proof/evidence decomposition leaves remain
+checked transitively through those top-level obligations and are not additional
+ledger rows. Machine-checked completion covers the same exact 54 obligations
+and must contain 44 `tlaps_proved`, 3 `cross_tool_proved`, 6
 `trusted_contract`, and 1 `out_of_scope`. Those are completion requirements,
 not current proof claims; `machine_checked_completion` remains false.
 
@@ -746,15 +762,17 @@ for that owner and the weak-fair CommitQC discovery rule conditional on exact
 pending-state preservation. It leaves clock/readiness, preservation across all
 unrelated actions, the authenticated request/response-to-Decision corridor,
 and the historical Decision/body/application corridor as visible operator
-premises. The remaining exact historical closure is registered as four
-proofless release targets:
+premises. The remaining exact historical closure is registered as exactly
+three proofless temporal release targets:
 `IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation`,
 `IndexedHistoricalCertificateRankProgressResidualObligation`,
-`IndexedHistoricalDecisionStageOwnershipResidualObligation`, and
-`IndexedHistoricalDecisionRankProgressResidualObligation`. The downstream
-composition theorem takes their residual properties as antecedents; it is
-dependency wiring, not their proof. Consequently all four remain
-`specified_unproved`, and neither the exact properties nor the ledger are
+and `IndexedHistoricalDecisionRankProgressResidualObligation`. The separate
+`IndexedHistoricalDecisionStageOwnershipResidualObligation` is now a proved
+safety support theorem: `IndexedChainSpec` establishes the composition,
+Decision-witness, and recovery-dormancy invariants that make its residual
+empty. Downstream composition derives that ownership property and assumes only
+the three temporal residuals. Consequently those three remain transitively
+`specified_unproved`, and neither the top-level ledger nor exact liveness is
 promoted. The release-facing theorem remains proofless and ledgered
 `specified_unproved` until those prerequisites are discharged and the whole
 theorem passes a fresh pinned strict proof
@@ -768,7 +786,13 @@ tier. Thus clean exact-complete-tip restart is a strict descent into the
 absent-owner attempt, and snapshot-bootstrap authority is kept distinct from
 the complete-tip credential. Applied failure retains Running until restart
 and a Recovered attempt may fail repeatedly, so failure history is not a
-ranking counter; `IndexedChainSpec` instead includes an explicit eventual
+ranking counter. Progress preservation now also consumes the chain-epoch
+invariant: an exact durable parent application derives that its canonical next
+context is admissible from the typed node context, certified valid-subject
+prefix, and no-outrun clauses before a failure/restart owner can be retained.
+This closes the former arbitrary-witness hole in the local protocol invariant;
+the helper, caller chain, and fail-closed mutations are SANY-clean, but still
+await strict TLAPS. `IndexedChainSpec` includes an explicit eventual
 failure-free suffix premise. It makes
 no progress claim for an honest validator outside `Responsive`, which may stop
 with pre-GST local work still queued. Its release-facing theorem contains a
@@ -899,17 +923,32 @@ consume progress ownership, while all three rank leaves consume their exact
 proved fair-action prerequisites. The aggregate
 `protected-service-rank` obligation waits for every leaf, while production
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
-abstract results. The 70-entry source ledger contains 35 `tlaps_proved`, 28
-`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope`; its exact
-60-target completion projection expects 50 `tlaps_proved`, 3
-`cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`. The 10
-reviewed exclusions remain source obligations but are not completion targets,
-so `machine_checked_completion` remains false.
+abstract results. The 54-entry top-level ledger contains 35 `tlaps_proved`, 12
+`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope`; completion
+expects 44 `tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
+`out_of_scope`. Sixteen decomposition declarations remain source-bound and
+transitively checked through their reviewed top-level consumers rather than
+appearing as extra claims, so `machine_checked_completion` remains false.
 The aggregate temporal closure deliberately leaves
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` proofless. The
 theorems which consume them are dependency wiring, not evidence that either
 residual has been discharged.
+
+The adequate-leader residual is target-local rather than aggregate: another
+validator's Decision is not terminal for the indexed target. Its occurrence
+rank counts every distinct target/leader owner at the frozen semantic rank,
+preventing one serviced owner from hiding another. Equal-count replacement
+and count-increasing replenishment remain explicit non-progress cases and
+require a prior finite or coalesced producer argument.
+
+The exact-Decision producer audit narrows causal replenishment to reachable
+local debt setters; Serve-capacity growth to ordinary or historical request
+drain, fresh causal Completion admission, or local Control enqueue; and
+priority growth to exact network-claim admission or the same archive's normal,
+recovery, or historical runner. Each classification is action-local. No
+current state expression decreases across every producer episode, so the five
+exact off-scheduler convergence leaves remain proofless.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The scheduler corridor runs nine
@@ -1050,7 +1089,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 722 tests across thirty-eight Rust
+The current pre-network release inventory names 733 tests across thirty-eight Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1121,7 +1160,15 @@ changes, yielding the 704-test checkpoint. The runner close-prefix
 failed-suffix handoff regression adds one exact name, yielding the current
 705-test checkpoint. The routed-Hint and crash-safe V3 lifecycle closure adds
 26 exact regressions and retires eight obsolete route-free/V2 selectors,
-yielding the current 723-test, 38-module inventory. The complete source-sealed
+yielding the 723-test checkpoint. Rejecting replay of a proposal superseded by
+a same-round lock adds one exact reducer regression, yielding the 724-test
+checkpoint. Preserving that replayed proposal's tag, round, and subject through
+runner startup adds one exact regression. Two cross-platform lifecycle V3
+crash regressions cover state replacement before directory sync and root
+replacement before predecessor cleanup, yielding the 732-test checkpoint.
+The foreign-context CommitQC Apply rejection adds one exact `v2_effects`
+regression, yielding the current
+733-test, 38-module inventory. The complete source-sealed
 pre-network corridor
 contains 81 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
@@ -1132,7 +1179,12 @@ and both peers, excluding only cumulative `closed_through`; a monotonic floor
 advance on the same occurrence does not rematerialize output. `GenerationHint`
 names the observed/current generations and exact triggering Request or Close
 hash while retaining that delivery's authenticated reply route. Alternate
-sources remain independent attempts.
+sources remain independent attempts. Each frozen target owns a
+`SidecarTopologyProgress` Lane reservation for topology-routed Request/Close
+and a separate `SidecarReplyControl` Lane reservation for exact-reply
+CloseAck/GenerationHint. Same-target ordinary output and saturated shared
+capacity cannot consume either reservation; alternate Hint routes coalesce
+without multiplying it.
 The canonical progress-mutation runner executes the dedicated
 `GenerationEpochFixed` trace as well as the cursor, source-isolation, and close
 traces. It persists and installs responder generation two, observes an old
@@ -1161,17 +1213,33 @@ delivery, rotating-leader progress, or another liveness result.
 
 The sole `MergeSidecarLifecycleSnapshotV3` persists geometry,
 `next_stream_epoch`, responder generation, requester streams, unified
-server streams, and request gates. The unified server-stream table and gate
-table are bounded independently of P2P reply-source capacity, and restore
-validates the whole marker-selected candidate before assignment. V1/V2 are
-unsupported. Successive snapshots alternate between two state slots: the
-inactive slot is fsynced before the independent root marker commits it. Thus a
-pre-marker crash restores the predecessor and a post-marker crash restores the
-successor. Generation advances only for a certified changed-roster geometry
-after every old stream, gate, transfer, and flush is terminal. A full
-same-roster table rejects without mutation.
+server streams, request gates, and its root generation. The unified
+server-stream table and gate table are bounded independently of P2P reply-source
+capacity. The root is durably published before the state directory as a
+generation-zero bootstrap sentinel with no snapshot hash; a surviving
+generation-one candidate is semantically validated and rechecked before the
+root adopts it. Later snapshots alternate between two state slots: the inactive
+slot is fsynced before the independent root marker commits it. A later
+pre-marker crash therefore restores the predecessor and a post-marker crash
+restores the successor. Restore validates the marker-selected candidate,
+rechecks the live pair, and validates known temp artifact types before deleting
+a temp or unselected slot; unknown or non-regular artifacts fail closed.
+Committed recovery re-syncs the selected state and root-marker directories
+before cleanup, and filesystem aliases, including Windows reparse-point files
+or directories, fail closed. Native atomic replacement is required on Unix and
+Windows, and unsupported directory-sync platforms fail closed. The root marker
+is the local trust anchor, so marker replacement/rollback—including restoration
+of the bootstrap sentinel—and whole-store rollback are outside the guarantee.
+V1/V2 are unsupported.
+
+Ordinary generation advance requires a certified changed roster and
+authenticated terminality. A sealed durable handoff or semantically validated
+restart may force-fence active predecessor responder state after committing the
+empty successor projection, without forging close prefixes. Same-roster
+rehydration preserves generation and responder ownership; a new requester
+against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`66a130b892347a296ed3b447d3cf388e00a5c83fdfcd193b228b8eab67059f1a`.
+`e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1213,7 +1281,7 @@ geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-nine-module, eighty-two-leg corridor. It
+tests are not claimed by the thirty-eight-module, eighty-one-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the

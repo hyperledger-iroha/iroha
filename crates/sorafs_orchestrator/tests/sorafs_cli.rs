@@ -2196,6 +2196,31 @@ fn reputation_snapshot_fixture() -> ReputationSnapshotV1 {
     .expect("reputation snapshot")
 }
 
+fn reputation_auth_args(directory: &CanonicalTempDir) -> [String; 2] {
+    let keypair = KeyPair::try_from_seed(
+        b"sorafs-cli-reputation-read-auth".to_vec(),
+        Algorithm::Ed25519,
+    )
+    .expect("derive reputation read fixture key");
+    let account = AccountId::new(keypair.public_key().clone())
+        .to_i105_for_discriminant(369)
+        .expect("encode reputation read fixture account");
+    let key_path = directory.path().join("reputation-read.key");
+    let exposed = ExposedPrivateKey(keypair.private_key().clone()).to_string();
+    fs::write(&key_path, format!("{exposed}\n")).expect("write reputation read fixture key");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+            .expect("secure reputation read fixture key");
+    }
+    [
+        format!("--auth-account={account}"),
+        format!("--auth-private-key-file={}", key_path.display()),
+    ]
+}
+
 fn reputation_snapshot_summary_value(snapshot: &ReputationSnapshotV1) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -2379,6 +2404,59 @@ fn reputation_verify_validates_snapshot_and_merkle_proof() {
 }
 
 #[test]
+fn reputation_verify_missing_provider_diagnostic_is_payload_free() {
+    let tempdir = tempdir().expect("tempdir");
+    let snapshot = reputation_snapshot_fixture();
+    let snapshot_path = tempdir.path().join("reputation-snapshot.to");
+    fs::write(
+        &snapshot_path,
+        to_bytes(&snapshot).expect("encode reputation snapshot"),
+    )
+    .expect("write reputation snapshot");
+    let provider_id = "provider-private-key-missing";
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("verify")
+        .arg(format!("--snapshot={}", snapshot_path.display()))
+        .arg(format!("--provider-id={provider_id}"))
+        .arg("--proof=/runtime/missing-proof.to")
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("requested provider was not found"));
+    assert!(!stderr.contains(provider_id));
+    assert!(!stderr.contains("private-key"));
+}
+
+#[test]
+fn reputation_verify_invalid_snapshot_diagnostic_is_payload_free() {
+    let tempdir = tempdir().expect("tempdir");
+    let mut snapshot = reputation_snapshot_fixture();
+    let provider_id = "provider-private-key-corrupt";
+    snapshot.providers[0].provider_id = provider_id.to_owned();
+    let snapshot_path = tempdir.path().join("invalid-reputation-snapshot.to");
+    fs::write(
+        &snapshot_path,
+        to_bytes(&snapshot).expect("encode invalid reputation snapshot"),
+    )
+    .expect("write invalid reputation snapshot");
+
+    let assert = sorafs_cli_cmd()
+        .arg("reputation")
+        .arg("verify")
+        .arg(format!("--snapshot={}", snapshot_path.display()))
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(stderr.contains("invalid reputation snapshot"));
+    assert!(!stderr.contains(provider_id));
+    assert!(!stderr.contains("private-key"));
+}
+
+#[test]
 fn reputation_publish_command_is_retired() {
     let assert = sorafs_cli_cmd()
         .arg("reputation")
@@ -2411,6 +2489,7 @@ fn reputation_snapshot_fetches_latest_and_writes_output() {
         .arg("snapshot")
         .arg(format!("--torii-url={}", server.base_url()))
         .arg(format!("--output={}", output_path.display()))
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();
@@ -2450,6 +2529,7 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--provider-id=provider-a")
         .arg(format!("--summary-out={}", summary_path.display()))
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();
@@ -2471,6 +2551,7 @@ fn reputation_fetch_outputs_provider_table_and_writes_summary() {
 
 #[test]
 fn reputation_fetch_outputs_provider_json() {
+    let tempdir = tempdir().expect("tempdir");
     let snapshot = reputation_snapshot_fixture();
     let response_value = reputation_provider_response_value(&snapshot, "provider-a");
     let response_body = to_vec(&response_value).expect("encode response");
@@ -2490,6 +2571,7 @@ fn reputation_fetch_outputs_provider_json() {
         .arg(format!("--torii-url={}", server.base_url()))
         .arg("--provider-id=provider-a")
         .arg("--format=json")
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();
@@ -2533,6 +2615,7 @@ fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
         .arg("--limit=10")
         .arg("--max-polls=1")
         .arg(format!("--summary-out={}", summary_path.display()))
+        .args(reputation_auth_args(&tempdir))
         .assert()
         .success();
     mock.assert();

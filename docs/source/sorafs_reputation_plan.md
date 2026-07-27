@@ -31,6 +31,12 @@ committed-derived projection after signed snapshot validation and authenticated
 Governance DAG readback. Snapshot-id reads resolve the exact authenticated
 snapshot from the durable immutable suffix capped at 1,024 entries and the
 publication-checkpoint byte ceiling; unknown or evicted ids return `404`.
+The REST, SSE, and WebSocket handlers require an exact `GET` with an empty body
+and one canonical request proof: either the signature quartet or one exact
+witness. Finite responses are private revalidating cache entries, streams are
+private and non-storable, and every response varies on all canonical
+authentication headers. `Last-Event-ID` is rejected; finalized resume uses a
+newly authenticated `since` request.
 
 Strict non-secret `iroha_config` policy construction and the supervised
 finalized-query/threshold-signing/publication worker are implemented. The
@@ -47,9 +53,11 @@ test matrix for these changes is also pending.
 
 The existing snapshot foundation includes canonical Norito/JSON schemas,
 fixed-point scoring, trust-edge iteration, degradation flags, Merkle proofs,
-Governance DAG payload validation, read-only Torii handlers, CLI verification
-and read helpers, SDK convenience clients, and
-observability assets. `scripts/build_sorafs_reputation_canary.py` builds
+Governance DAG payload validation, authenticated read-only Torii handlers, CLI
+verification and signed live reads, JavaScript/TypeScript and Python
+authenticated helpers, typed Kotlin/Java, Swift, and C# read clients, and
+observability assets.
+`scripts/build_sorafs_reputation_canary.py` builds
 individual payload-free SFM-3 canary artifacts for publish/latest snapshots,
 provider proofs, events, proof verification, metrics, transport, and
 routing/incentive consumption evidence. The builder requires reviewed
@@ -81,8 +89,8 @@ Checked-in response-file examples cover provider and metrics canaries.
 | Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open. |
 | Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection. |
 | Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
-| API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
-| CLI/SDK modules | `sorafs reputation` commands; SDK helper functions for verification and weighting. | Integrates with orchestrator, indexer, orderbook, incentives. |
+| API gateway (`sorafs_reputation_api`) | Exposes authenticated read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Exact empty-body GETs require the signature quartet or exact witness. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
+| CLI/SDK modules | Archived-proof verification plus authenticated CLI and SDK read helpers. | JS/TS and Python support signer or witness authentication; Kotlin, Java, Swift, and C# expose signer-only typed finite/SSE clients. Signed Rust live reads and the rollout collector require exact I105/key-file inputs. Native journal transaction/query builders and the complete SDK/native validation matrix remain open. |
 
 ### Data Flow
 1. Governance activates an exact recorder-policy revision in committed state.
@@ -247,12 +255,15 @@ publication authority.
 - `sorafs_cli reputation verify --snapshot=PATH [--provider-id=ID
   --proof=PATH] [--summary-out=PATH]` validates canonical Norito snapshots and
   optional provider Merkle proofs, then emits a JSON summary for operator logs.
-- `sorafs_cli reputation snapshot --torii-url=URL` and `sorafs_cli reputation
-  fetch --torii-url=URL --provider-id=ID [--format=table|json]` provide the
-  read-only Torii consumption workflow. `sorafs_cli reputation watch
-  --torii-url=URL [--since=N] [--limit=N]` polls the implemented reputation
-  event list and advances by `next_since`. There is deliberately no
-  `reputation publish` command or Torii POST fallback.
+- `sorafs_cli reputation snapshot`, `fetch`, and `watch` require an exact
+  canonical single-key I105 account plus its matching runtime-only Ed25519
+  private-key file. Every request or watch poll binds the exact empty-body GET,
+  path, and canonical query to the current timestamp and a fresh OS-random
+  nonce; redirects and retries are disabled. The key loader rejects unsafe
+  file identity, links, permissions, metadata changes, and malformed text
+  without logging key bytes. `reputation verify` remains the offline
+  snapshot/proof replay path. There is deliberately no `reputation publish`
+  command or Torii POST fallback.
 - `crates/sorafs_node/src/reputation.rs` contains a deterministic
   `ReputationIngestService` that joins proof, journal, repair, orderbook, reserve,
   and provider pages at one finalized height/hash/timestamp. It is exported,
@@ -264,8 +275,7 @@ publication authority.
   trust-policy injection, state-backed query scheduling, queue-backed journal
   submission/finality reconciliation, supervision, and payload-free status are
   wired. External threshold-signing and authenticated Governance DAG adapters,
-  the committed read projection, integrated Rust validation, and reviewed
-  deployment evidence remain open.
+  integrated Rust validation, and reviewed deployment evidence remain open.
 - Torii exposes only read handlers at `GET /v1/sorafs/reputation/latest` and
   `GET /v1/sorafs/reputation/providers/{provider_id}`. The provider endpoint
   returns the latest provider record with a Merkle proof. Historical lookup and
@@ -275,10 +285,34 @@ publication authority.
   through `GET /v1/sorafs/reputation/events`. Live server-sent event streaming
   is available through `GET /v1/sorafs/reputation/events/stream`, seeded by the
   same optional `since`/`limit` backlog cursor. WebSocket parity is available at
-  `/v1/sorafs/reputation/events/ws` with JSON text frames backed by the same event broadcaster.
-- JavaScript/TypeScript and Python Torii clients expose convenience helpers for
-  the local reputation latest/provider/snapshot/weights/events endpoints and
-  the SSE stream, including cache-validator options for `If-None-Match` polling.
+  `/v1/sorafs/reputation/events/ws` with JSON text frames backed by the same
+  event broadcaster. Every route requires an exact empty-body `GET` and either
+  the complete canonical signature quartet or one exact witness. Finite
+  responses use `private, max-age=30, must-revalidate`; streams use
+  `private, no-store`; both vary on all authentication headers.
+  `Last-Event-ID` is rejected and resume uses a newly authenticated `since`
+  request. Clients must not follow redirects or implicitly retry a fixed proof.
+- JavaScript/TypeScript and Python Torii clients expose authenticated helpers
+  for the local latest/provider/snapshot/weights/events endpoints and SSE,
+  including `If-None-Match`. Both accept a per-request signer or exact witness.
+  JavaScript uses one attempt and redirect mode `error`. Python finite reads
+  and SSE each make one `stream=True` request, disable redirects, require the
+  configured adapter to prove `retries=0` before signing, advertise only
+  identity encoding, reject non-identity/content-type aliases, leave error
+  bodies unread, and enforce 4 MiB finite-response and 64 KiB SSE-event caps.
+  Python then decodes strict UTF-8 bytes, rejects BOM/trailing data, duplicate
+  keys, floats, and non-finite values, and enforces the exact closed V1
+  field/type, integer, ordering, count, proof, and event-chain profiles before
+  delivery. Its SSE API has no retry/backoff surface and never reconnects.
+  Kotlin and Java expose
+  typed signer-only finite and SSE clients that make one request, require true
+  streaming, do not reconnect, and do not expose `Last-Event-ID`. Swift
+  provides the same five finite projections and true SSE, requires a matching
+  exact I105 account/Ed25519 key at construction, rejects redirects, and caps
+  finite bodies at 4 MiB and SSE frames at 64 KiB. C# adds the same typed
+  one-shot surface and bounds; it uses only the internally managed
+  no-redirect transport because a public injected `HttpClient` cannot prove
+  no-retry/no-decompression policy.
 - `sorafs_car::scoreboard::TelemetrySnapshot::from_reputation_snapshot` converts
   a validated reputation snapshot into scheduler telemetry, and
   `ProviderTelemetry::reputation_score_bps` reduces routing weight without
@@ -346,18 +380,22 @@ publication authority.
   It supports shell-style `@ARGFILE` inputs for direct replay of reviewed
   evidence directories and explicit artifacts.
 - `scripts/run_sorafs_reputation_rollout_evidence.py` requires reviewed
-  payload-free external publication evidence, then collects the deployed
-  read-only bundle with bounded `sorafs_cli reputation
-  snapshot|fetch|watch|verify` commands. It supports shell-style `@ARGFILE`
-  response files, checks provider proof coverage before touching a live Torii
-  endpoint, and then runs the evidence gate. Its `--dry-run` output includes
-  the checker-backed
+  payload-free external publication evidence plus an exact I105 account and
+  runtime-only key path, then collects the deployed read-only bundle with
+  bounded `sorafs_cli reputation snapshot|fetch|watch|verify` commands. The
+  collector validates but never reads the key file and forwards the two
+  authentication arguments only to live reads. It supports shell-style
+  `@ARGFILE` response files, checks provider proof coverage before touching a
+  live Torii endpoint, and then runs the evidence gate. Its `--dry-run` output
+  includes the checker-backed
   `evidence_contract` map for publish/latest, provider, events, verify,
   metrics, transport, and consumption artifacts, and the runner validates the
   schema-closed collection plan, external evidence map, evidence contract, and
   command steps before dry-run output or live collection.
   `scripts/examples/sorafs_reputation_rollout_collection.args.example`
-  provides a payload-free operator template.
+  provides a payload-free operator template with runtime-only signer paths.
+  Live collection still requires the genuine deployed adapters and reviewed
+  external evidence; local command-plan success is not deployment evidence.
 - Operator workflow notes live in
   `docs/source/sorafs/reputation_operator.md`.
 
@@ -419,11 +457,25 @@ publication authority.
     weights and smoothing parameters from the latest snapshot.
   - Implemented locally: `GET /v1/sorafs/reputation/events` returns sequenced
     snapshot events, with `since` and `limit` cursor parameters.
-  - Implemented locally: reputation `GET` responses include deterministic
-    `ETag` validators plus `Cache-Control`, and honor `If-None-Match` with
-    `304 Not Modified`.
+  - Implemented locally: every route requires an exact `GET`, an empty body,
+    and exactly one authentication mode: the complete
+    `X-Iroha-Account`/`X-Iroha-Signature`/`X-Iroha-Timestamp-Ms`/
+    `X-Iroha-Nonce` quartet, or one exact standard-base64
+    `X-Iroha-Witness`. A witness may be accompanied only by its exactly
+    matching account. Partial, duplicate, aliased, or mixed modes fail closed,
+    and the proof binds the method, path, canonical query, and empty body.
+  - Implemented locally: finite reputation responses include deterministic
+    `ETag` validators, use
+    `Cache-Control: private, max-age=30, must-revalidate`, and honor
+    `If-None-Match` with `304 Not Modified`. SSE and WebSocket responses use
+    `Cache-Control: private, no-store`. Every response varies on
+    `X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`,
+    `X-Iroha-Nonce`, and `X-Iroha-Witness`.
   - Implemented locally: `GET /v1/sorafs/reputation/events/stream` provides
     live server-sent events for reputation snapshot publications.
+    `Last-Event-ID` is rejected; clients resume with the finalized sequence in
+    a newly authenticated `since` request. Redirects are not a compatibility
+    path and clients must not implicitly retry a fixed proof.
   - The repository ships reputation Prometheus/Grafana contracts. Remaining
     rollout: connect them to the supervised committed projector/publisher and
     capture live run evidence.
@@ -434,27 +486,67 @@ publication authority.
 - SDK helpers:
   - Rust currently has generic signed native transaction/query submission for
     the journal ISIs and `FindSorafsReputationJournalEvents`; there is no
-    dedicated `ReputationClient`. Dedicated committed-projection builders remain
-    release work.
+    dedicated `ReputationClient`. Dedicated authenticated native journal
+    mutation/query builders remain release work; the committed read projection
+    itself is implemented.
   - Implemented locally in JS/TS:
     `getSorafsReputationLatest`, `getSorafsReputationProvider`,
     `getSorafsReputationSnapshot`, `getSorafsReputationWeights`,
-    `listSorafsReputationEvents`, and `streamSorafsReputationEvents`.
+    `listSorafsReputationEvents`, and `streamSorafsReputationEvents`. Each
+    accepts a per-request canonical signer or exact witness, rejects raw
+    signature-quartet/default-header authentication, makes one attempt, and
+    sets redirect mode to `error`.
   - Implemented locally in Python:
     `get_sorafs_reputation_latest`, `get_sorafs_reputation_provider`,
     `get_sorafs_reputation_snapshot`, `get_sorafs_reputation_weights`,
     `list_sorafs_reputation_events`, and
-    `stream_sorafs_reputation_events`.
+    `stream_sorafs_reputation_events`. Finite reads accept a per-request signer
+    or exact witness and disable retries and redirects. Finite reads and SSE
+    use `stream=True`, require the configured adapter to prove `retries=0`
+    before signing, advertise only `Accept-Encoding: identity`, reject
+    non-identity encoding and content-type aliases, and leave error bodies
+    unread. SSE uses the same authentication modes, exposes no retry/backoff
+    knobs, and never reconnects. The 4 MiB finite and 64 KiB SSE-event limits
+    apply to actual streamed bytes, and both result forms pass the exact closed
+    V1 profile validator before a mapping is returned or delivered.
+  - Implemented locally in Kotlin core-jvm and mirrored Java Android:
+    dedicated typed `SorafsReputationClient` finite and SSE surfaces. They are
+    signer-only, make exactly one request, reject redirects, do not reconnect,
+    expose no `Last-Event-ID` mode, and require a true streaming transport for
+    SSE. The built-in Java Android OkHttp provider disables HTTP/HTTPS
+    redirects and connection retries; injected custom transports retain their
+    explicit policy.
+  - Implemented locally in Swift: typed latest/provider/snapshot/weights/event
+    reads plus true streaming SSE. Construction checks the exact I105
+    account/private-key match; calls sign one empty GET with a fresh nonce,
+    reject redirects, never retry or reconnect, and enforce the closed V1
+    schema with 4 MiB finite-response and 64 KiB SSE-frame caps.
+  - Implemented locally in C#: typed latest/provider/snapshot/weights/event and
+    streaming SSE methods using matching `CanonicalRequestCredentials`.
+    Reputation calls accept only the internally managed no-redirect transport;
+    public injected `HttpClient` instances fail closed before signing because
+    their retry, redirect, and decompression policy is unverifiable. The C#
+    source and tests passed independent static review; compilation remains
+    pending on a host with .NET.
 - CLI commands:
   - Implemented locally as `sorafs_cli reputation fetch --torii-url=URL
-    --provider-id=ID [--format=table|json] [--summary-out=PATH]`.
+    --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH
+    [--format=table|json] [--summary-out=PATH]`.
   - Implemented locally as `sorafs_cli reputation snapshot --torii-url=URL
-    [--output=PATH] [--summary-out=PATH]`.
+    --auth-account=I105 --auth-private-key-file=PATH [--output=PATH]
+    [--summary-out=PATH]`.
   - Implemented locally as `sorafs_cli reputation verify --snapshot=PATH
     [--provider-id=ID --proof=PATH] [--summary-out=PATH]`.
   - Implemented locally as `sorafs_cli reputation watch --torii-url=URL
-    [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N]
-    [--summary-out=PATH]`.
+    --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N]
+    [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]`.
+  - Provider ids use the exact 1..=256-byte ASCII `[A-Za-z0-9_.:-]`
+    route grammar, excluding the whole URL dot-segment values `.` and `..`.
+    Clients and the rollout collector reject padding, aliases, decoding, and
+    other path-identity rewriting.
+  - `snapshot`, `fetch`, and every `watch` poll sign the exact canonical
+    request with a fresh OS-random nonce and a securely opened matching key.
+    `verify` remains the offline path.
 
 ## Integration Points
 - **Routing/Indexer**: Use scores as weights when ranking providers; degrade selection of low-score providers.
@@ -495,6 +587,11 @@ publication authority.
 - Reputation config changes require governance multi-sig; config hashed and stored in DAG.
 - Deployment requirement: mTLS for internal consumers; public API access
   requires the governed authentication policy and `reputation.read` scope.
+- Reputation reads additionally require the exact canonical empty-body `GET`
+  proof described above. Finite data is private/revalidating and streams are
+  private/non-storable; every response varies on all authentication headers.
+  `Last-Event-ID`, redirects, and implicit fixed-proof retries are not
+  compatibility mechanisms.
 - Rate limiting: 120 requests/min per client, bursts allowed for internal services.
 - Privacy: Raw consumer feedback aggregated before inclusion; no PII stored.
 - Retention is not hard-coded as a 12-month/5-year service promise. Committed
@@ -559,17 +656,26 @@ Completed local foundations:
 - Governance DAG payload validation and the keyless finalized multi-feed
   projector/outbox contract.
 - Read-only Torii latest, provider, snapshot, weights, events, SSE, and
-  WebSocket handlers consume the fresh committed projection; snapshot-id reads
-  return the exact retained authenticated snapshot and reject unknown or
-  evicted ids.
-- CLI `reputation verify`, `snapshot`, `fetch`, and `watch`; the obsolete local
-  publication command is retired.
+  WebSocket handlers consume the fresh committed projection, require canonical
+  empty-body GET authentication, use private cache policy with complete
+  authentication `Vary`, and reject `Last-Event-ID`; snapshot-id reads return
+  the exact retained authenticated snapshot and reject unknown or evicted ids.
+- CLI `reputation verify` is complete and the obsolete local publication
+  command is retired. The `snapshot`, `fetch`, and `watch` live-read commands
+  require exact canonical I105/key-file authentication, use a fresh nonce per
+  request, and disable redirects and retries. The rollout collector forwards
+  those runtime-only signer inputs only to live steps.
 - The rollout evidence gate now emits aggregate-compatible required-kind
   metadata, evidence counts, required-row `present`/`artifact_count` fields,
   threshold metadata, and reviewed deployment-context fingerprints so the final
   production readiness aggregate can consume real reputation summaries directly.
-- JavaScript/TypeScript and Python convenience clients for reads, event polling,
-  and SSE consumption.
+- JavaScript/TypeScript and Python authenticated clients for finite reads,
+  event polling, and SSE consumption, with signer/witness modes, strict closed
+  response validation, and single-attempt/no-redirect behavior. Python also
+  pins verified zero-retry streaming, identity-only encoding, actual 4 MiB /
+  64 KiB byte caps, and payload-free unread error bodies; typed
+  signer-only Kotlin, Java, Swift, and C# finite/SSE clients with
+  single-attempt true-stream behavior.
 - Scheduler consumption through `reputation_score_bps`.
 - Grafana dashboard and Prometheus alert rules for accepted snapshot health.
 - Rollout evidence summary gate for fresh snapshot, publisher, provider proof,
@@ -642,3 +748,12 @@ Remaining production gates:
   snapshot `.to`/JSON artifacts and proof replay evidence.
 - Exercise rollback/stale-snapshot procedures before routing or incentives rely
   on scores in production.
+- L1 remains open until the exact four-validator deployment supplies genuine
+  immutable finalized-query, external threshold-signing, authenticated
+  Governance DAG publication/readback/head-inclusion, PoR/token callback,
+  restart/failover, live transport, and rollout evidence, including
+  authenticated CLI collection or equivalent direct artifacts.
+- L2 remains open until the ordered nine-prerequisite envelope is externally
+  signed and both deterministic aggregate runs report `status=ready`,
+  `summary_file_count=17`, and `recognized_summary_count=17` with every lane
+  valid and rollback usable.

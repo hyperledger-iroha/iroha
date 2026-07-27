@@ -22,6 +22,10 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     isi::sorafs::CompleteReplicationOrder,
+    sorafs::pin_registry::{
+        ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+        ProviderIngestFinalizedAnchorV1,
+    },
     transaction::{Executable, SignedTransaction, TransactionPayload},
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
@@ -44,6 +48,14 @@ const PROVIDER_INGEST_LEASE_TOKEN_DOMAIN_V1: &[u8] = b"sorafs.provider.ingest.so
 const PROVIDER_INGEST_SIGNING_TOKEN_DOMAIN_V1: &[u8] =
     b"sorafs.provider.ingest.completion-signing.v1\0";
 const PROVIDER_INGEST_OUTBOX_LOCK_SUFFIX_V1: &str = ".lock";
+const PROVIDER_INGEST_CHECKPOINT_PROVIDER_QUALIFICATION_VERSION_V1: u8 = 1;
+const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_VERSION_V1: u8 = 1;
+const PROVIDER_INGEST_SEALED_CHECKPOINT_NAMESPACE_V1: [u8; 32] =
+    *b"sorafs.provider.ingest.outbox.v1";
+const PROVIDER_INGEST_SEALED_CHECKPOINT_REVISION_DOMAIN_V1: &[u8] =
+    b"sorafs.provider.ingest.sealed-checkpoint.revision.v1\0";
+const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 1_024;
+const PROVIDER_INGEST_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1: usize = 256;
 
 const MAX_MANIFEST_CID_BYTES_V1: usize = 256;
 const MAX_CHUNKER_HANDLE_BYTES_V1: usize = 128;
@@ -57,6 +69,252 @@ static PROVIDER_INGEST_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTre
 pub const PROVIDER_INGEST_OUTBOX_FILE_V1: &str = "provider_ingest_outbox_v1.to";
 /// Protocol ceiling for one payload-free status page.
 pub const PROVIDER_INGEST_STATUS_PAGE_MAX_V1: usize = 1_000;
+
+/// Non-secret configured identity of the production sealed checkpoint store.
+///
+/// Credentials, authentication tokens, private keys, and vendor diagnostics
+/// are runtime-only and are never represented by this binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestCheckpointProviderBindingV1 {
+    /// Stable opaque deployment handle.
+    pub handle: String,
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl ProviderIngestCheckpointProviderBindingV1 {
+    /// Return the exact qualification required from the injected provider.
+    #[must_use]
+    pub const fn qualification(&self) -> ProviderIngestCheckpointProviderQualificationV1 {
+        ProviderIngestCheckpointProviderQualificationV1::new(self.revision, self.policy_digest)
+    }
+
+    fn validate(&self) -> Result<(), ProviderIngestOutboxError> {
+        validate_provider_ingest_runtime_handle(&self.handle)?;
+        self.qualification().validate()
+    }
+}
+
+/// Payload-free public qualification returned by the sealed checkpoint store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderIngestCheckpointProviderQualificationV1 {
+    /// Qualification schema version.
+    pub version: u8,
+    /// Non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Non-zero digest of the exact public provider policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl ProviderIngestCheckpointProviderQualificationV1 {
+    /// Construct a first-release provider qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            version: PROVIDER_INGEST_CHECKPOINT_PROVIDER_QUALIFICATION_VERSION_V1,
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Validate the qualification schema and non-zero binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema or zero revision/digest.
+    pub fn validate(self) -> Result<(), ProviderIngestOutboxError> {
+        if self.version != PROVIDER_INGEST_CHECKPOINT_PROVIDER_QUALIFICATION_VERSION_V1
+            || self.revision == 0
+            || self.policy_digest == [0; 32]
+        {
+            return Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding);
+        }
+        Ok(())
+    }
+}
+
+/// Fixed payload-free failure classes returned by an external sealed store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderIngestCheckpointExternalErrorV1 {
+    /// The external store is unavailable.
+    Unavailable,
+    /// The external store rejected the exact request.
+    Rejected,
+    /// A compare-and-swap may have committed and requires authoritative readback.
+    Ambiguous,
+}
+
+/// Canonical external authority record for one provider-ingest checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ProviderIngestSealedCheckpointRecordV1 {
+    /// Fixed provider-ingest checkpoint namespace.
+    pub namespace: [u8; 32],
+    /// Record schema version.
+    pub version: u8,
+    /// Monotonic sequence of the authoritative checkpoint.
+    pub checkpoint_sequence: u64,
+    /// Exact predecessor CAS revision, absent only for sequence one.
+    pub predecessor_revision: Option<[u8; 32]>,
+    /// Exact predecessor checkpoint digest, absent only for sequence one.
+    pub predecessor_checkpoint_digest: Option<[u8; 32]>,
+    /// Digest of the exact canonical checkpoint bytes.
+    pub checkpoint_digest: [u8; 32],
+    /// Exact canonical bounded provider-ingest checkpoint.
+    pub checkpoint_bytes: Vec<u8>,
+    /// Deterministic content-addressed compare-and-swap revision.
+    pub revision: [u8; 32],
+}
+
+impl ProviderIngestSealedCheckpointRecordV1 {
+    fn new(
+        checkpoint_sequence: u64,
+        predecessor_revision: Option<[u8; 32]>,
+        predecessor_checkpoint_digest: Option<[u8; 32]>,
+        checkpoint_bytes: Vec<u8>,
+    ) -> Self {
+        let checkpoint_digest = *blake3::hash(&checkpoint_bytes).as_bytes();
+        let mut record = Self {
+            namespace: PROVIDER_INGEST_SEALED_CHECKPOINT_NAMESPACE_V1,
+            version: PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_VERSION_V1,
+            checkpoint_sequence,
+            predecessor_revision,
+            predecessor_checkpoint_digest,
+            checkpoint_digest,
+            checkpoint_bytes,
+            revision: [0; 32],
+        };
+        record.revision = provider_ingest_sealed_checkpoint_revision(&record);
+        record
+    }
+
+    /// Validate namespace, schema, lineage, bounds, bytes, and deterministic revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed, oversized, substituted, or noncanonical state.
+    pub fn validate(&self, checkpoint_max_bytes: u64) -> Result<(), ProviderIngestOutboxError> {
+        let valid_lineage = if self.checkpoint_sequence == 1 {
+            self.predecessor_revision.is_none() && self.predecessor_checkpoint_digest.is_none()
+        } else {
+            self.predecessor_revision
+                .is_some_and(|revision| revision != [0; 32])
+                && self
+                    .predecessor_checkpoint_digest
+                    .is_some_and(|digest| digest != [0; 32])
+        };
+        if checkpoint_max_bytes == 0
+            || self.namespace != PROVIDER_INGEST_SEALED_CHECKPOINT_NAMESPACE_V1
+            || self.version != PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_VERSION_V1
+            || self.checkpoint_sequence == 0
+            || !valid_lineage
+            || self.checkpoint_bytes.is_empty()
+            || u64::try_from(self.checkpoint_bytes.len()).unwrap_or(u64::MAX) > checkpoint_max_bytes
+            || self.checkpoint_digest == [0; 32]
+            || self.checkpoint_digest != *blake3::hash(&self.checkpoint_bytes).as_bytes()
+            || self.revision != provider_ingest_sealed_checkpoint_revision(self)
+        {
+            return Err(ProviderIngestOutboxError::InvalidSealedCheckpoint);
+        }
+        Ok(())
+    }
+
+    /// Encode the exact bounded canonical Norito record used by the provider and cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation, encoding, or the byte bound fails.
+    pub fn to_canonical_bytes(
+        &self,
+        checkpoint_max_bytes: u64,
+    ) -> Result<Vec<u8>, ProviderIngestOutboxError> {
+        self.validate(checkpoint_max_bytes)?;
+        let max_record_bytes =
+            provider_ingest_sealed_checkpoint_record_max_bytes(checkpoint_max_bytes)?;
+        let bytes = norito::to_bytes(self)
+            .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
+        if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_record_bytes {
+            return Err(ProviderIngestOutboxError::InvalidSealedCheckpoint);
+        }
+        Ok(bytes)
+    }
+
+    /// Decode one exact bounded canonical record from sealed storage or local cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before installation for oversized, malformed,
+    /// noncanonical, or substituted bytes.
+    pub fn from_canonical_bytes(
+        bytes: &[u8],
+        checkpoint_max_bytes: u64,
+    ) -> Result<Self, ProviderIngestOutboxError> {
+        let max_record_bytes =
+            provider_ingest_sealed_checkpoint_record_max_bytes(checkpoint_max_bytes)?;
+        if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_record_bytes {
+            return Err(ProviderIngestOutboxError::InvalidSealedCheckpoint);
+        }
+        let element_limit = bytes
+            .len()
+            .checked_mul(4)
+            .ok_or(ProviderIngestOutboxError::CheckpointTooLarge)?
+            .max(1);
+        let record: Self =
+            crate::decode_local_checkpoint_canonical(bytes, max_record_bytes, element_limit)
+                .map_err(|_| ProviderIngestOutboxError::InvalidSealedCheckpoint)?;
+        record.validate(checkpoint_max_bytes)?;
+        Ok(record)
+    }
+}
+
+/// Runtime-only sealed, monotonic provider-ingest checkpoint authority.
+///
+/// Implementations must preserve exact canonical records across restarts and
+/// enforce a linearizable compare-and-swap over `revision`. Credentials and
+/// private provider state must never be exposed through this trait.
+pub trait ProviderIngestCheckpointRuntimeV1: Send + Sync + fmt::Debug {
+    /// Return the stable opaque production handle.
+    fn handle(&self) -> &str;
+
+    /// Return the current payload-free provider qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed payload-free provider failure.
+    fn qualification(
+        &self,
+    ) -> Result<
+        ProviderIngestCheckpointProviderQualificationV1,
+        ProviderIngestCheckpointExternalErrorV1,
+    >;
+
+    /// Load the exact latest authoritative record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed payload-free provider failure.
+    fn load_latest(
+        &self,
+    ) -> Result<
+        Option<ProviderIngestSealedCheckpointRecordV1>,
+        ProviderIngestCheckpointExternalErrorV1,
+    >;
+
+    /// Replace the exact latest record if its deterministic revision is unchanged.
+    ///
+    /// A write whose commit outcome is unknown must return
+    /// [`ProviderIngestCheckpointExternalErrorV1::Ambiguous`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed payload-free provider failure.
+    fn compare_and_swap_latest(
+        &self,
+        expected_revision: Option<[u8; 32]>,
+        next: &ProviderIngestSealedCheckpointRecordV1,
+    ) -> Result<(), ProviderIngestCheckpointExternalErrorV1>;
+}
 
 /// Finalized block identity used by provider-ingest reconciliation.
 #[derive(
@@ -678,32 +936,13 @@ pub enum ProviderIngestRetryOutcomeV1 {
     DeadLettered,
 }
 
-/// Governance identity of the exact completion-signer policy.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
-)]
-pub struct ProviderIngestCompletionSignerPolicyV1 {
-    /// Stable governance identity for this provider-owner signing policy.
-    pub policy_id: [u8; 32],
-    /// Monotonic policy revision beginning at one.
-    pub revision: u64,
-    /// Digest of the exact governed signer/key/validity policy.
-    pub policy_digest: [u8; 32],
-}
-
-impl ProviderIngestCompletionSignerPolicyV1 {
-    /// Return whether every canonical identity component is non-zero.
-    #[must_use]
-    pub fn is_valid(&self) -> bool {
-        self.policy_id != [0; 32] && self.revision != 0 && self.policy_digest != [0; 32]
+fn validate_completion_signer_policy(
+    policy: ProviderIngestCompletionSignerPolicyV1,
+) -> Result<(), ProviderIngestOutboxError> {
+    if !policy.is_valid() {
+        return Err(ProviderIngestOutboxError::InvalidSignerPolicy);
     }
-
-    fn validate(self) -> Result<(), ProviderIngestOutboxError> {
-        if !self.is_valid() {
-            return Err(ProviderIngestOutboxError::InvalidSignerPolicy);
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 /// Current finalized observation used to reconcile a prepared signer policy.
@@ -735,6 +974,8 @@ pub struct ProviderIngestCompletionSigningContextV1 {
     pub provider_owner: AccountId,
     /// Exact governed signer policy resolved at the finalized baseline.
     pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    /// Exact order-scoped assignment revision at the finalized baseline.
+    pub assignment_revision: u64,
     /// Provider-specific completion epoch.
     pub completion_epoch: u64,
     /// Exact fee-quoted payload that the isolated signer must sign.
@@ -749,6 +990,7 @@ impl fmt::Debug for ProviderIngestCompletionSigningContextV1 {
             .field("chain_id", &self.chain_id)
             .field("provider_owner", &self.provider_owner)
             .field("signer_policy", &self.signer_policy)
+            .field("assignment_revision", &self.assignment_revision)
             .field("completion_epoch", &self.completion_epoch)
             .field("expected_payload", &"<redacted>")
             .finish()
@@ -1025,8 +1267,24 @@ impl Default for ProviderIngestOutboxCheckpointV1 {
 #[derive(Debug, Clone)]
 struct ProviderIngestOutboxState {
     checkpoint: ProviderIngestOutboxCheckpointV1,
+    sealed_record: Option<ProviderIngestSealedCheckpointRecordV1>,
     aggregate_counts: ProviderIngestOutboxCountsV1,
     durability_failure: Option<String>,
+}
+
+#[derive(Clone)]
+struct ProviderIngestCheckpointAuthority {
+    binding: ProviderIngestCheckpointProviderBindingV1,
+    runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+}
+
+impl fmt::Debug for ProviderIngestCheckpointAuthority {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderIngestCheckpointAuthority")
+            .field("handle", &self.binding.handle)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Durable payload-free outbox for provider-internal finalized-ledger ingest.
@@ -1034,6 +1292,7 @@ struct ProviderIngestOutboxState {
 pub struct ProviderIngestOutbox {
     path: Option<Arc<PathBuf>>,
     writer_lock: Option<Arc<ProviderIngestWriterLock>>,
+    checkpoint_authority: Option<ProviderIngestCheckpointAuthority>,
     policy: ProviderIngestOutboxPolicyV1,
     state: Arc<Mutex<ProviderIngestOutboxState>>,
 }
@@ -1043,6 +1302,7 @@ impl fmt::Debug for ProviderIngestOutbox {
         formatter
             .debug_struct("ProviderIngestOutbox")
             .field("persistent", &self.path.is_some())
+            .field("sealed_authoritative", &self.checkpoint_authority.is_some())
             .field("policy", &self.policy)
             .field("state", &"<redacted>")
             .finish()
@@ -1323,29 +1583,243 @@ fn validate_provider_ingest_lock_metadata(
     Ok(())
 }
 
+fn validate_provider_ingest_runtime_handle(value: &str) -> Result<(), ProviderIngestOutboxError> {
+    if value.is_empty()
+        || value.len() > PROVIDER_INGEST_CHECKPOINT_PROVIDER_HANDLE_MAX_BYTES_V1
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding);
+    }
+    let lowercase = value.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
+            )
+        })
+    {
+        return Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding);
+    }
+    Ok(())
+}
+
+fn provider_ingest_sealed_checkpoint_revision(
+    record: &ProviderIngestSealedCheckpointRecordV1,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PROVIDER_INGEST_SEALED_CHECKPOINT_REVISION_DOMAIN_V1);
+    hasher.update(&record.namespace);
+    hasher.update(&[record.version]);
+    hasher.update(&record.checkpoint_sequence.to_le_bytes());
+    match record.predecessor_revision {
+        Some(revision) => {
+            hasher.update(&[1]);
+            hasher.update(&revision);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    match record.predecessor_checkpoint_digest {
+        Some(digest) => {
+            hasher.update(&[1]);
+            hasher.update(&digest);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.update(&record.checkpoint_digest);
+    hasher.update(
+        &u64::try_from(record.checkpoint_bytes.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(&record.checkpoint_bytes);
+    *hasher.finalize().as_bytes()
+}
+
+fn provider_ingest_sealed_checkpoint_record_max_bytes(
+    checkpoint_max_bytes: u64,
+) -> Result<u64, ProviderIngestOutboxError> {
+    if checkpoint_max_bytes == 0 {
+        return Err(ProviderIngestOutboxError::InvalidPolicy);
+    }
+    checkpoint_max_bytes
+        .checked_add(PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1)
+        .ok_or(ProviderIngestOutboxError::CheckpointTooLarge)
+}
+
+fn encode_provider_ingest_checkpoint(
+    checkpoint: &ProviderIngestOutboxCheckpointV1,
+    policy: ProviderIngestOutboxPolicyV1,
+) -> Result<Vec<u8>, ProviderIngestOutboxError> {
+    validate_checkpoint(checkpoint, policy)?;
+    let bytes = norito::to_bytes(checkpoint)
+        .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
+    if bytes.is_empty()
+        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.checkpoint_max_bytes
+    {
+        return Err(ProviderIngestOutboxError::CheckpointTooLarge);
+    }
+    Ok(bytes)
+}
+
+fn decode_provider_ingest_checkpoint(
+    bytes: &[u8],
+    policy: ProviderIngestOutboxPolicyV1,
+) -> Result<ProviderIngestOutboxCheckpointV1, ProviderIngestOutboxError> {
+    if bytes.is_empty()
+        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.checkpoint_max_bytes
+    {
+        return Err(ProviderIngestOutboxError::CheckpointTooLarge);
+    }
+    let element_limit = bytes
+        .len()
+        .checked_mul(4)
+        .ok_or(ProviderIngestOutboxError::CheckpointTooLarge)?
+        .max(1);
+    let checkpoint =
+        crate::decode_local_checkpoint_canonical(bytes, policy.checkpoint_max_bytes, element_limit)
+            .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
+    validate_checkpoint(&checkpoint, policy)?;
+    Ok(checkpoint)
+}
+
+impl ProviderIngestCheckpointAuthority {
+    fn try_new(
+        binding: ProviderIngestCheckpointProviderBindingV1,
+        runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    ) -> Result<Self, ProviderIngestOutboxError> {
+        binding.validate()?;
+        let authority = Self { binding, runtime };
+        authority.assert_identity()?;
+        authority.assert_identity()?;
+        Ok(authority)
+    }
+
+    fn assert_identity(&self) -> Result<(), ProviderIngestOutboxError> {
+        self.binding.validate()?;
+        validate_provider_ingest_runtime_handle(self.runtime.handle())
+            .map_err(|_| ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)?;
+        if self.runtime.handle() != self.binding.handle {
+            return Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch);
+        }
+        let qualification = self.runtime.qualification()?;
+        qualification
+            .validate()
+            .map_err(|_| ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)?;
+        if self.runtime.handle() != self.binding.handle
+            || qualification != self.binding.qualification()
+        {
+            return Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch);
+        }
+        Ok(())
+    }
+
+    fn load_latest(
+        &self,
+        checkpoint_max_bytes: u64,
+    ) -> Result<Option<ProviderIngestSealedCheckpointRecordV1>, ProviderIngestOutboxError> {
+        self.assert_identity()?;
+        let result = self.runtime.load_latest();
+        self.assert_identity()?;
+        let record = result?;
+        if let Some(record) = &record {
+            let canonical = record.to_canonical_bytes(checkpoint_max_bytes)?;
+            if ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
+                &canonical,
+                checkpoint_max_bytes,
+            )? != *record
+            {
+                return Err(ProviderIngestOutboxError::InvalidSealedCheckpoint);
+            }
+        }
+        Ok(record)
+    }
+
+    fn compare_and_swap(
+        &self,
+        checkpoint_max_bytes: u64,
+        expected: Option<&ProviderIngestSealedCheckpointRecordV1>,
+        next: &ProviderIngestSealedCheckpointRecordV1,
+    ) -> Result<(), ProviderIngestOutboxError> {
+        next.to_canonical_bytes(checkpoint_max_bytes)?;
+        self.assert_identity()?;
+        let current = self.load_latest(checkpoint_max_bytes)?;
+        if current.as_ref() != expected {
+            return Err(ProviderIngestOutboxError::CheckpointFork);
+        }
+        let expected_revision = expected.map(|record| record.revision);
+        let result = self
+            .runtime
+            .compare_and_swap_latest(expected_revision, next);
+        if let Err(identity_error) = self.assert_identity() {
+            return Err(
+                if matches!(
+                    result,
+                    Ok(()) | Err(ProviderIngestCheckpointExternalErrorV1::Ambiguous)
+                ) {
+                    ProviderIngestOutboxError::CheckpointAuthorityAmbiguous
+                } else {
+                    identity_error
+                },
+            );
+        }
+        match result {
+            Err(ProviderIngestCheckpointExternalErrorV1::Unavailable) => {
+                return Err(ProviderIngestOutboxError::CheckpointProviderUnavailable);
+            }
+            Err(ProviderIngestCheckpointExternalErrorV1::Rejected) => {
+                return Err(ProviderIngestOutboxError::CheckpointProviderRejected);
+            }
+            Ok(()) | Err(ProviderIngestCheckpointExternalErrorV1::Ambiguous) => {}
+        }
+        let readback = self
+            .load_latest(checkpoint_max_bytes)
+            .map_err(|_| ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)?;
+        if readback.as_ref() == Some(next) {
+            return Ok(());
+        }
+        if readback.as_ref() == expected {
+            return Err(ProviderIngestOutboxError::CheckpointCasUnchanged);
+        }
+        Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)
+    }
+}
+
 impl ProviderIngestOutbox {
-    /// Construct a non-persistent outbox for focused composition tests.
-    pub fn in_memory(
+    /// Construct a non-persistent outbox for crate-internal composition tests.
+    #[cfg(test)]
+    pub(crate) fn in_memory(
         policy: ProviderIngestOutboxPolicyV1,
     ) -> Result<Self, ProviderIngestOutboxError> {
         policy.validate()?;
         Ok(Self {
             path: None,
             writer_lock: None,
+            checkpoint_authority: None,
             policy,
             state: Arc::new(Mutex::new(ProviderIngestOutboxState {
                 checkpoint: ProviderIngestOutboxCheckpointV1::default(),
+                sealed_record: None,
                 aggregate_counts: ProviderIngestOutboxCountsV1::default(),
                 durability_failure: None,
             })),
         })
     }
 
-    /// Open or create a bounded canonical checkpoint.
+    /// Open a local-only bounded checkpoint for crate-internal composition tests.
     ///
-    /// Pre-release checkpoint layouts are deliberately rejected rather than
-    /// migrated.
-    pub fn open(
+    /// The standard daemon never selects this constructor. Production provider
+    /// ingest must use [`Self::open_with_checkpoint_authority`].
+    #[cfg(test)]
+    pub(crate) fn open(
         path: impl Into<PathBuf>,
         policy: ProviderIngestOutboxPolicyV1,
     ) -> Result<Self, ProviderIngestOutboxError> {
@@ -1355,31 +1829,124 @@ impl ProviderIngestOutbox {
         let checkpoint = match read_local_checkpoint_bounded(&path, policy.checkpoint_max_bytes)
             .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?
         {
-            Some(bytes) => {
-                let element_limit = bytes
-                    .len()
-                    .checked_mul(4)
-                    .ok_or(ProviderIngestOutboxError::CheckpointTooLarge)?
-                    .max(1);
-                let checkpoint: ProviderIngestOutboxCheckpointV1 =
-                    crate::decode_local_checkpoint_canonical(
-                        &bytes,
-                        policy.checkpoint_max_bytes,
-                        element_limit,
-                    )
-                    .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
-                validate_checkpoint(&checkpoint, policy)?;
-                checkpoint
-            }
+            Some(bytes) => decode_provider_ingest_checkpoint(&bytes, policy)?,
             None => ProviderIngestOutboxCheckpointV1::default(),
         };
         let aggregate_counts = checkpoint_counts(&checkpoint);
         Ok(Self {
             path: Some(Arc::new(path)),
             writer_lock: Some(writer_lock),
+            checkpoint_authority: None,
             policy,
             state: Arc::new(Mutex::new(ProviderIngestOutboxState {
                 checkpoint,
+                sealed_record: None,
+                aggregate_counts,
+                durability_failure: None,
+            })),
+        })
+    }
+
+    /// Open a production outbox whose external sealed head is authoritative.
+    ///
+    /// The local file is only a revalidated cache. It may be absent or exactly
+    /// one committed predecessor behind the sealed head, but it can never seed,
+    /// replace, or override external state.
+    ///
+    /// # Errors
+    ///
+    /// Fails closed for missing, stale, substituted, test-marked, unavailable,
+    /// forked, rolled-back, malformed, or durability-ambiguous state.
+    pub fn open_with_checkpoint_authority(
+        path: impl Into<PathBuf>,
+        policy: ProviderIngestOutboxPolicyV1,
+        binding: ProviderIngestCheckpointProviderBindingV1,
+        runtime: Arc<dyn ProviderIngestCheckpointRuntimeV1>,
+    ) -> Result<Self, ProviderIngestOutboxError> {
+        policy.validate()?;
+        let authority = ProviderIngestCheckpointAuthority::try_new(binding, runtime)?;
+        let path = prepare_provider_ingest_checkpoint_path(path.into())?;
+        let writer_lock = Arc::new(ProviderIngestWriterLock::acquire(&path)?);
+        let record_max_bytes =
+            provider_ingest_sealed_checkpoint_record_max_bytes(policy.checkpoint_max_bytes)?;
+        let local_record = read_local_checkpoint_bounded(&path, record_max_bytes)
+            .map_err(|error| ProviderIngestOutboxError::Checkpoint(error.to_string()))?
+            .map(|bytes| {
+                ProviderIngestSealedCheckpointRecordV1::from_canonical_bytes(
+                    &bytes,
+                    policy.checkpoint_max_bytes,
+                )
+            })
+            .transpose()?;
+        let sealed_record = authority.load_latest(policy.checkpoint_max_bytes)?;
+        let (sealed_record, checkpoint, rewrite_cache) =
+            match (local_record.as_ref(), sealed_record) {
+                (Some(_), None) => {
+                    return Err(ProviderIngestOutboxError::CheckpointRollback);
+                }
+                (None, None) => {
+                    let checkpoint = ProviderIngestOutboxCheckpointV1::default();
+                    let checkpoint_bytes = encode_provider_ingest_checkpoint(&checkpoint, policy)?;
+                    let record = ProviderIngestSealedCheckpointRecordV1::new(
+                        1,
+                        None,
+                        None,
+                        checkpoint_bytes,
+                    );
+                    authority.compare_and_swap(policy.checkpoint_max_bytes, None, &record)?;
+                    (record, checkpoint, true)
+                }
+                (local, Some(record)) => {
+                    let checkpoint =
+                        decode_provider_ingest_checkpoint(&record.checkpoint_bytes, policy)?;
+                    let rewrite_cache = match local {
+                        None => true,
+                        Some(local) if local == &record => false,
+                        Some(local)
+                            if record.checkpoint_sequence.checked_sub(1)
+                                == Some(local.checkpoint_sequence)
+                                && record.predecessor_revision == Some(local.revision)
+                                && record.predecessor_checkpoint_digest
+                                    == Some(local.checkpoint_digest) =>
+                        {
+                            true
+                        }
+                        Some(local) if local.checkpoint_sequence == record.checkpoint_sequence => {
+                            return Err(ProviderIngestOutboxError::CheckpointFork);
+                        }
+                        Some(local) if local.checkpoint_sequence > record.checkpoint_sequence => {
+                            return Err(ProviderIngestOutboxError::CheckpointRollback);
+                        }
+                        Some(_) => {
+                            return Err(ProviderIngestOutboxError::CheckpointRollback);
+                        }
+                    };
+                    (record, checkpoint, rewrite_cache)
+                }
+            };
+        if rewrite_cache {
+            let bytes = sealed_record.to_canonical_bytes(policy.checkpoint_max_bytes)?;
+            write_local_checkpoint_atomic_bounded(&path, &bytes, record_max_bytes).map_err(
+                |error| {
+                    if error.committed {
+                        ProviderIngestOutboxError::DurabilityUncertain
+                    } else {
+                        ProviderIngestOutboxError::Checkpoint(error.to_string())
+                    }
+                },
+            )?;
+        }
+        writer_lock.validate_live(&path)?;
+        authority.assert_identity()?;
+        let aggregate_counts = checkpoint_counts(&checkpoint);
+        Ok(Self {
+            path: Some(Arc::new(path)),
+            writer_lock: Some(writer_lock),
+            checkpoint_authority: Some(authority),
+            policy,
+            state: Arc::new(Mutex::new(ProviderIngestOutboxState {
+                checkpoint,
+                sealed_record: Some(sealed_record),
                 aggregate_counts,
                 durability_failure: None,
             })),
@@ -2020,7 +2587,7 @@ impl ProviderIngestOutbox {
         current_signer_policy: ProviderIngestCompletionSignerPolicyV1,
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     ) -> Result<(), ProviderIngestOutboxError> {
-        current_signer_policy.validate()?;
+        validate_completion_signer_policy(current_signer_policy)?;
         observed_finalized_cursor.validate()?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
@@ -2242,7 +2809,7 @@ impl ProviderIngestOutbox {
             ProviderIngestSignerPolicyObservationV1::NotChecked => true,
             ProviderIngestSignerPolicyObservationV1::Missing => false,
             ProviderIngestSignerPolicyObservationV1::Active(policy) => {
-                policy.validate()?;
+                validate_completion_signer_policy(policy)?;
                 policy == signing_context.signer_policy
             }
         };
@@ -2564,7 +3131,7 @@ impl ProviderIngestOutbox {
         if now_ms == 0 {
             return Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp);
         }
-        current_signer_policy.validate()?;
+        validate_completion_signer_policy(current_signer_policy)?;
         checked_finalized_cursor.validate()?;
         let state = self.lock_state()?;
         if state.checkpoint.finalized_cursor_high_water != Some(checked_finalized_cursor) {
@@ -2747,7 +3314,7 @@ impl ProviderIngestOutbox {
         if now_ms == 0 {
             return Err(ProviderIngestOutboxError::InvalidRuntimeTimestamp);
         }
-        current_signer_policy.validate()?;
+        validate_completion_signer_policy(current_signer_policy)?;
         checked_finalized_cursor.validate()?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
@@ -3629,6 +4196,14 @@ impl ProviderIngestOutbox {
         &self,
     ) -> Result<std::sync::MutexGuard<'_, ProviderIngestOutboxState>, ProviderIngestOutboxError>
     {
+        let authoritative_record = self
+            .checkpoint_authority
+            .as_ref()
+            .map(|authority| authority.load_latest(self.policy.checkpoint_max_bytes))
+            .transpose()?;
+        if authoritative_record.as_ref().is_some_and(Option::is_none) {
+            return Err(ProviderIngestOutboxError::CheckpointRollback);
+        }
         match (&self.path, &self.writer_lock) {
             (Some(path), Some(writer_lock)) => writer_lock.validate_live(path.as_path())?,
             (None, None) => {}
@@ -3643,6 +4218,18 @@ impl ProviderIngestOutbox {
         if state.durability_failure.is_some() {
             return Err(ProviderIngestOutboxError::DurabilityPoisoned);
         }
+        if let Some(authoritative_record) = authoritative_record.flatten()
+            && state.sealed_record.as_ref() != Some(&authoritative_record)
+        {
+            return Err(match state.sealed_record.as_ref() {
+                Some(local)
+                    if local.checkpoint_sequence > authoritative_record.checkpoint_sequence =>
+                {
+                    ProviderIngestOutboxError::CheckpointRollback
+                }
+                _ => ProviderIngestOutboxError::CheckpointFork,
+            });
+        }
         Ok(state)
     }
 
@@ -3654,6 +4241,9 @@ impl ProviderIngestOutbox {
         validate_checkpoint(&candidate, self.policy)?;
         let aggregate_counts = checkpoint_counts(&candidate);
         let Some(path) = &self.path else {
+            if self.checkpoint_authority.is_some() || live.sealed_record.is_some() {
+                return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+            }
             live.checkpoint = candidate;
             live.aggregate_counts = aggregate_counts;
             return Ok(());
@@ -3663,34 +4253,84 @@ impl ProviderIngestOutbox {
             .as_ref()
             .ok_or(ProviderIngestOutboxError::InvalidCheckpoint)?;
         writer_lock.validate_live(path.as_path())?;
-        let bytes = norito::to_bytes(&candidate)
-            .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.policy.checkpoint_max_bytes {
-            return Err(ProviderIngestOutboxError::CheckpointTooLarge);
-        }
-        match write_local_checkpoint_atomic_bounded(
-            path.as_path(),
-            &bytes,
-            self.policy.checkpoint_max_bytes,
-        ) {
+        let checkpoint_bytes = encode_provider_ingest_checkpoint(&candidate, self.policy)?;
+        let (bytes, max_bytes, next_sealed_record) = if let Some(authority) =
+            &self.checkpoint_authority
+        {
+            let current = live
+                .sealed_record
+                .as_ref()
+                .ok_or(ProviderIngestOutboxError::InvalidSealedCheckpoint)?;
+            let live_bytes = encode_provider_ingest_checkpoint(&live.checkpoint, self.policy)?;
+            if current.checkpoint_bytes != live_bytes
+                || current.checkpoint_digest != *blake3::hash(&live_bytes).as_bytes()
+            {
+                live.durability_failure =
+                    Some("sealed provider-ingest state diverged from memory".to_owned());
+                return Err(ProviderIngestOutboxError::CheckpointFork);
+            }
+            let next_sequence = current
+                .checkpoint_sequence
+                .checked_add(1)
+                .ok_or(ProviderIngestOutboxError::SequenceExhausted)?;
+            let next = ProviderIngestSealedCheckpointRecordV1::new(
+                next_sequence,
+                Some(current.revision),
+                Some(current.checkpoint_digest),
+                checkpoint_bytes,
+            );
+            let next_bytes = next.to_canonical_bytes(self.policy.checkpoint_max_bytes)?;
+            let record_max_bytes = provider_ingest_sealed_checkpoint_record_max_bytes(
+                self.policy.checkpoint_max_bytes,
+            )?;
+            if let Err(error) =
+                authority.compare_and_swap(self.policy.checkpoint_max_bytes, Some(current), &next)
+            {
+                if error == ProviderIngestOutboxError::CheckpointAuthorityAmbiguous {
+                    live.durability_failure =
+                        Some("sealed provider-ingest commit outcome is ambiguous".to_owned());
+                }
+                return Err(error);
+            }
+            (next_bytes, record_max_bytes, Some(next))
+        } else {
+            if live.sealed_record.is_some() {
+                return Err(ProviderIngestOutboxError::InvalidSealedCheckpoint);
+            }
+            (checkpoint_bytes, self.policy.checkpoint_max_bytes, None)
+        };
+        match write_local_checkpoint_atomic_bounded(path.as_path(), &bytes, max_bytes) {
             Ok(()) => {
                 if let Err(error) = writer_lock.validate_live(path.as_path()) {
                     live.checkpoint = candidate;
+                    live.sealed_record = next_sealed_record;
                     live.aggregate_counts = aggregate_counts;
                     live.durability_failure = Some(error.to_string());
                     return Err(ProviderIngestOutboxError::DurabilityUncertain);
                 }
                 live.checkpoint = candidate;
+                live.sealed_record = next_sealed_record;
                 live.aggregate_counts = aggregate_counts;
                 Ok(())
             }
             Err(error) if error.committed => {
                 live.checkpoint = candidate;
+                live.sealed_record = next_sealed_record;
                 live.aggregate_counts = aggregate_counts;
                 live.durability_failure = Some(error.to_string());
                 Err(ProviderIngestOutboxError::DurabilityUncertain)
             }
-            Err(error) => Err(ProviderIngestOutboxError::Checkpoint(error.to_string())),
+            Err(error) => {
+                if next_sealed_record.is_some() {
+                    live.checkpoint = candidate;
+                    live.sealed_record = next_sealed_record;
+                    live.aggregate_counts = aggregate_counts;
+                    live.durability_failure = Some(error.to_string());
+                    Err(ProviderIngestOutboxError::DurabilityUncertain)
+                } else {
+                    Err(ProviderIngestOutboxError::Checkpoint(error.to_string()))
+                }
+            }
         }
     }
 }
@@ -4134,8 +4774,9 @@ fn validate_completion_signing_context(
     policy: ProviderIngestOutboxPolicyV1,
 ) -> Result<(), ProviderIngestOutboxError> {
     context.baseline_finalized_cursor.validate()?;
-    context.signer_policy.validate()?;
-    if context.completion_epoch == 0
+    validate_completion_signer_policy(context.signer_policy)?;
+    if context.assignment_revision == 0
+        || context.completion_epoch == 0
         || context.expected_payload.chain() != &context.chain_id
         || context.expected_payload.authority() != &context.provider_owner
         || context.expected_payload.time_to_live().is_none()
@@ -4151,7 +4792,7 @@ fn validate_completion_signing_context(
     }
     validate_completion_instruction(
         authorization,
-        context.completion_epoch,
+        context,
         context.expected_payload.instructions(),
     )
     .map_err(|_| ProviderIngestOutboxError::InvalidSigningContext)
@@ -4162,7 +4803,7 @@ fn validate_signer_policy_progress(
     successor_required: bool,
     candidate: ProviderIngestCompletionSignerPolicyV1,
 ) -> Result<(), ProviderIngestOutboxError> {
-    candidate.validate()?;
+    validate_completion_signer_policy(candidate)?;
     let Some(retained) = retained else {
         return if successor_required {
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
@@ -4170,15 +4811,26 @@ fn validate_signer_policy_progress(
             Ok(())
         };
     };
-    retained.validate()?;
-    if candidate.policy_id != retained.policy_id
-        || candidate.revision < retained.revision
-        || (candidate.revision == retained.revision
-            && candidate.policy_digest != retained.policy_digest)
-        || (candidate.revision > retained.revision
-            && candidate.policy_digest == retained.policy_digest)
-        || (successor_required && candidate.revision <= retained.revision)
-    {
+    validate_completion_signer_policy(retained)?;
+    if candidate == retained {
+        return if successor_required {
+            Err(ProviderIngestOutboxError::SignerPolicyRollback)
+        } else {
+            Ok(())
+        };
+    }
+    if candidate.policy_id == retained.policy_id {
+        let expected_revision = retained
+            .revision
+            .checked_add(1)
+            .ok_or(ProviderIngestOutboxError::SignerPolicyRollback)?;
+        if candidate.revision != expected_revision
+            || candidate.predecessor_digest != Some(retained.policy_digest)
+            || candidate.policy_digest == retained.policy_digest
+        {
+            return Err(ProviderIngestOutboxError::SignerPolicyRollback);
+        }
+    } else if candidate.revision != 1 || candidate.predecessor_digest.is_some() {
         return Err(ProviderIngestOutboxError::SignerPolicyRollback);
     }
     Ok(())
@@ -4192,7 +4844,7 @@ fn observe_finalized_completion_authority(
 ) -> Result<bool, ProviderIngestOutboxError> {
     cursor.validate()?;
     if let ProviderIngestSignerPolicyObservationV1::Active(policy) = signer_policy {
-        policy.validate()?;
+        validate_completion_signer_policy(policy)?;
     }
     if provider_owner.is_none()
         && signer_policy != ProviderIngestSignerPolicyObservationV1::NotChecked
@@ -4273,8 +4925,7 @@ fn validate_finalized_completion_authority_observation(
         return Err(ProviderIngestOutboxError::InvalidCheckpoint);
     }
     if let ProviderIngestSignerPolicyObservationV1::Active(policy) = observation.signer_policy {
-        policy
-            .validate()
+        validate_completion_signer_policy(policy)
             .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?;
     }
     Ok(())
@@ -4301,7 +4952,7 @@ fn validate_finalized_completion_authority_matches(
 
 fn validate_completion_instruction(
     authorization: &FinalizedProviderIngestAuthorizationV1,
-    completion_epoch: u64,
+    context: &ProviderIngestCompletionSigningContextV1,
     executable: &Executable,
 ) -> Result<(), ProviderIngestOutboxError> {
     let Executable::Instructions(instructions) = executable else {
@@ -4316,7 +4967,18 @@ fn validate_completion_instruction(
         .ok_or(ProviderIngestOutboxError::InvalidSignedTransaction)?;
     if completion.order_id().as_bytes() != &authorization.order_id
         || completion.provider_id().as_bytes() != &authorization.provider_id
-        || *completion.completion_epoch() != completion_epoch
+        || *completion.completion_epoch() != context.completion_epoch
+        || completion.expected_authority()
+            != &ProviderIngestCompletionAuthorityV1::new(
+                context.provider_owner.clone(),
+                context.signer_policy,
+            )
+        || *completion.expected_assignment_revision() != context.assignment_revision
+        || *completion.finalized_anchor()
+            != (ProviderIngestFinalizedAnchorV1 {
+                height: context.baseline_finalized_cursor.height,
+                block_hash: context.baseline_finalized_cursor.block_hash,
+            })
     {
         return Err(ProviderIngestOutboxError::InvalidSignedTransaction);
     }
@@ -4345,11 +5007,7 @@ fn validate_completion_transaction(
     {
         return Err(ProviderIngestOutboxError::InvalidSignedTransaction);
     }
-    validate_completion_instruction(
-        authorization,
-        context.completion_epoch,
-        transaction.instructions(),
-    )?;
+    validate_completion_instruction(authorization, context, transaction.instructions())?;
     let transaction_hash = *transaction.hash().as_ref();
     if transaction_hash == [0; 32] {
         return Err(ProviderIngestOutboxError::InvalidSignedTransaction);
@@ -4813,8 +5471,7 @@ fn validate_completion_delivery(
         completion.signer_policy_owner.as_ref(),
         completion.signer_policy_floor,
     ) {
-        (Some(_), Some(policy)) => policy
-            .validate()
+        (Some(_), Some(policy)) => validate_completion_signer_policy(policy)
             .map_err(|_| ProviderIngestOutboxError::InvalidCheckpoint)?,
         (None, None) if completion.signer_policy_successor_required => {
             return Err(ProviderIngestOutboxError::InvalidCheckpoint);
@@ -5019,6 +5676,33 @@ pub enum ProviderIngestOutboxError {
     /// Checkpoint is malformed, noncanonical, or from a retired layout.
     #[error("provider-ingest checkpoint is invalid")]
     InvalidCheckpoint,
+    /// Configured external checkpoint provider identity or qualification is invalid.
+    #[error("provider-ingest checkpoint provider binding is invalid")]
+    InvalidCheckpointProviderBinding,
+    /// Injected provider identity or qualification differs from configuration.
+    #[error("provider-ingest checkpoint provider identity does not match configuration")]
+    CheckpointProviderIdentityMismatch,
+    /// External sealed checkpoint provider is unavailable.
+    #[error("provider-ingest checkpoint provider is unavailable")]
+    CheckpointProviderUnavailable,
+    /// External sealed checkpoint provider rejected the exact operation.
+    #[error("provider-ingest checkpoint provider rejected the operation")]
+    CheckpointProviderRejected,
+    /// CAS readback proves that the exact predecessor remains authoritative.
+    #[error("provider-ingest sealed checkpoint compare-and-swap left the predecessor unchanged")]
+    CheckpointCasUnchanged,
+    /// External sealed checkpoint commit cannot be established safely.
+    #[error("provider-ingest sealed checkpoint outcome is ambiguous")]
+    CheckpointAuthorityAmbiguous,
+    /// External sealed checkpoint record is malformed or substituted.
+    #[error("provider-ingest sealed checkpoint is invalid")]
+    InvalidSealedCheckpoint,
+    /// Local/cache state is ahead of, absent from, or too far behind sealed state.
+    #[error("provider-ingest checkpoint rollback was detected")]
+    CheckpointRollback,
+    /// Local/cache and sealed checkpoint histories conflict.
+    #[error("provider-ingest checkpoint fork was detected")]
+    CheckpointFork,
     /// Canonical checkpoint or signed transaction exceeds its bound.
     #[error("provider-ingest checkpoint exceeds its configured bound")]
     CheckpointTooLarge,
@@ -5154,10 +5838,28 @@ impl From<DeliveryTransitionError> for ProviderIngestOutboxError {
     }
 }
 
+impl From<ProviderIngestCheckpointExternalErrorV1> for ProviderIngestOutboxError {
+    fn from(error: ProviderIngestCheckpointExternalErrorV1) -> Self {
+        match error {
+            ProviderIngestCheckpointExternalErrorV1::Unavailable => {
+                Self::CheckpointProviderUnavailable
+            }
+            ProviderIngestCheckpointExternalErrorV1::Rejected => Self::CheckpointProviderRejected,
+            ProviderIngestCheckpointExternalErrorV1::Ambiguous => {
+                Self::CheckpointAuthorityAmbiguous
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 mod tests {
-    use std::{fs, time::Duration};
+    use std::{
+        fs,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -5215,11 +5917,459 @@ mod tests {
             .expect("observe finalized fixture snapshot");
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TestCheckpointCasBehavior {
+        Normal,
+        CommitAmbiguous,
+        UnchangedOk,
+        UnchangedAmbiguous,
+    }
+
+    #[derive(Debug)]
+    struct TestCheckpointRuntime {
+        handle: String,
+        qualification: Mutex<ProviderIngestCheckpointProviderQualificationV1>,
+        latest: Mutex<Option<ProviderIngestSealedCheckpointRecordV1>>,
+        next_cas_behavior: Mutex<TestCheckpointCasBehavior>,
+        qualification_after_next_cas:
+            Mutex<Option<ProviderIngestCheckpointProviderQualificationV1>>,
+    }
+
+    impl TestCheckpointRuntime {
+        fn new(seed: u8) -> Self {
+            Self {
+                handle: format!("sealed.sorafs.provider-ingest.primary-{seed}"),
+                qualification: Mutex::new(ProviderIngestCheckpointProviderQualificationV1::new(
+                    1, [seed; 32],
+                )),
+                latest: Mutex::new(None),
+                next_cas_behavior: Mutex::new(TestCheckpointCasBehavior::Normal),
+                qualification_after_next_cas: Mutex::new(None),
+            }
+        }
+
+        fn binding(&self) -> ProviderIngestCheckpointProviderBindingV1 {
+            ProviderIngestCheckpointProviderBindingV1 {
+                handle: self.handle.clone(),
+                revision: 1,
+                policy_digest: self
+                    .qualification
+                    .lock()
+                    .expect("test checkpoint qualification")
+                    .policy_digest,
+            }
+        }
+
+        fn latest(&self) -> Option<ProviderIngestSealedCheckpointRecordV1> {
+            self.latest.lock().expect("test checkpoint latest").clone()
+        }
+
+        fn replace_latest(&self, record: Option<ProviderIngestSealedCheckpointRecordV1>) {
+            *self.latest.lock().expect("test checkpoint latest") = record;
+        }
+
+        fn set_next_cas_behavior(&self, behavior: TestCheckpointCasBehavior) {
+            *self
+                .next_cas_behavior
+                .lock()
+                .expect("test checkpoint CAS behavior") = behavior;
+        }
+
+        fn set_qualification(
+            &self,
+            qualification: ProviderIngestCheckpointProviderQualificationV1,
+        ) {
+            *self
+                .qualification
+                .lock()
+                .expect("test checkpoint qualification") = qualification;
+        }
+
+        fn set_qualification_after_next_cas(
+            &self,
+            qualification: ProviderIngestCheckpointProviderQualificationV1,
+        ) {
+            *self
+                .qualification_after_next_cas
+                .lock()
+                .expect("test post-CAS checkpoint qualification") = Some(qualification);
+        }
+    }
+
+    impl ProviderIngestCheckpointRuntimeV1 for TestCheckpointRuntime {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ProviderIngestCheckpointProviderQualificationV1,
+            ProviderIngestCheckpointExternalErrorV1,
+        > {
+            self.qualification
+                .lock()
+                .map(|qualification| *qualification)
+                .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)
+        }
+
+        fn load_latest(
+            &self,
+        ) -> Result<
+            Option<ProviderIngestSealedCheckpointRecordV1>,
+            ProviderIngestCheckpointExternalErrorV1,
+        > {
+            self.latest
+                .lock()
+                .map(|latest| latest.clone())
+                .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)
+        }
+
+        fn compare_and_swap_latest(
+            &self,
+            expected_revision: Option<[u8; 32]>,
+            next: &ProviderIngestSealedCheckpointRecordV1,
+        ) -> Result<(), ProviderIngestCheckpointExternalErrorV1> {
+            let mut latest = self
+                .latest
+                .lock()
+                .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?;
+            if latest.as_ref().map(|record| record.revision) != expected_revision
+                || latest
+                    .as_ref()
+                    .map_or(1, |record| record.checkpoint_sequence.saturating_add(1))
+                    != next.checkpoint_sequence
+                || next.predecessor_revision != expected_revision
+                || next.predecessor_checkpoint_digest
+                    != latest.as_ref().map(|record| record.checkpoint_digest)
+            {
+                return Err(ProviderIngestCheckpointExternalErrorV1::Rejected);
+            }
+            let behavior = std::mem::replace(
+                &mut *self
+                    .next_cas_behavior
+                    .lock()
+                    .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?,
+                TestCheckpointCasBehavior::Normal,
+            );
+            let outcome = match behavior {
+                TestCheckpointCasBehavior::Normal => {
+                    *latest = Some(next.clone());
+                    Ok(())
+                }
+                TestCheckpointCasBehavior::CommitAmbiguous => {
+                    *latest = Some(next.clone());
+                    Err(ProviderIngestCheckpointExternalErrorV1::Ambiguous)
+                }
+                TestCheckpointCasBehavior::UnchangedOk => Ok(()),
+                TestCheckpointCasBehavior::UnchangedAmbiguous => {
+                    Err(ProviderIngestCheckpointExternalErrorV1::Ambiguous)
+                }
+            };
+            drop(latest);
+            if let Some(qualification) = self
+                .qualification_after_next_cas
+                .lock()
+                .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)?
+                .take()
+            {
+                self.set_qualification(qualification);
+            }
+            outcome
+        }
+    }
+
+    fn open_sealed(
+        directory: &TempDir,
+        runtime: Arc<TestCheckpointRuntime>,
+    ) -> Result<ProviderIngestOutbox, ProviderIngestOutboxError> {
+        ProviderIngestOutbox::open_with_checkpoint_authority(
+            checkpoint_path(directory),
+            policy(),
+            runtime.binding(),
+            runtime,
+        )
+    }
+
+    #[test]
+    fn sealed_checkpoint_restart_uses_external_authority_and_exact_cache() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x71));
+        let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("open sealed outbox");
+        observe_finalized(&outbox, cursor(3));
+        let sealed = runtime.latest().expect("sealed checkpoint");
+        assert_eq!(sealed.checkpoint_sequence, 2);
+        assert_eq!(
+            fs::read(checkpoint_path(&directory)).expect("read local cache"),
+            sealed
+                .to_canonical_bytes(policy().checkpoint_max_bytes)
+                .expect("canonical sealed record")
+        );
+        drop(outbox);
+
+        let reopened = open_sealed(&directory, runtime).expect("restart from sealed authority");
+        assert_eq!(
+            reopened
+                .finalized_cursor_high_water()
+                .expect("read finalized cursor"),
+            Some(cursor(3))
+        );
+    }
+
+    #[test]
+    fn sealed_checkpoint_restart_repairs_only_an_exact_immediate_predecessor_cache() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x79));
+        let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        let predecessor_cache =
+            fs::read(checkpoint_path(&directory)).expect("read predecessor cache");
+        observe_finalized(&outbox, cursor(9));
+        let sealed = runtime.latest().expect("sealed successor");
+        fs::write(checkpoint_path(&directory), predecessor_cache)
+            .expect("simulate crash before local cache replacement");
+        drop(outbox);
+
+        let reopened = open_sealed(&directory, runtime).expect("recover exact successor");
+        assert_eq!(
+            reopened
+                .finalized_cursor_high_water()
+                .expect("recovered finalized cursor"),
+            Some(cursor(9))
+        );
+        assert_eq!(
+            fs::read(checkpoint_path(&directory)).expect("read repaired cache"),
+            sealed
+                .to_canonical_bytes(policy().checkpoint_max_bytes)
+                .expect("canonical successor")
+        );
+    }
+
+    #[test]
+    fn sealed_checkpoint_two_writer_conflict_fails_closed() {
+        let first_directory = tempdir().expect("first checkpoint directory");
+        let second_directory = tempdir().expect("second checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x72));
+        let first =
+            open_sealed(&first_directory, Arc::clone(&runtime)).expect("first sealed writer");
+        let second =
+            open_sealed(&second_directory, Arc::clone(&runtime)).expect("second sealed writer");
+
+        observe_finalized(&first, cursor(4));
+        assert_eq!(
+            second.observe_finalized_snapshot(cursor(5), finalized_block_time_ms(cursor(5))),
+            Err(ProviderIngestOutboxError::CheckpointFork)
+        );
+        assert_eq!(
+            second.finalized_cursor_high_water(),
+            Err(ProviderIngestOutboxError::CheckpointFork)
+        );
+    }
+
+    #[test]
+    fn ambiguous_sealed_commit_succeeds_only_after_exact_authoritative_readback() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x73));
+        let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        runtime.set_next_cas_behavior(TestCheckpointCasBehavior::CommitAmbiguous);
+
+        observe_finalized(&outbox, cursor(6));
+        assert_eq!(
+            runtime
+                .latest()
+                .expect("committed ambiguous record")
+                .checkpoint_sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn unchanged_predecessor_is_an_explicit_safe_retry_for_every_cas_outcome() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x74));
+        let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        runtime.set_next_cas_behavior(TestCheckpointCasBehavior::UnchangedAmbiguous);
+
+        assert_eq!(
+            outbox.observe_finalized_snapshot(cursor(7), finalized_block_time_ms(cursor(7))),
+            Err(ProviderIngestOutboxError::CheckpointCasUnchanged)
+        );
+        runtime.set_next_cas_behavior(TestCheckpointCasBehavior::UnchangedOk);
+        assert_eq!(
+            outbox.observe_finalized_snapshot(cursor(7), finalized_block_time_ms(cursor(7))),
+            Err(ProviderIngestOutboxError::CheckpointCasUnchanged)
+        );
+        assert_eq!(
+            outbox
+                .finalized_cursor_high_water()
+                .expect("unchanged predecessor remains readable"),
+            None
+        );
+        observe_finalized(&outbox, cursor(7));
+    }
+
+    #[test]
+    fn sealed_checkpoint_rollback_and_same_sequence_fork_fail_startup() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x75));
+        let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        let genesis = runtime.latest().expect("genesis record");
+        observe_finalized(&outbox, cursor(8));
+        let committed = runtime.latest().expect("successor record");
+        drop(outbox);
+
+        runtime.replace_latest(Some(genesis));
+        assert!(matches!(
+            open_sealed(&directory, Arc::clone(&runtime)),
+            Err(ProviderIngestOutboxError::CheckpointRollback)
+        ));
+
+        let mut forked_checkpoint =
+            decode_provider_ingest_checkpoint(&committed.checkpoint_bytes, policy())
+                .expect("decode committed checkpoint");
+        forked_checkpoint.next_sequence = forked_checkpoint
+            .next_sequence
+            .checked_add(1)
+            .expect("advance fixture sequence");
+        let forked = ProviderIngestSealedCheckpointRecordV1::new(
+            committed.checkpoint_sequence,
+            committed.predecessor_revision,
+            committed.predecessor_checkpoint_digest,
+            encode_provider_ingest_checkpoint(&forked_checkpoint, policy())
+                .expect("encode forked checkpoint"),
+        );
+        runtime.replace_latest(Some(forked));
+        assert!(matches!(
+            open_sealed(&directory, runtime),
+            Err(ProviderIngestOutboxError::CheckpointFork)
+        ));
+    }
+
+    #[test]
+    fn sealed_record_rejects_byte_digest_revision_and_lineage_tamper() {
+        let checkpoint_bytes = encode_provider_ingest_checkpoint(
+            &ProviderIngestOutboxCheckpointV1::default(),
+            policy(),
+        )
+        .expect("checkpoint bytes");
+        let record = ProviderIngestSealedCheckpointRecordV1::new(1, None, None, checkpoint_bytes);
+        let mut tampered_bytes = record.clone();
+        tampered_bytes.checkpoint_bytes[0] ^= 0x80;
+        assert_eq!(
+            tampered_bytes.validate(policy().checkpoint_max_bytes),
+            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
+        );
+        let mut tampered_digest = record.clone();
+        tampered_digest.checkpoint_digest[0] ^= 0x80;
+        assert_eq!(
+            tampered_digest.validate(policy().checkpoint_max_bytes),
+            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
+        );
+        let mut tampered_revision = record.clone();
+        tampered_revision.revision[0] ^= 0x80;
+        assert_eq!(
+            tampered_revision.validate(policy().checkpoint_max_bytes),
+            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
+        );
+        let mut tampered_lineage = record;
+        tampered_lineage.predecessor_revision = Some([0xA5; 32]);
+        assert_eq!(
+            tampered_lineage.validate(policy().checkpoint_max_bytes),
+            Err(ProviderIngestOutboxError::InvalidSealedCheckpoint)
+        );
+    }
+
+    #[test]
+    fn provider_drift_substitution_and_test_markers_fail_closed() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x76));
+        let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        runtime.set_qualification(ProviderIngestCheckpointProviderQualificationV1::new(
+            2, [0x76; 32],
+        ));
+        assert_eq!(
+            outbox.finalized_cursor_high_water(),
+            Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)
+        );
+        drop(outbox);
+
+        let substituted = Arc::new(TestCheckpointRuntime::new(0x77));
+        let configured = ProviderIngestCheckpointProviderBindingV1 {
+            handle: "sealed.sorafs.provider-ingest.configured".to_owned(),
+            revision: 1,
+            policy_digest: [0x77; 32],
+        };
+        assert!(matches!(
+            ProviderIngestOutbox::open_with_checkpoint_authority(
+                checkpoint_path(&directory),
+                policy(),
+                configured,
+                substituted,
+            ),
+            Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)
+        ));
+
+        let stale = Arc::new(TestCheckpointRuntime::new(0x7B));
+        let stale_binding = ProviderIngestCheckpointProviderBindingV1 {
+            handle: stale.handle.clone(),
+            revision: 2,
+            policy_digest: [0x7B; 32],
+        };
+        assert!(matches!(
+            ProviderIngestOutbox::open_with_checkpoint_authority(
+                checkpoint_path(&directory),
+                policy(),
+                stale_binding,
+                stale,
+            ),
+            Err(ProviderIngestOutboxError::CheckpointProviderIdentityMismatch)
+        ));
+
+        let test_marked = Arc::new(TestCheckpointRuntime::new(0x78));
+        let invalid_binding = ProviderIngestCheckpointProviderBindingV1 {
+            handle: "sealed.sorafs.provider-ingest.test".to_owned(),
+            revision: 1,
+            policy_digest: [0x78; 32],
+        };
+        assert!(matches!(
+            ProviderIngestOutbox::open_with_checkpoint_authority(
+                checkpoint_path(&directory),
+                policy(),
+                invalid_binding,
+                test_marked,
+            ),
+            Err(ProviderIngestOutboxError::InvalidCheckpointProviderBinding)
+        ));
+    }
+
+    #[test]
+    fn post_cas_provider_drift_is_ambiguous_and_poisoned() {
+        let directory = tempdir().expect("checkpoint directory");
+        let runtime = Arc::new(TestCheckpointRuntime::new(0x7A));
+        let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+        runtime.set_qualification_after_next_cas(
+            ProviderIngestCheckpointProviderQualificationV1::new(2, [0x7A; 32]),
+        );
+
+        assert_eq!(
+            outbox.observe_finalized_snapshot(cursor(10), finalized_block_time_ms(cursor(10))),
+            Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous)
+        );
+        assert_eq!(
+            runtime
+                .latest()
+                .expect("post-CAS authoritative record")
+                .checkpoint_sequence,
+            2
+        );
+    }
+
     fn signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
+        let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xA1; 32],
             revision,
-            policy_digest: [u8::try_from(revision).unwrap_or(0xFE); 32],
+            predecessor_digest: (revision > 1).then(|| [digest_byte.saturating_sub(1); 32]),
+            policy_digest: [digest_byte; 32],
         }
     }
 
@@ -5253,16 +6403,42 @@ mod tests {
         completion_epoch: u64,
         seed: u8,
     ) -> SignedTransaction {
+        signed_completion_for_at(
+            provider_id,
+            order_id,
+            completion_epoch,
+            cursor(completion_epoch),
+            seed,
+        )
+    }
+
+    fn signed_completion_for_at(
+        provider_id: [u8; 32],
+        order_id: [u8; 32],
+        completion_epoch: u64,
+        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        seed: u8,
+    ) -> SignedTransaction {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key");
+        let provider_owner = AccountId::new(key.public_key().clone());
         let mut builder = TransactionBuilder::new(
             ChainId::from("provider-ingest-outbox-test"),
-            AccountId::new(key.public_key().clone()),
+            provider_owner.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([InstructionBox::from(CompleteReplicationOrder {
             order_id: ReplicationOrderId::new(order_id),
             provider_id: ProviderId::new(provider_id),
             completion_epoch,
+            expected_authority: ProviderIngestCompletionAuthorityV1::new(
+                provider_owner,
+                signer_policy(1),
+            ),
+            expected_assignment_revision: 1,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: finalized_cursor.height,
+                block_hash: finalized_cursor.block_hash,
+            },
         })]);
         builder.set_creation_time(Duration::from_secs(u64::from(seed) + 1));
         builder.set_ttl(Duration::from_secs(30));
@@ -5278,6 +6454,21 @@ mod tests {
             authorization.provider_id(),
             authorization.order_id(),
             completion_epoch,
+            seed,
+        )
+    }
+
+    fn signed_completion_at(
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        completion_epoch: u64,
+        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        seed: u8,
+    ) -> SignedTransaction {
+        signed_completion_for_at(
+            authorization.provider_id(),
+            authorization.order_id(),
+            completion_epoch,
+            finalized_cursor,
             seed,
         )
     }
@@ -5313,6 +6504,7 @@ mod tests {
             chain_id: transaction.chain().clone(),
             provider_owner: transaction.authority().clone(),
             signer_policy: signer_policy(1),
+            assignment_revision: 1,
             completion_epoch,
             expected_payload: transaction.payload().clone(),
         }
@@ -5411,6 +6603,138 @@ mod tests {
             manifest_digest: authorization.manifest_digest(),
             reason,
         }
+    }
+
+    #[test]
+    fn completion_signer_policy_validity_is_const_and_requires_nonzero_components() {
+        const VALID: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const ZERO_POLICY_ID: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const ZERO_REVISION: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 0,
+            predecessor_digest: None,
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const ZERO_POLICY_DIGEST: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0; 32],
+        }
+        .is_valid();
+        const REVISION_ONE_WITH_PREDECESSOR: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 1,
+            predecessor_digest: Some([3; 32]),
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const SUCCESSOR_WITHOUT_PREDECESSOR: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 2,
+            predecessor_digest: None,
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const SUCCESSOR_WITH_ZERO_PREDECESSOR: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 2,
+            predecessor_digest: Some([0; 32]),
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+
+        assert!(VALID);
+        assert!(!ZERO_POLICY_ID);
+        assert!(!ZERO_REVISION);
+        assert!(!ZERO_POLICY_DIGEST);
+        assert!(!REVISION_ONE_WITH_PREDECESSOR);
+        assert!(!SUCCESSOR_WITHOUT_PREDECESSOR);
+        assert!(!SUCCESSOR_WITH_ZERO_PREDECESSOR);
+
+        let mut sparse_policy = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0; 32],
+        };
+        sparse_policy.policy_id[31] = 1;
+        sparse_policy.policy_digest[0] = 1;
+        assert!(sparse_policy.is_valid());
+    }
+
+    #[test]
+    fn repeated_unchecked_authority_observation_is_idempotent() {
+        let owner = completed_by(0xA0);
+        let mut completion = StoredCompletionDeliveryV1::default();
+        assert_eq!(
+            observe_finalized_completion_authority(
+                &mut completion,
+                Some(&owner),
+                ProviderIngestSignerPolicyObservationV1::NotChecked,
+                cursor(8),
+            ),
+            Ok(true)
+        );
+
+        let retained = completion.clone();
+        assert_eq!(
+            observe_finalized_completion_authority(
+                &mut completion,
+                Some(&owner),
+                ProviderIngestSignerPolicyObservationV1::NotChecked,
+                cursor(8),
+            ),
+            Ok(false)
+        );
+        assert_eq!(completion, retained);
+    }
+
+    #[test]
+    fn checkpoint_finalized_high_water_requires_a_complete_nonzero_time_pair() {
+        let mut checkpoint = ProviderIngestOutboxCheckpointV1::default();
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Ok(())
+        );
+
+        checkpoint.finalized_cursor_high_water = Some(cursor(8));
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_block_time_ms_high_water = Some(8_000);
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Ok(())
+        );
+
+        checkpoint.finalized_block_time_ms_high_water = Some(0);
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_cursor_high_water = None;
+        checkpoint.finalized_block_time_ms_high_water = Some(8_000);
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
     }
 
     #[test]
@@ -6775,6 +8099,20 @@ mod tests {
     }
 
     #[test]
+    fn signer_policy_floor_accepts_canonical_replacement_identity() {
+        let replacement = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0xB1; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0xB2; 32],
+        };
+        validate_signer_policy_progress(Some(signer_policy(2)), false, replacement)
+            .expect("replacement policy identity may restart at canonical revision one");
+        validate_signer_policy_progress(Some(signer_policy(2)), true, replacement)
+            .expect("canonical replacement satisfies a required post-revocation successor");
+    }
+
+    #[test]
     fn finalized_owner_rotation_invalidates_only_unexposed_prepared_state() {
         let prepared_states = [
             StoredDeliveryStateV1::Signing,
@@ -7874,7 +9212,7 @@ mod tests {
 
         let signing = authorization(0x6C, 7);
         enqueue_and_store_local(&outbox, &signing, 120);
-        let transaction = signed_completion(&signing, 8, 8);
+        let transaction = signed_completion_at(&signing, 8, cursor(9), 8);
         let signing_claim =
             claim_for_transaction(&outbox, signing.job_id(), &transaction, 8, 122, cursor(9));
         observe_finalized(&outbox, cursor(10));

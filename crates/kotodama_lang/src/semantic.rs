@@ -4322,6 +4322,21 @@ fn trigger_metadata_from_entries(
     Ok(metadata)
 }
 
+fn parse_json_literal(raw: &str) -> Result<json::Value, SemanticError> {
+    json::parse_value(raw).map_err(|error| match error {
+        json::Error::DuplicateField { field } => SemanticError {
+            code: "E_JSON_DUPLICATE_KEY",
+            message: format!(
+                "Json::parse object key `{field}` is supplied more than once after string decoding"
+            ),
+        },
+        error => SemanticError {
+            code: "E_JSON_LITERAL_INVALID",
+            message: format!("invalid Json::parse literal: {error}"),
+        },
+    })
+}
+
 fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
     let value = match expr {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
@@ -4363,10 +4378,7 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
                     code: "E_TRIGGER_METADATA_VALUE",
                     message: "Json::parse(...) metadata values must be a string literal".into(),
                 })?;
-            json::parse_value(raw).map_err(|err| SemanticError {
-                code: "E_TRIGGER_METADATA_VALUE",
-                message: format!("invalid json metadata literal: {err}"),
-            })?
+            parse_json_literal(raw)?
         }
         _ => {
             return Err(SemanticError {
@@ -7357,6 +7369,12 @@ fn analyze_surface_builtin_call(
                     code: "K2003",
                     message: format!("{name} expects string"),
                 });
+            }
+            if constructor == PointerConstructor::Json
+                && let ExprKind::String(raw) = arg_typed[0].kind()
+                && let Err(error) = parse_json_literal(raw)
+            {
+                return Err(error);
             }
             Ok(TypedExpr {
                 expr: ExprKind::Call {
@@ -16073,6 +16091,40 @@ mod tests {
     }
 
     #[test]
+    fn json_parse_literals_fail_during_semantic_analysis() {
+        let duplicate = analyze_error(
+            r#"fn duplicate() -> Json {
+                Json::parse("{\"owner\":1,\"owner\":2}")
+            }"#,
+        );
+        assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
+        assert!(duplicate.message.contains("owner"), "{}", duplicate.message);
+
+        let malformed = analyze_error(
+            r#"fn malformed() -> Json {
+                Json::parse("{\"owner\":")
+            }"#,
+        );
+        assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
+        assert!(
+            malformed.message.contains("Json::parse"),
+            "{}",
+            malformed.message
+        );
+    }
+
+    #[test]
+    fn json_parse_accepts_dynamic_string_inputs() {
+        let program = parse(
+            r#"fn decode(string raw) -> Json {
+                Json::parse(raw)
+            }"#,
+        )
+        .expect("dynamic Json::parse source should parse");
+        analyze(&program).expect("dynamic Json::parse string input should remain legal");
+    }
+
+    #[test]
     fn native_json_requires_explicit_result_and_struct_conversion() {
         let result =
             analyze_error("fn invalid(Result<int, int> value) -> Json { json { value: value } }");
@@ -19299,6 +19351,39 @@ seiyaku UnshieldAmount {{
             )
         );
         assert!(!trigger.metadata.is_empty());
+    }
+
+    #[test]
+    fn trigger_metadata_json_parse_uses_json_literal_diagnostics() {
+        let duplicate = analyze_error(
+            r#"
+            seiyaku C {
+                kotoage fn run() authorize("RunTrigger") {}
+                trigger wake -> run {
+                    on time pre_commit;
+                    metadata {
+                        payload: Json::parse("{\"owner\":1,\"owner\":2}");
+                    }
+                }
+            }
+            "#,
+        );
+        assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
+
+        let malformed = analyze_error(
+            r#"
+            seiyaku C {
+                kotoage fn run() authorize("RunTrigger") {}
+                trigger wake -> run {
+                    on time pre_commit;
+                    metadata {
+                        payload: Json::parse("{\"owner\":");
+                    }
+                }
+            }
+            "#,
+        );
+        assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
     }
 
     #[test]

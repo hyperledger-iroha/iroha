@@ -41,6 +41,173 @@ pub enum PotrSignerServiceError {
     Refused,
 }
 
+/// Public, non-secret qualification for one PoTR runtime signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PotrRuntimeProviderQualificationV1 {
+    revision: u64,
+    policy_digest: [u8; 32],
+}
+
+impl PotrRuntimeProviderQualificationV1 {
+    /// Construct one adapter and public-policy qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return the non-zero adapter and public-policy revision.
+    #[must_use]
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Return the non-zero digest of the exact public policy.
+    #[must_use]
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest != [0; 32]
+    }
+
+    fn from_admission_binding(binding: PotrAdmissionPolicyBindingV1) -> Self {
+        Self::new(binding.policy_sequence, binding.policy_digest)
+    }
+}
+
+/// Independently configured identity and policy binding for one PoTR signer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PotrRuntimeProviderBindingV1 {
+    handle: String,
+    signer_id: [u8; 32],
+    qualification: PotrRuntimeProviderQualificationV1,
+}
+
+impl PotrRuntimeProviderBindingV1 {
+    /// Construct and validate one production runtime signer binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or test-marked handles, zero identities, and invalid
+    /// revision or public-policy digests.
+    pub fn try_new(
+        handle: impl Into<String>,
+        signer_id: [u8; 32],
+        qualification: PotrRuntimeProviderQualificationV1,
+    ) -> Result<Self, PotrRuntimeSignerConfigError> {
+        let binding = Self {
+            handle: handle.into(),
+            signer_id,
+            qualification,
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    /// Return the stable opaque production handle.
+    #[must_use]
+    pub fn handle(&self) -> &str {
+        &self.handle
+    }
+
+    /// Return the stable signer administration identity.
+    #[must_use]
+    pub const fn signer_id(&self) -> [u8; 32] {
+        self.signer_id
+    }
+
+    /// Return the expected adapter and public-policy qualification.
+    #[must_use]
+    pub const fn qualification(&self) -> PotrRuntimeProviderQualificationV1 {
+        self.qualification
+    }
+
+    fn validate(&self) -> Result<(), PotrRuntimeSignerConfigError> {
+        validate_potr_runtime_handle(&self.handle)?;
+        if self.signer_id == [0; 32] {
+            return Err(PotrRuntimeSignerConfigError::ZeroSignerBindingId);
+        }
+        if !self.qualification.is_valid() {
+            return Err(PotrRuntimeSignerConfigError::InvalidProviderQualification);
+        }
+        Ok(())
+    }
+}
+
+/// Stable identities of the independently administered PoTR policy reader.
+///
+/// These public, non-secret pins keep the immutable finalized-state source and
+/// admission-material resolver distinct from the reader facade and both
+/// runtime signer roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PotrRuntimeReaderBindingsV1 {
+    reader_id: [u8; 32],
+    source_id: [u8; 32],
+    resolver_id: [u8; 32],
+}
+
+impl PotrRuntimeReaderBindingsV1 {
+    /// Construct and validate the three independent reader identities.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities and reuse between reader components.
+    pub fn try_new(
+        reader_id: [u8; 32],
+        source_id: [u8; 32],
+        resolver_id: [u8; 32],
+    ) -> Result<Self, PotrRuntimeSignerConfigError> {
+        let bindings = Self {
+            reader_id,
+            source_id,
+            resolver_id,
+        };
+        bindings.validate()?;
+        Ok(bindings)
+    }
+
+    /// Return the admission-reader facade identity.
+    #[must_use]
+    pub const fn reader_id(self) -> [u8; 32] {
+        self.reader_id
+    }
+
+    /// Return the immutable finalized-state source identity.
+    #[must_use]
+    pub const fn source_id(self) -> [u8; 32] {
+        self.source_id
+    }
+
+    /// Return the admission-material resolver identity.
+    #[must_use]
+    pub const fn resolver_id(self) -> [u8; 32] {
+        self.resolver_id
+    }
+
+    fn validate(self) -> Result<(), PotrRuntimeSignerConfigError> {
+        if self.reader_id == [0; 32] {
+            return Err(PotrRuntimeSignerConfigError::ZeroAdmissionReaderId);
+        }
+        if self.source_id == [0; 32] {
+            return Err(PotrRuntimeSignerConfigError::ZeroAdmissionSourceId);
+        }
+        if self.resolver_id == [0; 32] {
+            return Err(PotrRuntimeSignerConfigError::ZeroAdmissionResolverId);
+        }
+        if self.reader_id == self.source_id
+            || self.reader_id == self.resolver_id
+            || self.source_id == self.resolver_id
+        {
+            return Err(PotrRuntimeSignerConfigError::RuntimeIdentityCollision);
+        }
+        Ok(())
+    }
+}
+
 /// Fixed, payload-free failure classes returned by the live admission reader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrAdmissionReaderError {
@@ -455,8 +622,14 @@ pub enum PotrFinalizedAdmissionReaderConfigError {
 /// service. `signer_id` is a non-secret stable deployment identity for the
 /// signer instance, not a key handle or credential.
 pub trait PotrGatewaySignerV1: Send + Sync {
+    /// Stable opaque production provider handle.
+    fn handle(&self) -> &str;
+
     /// Stable non-secret identity of this independently administered signer.
     fn signer_id(&self) -> [u8; 32];
+
+    /// Qualify the active adapter and exact public-policy revision.
+    fn qualification(&self) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError>;
 
     /// Return the active Ed25519 public key.
     fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError>;
@@ -472,8 +645,14 @@ pub trait PotrGatewaySignerV1: Send + Sync {
 /// revocation and key rotation fail closed without trusting a self-advertised
 /// receipt key.
 pub trait PotrProviderSignerV1: Send + Sync {
+    /// Stable opaque production provider handle.
+    fn handle(&self) -> &str;
+
     /// Stable non-secret identity of this independently administered signer.
     fn signer_id(&self) -> [u8; 32];
+
+    /// Qualify the active adapter and governed admission-policy revision.
+    fn qualification(&self) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError>;
 
     /// Governed provider identity served by this signer.
     fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError>;
@@ -485,6 +664,116 @@ pub trait PotrProviderSignerV1: Send + Sync {
     fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError>;
 }
 
+fn validate_potr_runtime_handle(handle: &str) -> Result<(), PotrRuntimeSignerConfigError> {
+    if handle.is_empty()
+        || handle.len() > 256
+        || !handle.is_ascii()
+        || handle
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err(PotrRuntimeSignerConfigError::InvalidProviderHandle);
+    }
+    let lowercase = handle.to_ascii_lowercase();
+    if lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
+            )
+        })
+    {
+        return Err(PotrRuntimeSignerConfigError::TestMarkedProviderHandle);
+    }
+    Ok(())
+}
+
+fn qualify_gateway_signer(
+    expected: &PotrRuntimeProviderBindingV1,
+    signer: &dyn PotrGatewaySignerV1,
+    expected_public_key: [u8; 32],
+) -> Result<(), PotrRuntimeSignerConfigError> {
+    if signer.handle() != expected.handle() || signer.signer_id() != expected.signer_id() {
+        return Err(PotrRuntimeSignerConfigError::SignerBindingMismatch);
+    }
+    let qualification = signer
+        .qualification()
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    if !qualification.is_valid() {
+        return Err(PotrRuntimeSignerConfigError::InvalidProviderQualification);
+    }
+    if signer.handle() != expected.handle()
+        || signer.signer_id() != expected.signer_id()
+        || qualification != expected.qualification()
+    {
+        return Err(PotrRuntimeSignerConfigError::SignerBindingMismatch);
+    }
+    let public_key_result = signer.public_key();
+    let qualification_after_key = signer
+        .qualification()
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    let public_key = public_key_result
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    if signer.handle() != expected.handle()
+        || signer.signer_id() != expected.signer_id()
+        || qualification_after_key != expected.qualification()
+        || public_key != expected_public_key
+    {
+        return Err(PotrRuntimeSignerConfigError::SignerBindingMismatch);
+    }
+    Ok(())
+}
+
+fn qualify_provider_signer(
+    expected: &PotrRuntimeProviderBindingV1,
+    signer: &dyn PotrProviderSignerV1,
+    expected_provider_id: [u8; 32],
+) -> Result<(), PotrRuntimeSignerConfigError> {
+    if signer.handle() != expected.handle() || signer.signer_id() != expected.signer_id() {
+        return Err(PotrRuntimeSignerConfigError::SignerBindingMismatch);
+    }
+    let qualification = signer
+        .qualification()
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    if !qualification.is_valid() {
+        return Err(PotrRuntimeSignerConfigError::InvalidProviderQualification);
+    }
+    if signer.handle() != expected.handle()
+        || signer.signer_id() != expected.signer_id()
+        || qualification != expected.qualification()
+    {
+        return Err(PotrRuntimeSignerConfigError::SignerBindingMismatch);
+    }
+    let provider_id_result = signer.provider_id();
+    let qualification_after_id = signer
+        .qualification()
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    let provider_id = provider_id_result
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    if signer.handle() != expected.handle()
+        || signer.signer_id() != expected.signer_id()
+        || qualification_after_id != expected.qualification()
+        || provider_id != expected_provider_id
+    {
+        return Err(PotrRuntimeSignerConfigError::SignerBindingMismatch);
+    }
+    let public_key_result = signer.public_key();
+    let qualification_after_key = signer
+        .qualification()
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    let public_key = public_key_result
+        .map_err(|_| PotrRuntimeSignerConfigError::SignerQualificationUnavailable)?;
+    if signer.handle() != expected.handle()
+        || signer.signer_id() != expected.signer_id()
+        || qualification_after_key != expected.qualification()
+        || validate_provider_public_key(&public_key).is_err()
+    {
+        return Err(PotrRuntimeSignerConfigError::SignerBindingMismatch);
+    }
+    Ok(())
+}
+
 /// Externally administered PoTR signer roles plus non-secret reader pins.
 ///
 /// Torii accepts this object before API construction, then binds the two signer
@@ -494,11 +783,11 @@ pub trait PotrProviderSignerV1: Send + Sync {
 pub struct PotrRuntimeSignerRolesV1 {
     gateway: Arc<dyn PotrGatewaySignerV1>,
     provider: Arc<dyn PotrProviderSignerV1>,
+    gateway_binding: PotrRuntimeProviderBindingV1,
+    provider_binding: PotrRuntimeProviderBindingV1,
     expected_gateway_public_key: [u8; 32],
     baseline_admission_policy: PotrAdmissionPolicyBindingV1,
-    reader_id: [u8; 32],
-    source_id: [u8; 32],
-    resolver_id: [u8; 32],
+    reader_bindings: PotrRuntimeReaderBindingsV1,
 }
 
 impl fmt::Debug for PotrRuntimeSignerRolesV1 {
@@ -522,23 +811,35 @@ impl PotrRuntimeSignerRolesV1 {
     /// Fails for malformed keys or policy anchors, shared signer objects, zero
     /// identities, or identity reuse across signing and policy-observation
     /// roles.
-    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         gateway: Arc<dyn PotrGatewaySignerV1>,
         provider: Arc<dyn PotrProviderSignerV1>,
+        gateway_binding: PotrRuntimeProviderBindingV1,
+        provider_binding: PotrRuntimeProviderBindingV1,
         expected_gateway_public_key: [u8; 32],
         baseline_admission_policy: PotrAdmissionPolicyBindingV1,
-        reader_id: [u8; 32],
-        source_id: [u8; 32],
-        resolver_id: [u8; 32],
+        reader_bindings: PotrRuntimeReaderBindingsV1,
     ) -> Result<Self, PotrRuntimeSignerConfigError> {
         validate_gateway_public_key(&expected_gateway_public_key)
             .map_err(|_| PotrRuntimeSignerConfigError::InvalidGatewayPolicyKey)?;
         baseline_admission_policy
             .validate()
             .map_err(|_| PotrRuntimeSignerConfigError::InvalidAdmissionPolicyAnchor)?;
-        let gateway_signer_id = gateway.signer_id();
-        let provider_signer_id = provider.signer_id();
+        gateway_binding.validate()?;
+        provider_binding.validate()?;
+        reader_bindings.validate()?;
+        if provider_binding.qualification()
+            != PotrRuntimeProviderQualificationV1::from_admission_binding(baseline_admission_policy)
+        {
+            return Err(PotrRuntimeSignerConfigError::ProviderQualificationPolicyMismatch);
+        }
+        let gateway_object = Arc::as_ptr(&gateway).cast::<()>();
+        let provider_object = Arc::as_ptr(&provider).cast::<()>();
+        if gateway_object == provider_object {
+            return Err(PotrRuntimeSignerConfigError::SharedSignerObject);
+        }
+        let gateway_signer_id = gateway_binding.signer_id();
+        let provider_signer_id = provider_binding.signer_id();
         if gateway_signer_id == [0; 32] {
             return Err(PotrRuntimeSignerConfigError::ZeroGatewaySignerId);
         }
@@ -548,15 +849,12 @@ impl PotrRuntimeSignerRolesV1 {
         if gateway_signer_id == provider_signer_id {
             return Err(PotrRuntimeSignerConfigError::SharedSignerIdentity);
         }
-        if reader_id == [0; 32] {
-            return Err(PotrRuntimeSignerConfigError::ZeroAdmissionReaderId);
+        if gateway_binding.handle() == provider_binding.handle() {
+            return Err(PotrRuntimeSignerConfigError::SharedSignerHandle);
         }
-        if source_id == [0; 32] {
-            return Err(PotrRuntimeSignerConfigError::ZeroAdmissionSourceId);
-        }
-        if resolver_id == [0; 32] {
-            return Err(PotrRuntimeSignerConfigError::ZeroAdmissionResolverId);
-        }
+        let reader_id = reader_bindings.reader_id();
+        let source_id = reader_bindings.source_id();
+        let resolver_id = reader_bindings.resolver_id();
         let administrative_identities = [
             gateway_signer_id,
             provider_signer_id,
@@ -569,20 +867,55 @@ impl PotrRuntimeSignerRolesV1 {
                 return Err(PotrRuntimeSignerConfigError::RuntimeIdentityCollision);
             }
         }
-        let gateway_object = Arc::as_ptr(&gateway).cast::<()>();
-        let provider_object = Arc::as_ptr(&provider).cast::<()>();
-        if gateway_object == provider_object {
-            return Err(PotrRuntimeSignerConfigError::SharedSignerObject);
-        }
+        qualify_gateway_signer(
+            &gateway_binding,
+            gateway.as_ref(),
+            expected_gateway_public_key,
+        )?;
+        qualify_provider_signer(
+            &provider_binding,
+            provider.as_ref(),
+            baseline_admission_policy.provider_id,
+        )?;
         Ok(Self {
             gateway,
             provider,
+            gateway_binding,
+            provider_binding,
             expected_gateway_public_key,
             baseline_admission_policy,
-            reader_id,
-            source_id,
-            resolver_id,
+            reader_bindings,
         })
+    }
+
+    /// Return the independently configured gateway signer binding.
+    #[must_use]
+    pub fn gateway_binding(&self) -> &PotrRuntimeProviderBindingV1 {
+        &self.gateway_binding
+    }
+
+    /// Return the independently configured provider signer binding.
+    #[must_use]
+    pub fn provider_binding(&self) -> &PotrRuntimeProviderBindingV1 {
+        &self.provider_binding
+    }
+
+    /// Return the exact configured gateway verification key.
+    #[must_use]
+    pub const fn expected_gateway_public_key(&self) -> [u8; 32] {
+        self.expected_gateway_public_key
+    }
+
+    /// Return the baseline finalized provider-admission policy.
+    #[must_use]
+    pub const fn baseline_admission_policy(&self) -> PotrAdmissionPolicyBindingV1 {
+        self.baseline_admission_policy
+    }
+
+    /// Return the configured reader, finalized-source, and resolver identities.
+    #[must_use]
+    pub const fn reader_bindings(&self) -> PotrRuntimeReaderBindingsV1 {
+        self.reader_bindings
     }
 
     /// Bind these roles to Torii's authoritative finalized state and verified
@@ -598,16 +931,19 @@ impl PotrRuntimeSignerRolesV1 {
         admission_registry: Arc<crate::sorafs::AdmissionRegistry>,
     ) -> Result<PotrRuntimeSignersV1, PotrRuntimeSignerConfigError> {
         let source: Arc<dyn PotrFinalizedPolicySourceV1> = Arc::new(
-            PotrStateFinalizedPolicySourceV1::try_new(self.source_id, state)
+            PotrStateFinalizedPolicySourceV1::try_new(self.reader_bindings.source_id(), state)
                 .map_err(PotrRuntimeSignerConfigError::FinalizedReader)?,
         );
         let resolver: Arc<dyn PotrAdmissionMaterialResolverV1> = Arc::new(
-            PotrAdmissionRegistryResolverV1::try_new(self.resolver_id, admission_registry)
-                .map_err(PotrRuntimeSignerConfigError::FinalizedReader)?,
+            PotrAdmissionRegistryResolverV1::try_new(
+                self.reader_bindings.resolver_id(),
+                admission_registry,
+            )
+            .map_err(PotrRuntimeSignerConfigError::FinalizedReader)?,
         );
         let reader: Arc<dyn PotrAdmissionReaderV1> = Arc::new(
             PotrFinalizedAdmissionReaderV1::try_new(
-                self.reader_id,
+                self.reader_bindings.reader_id(),
                 self.baseline_admission_policy.policy_identity,
                 self.expected_gateway_public_key,
                 source,
@@ -618,6 +954,8 @@ impl PotrRuntimeSignerRolesV1 {
         PotrRuntimeSignersV1::try_new(
             Arc::clone(&self.gateway),
             Arc::clone(&self.provider),
+            self.gateway_binding.clone(),
+            self.provider_binding.clone(),
             reader,
             self.expected_gateway_public_key,
             self.baseline_admission_policy,
@@ -630,6 +968,8 @@ impl PotrRuntimeSignerRolesV1 {
 pub struct PotrRuntimeSignersV1 {
     gateway: Arc<dyn PotrGatewaySignerV1>,
     provider: Arc<dyn PotrProviderSignerV1>,
+    gateway_binding: PotrRuntimeProviderBindingV1,
+    provider_binding: PotrRuntimeProviderBindingV1,
     admission_reader: Arc<dyn PotrAdmissionReaderV1>,
     expected_gateway_public_key: [u8; 32],
     baseline_admission_policy: PotrAdmissionPolicyBindingV1,
@@ -665,6 +1005,8 @@ impl PotrRuntimeSignersV1 {
     pub fn try_new(
         gateway: Arc<dyn PotrGatewaySignerV1>,
         provider: Arc<dyn PotrProviderSignerV1>,
+        gateway_binding: PotrRuntimeProviderBindingV1,
+        provider_binding: PotrRuntimeProviderBindingV1,
         admission_reader: Arc<dyn PotrAdmissionReaderV1>,
         expected_gateway_public_key: [u8; 32],
         baseline_admission_policy: PotrAdmissionPolicyBindingV1,
@@ -674,8 +1016,24 @@ impl PotrRuntimeSignersV1 {
         baseline_admission_policy
             .validate()
             .map_err(|_| PotrRuntimeSignerConfigError::InvalidAdmissionPolicyAnchor)?;
-        let gateway_signer_id = gateway.signer_id();
-        let provider_signer_id = provider.signer_id();
+        gateway_binding.validate()?;
+        provider_binding.validate()?;
+        if provider_binding.qualification()
+            != PotrRuntimeProviderQualificationV1::from_admission_binding(baseline_admission_policy)
+        {
+            return Err(PotrRuntimeSignerConfigError::ProviderQualificationPolicyMismatch);
+        }
+        let gateway_object = Arc::as_ptr(&gateway).cast::<()>();
+        let provider_object = Arc::as_ptr(&provider).cast::<()>();
+        if gateway_object == provider_object {
+            return Err(PotrRuntimeSignerConfigError::SharedSignerObject);
+        }
+        let admission_reader_object = Arc::as_ptr(&admission_reader).cast::<()>();
+        if admission_reader_object == gateway_object || admission_reader_object == provider_object {
+            return Err(PotrRuntimeSignerConfigError::AdmissionReaderSharesSignerObject);
+        }
+        let gateway_signer_id = gateway_binding.signer_id();
+        let provider_signer_id = provider_binding.signer_id();
         let admission_reader_id = admission_reader.reader_id();
         if gateway_signer_id == [0; 32] {
             return Err(PotrRuntimeSignerConfigError::ZeroGatewaySignerId);
@@ -689,21 +1047,27 @@ impl PotrRuntimeSignersV1 {
         if gateway_signer_id == provider_signer_id {
             return Err(PotrRuntimeSignerConfigError::SharedSignerIdentity);
         }
+        if gateway_binding.handle() == provider_binding.handle() {
+            return Err(PotrRuntimeSignerConfigError::SharedSignerHandle);
+        }
         if admission_reader_id == gateway_signer_id || admission_reader_id == provider_signer_id {
             return Err(PotrRuntimeSignerConfigError::AdmissionReaderSharesSignerIdentity);
         }
-        let gateway_object = Arc::as_ptr(&gateway).cast::<()>();
-        let provider_object = Arc::as_ptr(&provider).cast::<()>();
-        if gateway_object == provider_object {
-            return Err(PotrRuntimeSignerConfigError::SharedSignerObject);
-        }
-        let admission_reader_object = Arc::as_ptr(&admission_reader).cast::<()>();
-        if admission_reader_object == gateway_object || admission_reader_object == provider_object {
-            return Err(PotrRuntimeSignerConfigError::AdmissionReaderSharesSignerObject);
-        }
+        qualify_gateway_signer(
+            &gateway_binding,
+            gateway.as_ref(),
+            expected_gateway_public_key,
+        )?;
+        qualify_provider_signer(
+            &provider_binding,
+            provider.as_ref(),
+            baseline_admission_policy.provider_id,
+        )?;
         Ok(Self {
             gateway,
             provider,
+            gateway_binding,
+            provider_binding,
             admission_reader,
             expected_gateway_public_key,
             baseline_admission_policy,
@@ -719,6 +1083,122 @@ impl PotrRuntimeSignersV1 {
         self.expected_gateway_public_key
     }
 
+    fn revalidate_gateway_binding(&self) -> Result<(), PotrReceiptRuntimeSigningError> {
+        if self.gateway.handle() != self.gateway_binding.handle()
+            || self.gateway.signer_id() != self.gateway_binding.signer_id()
+        {
+            return Err(PotrReceiptRuntimeSigningError::GatewaySignerIdentityDrift);
+        }
+        let qualification = self
+            .gateway
+            .qualification()
+            .map_err(PotrReceiptRuntimeSigningError::GatewayService)?;
+        if !qualification.is_valid()
+            || self.gateway.handle() != self.gateway_binding.handle()
+            || self.gateway.signer_id() != self.gateway_binding.signer_id()
+            || qualification != self.gateway_binding.qualification()
+        {
+            return Err(PotrReceiptRuntimeSigningError::GatewaySignerIdentityDrift);
+        }
+        Ok(())
+    }
+
+    fn revalidate_provider_identity(&self) -> Result<(), PotrReceiptRuntimeSigningError> {
+        if self.provider.handle() != self.provider_binding.handle()
+            || self.provider.signer_id() != self.provider_binding.signer_id()
+        {
+            return Err(PotrReceiptRuntimeSigningError::ProviderSignerIdentityDrift);
+        }
+        Ok(())
+    }
+
+    fn revalidate_provider_binding(
+        &self,
+        expected: PotrRuntimeProviderQualificationV1,
+    ) -> Result<(), PotrReceiptRuntimeSigningError> {
+        self.revalidate_provider_identity()?;
+        let qualification = self
+            .provider
+            .qualification()
+            .map_err(PotrReceiptRuntimeSigningError::ProviderService)?;
+        if !qualification.is_valid()
+            || self.provider.handle() != self.provider_binding.handle()
+            || self.provider.signer_id() != self.provider_binding.signer_id()
+            || qualification != expected
+        {
+            return Err(PotrReceiptRuntimeSigningError::ProviderSignerIdentityDrift);
+        }
+        Ok(())
+    }
+
+    fn revalidate_admission_reader(&self) -> Result<(), PotrReceiptRuntimeSigningError> {
+        if self.admission_reader.reader_id() != self.admission_reader_id {
+            return Err(PotrReceiptRuntimeSigningError::AdmissionReaderIdentityDrift);
+        }
+        Ok(())
+    }
+
+    fn read_admission(
+        &self,
+        receipt: &PotrReceiptV1,
+        minimum: &PotrAdmissionPolicyBindingV1,
+    ) -> Result<PotrAdmissionSnapshotV1, PotrReceiptRuntimeSigningError> {
+        self.revalidate_admission_reader()?;
+        let result = self.admission_reader.active_admission(
+            receipt.provider_id,
+            receipt.requested_at_ms,
+            receipt.recorded_at_ms,
+            minimum,
+        );
+        self.revalidate_admission_reader()?;
+        result.map_err(PotrReceiptRuntimeSigningError::AdmissionReader)
+    }
+
+    fn gateway_public_key(&self) -> Result<[u8; 32], PotrReceiptRuntimeSigningError> {
+        self.revalidate_gateway_binding()?;
+        let result = self.gateway.public_key();
+        self.revalidate_gateway_binding()?;
+        result.map_err(PotrReceiptRuntimeSigningError::GatewayService)
+    }
+
+    fn provider_id(
+        &self,
+        expected: PotrRuntimeProviderQualificationV1,
+    ) -> Result<[u8; 32], PotrReceiptRuntimeSigningError> {
+        self.revalidate_provider_binding(expected)?;
+        let result = self.provider.provider_id();
+        self.revalidate_provider_binding(expected)?;
+        result.map_err(PotrReceiptRuntimeSigningError::ProviderService)
+    }
+
+    fn provider_public_key(
+        &self,
+        expected: PotrRuntimeProviderQualificationV1,
+    ) -> Result<Vec<u8>, PotrReceiptRuntimeSigningError> {
+        self.revalidate_provider_binding(expected)?;
+        let result = self.provider.public_key();
+        self.revalidate_provider_binding(expected)?;
+        result.map_err(PotrReceiptRuntimeSigningError::ProviderService)
+    }
+
+    fn gateway_sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrReceiptRuntimeSigningError> {
+        self.revalidate_gateway_binding()?;
+        let result = self.gateway.sign(payload);
+        self.revalidate_gateway_binding()?;
+        result.map_err(PotrReceiptRuntimeSigningError::GatewayService)
+    }
+
+    fn provider_sign(
+        &self,
+        expected: PotrRuntimeProviderQualificationV1,
+        payload: &[u8],
+    ) -> Result<Vec<u8>, PotrReceiptRuntimeSigningError> {
+        self.revalidate_provider_binding(expected)?;
+        let result = self.provider.sign(payload);
+        self.revalidate_provider_binding(expected)?;
+        result.map_err(PotrReceiptRuntimeSigningError::ProviderService)
+    }
+
     /// Attach both signatures after validating runtime keys against policy.
     pub(crate) fn sign_receipt(
         &self,
@@ -730,41 +1210,24 @@ impl PotrRuntimeSignersV1 {
         // Re-check the identities before consulting keys so a drifting or
         // substituted provider fails before either service sees signable
         // material.
-        if self.gateway.signer_id() != self.gateway_signer_id {
-            return Err(PotrReceiptRuntimeSigningError::GatewaySignerIdentityDrift);
-        }
-        if self.provider.signer_id() != self.provider_signer_id {
-            return Err(PotrReceiptRuntimeSigningError::ProviderSignerIdentityDrift);
-        }
-        if self.admission_reader.reader_id() != self.admission_reader_id {
-            return Err(PotrReceiptRuntimeSigningError::AdmissionReaderIdentityDrift);
-        }
+        self.revalidate_gateway_binding()?;
+        self.revalidate_provider_identity()?;
+        self.revalidate_admission_reader()?;
         let policy_floor = self.effective_policy_floor(durable_policy_floor)?;
-        let admission_snapshot = self
-            .admission_reader
-            .active_admission(
-                receipt.provider_id,
-                receipt.requested_at_ms,
-                receipt.recorded_at_ms,
-                &policy_floor,
-            )
-            .map_err(PotrReceiptRuntimeSigningError::AdmissionReader)?;
+        let admission_snapshot = self.read_admission(&receipt, &policy_floor)?;
         validate_admission_snapshot(&admission_snapshot, &receipt, policy_floor)?;
         let admission = admission_snapshot.admission.as_ref();
+        let provider_qualification =
+            PotrRuntimeProviderQualificationV1::from_admission_binding(admission_snapshot.binding);
+        self.revalidate_provider_binding(provider_qualification)?;
 
-        let runtime_gateway_public_key = self
-            .gateway
-            .public_key()
-            .map_err(PotrReceiptRuntimeSigningError::GatewayService)?;
+        let runtime_gateway_public_key = self.gateway_public_key()?;
         validate_gateway_public_key(&runtime_gateway_public_key)?;
         if runtime_gateway_public_key != self.expected_gateway_public_key {
             return Err(PotrReceiptRuntimeSigningError::GatewayPolicyMismatch);
         }
 
-        let runtime_provider_id = self
-            .provider
-            .provider_id()
-            .map_err(PotrReceiptRuntimeSigningError::ProviderService)?;
+        let runtime_provider_id = self.provider_id(provider_qualification)?;
         if runtime_provider_id == [0; 32] {
             return Err(PotrReceiptRuntimeSigningError::InvalidProviderIdentity);
         }
@@ -772,10 +1235,7 @@ impl PotrRuntimeSignersV1 {
             return Err(PotrReceiptRuntimeSigningError::RuntimeProviderMismatch);
         }
 
-        let runtime_provider_public_key = self
-            .provider
-            .public_key()
-            .map_err(PotrReceiptRuntimeSigningError::ProviderService)?;
+        let runtime_provider_public_key = self.provider_public_key(provider_qualification)?;
         validate_provider_public_key(&runtime_provider_public_key)?;
         let governed_provider_public_key = admission
             .potr_mldsa_key()
@@ -789,10 +1249,7 @@ impl PotrRuntimeSignersV1 {
         let payload = receipt
             .signing_payload_bytes()
             .map_err(|_| PotrReceiptRuntimeSigningError::CanonicalPayload)?;
-        let gateway_signature = self
-            .gateway
-            .sign(&payload)
-            .map_err(PotrReceiptRuntimeSigningError::GatewayService)?;
+        let gateway_signature = self.gateway_sign(&payload)?;
         let gateway_signature = PotrSignatureV1 {
             algorithm: PotrSignatureAlgorithm::Ed25519,
             public_key: runtime_gateway_public_key.to_vec(),
@@ -802,19 +1259,7 @@ impl PotrRuntimeSignersV1 {
             .verify("gateway", &payload)
             .map_err(|_| PotrReceiptRuntimeSigningError::InvalidSignedReceipt)?;
         receipt.gateway_signature = Some(gateway_signature);
-        let provider_signature = self
-            .provider
-            .sign(&payload)
-            .map_err(PotrReceiptRuntimeSigningError::ProviderService)?;
-        if self.gateway.signer_id() != self.gateway_signer_id {
-            return Err(PotrReceiptRuntimeSigningError::GatewaySignerIdentityDrift);
-        }
-        if self.provider.signer_id() != self.provider_signer_id {
-            return Err(PotrReceiptRuntimeSigningError::ProviderSignerIdentityDrift);
-        }
-        if self.admission_reader.reader_id() != self.admission_reader_id {
-            return Err(PotrReceiptRuntimeSigningError::AdmissionReaderIdentityDrift);
-        }
+        let provider_signature = self.provider_sign(provider_qualification, &payload)?;
         receipt.provider_signature = Some(PotrSignatureV1 {
             algorithm: PotrSignatureAlgorithm::MlDsa65,
             public_key: runtime_provider_public_key,
@@ -823,30 +1268,18 @@ impl PotrRuntimeSignersV1 {
         receipt
             .validate_with_governed_keys(&self.expected_gateway_public_key, admission)
             .map_err(|_| PotrReceiptRuntimeSigningError::InvalidSignedReceipt)?;
-        let rechecked = self
-            .admission_reader
-            .active_admission(
-                receipt.provider_id,
-                receipt.requested_at_ms,
-                receipt.recorded_at_ms,
-                &admission_snapshot.binding,
-            )
-            .map_err(PotrReceiptRuntimeSigningError::AdmissionReader)?;
+        let rechecked = self.read_admission(&receipt, &admission_snapshot.binding)?;
         validate_admission_snapshot(&rechecked, &receipt, admission_snapshot.binding)?;
         if rechecked.binding != admission_snapshot.binding
             || rechecked.admission.envelope_digest() != admission.envelope_digest()
         {
             return Err(PotrReceiptRuntimeSigningError::AdmissionChangedDuringSigning);
         }
-        if self.gateway.signer_id() != self.gateway_signer_id {
-            return Err(PotrReceiptRuntimeSigningError::GatewaySignerIdentityDrift);
-        }
-        if self.provider.signer_id() != self.provider_signer_id {
-            return Err(PotrReceiptRuntimeSigningError::ProviderSignerIdentityDrift);
-        }
-        if self.admission_reader.reader_id() != self.admission_reader_id {
-            return Err(PotrReceiptRuntimeSigningError::AdmissionReaderIdentityDrift);
-        }
+        self.revalidate_gateway_binding()?;
+        self.revalidate_provider_binding(
+            PotrRuntimeProviderQualificationV1::from_admission_binding(rechecked.binding),
+        )?;
+        self.revalidate_admission_reader()?;
         Ok(SignedPotrReceiptV1 {
             receipt,
             admission: Arc::clone(&admission_snapshot.admission),
@@ -955,6 +1388,27 @@ fn validate_provider_public_key(public_key: &[u8]) -> Result<(), PotrReceiptRunt
 /// Invalid construction of the role-separated PoTR runtime boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PotrRuntimeSignerConfigError {
+    /// A configured signer handle is malformed.
+    #[error("PoTR runtime signer handle is invalid")]
+    InvalidProviderHandle,
+    /// A configured signer handle is explicitly test- or development-marked.
+    #[error("PoTR runtime signer handle is test-marked")]
+    TestMarkedProviderHandle,
+    /// A configured signer binding uses the zero identity sentinel.
+    #[error("PoTR runtime signer binding identity must be non-zero")]
+    ZeroSignerBindingId,
+    /// A configured signer revision or policy digest is zero.
+    #[error("PoTR runtime signer qualification is invalid")]
+    InvalidProviderQualification,
+    /// Runtime signer readiness could not be established.
+    #[error("PoTR runtime signer is unavailable or stale")]
+    SignerQualificationUnavailable,
+    /// The injected signer differs from its independently configured binding.
+    #[error("PoTR runtime signer binding does not match the injected provider")]
+    SignerBindingMismatch,
+    /// Provider signer qualification does not match the baseline admission policy.
+    #[error("PoTR provider signer qualification does not match admission policy")]
+    ProviderQualificationPolicyMismatch,
     /// Gateway policy must carry a canonical strong Ed25519 public key.
     #[error("PoTR gateway policy key must be a canonical strong Ed25519 public key")]
     InvalidGatewayPolicyKey,
@@ -970,6 +1424,9 @@ pub enum PotrRuntimeSignerConfigError {
     /// Both roles claimed the same runtime signer identity.
     #[error("PoTR gateway and provider runtime signer identities must be distinct")]
     SharedSignerIdentity,
+    /// Both roles claimed the same runtime provider handle.
+    #[error("PoTR gateway and provider runtime signer handles must be distinct")]
+    SharedSignerHandle,
     /// Policy observation must not claim either signer administration identity.
     #[error("PoTR admission reader identity must be distinct from signer identities")]
     AdmissionReaderSharesSignerIdentity,
@@ -994,6 +1451,21 @@ pub enum PotrRuntimeSignerConfigError {
     /// The production finalized admission reader could not be constructed.
     #[error("PoTR finalized admission reader configuration is invalid")]
     FinalizedReader(PotrFinalizedAdmissionReaderConfigError),
+    /// PoTR is enabled without the exact public runtime binding.
+    #[error("enabled PoTR requires an exact runtime binding")]
+    MissingRuntimeConfiguration,
+    /// A PoTR runtime binding was retained while the service is disabled.
+    #[error("disabled PoTR must not retain a runtime binding")]
+    DisabledRuntimeConfiguration,
+    /// Enabled PoTR configuration has no injected runtime signer roles.
+    #[error("enabled PoTR runtime configuration requires injected signer roles")]
+    MissingRuntimeSignerRoles,
+    /// Runtime roles were injected without an enabled exact configuration.
+    #[error("PoTR runtime signer roles were injected without enabled configuration")]
+    RuntimeSignerRolesNotConfigured,
+    /// Injected runtime roles differ from the exact public configuration.
+    #[error("PoTR runtime signer roles do not match the exact configured bindings")]
+    RuntimeConfigurationMismatch,
     /// Torii cannot build the finalized reader without verified admission material.
     #[error("PoTR runtime signer roles require a council-verified admission registry")]
     MissingAdmissionRegistry,
@@ -1072,7 +1544,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use ed25519_dalek::{Signer as _, SigningKey};
@@ -1090,6 +1562,12 @@ mod tests {
 
     const GATEWAY_SIGNER_ID: [u8; 32] = [0xA1; 32];
     const PROVIDER_SIGNER_ID: [u8; 32] = [0xB2; 32];
+    const GATEWAY_HANDLE: &str = "hsm:potr:gateway-primary";
+    const PROVIDER_HANDLE: &str = "hsm:potr:provider-primary";
+    const GATEWAY_QUALIFICATION: PotrRuntimeProviderQualificationV1 =
+        PotrRuntimeProviderQualificationV1::new(1, [0xA7; 32]);
+    const PROVIDER_BASELINE_QUALIFICATION: PotrRuntimeProviderQualificationV1 =
+        PotrRuntimeProviderQualificationV1::new(1, [0xE5; 32]);
     const ADMISSION_READER_ID: [u8; 32] = [0xC3; 32];
     const ADMISSION_POLICY_IDENTITY: [u8; 32] = [0xD4; 32];
     const FINALIZED_SOURCE_ID: [u8; 32] = [0xD5; 32];
@@ -1241,20 +1719,31 @@ mod tests {
 
     struct TestGatewaySigner {
         signer_id: [u8; 32],
+        qualification: PotrRuntimeProviderQualificationV1,
         key: SigningKey,
         public_key_override: Option<[u8; 32]>,
-        unavailable: bool,
+        unavailable: AtomicBool,
         corrupt_signature: bool,
         calls: Arc<AtomicUsize>,
     }
 
     impl PotrGatewaySignerV1 for TestGatewaySigner {
+        fn handle(&self) -> &str {
+            GATEWAY_HANDLE
+        }
+
         fn signer_id(&self) -> [u8; 32] {
             self.signer_id
         }
 
+        fn qualification(
+            &self,
+        ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+            Ok(self.qualification)
+        }
+
         fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
-            if self.unavailable {
+            if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
             }
             Ok(self
@@ -1264,7 +1753,7 @@ mod tests {
 
         fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if self.unavailable {
+            if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
             }
             let mut signature = self.key.sign(payload).to_bytes().to_vec();
@@ -1277,10 +1766,11 @@ mod tests {
 
     struct TestProviderSigner {
         signer_id: [u8; 32],
+        qualification: PotrRuntimeProviderQualificationV1,
         provider_id: [u8; 32],
         key: KeyPair,
         public_key_override: Option<Vec<u8>>,
-        unavailable: bool,
+        unavailable: AtomicBool,
         corrupt_signature: bool,
         calls: Arc<AtomicUsize>,
     }
@@ -1298,19 +1788,29 @@ mod tests {
     }
 
     impl PotrProviderSignerV1 for TestProviderSigner {
+        fn handle(&self) -> &str {
+            PROVIDER_HANDLE
+        }
+
         fn signer_id(&self) -> [u8; 32] {
             self.signer_id
         }
 
+        fn qualification(
+            &self,
+        ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+            Ok(self.qualification)
+        }
+
         fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
-            if self.unavailable {
+            if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
             }
             Ok(self.provider_id)
         }
 
         fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
-            if self.unavailable {
+            if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
             }
             Ok(self
@@ -1321,7 +1821,7 @@ mod tests {
 
         fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            if self.unavailable {
+            if self.unavailable.load(Ordering::SeqCst) {
                 return Err(PotrSignerServiceError::Unavailable);
             }
             let mut signature = Signature::try_new(self.key.private_key(), payload)
@@ -1335,22 +1835,132 @@ mod tests {
         }
     }
 
+    struct PostSignQualificationDriftingGatewaySigner {
+        key: SigningKey,
+        qualification: Mutex<PotrRuntimeProviderQualificationV1>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PotrGatewaySignerV1 for PostSignQualificationDriftingGatewaySigner {
+        fn handle(&self) -> &str {
+            GATEWAY_HANDLE
+        }
+
+        fn signer_id(&self) -> [u8; 32] {
+            GATEWAY_SIGNER_ID
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+            self.qualification
+                .lock()
+                .map(|qualification| *qualification)
+                .map_err(|_| PotrSignerServiceError::Unavailable)
+        }
+
+        fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
+            Ok(self.key.verifying_key().to_bytes())
+        }
+
+        fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let signature = self.key.sign(payload).to_bytes().to_vec();
+            *self
+                .qualification
+                .lock()
+                .map_err(|_| PotrSignerServiceError::Unavailable)? =
+                PotrRuntimeProviderQualificationV1::new(2, [0xD7; 32]);
+            Ok(signature)
+        }
+    }
+
+    struct PostSignQualificationDriftingProviderSigner {
+        provider_id: [u8; 32],
+        key: KeyPair,
+        qualification: Mutex<PotrRuntimeProviderQualificationV1>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PotrProviderSignerV1 for PostSignQualificationDriftingProviderSigner {
+        fn handle(&self) -> &str {
+            PROVIDER_HANDLE
+        }
+
+        fn signer_id(&self) -> [u8; 32] {
+            PROVIDER_SIGNER_ID
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+            self.qualification
+                .lock()
+                .map(|qualification| *qualification)
+                .map_err(|_| PotrSignerServiceError::Unavailable)
+        }
+
+        fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
+            Ok(self.provider_id)
+        }
+
+        fn public_key(&self) -> Result<Vec<u8>, PotrSignerServiceError> {
+            self.key
+                .public_key()
+                .try_to_bytes()
+                .map(|(_, bytes)| bytes.to_vec())
+                .map_err(|_| PotrSignerServiceError::Refused)
+        }
+
+        fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, PotrSignerServiceError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let signature = Signature::try_new(self.key.private_key(), payload)
+                .map_err(|_| PotrSignerServiceError::Refused)?
+                .payload()
+                .to_vec();
+            *self
+                .qualification
+                .lock()
+                .map_err(|_| PotrSignerServiceError::Unavailable)? =
+                PotrRuntimeProviderQualificationV1::new(2, [0xD8; 32]);
+            Ok(signature)
+        }
+    }
+
     struct RotatingProviderSigner {
         signer_id: [u8; 32],
         provider_id: [u8; 32],
         key: Mutex<KeyPair>,
+        qualification: Mutex<PotrRuntimeProviderQualificationV1>,
         calls: Arc<AtomicUsize>,
     }
 
     impl RotatingProviderSigner {
-        fn rotate(&self, key: KeyPair) {
+        fn rotate(&self, key: KeyPair, qualification: PotrRuntimeProviderQualificationV1) {
             *self.key.lock().expect("provider signer key lock") = key;
+            *self
+                .qualification
+                .lock()
+                .expect("provider signer qualification lock") = qualification;
         }
     }
 
     impl PotrProviderSignerV1 for RotatingProviderSigner {
+        fn handle(&self) -> &str {
+            PROVIDER_HANDLE
+        }
+
         fn signer_id(&self) -> [u8; 32] {
             self.signer_id
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+            self.qualification
+                .lock()
+                .map(|qualification| *qualification)
+                .map_err(|_| PotrSignerServiceError::Unavailable)
         }
 
         fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
@@ -1490,6 +2100,69 @@ mod tests {
         )))
     }
 
+    fn gateway_binding() -> PotrRuntimeProviderBindingV1 {
+        PotrRuntimeProviderBindingV1::try_new(
+            GATEWAY_HANDLE,
+            GATEWAY_SIGNER_ID,
+            GATEWAY_QUALIFICATION,
+        )
+        .expect("valid gateway runtime binding")
+    }
+
+    fn provider_binding(
+        admission_policy: PotrAdmissionPolicyBindingV1,
+    ) -> PotrRuntimeProviderBindingV1 {
+        PotrRuntimeProviderBindingV1::try_new(
+            PROVIDER_HANDLE,
+            PROVIDER_SIGNER_ID,
+            PotrRuntimeProviderQualificationV1::from_admission_binding(admission_policy),
+        )
+        .expect("valid provider runtime binding")
+    }
+
+    fn reader_bindings() -> PotrRuntimeReaderBindingsV1 {
+        PotrRuntimeReaderBindingsV1::try_new(
+            ADMISSION_READER_ID,
+            FINALIZED_SOURCE_ID,
+            ADMISSION_RESOLVER_ID,
+        )
+        .expect("valid finalized-reader runtime bindings")
+    }
+
+    fn configured_runtime_binding(
+        fixture: &TestFixture,
+    ) -> iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
+        let policy = fixture.admission_policy;
+        iroha_config::parameters::actual::SorafsPotrRuntimeBinding {
+            gateway_signer: iroha_config::parameters::actual::SorafsPotrRuntimeSignerBinding {
+                handle: GATEWAY_HANDLE.to_owned(),
+                signer_id: GATEWAY_SIGNER_ID,
+                revision: GATEWAY_QUALIFICATION.revision(),
+                policy_digest: GATEWAY_QUALIFICATION.policy_digest(),
+            },
+            provider_signer: iroha_config::parameters::actual::SorafsPotrRuntimeSignerBinding {
+                handle: PROVIDER_HANDLE.to_owned(),
+                signer_id: PROVIDER_SIGNER_ID,
+                revision: policy.policy_sequence,
+                policy_digest: policy.policy_digest,
+            },
+            gateway_public_key: fixture.gateway_key.verifying_key().to_bytes(),
+            reader_id: ADMISSION_READER_ID,
+            source_id: FINALIZED_SOURCE_ID,
+            resolver_id: ADMISSION_RESOLVER_ID,
+            baseline_admission_policy:
+                iroha_config::parameters::actual::SorafsPotrAdmissionPolicyBinding {
+                    provider_id: policy.provider_id,
+                    policy_identity: policy.policy_identity,
+                    policy_digest: policy.policy_digest,
+                    policy_sequence: policy.policy_sequence,
+                    finalized_height: policy.finalized_height,
+                    finalized_block_hash: policy.finalized_block_hash,
+                    admission_envelope_digest: policy.admission_envelope_digest,
+                },
+        }
+    }
+
     fn finalized_policy_snapshot(
         fixture: &TestFixture,
         admission: &AdmissionRecord,
@@ -1612,29 +2285,39 @@ mod tests {
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: gateway_unavailable,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::clone(&gateway_calls),
         });
         let provider = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key.clone(),
             public_key_override: None,
-            unavailable: provider_unavailable,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::clone(&provider_calls),
         });
         let signers = PotrRuntimeSignersV1::try_new(
-            gateway,
-            provider,
+            gateway.clone(),
+            provider.clone(),
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
             admission_reader,
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
         )
         .expect("independent runtime signers");
+        gateway
+            .unavailable
+            .store(gateway_unavailable, Ordering::SeqCst);
+        provider
+            .unavailable
+            .store(provider_unavailable, Ordering::SeqCst);
         (signers, gateway_calls, provider_calls)
     }
 
@@ -1924,45 +2607,134 @@ mod tests {
         let fixture = fixture();
         let gateway: Arc<dyn PotrGatewaySignerV1> = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let provider: Arc<dyn PotrProviderSignerV1> = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
-        let roles = PotrRuntimeSignerRolesV1::try_new(
-            Arc::clone(&gateway),
-            Arc::clone(&provider),
-            fixture.gateway_key.verifying_key().to_bytes(),
-            fixture.admission_policy,
-            ADMISSION_READER_ID,
-            FINALIZED_SOURCE_ID,
-            ADMISSION_RESOLVER_ID,
-        )
-        .expect("distinct signer and reader component identities");
+        let roles = Arc::new(
+            PotrRuntimeSignerRolesV1::try_new(
+                Arc::clone(&gateway),
+                Arc::clone(&provider),
+                gateway_binding(),
+                provider_binding(fixture.admission_policy),
+                fixture.gateway_key.verifying_key().to_bytes(),
+                fixture.admission_policy,
+                reader_bindings(),
+            )
+            .expect("distinct signer and reader component identities"),
+        );
+        let configured = configured_runtime_binding(&fixture);
         assert_eq!(
-            crate::require_sorafs_potr_finalized_reader_inputs(Some(Arc::new(roles)), None,)
-                .expect_err("startup must reject signer roles without verified admission material"),
+            crate::require_sorafs_potr_finalized_reader_inputs(
+                false,
+                None,
+                Some(Arc::clone(&roles)),
+                None,
+            )
+            .expect_err("injected roles require enabled exact configuration"),
+            PotrRuntimeSignerConfigError::RuntimeSignerRolesNotConfigured
+        );
+        assert_eq!(
+            crate::require_sorafs_potr_finalized_reader_inputs(
+                false,
+                Some(&configured),
+                None,
+                None,
+            )
+            .expect_err("disabled service must reject stale runtime fields"),
+            PotrRuntimeSignerConfigError::DisabledRuntimeConfiguration
+        );
+        assert_eq!(
+            crate::require_sorafs_potr_finalized_reader_inputs(true, None, None, None)
+                .expect_err("enabled service requires an exact public binding"),
+            PotrRuntimeSignerConfigError::MissingRuntimeConfiguration
+        );
+        assert_eq!(
+            crate::require_sorafs_potr_finalized_reader_inputs(
+                true,
+                Some(&configured),
+                None,
+                None,
+            )
+            .expect_err("enabled exact configuration requires injected roles"),
+            PotrRuntimeSignerConfigError::MissingRuntimeSignerRoles
+        );
+        let substitutions: &[fn(
+            &mut iroha_config::parameters::actual::SorafsPotrRuntimeBinding,
+        )] = &[
+            |binding| binding.gateway_signer.handle.push_str("-substituted"),
+            |binding| binding.gateway_signer.signer_id[0] ^= 1,
+            |binding| binding.gateway_signer.revision += 1,
+            |binding| binding.gateway_signer.policy_digest[0] ^= 1,
+            |binding| binding.provider_signer.handle.push_str("-substituted"),
+            |binding| binding.provider_signer.signer_id[0] ^= 1,
+            |binding| binding.provider_signer.revision += 1,
+            |binding| binding.provider_signer.policy_digest[0] ^= 1,
+            |binding| binding.gateway_public_key[0] ^= 1,
+            |binding| binding.reader_id[0] ^= 1,
+            |binding| binding.source_id[0] ^= 1,
+            |binding| binding.resolver_id[0] ^= 1,
+            |binding| binding.baseline_admission_policy.provider_id[0] ^= 1,
+            |binding| binding.baseline_admission_policy.policy_identity[0] ^= 1,
+            |binding| binding.baseline_admission_policy.policy_digest[0] ^= 1,
+            |binding| binding.baseline_admission_policy.policy_sequence += 1,
+            |binding| binding.baseline_admission_policy.finalized_height += 1,
+            |binding| binding.baseline_admission_policy.finalized_block_hash[0] ^= 1,
+            |binding| {
+                binding.baseline_admission_policy.admission_envelope_digest[0] ^= 1;
+            },
+        ];
+        for substitute in substitutions {
+            let mut substituted = configured.clone();
+            substitute(&mut substituted);
+            assert_eq!(
+                crate::require_sorafs_potr_finalized_reader_inputs(
+                    true,
+                    Some(&substituted),
+                    Some(Arc::clone(&roles)),
+                    None,
+                )
+                .expect_err("every substituted public field must fail before reader binding"),
+                PotrRuntimeSignerConfigError::RuntimeConfigurationMismatch
+            );
+        }
+        assert_eq!(
+            crate::require_sorafs_potr_finalized_reader_inputs(
+                true,
+                Some(&configured),
+                Some(roles),
+                None,
+            )
+            .expect_err("startup must reject signer roles without verified admission material"),
             PotrRuntimeSignerConfigError::MissingAdmissionRegistry
         );
         assert_eq!(
             PotrRuntimeSignerRolesV1::try_new(
                 gateway,
                 provider,
+                gateway_binding(),
+                provider_binding(fixture.admission_policy),
                 fixture.gateway_key.verifying_key().to_bytes(),
                 fixture.admission_policy,
-                GATEWAY_SIGNER_ID,
-                FINALIZED_SOURCE_ID,
-                ADMISSION_RESOLVER_ID,
+                PotrRuntimeReaderBindingsV1::try_new(
+                    GATEWAY_SIGNER_ID,
+                    FINALIZED_SOURCE_ID,
+                    ADMISSION_RESOLVER_ID,
+                )
+                .expect("internally distinct reader bindings"),
             )
             .expect_err("reader identity cannot reuse a signer identity"),
             PotrRuntimeSignerConfigError::RuntimeIdentityCollision
@@ -1989,30 +2761,245 @@ mod tests {
     }
 
     #[test]
-    fn invalid_gateway_output_is_rejected_before_provider_signing() {
+    fn runtime_bindings_reject_test_markers_and_invalid_qualification() {
+        assert_eq!(
+            PotrRuntimeProviderBindingV1::try_new(
+                "hsm:dummy:potr",
+                GATEWAY_SIGNER_ID,
+                GATEWAY_QUALIFICATION,
+            )
+            .expect_err("test-marked provider handles must fail closed"),
+            PotrRuntimeSignerConfigError::TestMarkedProviderHandle
+        );
+        for qualification in [
+            PotrRuntimeProviderQualificationV1::new(0, [0xA7; 32]),
+            PotrRuntimeProviderQualificationV1::new(1, [0; 32]),
+        ] {
+            assert_eq!(
+                PotrRuntimeProviderBindingV1::try_new(
+                    GATEWAY_HANDLE,
+                    GATEWAY_SIGNER_ID,
+                    qualification,
+                )
+                .expect_err("zero qualification components must fail closed"),
+                PotrRuntimeSignerConfigError::InvalidProviderQualification
+            );
+        }
+        assert_eq!(
+            PotrRuntimeReaderBindingsV1::try_new(
+                [0; 32],
+                FINALIZED_SOURCE_ID,
+                ADMISSION_RESOLVER_ID,
+            )
+            .expect_err("zero reader identity must fail closed"),
+            PotrRuntimeSignerConfigError::ZeroAdmissionReaderId
+        );
+        assert_eq!(
+            PotrRuntimeReaderBindingsV1::try_new(
+                ADMISSION_READER_ID,
+                FINALIZED_SOURCE_ID,
+                FINALIZED_SOURCE_ID,
+            )
+            .expect_err("reader component identities must be distinct"),
+            PotrRuntimeSignerConfigError::RuntimeIdentityCollision
+        );
+    }
+
+    #[test]
+    fn provider_qualification_must_match_the_configured_admission_anchor() {
+        let fixture = fixture();
+        let gateway: Arc<dyn PotrGatewaySignerV1> = Arc::new(TestGatewaySigner {
+            signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
+            key: fixture.gateway_key.clone(),
+            public_key_override: None,
+            unavailable: AtomicBool::new(false),
+            corrupt_signature: false,
+            calls: Arc::new(AtomicUsize::new(0)),
+        });
+        let provider: Arc<dyn PotrProviderSignerV1> = Arc::new(TestProviderSigner {
+            signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
+            provider_id: fixture.receipt.provider_id,
+            key: fixture.provider_key.clone(),
+            public_key_override: None,
+            unavailable: AtomicBool::new(false),
+            corrupt_signature: false,
+            calls: Arc::new(AtomicUsize::new(0)),
+        });
+        let mismatched_provider_binding = PotrRuntimeProviderBindingV1::try_new(
+            PROVIDER_HANDLE,
+            PROVIDER_SIGNER_ID,
+            PotrRuntimeProviderQualificationV1::new(2, [0xE6; 32]),
+        )
+        .expect("structurally valid mismatched provider binding");
+
+        assert_eq!(
+            PotrRuntimeSignersV1::try_new(
+                gateway,
+                provider,
+                gateway_binding(),
+                mismatched_provider_binding,
+                admission_reader(&fixture.admission, fixture.admission_policy),
+                fixture.gateway_key.verifying_key().to_bytes(),
+                fixture.admission_policy,
+            )
+            .expect_err("provider qualification must be independently anchored"),
+            PotrRuntimeSignerConfigError::ProviderQualificationPolicyMismatch
+        );
+    }
+
+    #[test]
+    fn unavailable_signer_services_fail_startup_qualification() {
+        let fixture = fixture();
+        let gateway = |unavailable| {
+            Arc::new(TestGatewaySigner {
+                signer_id: GATEWAY_SIGNER_ID,
+                qualification: GATEWAY_QUALIFICATION,
+                key: fixture.gateway_key.clone(),
+                public_key_override: None,
+                unavailable: AtomicBool::new(unavailable),
+                corrupt_signature: false,
+                calls: Arc::new(AtomicUsize::new(0)),
+            })
+        };
+        let provider = |unavailable| {
+            Arc::new(TestProviderSigner {
+                signer_id: PROVIDER_SIGNER_ID,
+                qualification: PROVIDER_BASELINE_QUALIFICATION,
+                provider_id: fixture.receipt.provider_id,
+                key: fixture.provider_key.clone(),
+                public_key_override: None,
+                unavailable: AtomicBool::new(unavailable),
+                corrupt_signature: false,
+                calls: Arc::new(AtomicUsize::new(0)),
+            })
+        };
+
+        for (gateway_unavailable, provider_unavailable) in [(true, false), (false, true)] {
+            assert_eq!(
+                PotrRuntimeSignersV1::try_new(
+                    gateway(gateway_unavailable),
+                    provider(provider_unavailable),
+                    gateway_binding(),
+                    provider_binding(fixture.admission_policy),
+                    admission_reader(&fixture.admission, fixture.admission_policy),
+                    fixture.gateway_key.verifying_key().to_bytes(),
+                    fixture.admission_policy,
+                )
+                .expect_err("unavailable signer must fail startup"),
+                PotrRuntimeSignerConfigError::SignerQualificationUnavailable
+            );
+        }
+    }
+
+    #[test]
+    fn post_signature_qualification_drift_discards_the_receipt() {
         let fixture = fixture();
         let gateway_calls = Arc::new(AtomicUsize::new(0));
         let provider_calls = Arc::new(AtomicUsize::new(0));
-        let gateway = Arc::new(TestGatewaySigner {
-            signer_id: GATEWAY_SIGNER_ID,
-            key: fixture.gateway_key.clone(),
-            public_key_override: None,
-            unavailable: false,
-            corrupt_signature: true,
-            calls: Arc::clone(&gateway_calls),
-        });
-        let provider = Arc::new(TestProviderSigner {
+        let gateway: Arc<dyn PotrGatewaySignerV1> =
+            Arc::new(PostSignQualificationDriftingGatewaySigner {
+                key: fixture.gateway_key.clone(),
+                qualification: Mutex::new(GATEWAY_QUALIFICATION),
+                calls: Arc::clone(&gateway_calls),
+            });
+        let provider: Arc<dyn PotrProviderSignerV1> = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
-            key: fixture.provider_key,
+            key: fixture.provider_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::clone(&provider_calls),
         });
         let signers = PotrRuntimeSignersV1::try_new(
             gateway,
             provider,
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
+            admission_reader(&fixture.admission, fixture.admission_policy),
+            fixture.gateway_key.verifying_key().to_bytes(),
+            fixture.admission_policy,
+        )
+        .expect("qualified gateway signer");
+        assert_eq!(
+            signers
+                .sign_receipt(fixture.receipt.clone(), None)
+                .expect_err("post-sign gateway qualification drift must discard the receipt"),
+            PotrReceiptRuntimeSigningError::GatewaySignerIdentityDrift
+        );
+        assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+
+        let gateway_calls = Arc::new(AtomicUsize::new(0));
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let gateway: Arc<dyn PotrGatewaySignerV1> = Arc::new(TestGatewaySigner {
+            signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
+            key: fixture.gateway_key.clone(),
+            public_key_override: None,
+            unavailable: AtomicBool::new(false),
+            corrupt_signature: false,
+            calls: Arc::clone(&gateway_calls),
+        });
+        let provider: Arc<dyn PotrProviderSignerV1> =
+            Arc::new(PostSignQualificationDriftingProviderSigner {
+                provider_id: fixture.receipt.provider_id,
+                key: fixture.provider_key.clone(),
+                qualification: Mutex::new(PROVIDER_BASELINE_QUALIFICATION),
+                calls: Arc::clone(&provider_calls),
+            });
+        let signers = PotrRuntimeSignersV1::try_new(
+            gateway,
+            provider,
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
+            admission_reader(&fixture.admission, fixture.admission_policy),
+            fixture.gateway_key.verifying_key().to_bytes(),
+            fixture.admission_policy,
+        )
+        .expect("qualified provider signer");
+        assert_eq!(
+            signers
+                .sign_receipt(fixture.receipt, None)
+                .expect_err("post-sign provider qualification drift must discard the receipt"),
+            PotrReceiptRuntimeSigningError::ProviderSignerIdentityDrift
+        );
+        assert_eq!(gateway_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(provider_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn invalid_gateway_output_is_rejected_before_provider_signing() {
+        let fixture = fixture();
+        let gateway_calls = Arc::new(AtomicUsize::new(0));
+        let provider_calls = Arc::new(AtomicUsize::new(0));
+        let gateway = Arc::new(TestGatewaySigner {
+            signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
+            key: fixture.gateway_key.clone(),
+            public_key_override: None,
+            unavailable: AtomicBool::new(false),
+            corrupt_signature: true,
+            calls: Arc::clone(&gateway_calls),
+        });
+        let provider = Arc::new(TestProviderSigner {
+            signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
+            provider_id: fixture.receipt.provider_id,
+            key: fixture.provider_key,
+            public_key_override: None,
+            unavailable: AtomicBool::new(false),
+            corrupt_signature: false,
+            calls: Arc::clone(&provider_calls),
+        });
+        let signers = PotrRuntimeSignersV1::try_new(
+            gateway,
+            provider,
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
             admission_reader(&fixture.admission, fixture.admission_policy),
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
@@ -2038,18 +3025,20 @@ mod tests {
         let fixture = fixture();
         let invalid_policy_gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let invalid_policy_provider = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
@@ -2057,6 +3046,8 @@ mod tests {
             PotrRuntimeSignersV1::try_new(
                 invalid_policy_gateway,
                 invalid_policy_provider,
+                gateway_binding(),
+                provider_binding(fixture.admission_policy),
                 admission_reader(&fixture.admission, fixture.admission_policy),
                 [0; 32],
                 fixture.admission_policy,
@@ -2067,18 +3058,20 @@ mod tests {
 
         let shared_identity_gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let shared_identity_provider = Arc::new(TestProviderSigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key,
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
@@ -2086,6 +3079,13 @@ mod tests {
             PotrRuntimeSignersV1::try_new(
                 shared_identity_gateway,
                 shared_identity_provider,
+                gateway_binding(),
+                PotrRuntimeProviderBindingV1::try_new(
+                    PROVIDER_HANDLE,
+                    GATEWAY_SIGNER_ID,
+                    PROVIDER_BASELINE_QUALIFICATION,
+                )
+                .expect("valid shared-identity provider binding"),
                 admission_reader(&fixture.admission, fixture.admission_policy),
                 fixture.gateway_key.verifying_key().to_bytes(),
                 fixture.admission_policy,
@@ -2096,8 +3096,18 @@ mod tests {
 
         struct DualRoleSigner;
         impl PotrGatewaySignerV1 for DualRoleSigner {
+            fn handle(&self) -> &str {
+                GATEWAY_HANDLE
+            }
+
             fn signer_id(&self) -> [u8; 32] {
                 GATEWAY_SIGNER_ID
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+                Ok(GATEWAY_QUALIFICATION)
             }
 
             fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
@@ -2109,8 +3119,18 @@ mod tests {
             }
         }
         impl PotrProviderSignerV1 for DualRoleSigner {
+            fn handle(&self) -> &str {
+                PROVIDER_HANDLE
+            }
+
             fn signer_id(&self) -> [u8; 32] {
                 PROVIDER_SIGNER_ID
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+                Ok(PROVIDER_BASELINE_QUALIFICATION)
             }
 
             fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
@@ -2132,6 +3152,8 @@ mod tests {
             PotrRuntimeSignersV1::try_new(
                 gateway,
                 provider,
+                gateway_binding(),
+                provider_binding(fixture.admission_policy),
                 admission_reader(&fixture.admission, fixture.admission_policy),
                 fixture.gateway_key.verifying_key().to_bytes(),
                 fixture.admission_policy,
@@ -2146,18 +3168,20 @@ mod tests {
         let fixture = fixture();
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let provider = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
@@ -2173,6 +3197,8 @@ mod tests {
             PotrRuntimeSignersV1::try_new(
                 gateway,
                 provider,
+                gateway_binding(),
+                provider_binding(fixture.admission_policy),
                 colliding_reader,
                 fixture.gateway_key.verifying_key().to_bytes(),
                 fixture.admission_policy,
@@ -2216,24 +3242,28 @@ mod tests {
         });
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let provider = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key,
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let signers = PotrRuntimeSignersV1::try_new(
             gateway,
             provider,
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
             drifting_reader,
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
@@ -2257,12 +3287,22 @@ mod tests {
         }
 
         impl PotrGatewaySignerV1 for DriftingGatewaySigner {
+            fn handle(&self) -> &str {
+                GATEWAY_HANDLE
+            }
+
             fn signer_id(&self) -> [u8; 32] {
-                if self.identity_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                if self.identity_reads.fetch_add(1, Ordering::SeqCst) < 3 {
                     GATEWAY_SIGNER_ID
                 } else {
                     [0xC3; 32]
                 }
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+                Ok(GATEWAY_QUALIFICATION)
             }
 
             fn public_key(&self) -> Result<[u8; 32], PotrSignerServiceError> {
@@ -2284,12 +3324,22 @@ mod tests {
         }
 
         impl PotrProviderSignerV1 for DriftingProviderSigner {
+            fn handle(&self) -> &str {
+                PROVIDER_HANDLE
+            }
+
             fn signer_id(&self) -> [u8; 32] {
-                if self.identity_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                if self.identity_reads.fetch_add(1, Ordering::SeqCst) < 4 {
                     PROVIDER_SIGNER_ID
                 } else {
                     [0xD4; 32]
                 }
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<PotrRuntimeProviderQualificationV1, PotrSignerServiceError> {
+                Ok(PROVIDER_BASELINE_QUALIFICATION)
             }
 
             fn provider_id(&self) -> Result<[u8; 32], PotrSignerServiceError> {
@@ -2323,21 +3373,25 @@ mod tests {
         });
         let provider = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let signers = PotrRuntimeSignersV1::try_new(
             drifting_gateway,
             provider,
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
             admission_reader(&fixture.admission, fixture.admission_policy),
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
         )
         .expect("initial signer identities are distinct");
+        gateway_service_calls.store(0, Ordering::SeqCst);
         assert_eq!(
             signers
                 .sign_receipt(fixture.receipt.clone(), None)
@@ -2348,9 +3402,10 @@ mod tests {
 
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
@@ -2364,11 +3419,14 @@ mod tests {
         let signers = PotrRuntimeSignersV1::try_new(
             gateway,
             drifting_provider,
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
             admission_reader(&fixture.admission, fixture.admission_policy),
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
         )
         .expect("initial signer identities are distinct");
+        provider_service_calls.store(0, Ordering::SeqCst);
         assert_eq!(
             signers
                 .sign_receipt(fixture.receipt, None)
@@ -2385,48 +3443,51 @@ mod tests {
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::clone(&gateway_calls),
         });
         let wrong_identity = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: [0xEE; 32],
             key: fixture.provider_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::clone(&provider_calls),
         });
-        let signers = PotrRuntimeSignersV1::try_new(
-            gateway,
-            wrong_identity,
-            admission_reader(&fixture.admission, fixture.admission_policy),
-            fixture.gateway_key.verifying_key().to_bytes(),
-            fixture.admission_policy,
-        )
-        .expect("distinct signers");
         assert_eq!(
-            signers
-                .sign_receipt(fixture.receipt.clone(), None)
-                .expect_err("wrong provider identity must fail"),
-            PotrReceiptRuntimeSigningError::RuntimeProviderMismatch
+            PotrRuntimeSignersV1::try_new(
+                gateway,
+                wrong_identity,
+                gateway_binding(),
+                provider_binding(fixture.admission_policy),
+                admission_reader(&fixture.admission, fixture.admission_policy),
+                fixture.gateway_key.verifying_key().to_bytes(),
+                fixture.admission_policy,
+            )
+            .expect_err("wrong provider identity must fail at startup"),
+            PotrRuntimeSignerConfigError::SignerBindingMismatch
         );
         assert_eq!(gateway_calls.load(Ordering::SeqCst), 0);
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
 
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let wrong_algorithm = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key.clone(),
             public_key_override: Some(
@@ -2435,47 +3496,50 @@ mod tests {
                     .to_bytes()
                     .to_vec(),
             ),
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
-        let signers = PotrRuntimeSignersV1::try_new(
-            gateway,
-            wrong_algorithm,
-            admission_reader(&fixture.admission, fixture.admission_policy),
-            fixture.gateway_key.verifying_key().to_bytes(),
-            fixture.admission_policy,
-        )
-        .expect("distinct signers");
         assert_eq!(
-            signers
-                .sign_receipt(fixture.receipt.clone(), None)
-                .expect_err("Ed25519 material in provider role must fail"),
-            PotrReceiptRuntimeSigningError::InvalidProviderPublicKey
+            PotrRuntimeSignersV1::try_new(
+                gateway,
+                wrong_algorithm,
+                gateway_binding(),
+                provider_binding(fixture.admission_policy),
+                admission_reader(&fixture.admission, fixture.admission_policy),
+                fixture.gateway_key.verifying_key().to_bytes(),
+                fixture.admission_policy,
+            )
+            .expect_err("Ed25519 provider material must fail at startup"),
+            PotrRuntimeSignerConfigError::SignerBindingMismatch
         );
 
         let rotated_provider_key =
             KeyPair::try_from_seed(vec![0x82; 32], Algorithm::MlDsa).expect("rotated provider key");
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let stale_policy = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: rotated_provider_key,
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let signers = PotrRuntimeSignersV1::try_new(
             gateway,
             stale_policy,
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
             admission_reader(&fixture.admission, fixture.admission_policy),
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
@@ -2702,9 +3766,10 @@ mod tests {
         let gateway_calls = Arc::new(AtomicUsize::new(0));
         let gateway = Arc::new(TestGatewaySigner {
             signer_id: GATEWAY_SIGNER_ID,
+            qualification: GATEWAY_QUALIFICATION,
             key: fixture.gateway_key.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::clone(&gateway_calls),
         });
@@ -2713,6 +3778,7 @@ mod tests {
             signer_id: PROVIDER_SIGNER_ID,
             provider_id: fixture.receipt.provider_id,
             key: Mutex::new(fixture.provider_key.clone()),
+            qualification: Mutex::new(PROVIDER_BASELINE_QUALIFICATION),
             calls: Arc::clone(&provider_calls),
         });
         let reader = Arc::new(TestAdmissionReader::stable(admission_snapshot(
@@ -2722,6 +3788,8 @@ mod tests {
         let signers = PotrRuntimeSignersV1::try_new(
             gateway,
             provider.clone(),
+            gateway_binding(),
+            provider_binding(fixture.admission_policy),
             reader.clone(),
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
@@ -2734,7 +3802,10 @@ mod tests {
             .into_parts();
         assert_eq!(first.2, fixture.admission_policy);
 
-        provider.rotate(rotated_key);
+        provider.rotate(
+            rotated_key,
+            PotrRuntimeProviderQualificationV1::from_admission_binding(rotated_policy),
+        );
         reader.replace_responses(vec![Ok(PotrAdmissionSnapshotV1 {
             binding: rotated_policy,
             admission: Arc::new(rotated_admission.clone()),
@@ -2762,43 +3833,53 @@ mod tests {
     fn gateway_rotation_requires_independent_policy_update() {
         let fixture = fixture();
         let rotated_gateway = SigningKey::from_bytes(&[0x73; 32]);
+        let rotated_qualification = PotrRuntimeProviderQualificationV1::new(2, [0x74; 32]);
+        let rotated_binding = PotrRuntimeProviderBindingV1::try_new(
+            GATEWAY_HANDLE,
+            GATEWAY_SIGNER_ID,
+            rotated_qualification,
+        )
+        .expect("rotated gateway binding");
         let gateway = Arc::new(TestGatewaySigner {
-            signer_id: [0xE3; 32],
+            signer_id: GATEWAY_SIGNER_ID,
+            qualification: rotated_qualification,
             key: rotated_gateway.clone(),
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::new(AtomicUsize::new(0)),
         });
         let provider_calls = Arc::new(AtomicUsize::new(0));
         let provider = Arc::new(TestProviderSigner {
             signer_id: PROVIDER_SIGNER_ID,
+            qualification: PROVIDER_BASELINE_QUALIFICATION,
             provider_id: fixture.receipt.provider_id,
             key: fixture.provider_key,
             public_key_override: None,
-            unavailable: false,
+            unavailable: AtomicBool::new(false),
             corrupt_signature: false,
             calls: Arc::clone(&provider_calls),
         });
         let stale_policy_signers = PotrRuntimeSignersV1::try_new(
             gateway.clone(),
             provider.clone(),
+            rotated_binding.clone(),
+            provider_binding(fixture.admission_policy),
             admission_reader(&fixture.admission, fixture.admission_policy),
             fixture.gateway_key.verifying_key().to_bytes(),
             fixture.admission_policy,
-        )
-        .expect("rotated gateway signer with stale policy");
+        );
         assert_eq!(
-            stale_policy_signers
-                .sign_receipt(fixture.receipt.clone(), None)
-                .expect_err("stale gateway policy must reject rotation"),
-            PotrReceiptRuntimeSigningError::GatewayPolicyMismatch
+            stale_policy_signers.expect_err("stale gateway policy must reject rotation at startup"),
+            PotrRuntimeSignerConfigError::SignerBindingMismatch
         );
         assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
 
         let rotated_policy_signers = PotrRuntimeSignersV1::try_new(
             gateway,
             provider,
+            rotated_binding,
+            provider_binding(fixture.admission_policy),
             admission_reader(&fixture.admission, fixture.admission_policy),
             rotated_gateway.verifying_key().to_bytes(),
             fixture.admission_policy,

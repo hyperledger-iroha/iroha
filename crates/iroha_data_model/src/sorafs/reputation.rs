@@ -1471,7 +1471,7 @@ pub enum ReputationJournalValidationError {
         /// Active governed maximum source age.
         maximum_ms: u64,
     },
-    /// PoR epoch or drand identity is inert.
+    /// `PoR` epoch or drand identity is inert.
     #[error("PoR epoch and drand round must be non-zero")]
     InvalidPorRandomnessIdentity,
     /// `PoR` response time lies outside issue/decision bounds.

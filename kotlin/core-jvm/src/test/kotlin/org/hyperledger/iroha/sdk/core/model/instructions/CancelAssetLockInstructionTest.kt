@@ -99,6 +99,9 @@ class CancelAssetLockInstructionTest {
             "$FIXTURE_LOCK_ID ",
             "\uFEFF$FIXTURE_LOCK_ID",
             "$FIXTURE_LOCK_ID\uFEFF",
+            "\uD800",
+            "\uDC00",
+            "lock\uD800id",
         ).forEach {
             assertFailsWith<IllegalArgumentException>("accepted lock id '$it'") {
                 CancelAssetLockInstruction(it, "20")

@@ -112,6 +112,18 @@ public sealed class CancelAssetLockInstructionTests
             TransactionInstruction.CancelAssetLock(
                 "\uFEFFmerchant-lock-001",
                 "1"));
+        foreach (var malformedUtf16 in new[]
+        {
+            "\uD800",
+            "\uDC00",
+            "lock\uD800id",
+        })
+        {
+            Assert.Throws<ArgumentException>(() =>
+                TransactionInstruction.CancelAssetLock(
+                    malformedUtf16,
+                    "1"));
+        }
 
         Assert.Equal(
             4_096,

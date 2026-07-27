@@ -800,16 +800,16 @@ _RELIABLE_FLUSH_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS = (
 
 
 _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushApplicationProjection", "d9b88c7667654798672e48f456615a0e56ec7bd5d989da11a0fb6a4a557ec131", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_application_body", "0e9acf08942860367c6a5d953deaa51a430924ffdafe7174e51bb4b96f4def4e", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushApplicationProjection", "7ffaf7f495f2a7f96320e1c377c0358c895d00dcfd35bf53f3e8e4d61a443e05", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_application_body", "49559bef138c5b61161d45ca264e50a35e4c6f48d76d517b289b4f5e6fa64b80", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_two_phase_link_body", "b165517bbaf656b9136ab8e10c9c909e53ec68fff3dc2116ce4a1a2eade84da6", "macro"),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushApplicationProjection", "15a91e930f41a72fd057956ef0c26d9d3e24a3f6043af5884b670fc632cedd53", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushApplicationProjection", "e71a4e1d1f591e86542c9379fb5d280702e291c1a644144975fd30f8b8e361fd", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushProjectionBytes", "6561689ace006734d5b7da3ed40d527460e78aedd7dd356aeda4219dcb1e8033", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetGateResidual", "29c6ccec7cb1b4f5f82b629f42763c65bfc8e33d9b5daeeb12ba70645a7ae5d5", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetGateResidual", "13f961f2f17b810e1fc59378e946d0f42828b196f88433e6b9837364729f7993", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetOutboundResidual", "c7059660e4aba5989c599d08bb30907eb313e025c455f749b42ffa9e4df51959", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushChunkArcIdentity", "bba07374c9524055d3ce702e9f0aeb74880a4ceddbe199285bcbb81100081a6a", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushChunkArcIdentity", "070ca20fc32e5a4cbc0e90831bd568e88cc665b6e7f32b4c5222c081c93ab408", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSharedTransferSnapshot", "4d8641651448847cc75c596ed7b65b5de0d845fbb60fb97885013aa3f2235955", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingGateSnapshot", "24575aef084082886f7c19179dbd0a0cdfbcd484a721b25ae40792f2d8c7302c", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingGateSnapshot", "d6b5d5cdbfbb0f1f7bd0a27575dfc811cef3a74b86c177cb5d29d6d372b057c6", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingOutboundSnapshot", "64183ad2a502d96cbc5de2ad0e808b5193dfe628fcf59d66bc0a7f9ca15aa8aa", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingStateSnapshot", "d5f2c6c8a5687a08677946625293f80a8521f02dc65e5a41fc3c44c48889dfb7", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushGateApplicationPlan", "77cd6b2af38d39809917b3d082104a8e63427bc78ae492d252d1373caa480c04", "struct"),
@@ -827,25 +827,25 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "typed_hash", "9e4cd4400baa11201ece5bf143c9d2618b529db97413aabe39a0b2cd77705a1e", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "source", "9d8de926c5a07c7e7d6ba62f11c9e44c5f8a6c875f0f01133559859b51dd5ebc", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "cursor", "002f5526f0b10ffdc6d02129e091459a0ce28de800a186c7fcf1bb74dfe18c59", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "pending_chunk", "907a0138200d65a67078ba97983c2a7e2b9c13795afccc3b360fe3547d4ca587", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "pending_chunk", "6cf5d0b970d680b70cf8afd9f88f01061fedac7e81abe959a51fbe13c4f3ee3c", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "key", "73a8e5fa851fd941b9004bbc3c1eaab53c1ad9538d51132d4ced6f8e6004e2bb", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "finish", "d92b5b03bcfab47c5813a3398fe7a773aa566eec9284b49e0cf91ec7b30d2d0d", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "fe82f420ac5c5bf2fd5cb0e60b6635688c006ccdbef572feb130776e409ec5a3", brace_context=(("impl", "ReliableFlushRouteIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "53ce7070e038967a279ea803de9d507bc7608284337c8a73c7aaf1c8654d78b4", brace_context=(("impl", "ReliableFlushRouteIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "82002df509439af4e35aaed77bd9e02f9b0dc395893d057168b3f042c5c21f6c", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "61bf76985ab6b884520d58afdc22409595debe1d33bb85064fb5ed7ddff7c3fe", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "cd0e744904b0fa142732607dfa400340cbdb172f28809973847f73d12ad6c31c", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "2ef6e6b5f3403e2f307d64b3962c8dbdf32dfdd2ff352608d177105034e6c212", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "e8fba25aa719fe80850ff4633d7db9b0ff53a52872149a86e1102d12041a5679", brace_context=(("impl", "ReliableFlushTargetOutboundResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "e29da87c7d60f617ac76a0fad11b7d82dce2c137118815ea0da7307c96fd96ff", brace_context=(("impl", "ReliableFlushTargetOutboundResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "ab931898cbc6647b3031498006cc6f6bba04b29cc7acbea4a80553b214604804", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "append_to", "0b20503cf92be8020c661de09aeef2b3ac1262f6fdb7af13c406dee1885d9e2d", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "15454080eae97fb168dade79fabb3cd4598eee476b71253e6be1797fd0ce293a", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "append_to", "c4e8f5e58b5587c1d067f2cc97a321b8a6b4736d76d69c0b27e3917f27d49abb", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "a0da4d0e59f8b4c0f9ed9af08ed6b80c9e9603b8b3eab608e11e1139be4142dc", brace_context=(("impl", "ReliableFlushSharedTransferSnapshot"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "be53565d8672ac62cdd092462388d168bcaded210cfe53e28a9c1f20722c113a", brace_context=(("impl", "ReliableFlushSharedTransferSnapshot"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "c43764d7234abe2fc8afdb3c40088e4d9f3224b00ebd5837ea6b1c2db417298a", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "ae2c8c985a04b9a4701ccd250face95f8e3ef6a6f5d0ded15a43c3aaa4fe43e8", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "7b1586cfae44a33a2e5e2f0d9772c20528ac844711559deb2e2e4b39e6ea7aa4", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "cd7f087a31da89e54eadce3f660636441ba7b6c2a190f6b6650e18cc9a199e21", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "2682491a6b73b17ce91aaf6dd374f2158a0196b6a9e0b3ca6487a269466dd0a1", brace_context=(("impl", "PartialEq", "for", "ReliableFlushRouteIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "ed9b902a7091c9acac4a3bbf455a0860c5b9e4aef30841ce6688c62a4cc1cb01", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetGateResidual"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "85fca42ad6e1b4ae30138ad40b3b4a54b6bf187f3f9a73e54571da62caf98b3f", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetGateResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "b249fcbef09dc41c47eae28e6b1fe275305e502edc078ae817241b0581c8d70a", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetOutboundResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "4560af28092b529e7d399e83bf370bdd0ac33efd7140c70dc54461c9bd082cc1", brace_context=(("impl", "PartialEq", "for", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "19d57e02a57170cdb0c1394fc08fe93f44ca5d89ba058aeceafd2deb6662fb0f", brace_context=(("impl", "PartialEq", "for", "ReliableFlushChunkArcIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_typed_identity", "e0f75753b395d116820035bcfe43ba3759fe8973d38d414b5cdbadd3a1a5db8f"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_hash_identity", "3a6cc6e2dcb6137ff1722f167fbd5b4828596bce1bf8422e8177d75c24d0f6f3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_peer_identity", "3a1c9e36eaf39d860738c32f7612b187ef8dc45db64f7cf57622fbc3ca10a944"),
@@ -853,14 +853,14 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_usize", "674058b603b97c8ffaf4ea506e42514d76237ad8392c0de38eb6a815ad2d30b2"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_topic_tag", "0ce52c4dfc94894c9656eec6bd9348c55b1653b634660857b9f4e6514ee72eaf"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_target_order_position", "c82e9b6840fd471ad4a4cc3cba73d364ac172bae343ac5f39d3cadea6cd8fc5f"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_gate", "b9ed8e3fdd0f2e0864fff1f4764006783f7c0721974f692a49d5833d24ed11fe"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_outbound", "9602ada0ff5aab21abd59e8046384a397eac581634bff2dd2c19c7771640f463"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_gate", "6f7b8e5cc37b371acc0850850ac00df8c50c957094aac32d6ed13ec16edf6b90"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_outbound", "a09d5a66a346811fa664361fa38de502d06af0986384fd4f491cd5cb298d6667"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_outbound_attempt", "cdbcb606745395d0325f2046dd5f4cbdf0ad2e4595d2aa6887d9866f232c1d11"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "finish_reliable_flush_application_plan", "86dd7b1577741b605a95df8bd114c3c33717d21f395f229551950394f173d751"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "apply_reliable_flush_application", "93912d6c690daa60be7fda65daa0a997a0e55839d3661560ada00aaca8dd8a52"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "observe_reliable_flush_application", "4b1799bf12e791d70d96dbdeaa7faf4fa73e1ed2c228f441d4862e0a5e68b34a"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_application_occurrence_projection", "15618d27a59f7246f7a7f32529cbde1cb8e19f1514821177c4738b693ff7c84b"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_marker", "1b83ddf1a0493b88911c19ce08807a3dbe2f1b2d6e24b38da6f7284e908923f0"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_application_occurrence_projection", "a15d6e74a32f1b0117578bf9d2c12ae08f9e0cef7818229886252a4ef9f3bc7f"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_marker", "aa021429243b00767306e42643531251aa0a28d43cc992eae1494278cc5791c3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_transition", "e65ebf42b756072f30b783798446834e4ef67c44fe051792d3995f5009f065fe"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "process_local_projection", "deef81bb181613540e6a2c3c70ceb9b06f484fac5fc2bf66ed6211133384ffc7"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_residuals", "6c38a1e1206d937ab4d10fa07f18c689490bafb01d1593b326849134398b2ba6"),
@@ -876,32 +876,32 @@ _RELIABLE_FLUSH_SOURCE_ITEM_SEALS = (
     + _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS
     + (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushTraceProjection", "707b03ddf6a683acc8cd78cc7a2071f25a89da5e8eaba1465f6a96016888e107", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_trace_body", "611933062ae23d502966c25c176f8dff489ed83215d7639773ba63049695d686", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushTraceProjection", "ec137085348f9e052ece6aaf19aaabcdc11f6ea0848b1998495f1ea2ff48402b", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_trace_body", "7b830dafccef15b33a2966e57e2fccd18c6f6ce3e454831cb7378d12ae2db1d5", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushTraceProjection", "4449822043b8473e00e3fe01e2b7bf6f524e294234c81d2863b2942cf587c88b", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkFlushProjection", "12c0d7db72a87a59588640d0e482e64a60b41e432668040169291a0e09ba7217", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushTraceProjection", "908e6622ab099784f36095f2bf96c9ace7fcc2b2be791d6c55d755a4fdd7850d", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkFlushProjection", "e33ee8cd88404b0627305a89a28beb6e9d74cc3a80d9eb105af395fa0effd0db", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkAdmission", "f8f5605e0249bfbe54216287e4d82c2a1cb2a27621731e2073a6f0c16f3e53fa", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ServerPendingChunkIdentity", "bf466defc9a4a4fd7ae6812b5af10f1b2369a92ee71caf2eb8b63f8044cbf361", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_admitted_reply", "6aab4029fd336b2651d767106862270fd1ac3accb751fbfffe2e5335e21523ca", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ServerPendingChunkIdentity", "f829ed6abcaefd45ee46ea385995c58f3ac40b535782fdbf36d551d72e221504", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_admitted_reply", "a2b593a56511c97eae5bfaca2235490ace31a128884729704bb6dc907a98da44", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection", "7c2b58e389e8a3f8d3875bef22e7407f914c44d16baa8db933c14d1b53c754ef", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_ack_identity", "b41736d098c44a77011b4e5e02b84fc849f7c41f4a523ec4d5e7c7138f9308c7", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection_matches_identity", "e664bed9c23ca13891cc54d9609ed286e5d1d8d9e75ae9be82eefbca63c9efd6", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "5409de569e6d24d487c2da720277f46b71dd3eda1ae7b808549a37bb46ab1196", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection_matches_identity", "14d965c4c6fa7416fe47a93c29d32b1f244f5baf7af3d72ad64282b996579303", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "353fc1629ed277f4b30242bb13134084b118bb92efa3c92437ae6c7f4b8b507a", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_attempt", "bc91d3dca2a1cd0d409ae3a00956265c44db98e16fece0312721a30dc7c41d0e", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_source", "9b3eb15cf936a718438f1aaed1f91a1ff839fad37327b5050180c25859d224f7", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_message", "3df9cc44b6f184195c2a2aeedfc3b875077fdcda06850bacf0b552c62df93b29", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_admission", "832b2006e63195d9962938caa6c08eff7609efe6c2eeebdc9ee6eb0df02ed263", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "acknowledge_outbound_chunk", "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887", brace_context=(("impl", "MergeSidecarTransport"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_message", "332520780a3fd24ecb3408909165c5018800bad19562c8434c6b4de225cd7d46", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_admission", "ca5f53b31a91aac8cc3ceec313c4ee309b8ba10126c86c1fde5a97f7083807c5", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "acknowledge_outbound_chunk", "ea52e797318cf35982fc24c9da0d7a40c6aa87df2814ba49612ec4d6a5184fdb", brace_context=(("impl", "MergeSidecarTransport"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_typed_identity", "e0f75753b395d116820035bcfe43ba3759fe8973d38d414b5cdbadd3a1a5db8f"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_hash_identity", "3a6cc6e2dcb6137ff1722f167fbd5b4828596bce1bf8422e8177d75c24d0f6f3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_peer_identity", "3a1c9e36eaf39d860738c32f7612b187ef8dc45db64f7cf57622fbc3ca10a944"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_ordinal_halves", "efc05f069320482233885330aa53196e5f5d6382da0b8eb482759e7f7854e52b"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_usize", "674058b603b97c8ffaf4ea506e42514d76237ad8392c0de38eb6a815ad2d30b2"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_trace_projection", "ff6227ecbcf138127c0f8895808f9226f8e6f06ef4a3a9a21f4808599507cbd9"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_trace_projection", "7d8f14adddee04f2fcb04c6bf45d51debc1b346fcb09e51afee76f1ca520bef5"),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "NetworkActorAdmittedTicketIdentity", "a77a7f1d0c9204b74b042466c371e4bf93d85adb56c77f6533730cc5754fc5e0", "struct"),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "same_ticket", "1264d6ad9adafb1984aa90db2e301a5832e47694a99b33313f9d71adf97dc120", brace_context=(("impl", "NetworkActorAdmittedTicketIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "process_local_identity_hash", "8aca03dffb50726eb4217efc42274331186721a7467f3f49dc5b5c55d1050e87", brace_context=(("impl", "NetworkActorAdmittedTicketIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "process_local_identity_hash", "462c668bd2f0bb4f56421c2f95293a2432a6a3e59e35526a6d61ff2915e2ed9e", brace_context=(("impl", "NetworkActorAdmittedTicketIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "matches", "d7aa1ff1bba2b408eacaa4821e5c8791a3298f8ecbbc10a120e4cf4f18dd00aa", brace_context=(("impl", "WeakProgressDeliveryAuthority"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "try_reserve_for_source", "b938440d9f487ac064ca8ac46269d88551da51349ce14b4e470c87d672e82888", brace_context=(("impl", "NetworkActorProgressBudget"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "NetworkReplyFlushIdentity", "dce80dad1dd1ec1ff9d40090bec2dcff4ed40a7565e316acc69f5b87dc8eb089", "struct"),
@@ -942,7 +942,7 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send_rehydrated", "d10242d792a48f0778102fd02d6eb3b1843dfb2c099101cddc181b817eadf668", brace_context=(("impl", "SumeragiRelayIngress"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_rehydrated_ownership_matches", "e256e3116ecb06539aa891d0057e502b9b6bdf46150211a9891168eeb38a256e"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "rehydrate_held_sumeragi_relay_work", "c70d1d27ef4f639937fdbb8e4c5deb035142532b31c7bcfdb539ab752e36bb16"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "fa9919eae532cfec51c26996d518bc8794f2bb7e28543521b4709aa36c2f3936", brace_context=(("impl", "NetworkRelayShared"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "25149b267f36f5a990d340fbc9331768bc5062a5c414e3de46720407862a874c", brace_context=(("impl", "NetworkRelayShared"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "push", "d30cc609e125945f143c35d42f513479d7255ed739859859a6a2149aa74abf82", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "4041485881b4ba7d2898082b21a228ff77652d520a91bb20cb9475ece8a48b41", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "acfcb75628dc5cc0a843059252287d0caaddae96a7575435ced11cd3b84a86fb"),
@@ -2699,6 +2699,30 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         production_reliable_flush_application_projection(application),
                     ),
                     worker.status == 2u8,
+                    worker.stream_epoch > 0u64,
+                    application.stream_epoch > 0u64,
+                    application.marker_stream_epoch > 0u64,
+                    worker.stream_epoch == application.stream_epoch,
+                    worker.stream_epoch == application.marker_stream_epoch,
+                    application.stream_epoch == application.marker_stream_epoch,
+                    worker.service_generation > 0u64,
+                    application.service_generation > 0u64,
+                    application.marker_service_generation > 0u64,
+                    worker.service_generation == application.service_generation,
+                    worker.service_generation
+                        == application.marker_service_generation,
+                    application.service_generation
+                        == application.marker_service_generation,
+                    worker.semantic_sequence > 0u64,
+                    application.semantic_sequence > 0u64,
+                    application.marker_semantic_sequence > 0u64,
+                    worker.semantic_sequence == application.semantic_sequence,
+                    worker.semantic_sequence
+                        == application.marker_semantic_sequence,
+                    application.semantic_sequence
+                        == application.marker_semantic_sequence,
+                    worker.reply_writer_timeout_attempt
+                        == application.reply_writer_timeout_attempt,
                     application.claim_acquired,
                     application.gate_marker_present_before,
                     !application.gate_marker_present_after,
@@ -2739,7 +2763,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_shared_macro_sha256=(
     ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
-                    ("production_reliable_flush_trace_body", "611933062ae23d502966c25c176f8dff489ed83215d7639773ba63049695d686"),
+                    ("production_reliable_flush_trace_body", "7b830dafccef15b33a2966e57e2fccd18c6f6ce3e454831cb7378d12ae2db1d5"),
                 ),
                 theorem_kernel_projection=(
                     "production_reliable_flush_trace_projection(worker),"
@@ -2761,7 +2785,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_worker.rs",
                         item="poll_reply_flushes",
                         item_token_sha256=(
-                            "6bb5a13a7fa1516153de7a1410d00fcf12d8b8dee7d40b27be591ac51f0088d4"
+                            "bdcb177a425296d471e827d561974ec96bedb9de661681d6a8144f8326c4f372"
                         ),
                         brace_context=(("impl", "PendingExactOutput"),),
                         projection="flush_trace",
@@ -2818,7 +2842,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),
                         verified_kernel_shared_macro_sha256=(
     ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
-                            ("production_reliable_flush_application_body", "0e9acf08942860367c6a5d953deaa51a430924ffdafe7174e51bb4b96f4def4e"),
+                            ("production_reliable_flush_application_body", "49559bef138c5b61161d45ca264e50a35e4c6f48d76d517b289b4f5e6fa64b80"),
                         ),
                         theorem_kernel_projection=(
                             "production_reliable_flush_application_projection(application),"
@@ -2857,7 +2881,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     }
                                 """,
                                 item_token_sha256=(
-                                    "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887"
+                                    "ea52e797318cf35982fc24c9da0d7a40c6aa87df2814ba49612ec4d6a5184fdb"
                                 ),
                             ),
                         ),
@@ -2930,7 +2954,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     }
                                 """,
                                 item_token_sha256=(
-                                    "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887"
+                                    "ea52e797318cf35982fc24c9da0d7a40c6aa87df2814ba49612ec4d6a5184fdb"
                                 ),
                             ),
                         ),
@@ -3585,7 +3609,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="run_inner",
                         item_token_sha256=(
-                            "e48af8d484dc2fb93697b167e8edd2a96b626bfb39e84a69fc37c47c2e4169c7"
+                            "665cb4f59dc4037e17216d4f250cb08ec33f8dacd3c34405c544bd1582c8ebab"
                         ),
                         projection="terminal_application,",
                         required_expression="""
@@ -3776,14 +3800,6 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "chain-prefix": ("SumeragiV2ChainEpochProofs", "ChainPrefixObligation"),
     "crash-restart": ("SumeragiV2Proofs", "CrashRecoveryObligation"),
     "epoch-boundary": ("SumeragiV2ChainEpochProofs", "EpochBoundaryObligation"),
-    "chain-durable-receipt-agreement": (
-        "SumeragiV2ChainReceiptAgreementProofs",
-        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
-    ),
-    "terminal-ingress-process-lifetime-absorbency": (
-        "SumeragiV2TerminalIngressLifecycleProofs",
-        "TerminalIngressProcessLifetimeAbsorbencyObligation",
-    ),
     "effective-lock-body-acquisition-model": (
         "SumeragiV2EffectiveLockAcquisitionProofs",
         "EffectiveLockAcquisitionModelObligation",
@@ -3828,14 +3844,6 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncTemporalClosureProofs",
         "ProgressWitnessProductionRefinementObligation",
     ),
-    "adequate-leader-exact-closure-residual": (
-        "SumeragiV2AsyncTemporalClosureProofs",
-        "AdequateLeaderExactClosureResidualObligation",
-    ),
-    "exact-decision-off-scheduler-residual-convergence": (
-        "SumeragiV2AsyncTemporalClosureProofs",
-        "ExactDecisionOffSchedulerResidualConvergenceObligation",
-    ),
     "protected-service-rank-stage4-ready-causal": (
         "SumeragiV2AsyncLivenessProofs",
         "ProtectedStage4RankProgressFromFairScheduler",
@@ -3876,22 +3884,6 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2AsyncLivenessProofs",
         "ApplicationCompletionProgressObligation",
     ),
-    "historical-recovery-authority-acquisition": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
-    ),
-    "historical-recovery-certificate-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalCertificateRankProgressResidualObligation",
-    ),
-    "historical-recovery-decision-stage-ownership": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
-    ),
-    "historical-recovery-decision-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionRankProgressResidualObligation",
-    ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
         "SuccessorActivationStarvationFreedomObligation",
@@ -3907,6 +3899,58 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     "height-liveness": (
         "SumeragiV2ChainLivenessProofs",
         "HeightLivenessObligation",
+    ),
+    "cryptography": ("trusted-boundary", "cryptography"),
+    "durability-system-call": ("trusted-boundary", "os-fsync"),
+    "deterministic-execution": ("trusted-boundary", "deterministic-execution"),
+    "post-gst-responsive-quorum": (
+        "trusted-boundary",
+        "post-gst-responsive-quorum",
+    ),
+    "network-after-gst": ("trusted-boundary", "post-gst-delivery"),
+    "runtime-after-gst": ("trusted-boundary", "post-gst-runtime-service"),
+    "transaction-inclusion-fairness": (
+        "trusted-boundary",
+        "transaction-inclusion-fairness",
+    ),
+}
+
+# These sixteen declarations are proof/evidence decomposition leaves, not
+# independently reviewed release claims.  They remain source-bound below and
+# must be consumed by one of the exact 54 top-level obligations rather than
+# being promoted into additional ledger rows.
+SUPPORT_PROOF_OBLIGATION_INVENTORY = {
+    "chain-durable-receipt-agreement": (
+        "SumeragiV2ChainReceiptAgreementProofs",
+        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
+    ),
+    "terminal-ingress-process-lifetime-absorbency": (
+        "SumeragiV2TerminalIngressLifecycleProofs",
+        "TerminalIngressProcessLifetimeAbsorbencyObligation",
+    ),
+    "adequate-leader-exact-closure-residual": (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderExactClosureResidualObligation",
+    ),
+    "exact-decision-off-scheduler-residual-convergence": (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceObligation",
+    ),
+    "historical-recovery-authority-acquisition": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
+    ),
+    "historical-recovery-certificate-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalCertificateRankProgressResidualObligation",
+    ),
+    "historical-recovery-decision-stage-ownership": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+    ),
+    "historical-recovery-decision-rank-progress": (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionRankProgressResidualObligation",
     ),
     "autoscale-lifecycle-production-refinement": (
         "SumeragiV2AutoscaleLifecycle",
@@ -3939,47 +3983,62 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
         "SumeragiV2TypedRolloverHandoffProofs",
-        "ResponsiveChangedRosterRolloverLivenessObligation",
-    ),
-    "cryptography": ("trusted-boundary", "cryptography"),
-    "durability-system-call": ("trusted-boundary", "os-fsync"),
-    "deterministic-execution": ("trusted-boundary", "deterministic-execution"),
-    "post-gst-responsive-quorum": (
-        "trusted-boundary",
-        "post-gst-responsive-quorum",
-    ),
-    "network-after-gst": ("trusted-boundary", "post-gst-delivery"),
-    "runtime-after-gst": ("trusted-boundary", "post-gst-runtime-service"),
-    "transaction-inclusion-fairness": (
-        "trusted-boundary",
-        "transaction-inclusion-fairness",
+        "ResponsiveDurableExactOutputRolloverLivenessObligation / "
+        "ResponsiveRestartRestoreRolloverLivenessObligation",
     ),
 }
 
-# The source ledger intentionally retains ten reviewed supporting or obsolete
-# obligations so their current proof debt cannot disappear through a JSON edit.
-# They are not members of the first-release completion theorem.  Completion is
-# therefore evaluated over the exact ordered 60-ID projection below while the
-# full 70-entry source inventory remains independently mandatory.
-MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS = (
+# Historical recovery has exactly three temporal debt leaves.  Decision-stage
+# ownership is a fourth support leaf, but it is a proved safety theorem and may
+# never fall back into the proofless-support accounting path.
+HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS = (
+    "historical-recovery-authority-acquisition",
+    "historical-recovery-certificate-rank-progress",
+    "historical-recovery-decision-rank-progress",
+)
+HISTORICAL_RECOVERY_PROVED_SAFETY_SUPPORT_IDS = (
+    "historical-recovery-decision-stage-ownership",
+)
+STRICT_PROOFLESS_TEMPORAL_SUPPORT_IDS = (
     "adequate-leader-exact-closure-residual",
     "exact-decision-off-scheduler-residual-convergence",
-    "autoscale-lifecycle-production-refinement",
-    "native-application-evidence-production-refinement",
-    "autonomous-reservation-carrier-production-refinement",
-    "reply-writer-deadline-local-termination",
-    "reply-writer-conditional-responsive-cursor-liveness",
-    "reply-writer-responsive-strong-fairness-to-receipt",
-    "typed-rollover-handoff-model-safety",
-    "typed-rollover-handoff-conditional-local-liveness",
-)
-_MACHINE_CHECKED_COMPLETION_EXCLUDED_ID_SET = frozenset(
-    MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
-)
+) + HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS
+
+SUPPORT_PROOF_CONSUMER_BY_ID = {
+    "chain-durable-receipt-agreement": "height-liveness",
+    "terminal-ingress-process-lifetime-absorbency": (
+        "successor-activation-exact-recovery-production-refinement"
+    ),
+    "adequate-leader-exact-closure-residual": "rotating-leader-liveness",
+    "exact-decision-off-scheduler-residual-convergence": "application-liveness",
+    "historical-recovery-authority-acquisition": "height-liveness",
+    "historical-recovery-certificate-rank-progress": "height-liveness",
+    "historical-recovery-decision-stage-ownership": "height-liveness",
+    "historical-recovery-decision-rank-progress": "height-liveness",
+    "autoscale-lifecycle-production-refinement": "progress-witness-production-refinement",
+    "native-application-evidence-production-refinement": (
+        "progress-witness-production-refinement"
+    ),
+    "autonomous-reservation-carrier-production-refinement": (
+        "progress-witness-production-refinement"
+    ),
+    "reply-writer-deadline-local-termination": "progress-witness-production-refinement",
+    "reply-writer-conditional-responsive-cursor-liveness": (
+        "progress-witness-production-refinement"
+    ),
+    "reply-writer-responsive-strong-fairness-to-receipt": (
+        "progress-witness-production-refinement"
+    ),
+    "typed-rollover-handoff-model-safety": (
+        "successor-activation-exact-recovery-production-refinement"
+    ),
+    "typed-rollover-handoff-conditional-local-liveness": (
+        "successor-activation-exact-recovery-production-refinement"
+    ),
+}
+
 MACHINE_CHECKED_COMPLETION_TARGET_IDS = tuple(
-    obligation_id
-    for obligation_id in REQUIRED_PROOF_OBLIGATION_INVENTORY
-    if obligation_id not in _MACHINE_CHECKED_COMPLETION_EXCLUDED_ID_SET
+    REQUIRED_PROOF_OBLIGATION_INVENTORY
 )
 _MACHINE_CHECKED_COMPLETION_TARGET_ID_SET = frozenset(
     MACHINE_CHECKED_COMPLETION_TARGET_IDS
@@ -4011,12 +4070,42 @@ MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID = {
     for obligation_id in MACHINE_CHECKED_COMPLETION_TARGET_IDS
 }
 MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_COUNTS = {
-    "tlaps_proved": 50,
+    "tlaps_proved": 44,
     "cross_tool_proved": 3,
     "specified_unproved": 0,
     "trusted_contract": 6,
     "out_of_scope": 1,
 }
+
+# The replenishment-lasso repair has a deliberately named source surface.
+# Keeping this list code-owned makes deleting or renaming one of the ownership
+# operators a checker failure even while the full normalized operator bodies
+# are pinned below.  In particular, an arbitrary proof parameter must never
+# return as a substitute for durable protocol state.
+SERVE_LIFECYCLE_REQUIRED_OPERATORS = {
+    "SumeragiV2AsyncNetwork": (
+        "AsyncServeLogicalRequestIdentity",
+        "AsyncServeAdmissionOrdinal",
+        "ReserveExactServeCapacity",
+        "AsyncServeLifecycleOwned",
+        "AsyncServeLifecycleTombstone",
+        "AsyncServeFrozenPredecessorSet",
+    ),
+    "SumeragiV2ExactDecisionStageServiceClosureProofs": (
+        "ExactDecisionRequestLifecycleIngressRank",
+    ),
+    "SumeragiV2AdequateLeaderServiceClosureProofs": (
+        "AdequateLeaderFrozenOwnerUniverse",
+        "AdequateLeaderTargetEqualCountOwnerReplacementAction",
+        "AdequateLeaderTargetCountIncreasingReplenishmentAction",
+        "AdequateLeaderTargetNonDescentEpisodeBudget",
+        "AdequateLeaderTargetNonDescentEpisodeClosureProperty",
+        "AdequateLeaderTargetComposedRankDescentProperty",
+    ),
+}
+RETIRED_ARBITRARY_PRODUCER_BUDGET_SYMBOLS = (
+    "ExactDecisionRequestIngressProducerBudgetResidual",
+)
 
 REQUIRED_MODEL_MODULES = (
     "SumeragiV2",
@@ -4459,124 +4548,229 @@ _REPLY_WRITER_DEADLINE_MUTATION_RUNNER_SHA256 = (
 
 _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2TypedRolloverHandoff.tla": (
-        "24eebb0d15d3f6e634f2500ee94d21e77281a9dbe364b6e8b8c7ae2d40083d2c"
+        "e81da94ee4ead2b9183819a5eb733082267429ee89b7caea23b686dd007ca77c"
     ),
     "SumeragiV2TypedRolloverHandoffProofs.tla": (
-        "2433f237ffeebf8188eb27ebd6f401387331d2cf20e53548340f7eda07b314df"
+        "635b6d75b3aa8c942061c67ebeffb9ef35afbeba5a043cfc904abe7a602d6cde"
     ),
     "SumeragiV2TypedRolloverHandoffMutation.tla": (
-        "40e1d1224421f4bfd36b7eee4febb35ce3410e87e2afcb53610366309a60e4b8"
+        "21de53c3bf6d7853e47faf5a0009ebad453966dd36e919b88481c0bca0f53378"
+    ),
+    "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla": (
+        "8995252082e80cbab0649f98aded2c98b59b7ab74839e02457ca73f5bb4a3d23"
     ),
     "typed_rollover_handoff_fixed.cfg": (
-        "7c73d73f87609cea7e71eafb18e1e6aad51014dfac68a6751143bda922bc0e21"
+        "7e0f8d0f8b27a3266725a00350e49a5f24b0f6433f0467203a4d2dc578f162b9"
+    ),
+    "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg": (
+        "c3659f678de35e046075a4b917c0ff946b3945d6da818c5d62ba712ab424bad3"
     ),
     "typed_rollover_handoff_active_state_roll_bug.cfg": (
-        "a5838333fa1e4871ab6afb658da79586b7ac445a76d3e35730adc1dbb9ba8175"
+        "6e54a37be02494c53de0c27d282c8996064e89703ca45232aaf8429db8d7465c"
     ),
-    "typed_rollover_handoff_clean_atomic_v2_persistence_failure_bug.cfg": (
-        "c91318bd4d863f0a15e1f2d71f13012e7e9cbd4dcbca00a3bf1b42a11b730ac8"
+    "typed_rollover_handoff_changed_roster_without_generation_advance_bug.cfg": (
+        "e342421faaf96607a0127680fa97a9329b0bff9d4633cc84b10a0d010d328e38"
     ),
-    "typed_rollover_handoff_clean_crash_after_atomic_v2_persist_bug.cfg": (
-        "34eb79a3c070bd9dd57a6d3d13c749ec5fd0f9bfc2d7ca917c36f71cea50cd57"
+    "typed_rollover_handoff_clean_state_slot_v3_persistence_failure_bug.cfg": (
+        "4ec02dd05d719f732346cfc09ba2423ce07b71e0dce6ffd912a7b5e8cdbf6d2d"
+    ),
+    "typed_rollover_handoff_clean_crash_after_lifecycle_root_v3_commit_bug.cfg": (
+        "77b166d9480ce848e9b818ced2eb025d4cfaeb47acb2745ca9fc86adb968044e"
     ),
     "typed_rollover_handoff_clean_foreign_owner_reject_bug.cfg": (
-        "17621b4de9815bada75b24afe885fa638fa3f1f9b85e9600b6f84e34fdb19b4a"
+        "9e9fc9e5c1b98b010089a21921b45a4ab4af653fcb542d92c9388c6bd09d06ec"
     ),
     "typed_rollover_handoff_clean_late_enqueue_reject_bug.cfg": (
-        "2296640b54f23389fbe99288ee012149cb62796412e481a90a29cd96be2bfd29"
+        "16085a16c185d7c009046f112e8ac35902b7b506a7f28780bd9f2891ee90c967"
     ),
     "typed_rollover_handoff_clean_predecessor_artifact_reject_bug.cfg": (
-        "23b8fdf6f4007ee61356d5dcfe587536db60919ff344bad5f2451bf64c50fdb9"
+        "9cdfccfe85d63ad27492168e650859005188b9b6cbda7134c12379a6fcaaf591"
     ),
     "typed_rollover_handoff_clean_predecessor_context_reject_bug.cfg": (
-        "4eeed7902995ece5be5fd94eda80a5bb3bc28a9ee6a5cbba834fb91f9d101a72"
+        "0d62a12bb77eb622594368554e4af00282f1c044d4e4b953b27618e786d51962"
     ),
     "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg": (
-        "a7bc054d397291ca783139464cc78e6c83a68a360bb9af80462863a5b06f7e2e"
+        "b30f0be811e137ad56880e644f3e1a6deb90a113c54e0e44738e7d86469d1b4d"
+    ),
+    "typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg": (
+        "b33f2ddd6417c8b43eaca226687edcd28bcddabc2d64efc74eaded6c83c2971f"
+    ),
+    "typed_rollover_handoff_cleanup_before_validation_bug.cfg": (
+        "abe8de889668f65a9e47e721c32bbd57d5ecbf52f6ff2cde9dafe2b5408241ab"
+    ),
+    "typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg": (
+        "baa273c35b7a7f2d031988bd984498a16e556ce46ca7b930ca7712782a11c09a"
+    ),
+    "typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg": (
+        "ad51095a5ede9c012752e8287ef3519e2ad77365f67402a3fee4140180194d23"
+    ),
+    "typed_rollover_handoff_crossed_root_shape_bug.cfg": (
+        "77c3e97f34ca11c01418495b1e95e7999267ffb95499764eace57ca77d07febc"
     ),
     "typed_rollover_handoff_epoch_overflow_bug.cfg": (
-        "a7c29d0ec969c45d27bf973daf2c62b6ce48df957de5f3d7fef5209a0edaef44"
+        "ba66428dbb7f621a75246892029a8bb48c8cd086b6cb12b5c934f1e082a6ba06"
     ),
-    "typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg": (
-        "935a31d970be95f2d836e6bc5efb0dfc4bda9bf6e24e459b13f208a38ada79bb"
+    "typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg": (
+        "a9585ebdaa2f3ba3e5ce694eecde958abb2f7ddd1ca2bc3a22f91df0345e007f"
     ),
     "typed_rollover_handoff_epoch_use_before_persist_bug.cfg": (
-        "d5a44eb95431ad9525daaeef282ae22289b35206b1784c63551ba84bb9b1a55c"
+        "597fe537a1fdc98005171c056eb35b38f0a62dd78855ca13e5678df2c9cc7da8"
     ),
     "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg": (
-        "11dff749d847f4088a274aee292dd2713c910fa662ea08e40cd2ddbedc973e3d"
+        "047275a974264b953baf70238e493325099c2460b005dbb7a04ae12d5413f465"
     ),
     "typed_rollover_handoff_foreign_receipt_bug.cfg": (
-        "0edc0adba05c06f5b98b2553c89cc19df1b344f05e519696eb7ffba1ed746c9b"
+        "6c4bc9b411e21f150a23dfa2f709bc2a34589e7a895e930decf82df6ad14054a"
     ),
     "typed_rollover_handoff_foreign_successor_bug.cfg": (
-        "2acdd54ee494a6dc121ba9ec0992f40a805ba45c6200c2666a22819e638d543b"
+        "d2c662e48d933b2e8118fcce3b8e78fbdd2cb9fddea82b59f14dde82f7e556f5"
+    ),
+    "typed_rollover_handoff_forged_authenticated_close_prefix_bug.cfg": (
+        "b5b69ccaa8766b0a7f210aedb000d55db0cc851a2e1ee25ee62de1dd49a36757"
     ),
     "typed_rollover_handoff_generation_overflow_bug.cfg": (
-        "0c0198b0f59e9aff87c922baa50e3f5ce0adabb60e830e9747969580d148dce5"
+        "1a91a8ad2158774310e18251447b6643863e50068169bfc62530263fc6b9bb2e"
     ),
     "typed_rollover_handoff_late_callback_bug.cfg": (
-        "b7b319b8fd4174cb7dfec365bcf721ad6130ae2d205275a7af454cdcde6c391d"
+        "34ee3c2d0c682de0925613783449d5dfbb15254142f34a85b0188128fe93d31b"
     ),
     "typed_rollover_handoff_late_enqueue_bug.cfg": (
-        "fe4d7ed30dc75131cdb2334de9682b85ef92856b2faa43dbbd7bb808310593c5"
+        "13016842c0df21e6d5efdd7a6f858619770a2c26304347afe4926ae4456bdb3e"
+    ),
+    "typed_rollover_handoff_missing_selected_state_bug.cfg": (
+        "24b4db0f1fa54017035999b389464141627f51ed1279e460f4e837bfb84470c2"
     ),
     "typed_rollover_handoff_predecessor_artifact_accept_bug.cfg": (
-        "d36ed8ef0b3345685bbc5402a83d04e46d78c65b61a01081d678725e7d4ee216"
+        "4d337f7b55fe2ea2dd3d5ecbba8768f9880f54c33709369692103422e01c1318"
     ),
     "typed_rollover_handoff_predecessor_context_accept_bug.cfg": (
-        "cbf01d086f254e33e3be649f70a1bc1eba652016ca1924b86bc5b10937be7dde"
+        "f362f2f8faa173ea7da8572237e80f098e5020418e17fd4ec2aa9ae5181e19bf"
     ),
     "typed_rollover_handoff_premature_mint_bug.cfg": (
-        "9948bfd56465d1e3fa0c67ce4d34b3ae0cbcdf42cf22a6996f953e4266e75356"
+        "191e34d9b4e3897f281e63a15999e9ca761d579a11308d8c37edb5bbb5dfdc0d"
     ),
-    "typed_rollover_handoff_publish_before_atomic_v2_persist_bug.cfg": (
-        "c4322485e904c9bfb9723f68b99137cda3322a286e689fa27ab3158d06c8779c"
+    "typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg": (
+        "dc6828172645ec6cac3f57de2a8a4f507dafaabf98230a817730c108d8d23cb5"
+    ),
+    "typed_rollover_handoff_publish_memory_before_lifecycle_root_v3_commit_bug.cfg": (
+        "66b9b2ce6045be01c9225ed904ec397cdc43a7ee82decba080cb8198f5afe08f"
     ),
     "typed_rollover_handoff_retry_loss_bug.cfg": (
-        "bea0ffe903d5a8e2df176cf3e90959dfe65353c9085ec1468f0f8d04306218ea"
+        "7c30dbe724a751aec3c012083493c1dee4fde6d192e4a88f50b144c6dfda3f35"
     ),
-    "typed_rollover_handoff_skip_snapshot_crash_history_bug.cfg": (
-        "9e56716ecde4814070ed8fe690ec52a41723bd97c2fc299b389fce5d307d469f"
+    "typed_rollover_handoff_reuse_root_selected_state_slot_bug.cfg": (
+        "b8f82d925fdb7b8e98033943640b711aa596991f8bdcb3cdca337cb9dbe9bd0c"
     ),
-    "typed_rollover_handoff_snapshot_ahead_without_restore_bug.cfg": (
-        "abfb5a694957a1edb9772966becaf8a72b896c1411cca68b01c7129d3550d701"
+    "typed_rollover_handoff_root_commit_before_state_slot_bug.cfg": (
+        "9d94abe53148e124adacef888e2f54a75648c7e521fac23da5d07da866d3ec63"
+    ),
+    "typed_rollover_handoff_root_generation_overflow_bug.cfg": (
+        "94242eac961422c567fed5da2f4c72479d719ab7887be9bcfaf3cdc5c1dd2e29"
+    ),
+    "typed_rollover_handoff_same_roster_generation_roll_bug.cfg": (
+        "c1f8e1ecba1e2e7ef1c5aa5e77287795f6514f0c7d7a5dabf298dd707fb219a6"
+    ),
+    "typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg": (
+        "5a0c0045f81b636c42d42b9a32129c2f3301be1e7be7d32f7a26af5d72d1cbc3"
+    ),
+    "typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg": (
+        "641626c1a0cc96125649d40dbd73b4432e153ef275a7567453c7c095f5a61d48"
+    ),
+    "typed_rollover_handoff_recover_uncommitted_state_slot_bug.cfg": (
+        "24ed862807885af3f8f398a76cd5699ffac6a4d41a682a891d0ec76d358595f3"
+    ),
+    "typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg": (
+        "2f826575880769249c8b9a72482d1dfc41a91feab31f41ca770d0b77771ea2ba"
+    ),
+    "typed_rollover_handoff_split_generation_hash_bug.cfg": (
+        "f2e349bc658353a272add46cf9e3c246150c9e10c6182eecce27caec56c11a3d"
     ),
     "typed_rollover_handoff_untyped_force_bug.cfg": (
-        "0274ea20cc0f7e3ff1c2aa833de6486ce2e9d7e306d1556e3fcf7848d49f193c"
+        "c725dc6aa339a63eea289cdcbebf557cb45c6df45a1f63aea4ca32f8b22655b7"
+    ),
+    "typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg": (
+        "a916601a43baa2a7d85fe77670966890b81e85ea741eeabeaadab3170f9ee871"
     ),
 }
 
 _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
-    "edc7a5505da02ea3c9ca04c47f7521f2e206c93fd7ddb2dacaeb074841874f02"
+    "f9f4d9706486c8692ecf3b2bc36e577de557b6520ff89fca31662efdbb3b1652"
 )
 
 _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
     "TypedRolloverInitEstablishesSafetyObligation",
-    "TerminalCompactionPersistsAtomicSoleV2SnapshotObligation",
-    "ActiveLifecycleCompactionReturnsCapacityAtomicallyObligation",
-    "GenerationOverflowReturnsCapacityAtomicallyObligation",
-    "EpochOverflowReturnsCapacityAtomicallyObligation",
-    "SnapshotPublicationRequiresDurableV2PreimageObligation",
-    "CrashBeforeSnapshotPersistencePreservesPredecessorObligation",
-    "CrashAfterSnapshotPersistenceRestoresSuccessorObligation",
-    "FreshEpochPersistencePrecedesUseObligation",
-    "CrashAfterEpochPersistenceSkipsEpochObligation",
-    "SameRosterPreservesTransportWithoutCompactionObligation",
-    "LateOldCallbackCannotMutateSuccessorObligation",
+    "EveryCrashDropsProcessLocalAuthorityObligation",
+    "OnlyValidatedRestartMayFenceAfterCrashObligation",
+    "RootGenerationAdvancesExactlyOnceAndAlternatesSlotObligation",
+    "ForcedFenceCannotForgeAuthenticatedClosePrefixObligation",
     "TypedRolloverNextPreservesSafetyObligation",
     "TypedRolloverSpecAlwaysSafeObligation",
 )
-_TYPED_ROLLOVER_MODEL_SAFETY_LEDGER_SYMBOL = (
-    "TypedRolloverSpecAlwaysSafeObligation / "
-    "TypedRolloverNextPreservesSafetyObligation"
+_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS = (
+    "BootstrapRootHasExactGenerationZeroShapeObligation",
+    "FreshBootstrapUsesTargetGeometryEpochZeroObligation",
+    "BootstrapStateReplacementRequiresDirectorySyncObligation",
+    "BootstrapCrashRecoveryObligation",
+    "BootstrapFirstCommitSelectsExactInitialPairObligation",
+    "ExactOwnerPairRequiredForRetainedHandoffObligation",
+    "StateReplacementRequiresDirectorySyncBeforeRootReplacementObligation",
+    "RootReplacementRequiresStoreSyncBeforeMemoryPublicationObligation",
+    "RootSelectedPairBindsGenerationAndDigestObligation",
+    "MissingRootSelectedStateCannotValidateOrCleanupObligation",
+    "ValidationFailurePreservesArtifactsObligation",
+    "SemanticValidationPrecedesArtifactCleanupObligation",
+    "ValidatedCleanupRemovesInactiveSlotObligation",
+    "SecondCrashBeforeRootResyncPreservesPredecessorObligation",
+    "MemoryPublicationRequiresCommittedV3RootObligation",
+    "OrdinaryRolloverRequiresAuthenticatedTerminalityObligation",
+    "DurableExactOutputAuthorityMayFenceActiveStateObligation",
+    "ValidatedRestartAuthorityMayFenceActiveStateObligation",
+    "ActiveOrdinaryRolloverReturnsCapacityAtomicallyObligation",
+    "SameRosterFullTableReturnsCapacityAtomicallyObligation",
+    "ServiceGenerationOverflowReturnsCapacityAtomicallyObligation",
+    "RootGenerationExhaustionPoisonsJournalFailAtomicallyObligation",
+    "EpochOverflowReturnsCapacityAtomicallyObligation",
+    "CrashBeforeRootCommitRestoresPredecessorObligation",
+    "CrashAfterRootCommitRestoresSuccessorObligation",
+    "FreshEpochPersistencePrecedesExactUseObligation",
+    "CrashRestoresExactRequesterIncarnationObligation",
+    "SameRosterPreservesTransportWithoutGenerationRollObligation",
+    "LateOldCallbackCannotMutateSuccessorObligation",
 )
-_PROOFLESS_RELEASE_AGGREGATE_DEBT_BY_THEOREM = {
-    ("SumeragiV2TypedRolloverHandoffProofs", symbol): (
-        "typed-rollover-handoff-model-safety",
-        _TYPED_ROLLOVER_MODEL_SAFETY_LEDGER_SYMBOL,
-    )
+_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS = (
+    "ResponsiveDurableExactOutputRolloverLivenessObligation",
+    "ResponsiveRestartRestoreRolloverLivenessObligation",
+)
+_PROOFLESS_RELEASE_SUPPORT_BY_THEOREM = {
+    (
+        "SumeragiV2TypedRolloverHandoffProofs",
+        symbol,
+    ): "typed-rollover-handoff-model-safety"
     for symbol in _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS
+}
+_PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
+    {
+        ("SumeragiV2TypedRolloverHandoffProofs", symbol): (
+            "typed-rollover-handoff-conditional-local-liveness"
+        )
+        for symbol in _TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS
+    }
+)
+_PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
+    {
+        (module, symbol): support_id
+        for support_id, (module, symbols) in (
+            SUPPORT_PROOF_OBLIGATION_INVENTORY.items()
+        )
+        if support_id not in HISTORICAL_RECOVERY_PROVED_SAFETY_SUPPORT_IDS
+        for symbol in symbols.split(" / ")
+    }
+)
+_PROOFLESS_RELEASE_DIRECT_CONSUMER_BY_THEOREM = {
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+    ): "timeout-view-liveness",
 }
 
 RETIRED_PATHS = (
@@ -4725,14 +4919,6 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "SumeragiV2Proofs",
         "SameRoundLockAndCommitAuthorizationObligation",
     ),
-    "chain-durable-receipt-agreement": (
-        "SumeragiV2ChainReceiptAgreementProofs",
-        "IndexedChainSpecEstablishesExactPerSlotReceiptAgreement",
-    ),
-    "terminal-ingress-process-lifetime-absorbency": (
-        "SumeragiV2TerminalIngressLifecycleProofs",
-        "TerminalIngressProcessLifetimeAbsorbencyObligation",
-    ),
     "effective-lock-body-acquisition-model": (
         "SumeragiV2EffectiveLockAcquisitionProofs",
         "EffectiveLockAcquisitionModelObligation",
@@ -4773,22 +4959,6 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "SumeragiV2AsyncLivenessProofs",
         "ProtectedStage5RankProgressFromFairFifo",
     ),
-    "historical-recovery-authority-acquisition": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation",
-    ),
-    "historical-recovery-certificate-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalCertificateRankProgressResidualObligation",
-    ),
-    "historical-recovery-decision-stage-ownership": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
-    ),
-    "historical-recovery-decision-rank-progress": (
-        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
-        "IndexedHistoricalDecisionRankProgressResidualObligation",
-    ),
     "successor-activation-starvation-freedom": (
         "SumeragiV2SuccessorActivationRefinementProofs",
         "SuccessorActivationStarvationFreedomObligation",
@@ -4809,9 +4979,9 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
 
 # A fixed module/symbol binding is insufficient when a theorem can retain its
 # name while its statement is weakened.  These release seams therefore pin
-# the complete normalized theorem statement.  The four historical residuals
-# intentionally remain proofless until their exact fairness kernels are
-# discharged.
+# the complete normalized theorem statement. Historical residual declarations
+# are support leaves: whether a leaf has gained a proof does not by itself
+# promote its reviewed top-level consumer.
 EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
     "chain-durable-receipt-agreement": (
         "IndexedChainSpec "
@@ -4820,6 +4990,16 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
     "terminal-ingress-process-lifetime-absorbency": (
         "TerminalIngressLifecycleSpec "
         "=> TerminalIngressProcessLifetimeAbsorbencyProperty"
+    ),
+    "adequate-leader-exact-closure-residual": (
+        "\\A initialContext: "
+        "AdequateLeaderExactClosureResidualProperty("
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    "exact-decision-off-scheduler-residual-convergence": (
+        "\\A initialContext: "
+        "ExactDecisionOffSchedulerResidualConvergenceProperty("
+        " AsyncSpecAt(initialContext))"
     ),
     "historical-recovery-authority-acquisition": (
         "IndexedChainSpec "
@@ -4845,20 +5025,445 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
     ),
 }
 
-PROOFLESS_FIXED_DEBT_OBLIGATION_IDS = frozenset(
-    {
-        "historical-recovery-authority-acquisition",
-        "historical-recovery-certificate-rank-progress",
-        "historical-recovery-decision-stage-ownership",
-        "historical-recovery-decision-rank-progress",
-    }
-)
-
 # Pin the direct property surfaces consumed by the six theorem statements.
 # Without these contracts, replacing a property with TRUE would preserve the
 # theorem declaration and silently turn a real release obligation into a
 # tautology.
 EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderExactClosureResidualProperty",
+    ): (
+        "/\\ AdequateLeaderExactResidualKernelProperty(specification) "
+        "/\\ AdequateLeaderSemanticCompositionProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderExactResidualKernelProperty",
+    ): (
+        "/\\ ExactLeaderSchedulerOriginReadinessProperty(specification) "
+        "/\\ AdequateLeaderOpenPhysicalResidualConvergenceProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderSemanticCompositionProperty",
+    ): (
+        "/\\ AdequateLeaderViewReachCompositionProperty(specification) "
+        "/\\ AdequateLeaderTargetSemanticCompositionProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderViewReachCompositionProperty",
+    ): (
+        "specification => (gst /\\ ~ResponsiveNodesDecide) "
+        "~> (AdequateResponsiveHonestLeaderViewReached "
+        "\\/ ResponsiveNodesDecide)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticCompositionProperty",
+    ): (
+        "/\\ AdequateLeaderTargetCorridorEntryProperty(specification) "
+        "/\\ AdequateLeaderTargetProducerTransportClosureProperty(specification) "
+        "/\\ AdequateLeaderTargetRankDescentProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCorridorEntryProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds: "
+        "AdequateLeaderTargetDecisionSource(target) "
+        "~> (NodeHasDecision(target) "
+        "\\/ \\E leaderContext \\in ContextRecords, "
+        "leader \\in ValidatorIds, leaderView \\in Views, "
+        "subject \\in Subjects: AdequateLeaderTargetOpenFrontier( "
+        "target, leaderContext, leader, leaderView, subject))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetProducerTransportClosureProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds, "
+        "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
+        "leaderView \\in Views, subject \\in Subjects: "
+        "AdequateLeaderTargetProducerTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "~> (NodeHasDecision(target) "
+        "\\/ \\E occurrenceRank \\in "
+        "AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, occurrenceRank))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankDescentProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds, "
+        "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
+        "leaderView \\in Views, subject \\in Subjects, "
+        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, occurrenceRank) "
+        "~> (NodeHasDecision(target) "
+        "\\/ \\E lowerOccurrenceRank \\in SetLessThan( "
+        "occurrenceRank, AdequateLeaderTargetOccurrenceRankOrdering, "
+        "AdequateLeaderTargetOccurrenceRankCarrier): "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, lowerOccurrenceRank))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderFrozenTargetCorridor",
+    ): (
+        "/\\ gst /\\ leaderContext \\in ContextRecords "
+        "/\\ leaderContext = context "
+        "/\\ target \\in Responsive \\cap VotingRoster(leaderContext.epoch) "
+        "/\\ leader \\in Responsive \\cap VotingRoster(leaderContext.epoch) "
+        "/\\ leader \\in Honest /\\ leaderView \\in Views "
+        "/\\ nodeView[leader] = leaderView "
+        "/\\ nodeView[target] = leaderView "
+        "/\\ Leader(leaderContext, leaderView) = leader "
+        "/\\ AsyncViewTimeout(leaderView) > AsyncWorstCaseServiceBudget "
+        "/\\ ~NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCandidateRole",
+    ): (
+        "/\\ candidate.node \\in {target, leader} "
+        "/\\ IF candidate.kind \\in {\"BeginDecision\", \"PersistDecision\"} "
+        "THEN candidate.node = target "
+        "ELSE IF candidate.node # target "
+        "THEN ~NodeHasDecision(candidate.node) ELSE TRUE"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCandidateIdentity",
+    ): (
+        "/\\ rank \\in AdequateLeaderTargetSemanticRankCarrier "
+        "/\\ subject \\in Subjects "
+        "/\\ AdequateLeaderFrozenTargetCorridor( "
+        "target, leaderContext, leader, leaderView) "
+        "/\\ ExactLeaderCurrentRankWitness( candidate, rank, leaderContext, "
+        "candidate.node, leaderView, subject) "
+        "/\\ AdequateLeaderTargetCandidateRole(candidate, target, leader)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticRankCarrier",
+    ): "(1..4) \\X (0..9)",
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticRankOrdering",
+    ): (
+        "LexPairOrdering( OpToRel(<, Nat), OpToRel(<, Nat), "
+        "1..4, 0..9)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankFrontier",
+    ): (
+        "\\E candidate \\in AsyncCandidateSet: "
+        "AdequateLeaderTargetCandidateIdentity( "
+        "candidate, rank, target, leaderContext, leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankOwnerSet",
+    ): (
+        "{candidate \\in AsyncCandidateSet: "
+        "AdequateLeaderTargetCandidateIdentity( candidate, rank, target, "
+        "leaderContext, leader, leaderView, subject)}"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankOwnerCount",
+    ): (
+        "Cardinality( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, subject, rank))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankCarrier",
+    ): "AdequateLeaderTargetSemanticRankCarrier \\X Nat",
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankOrdering",
+    ): (
+        "LexPairOrdering( AdequateLeaderTargetSemanticRankOrdering, "
+        "OpToRel(<, Nat), AdequateLeaderTargetSemanticRankCarrier, Nat)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankFrontier",
+    ): (
+        "/\\ occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier "
+        "/\\ occurrenceRank[2] > 0 "
+        "/\\ IsFiniteSet( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank[1])) "
+        "/\\ AdequateLeaderTargetRankFrontier( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank[1]) "
+        "/\\ occurrenceRank[2] = AdequateLeaderTargetRankOwnerCount( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank[1])"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankReplenishmentAction",
+    ): (
+        "/\\ rank \\in AdequateLeaderTargetSemanticRankCarrier "
+        "/\\ subject \\in Subjects "
+        "/\\ AdequateLeaderFrozenTargetCorridor( "
+        "target, leaderContext, leader, leaderView) "
+        "/\\ IsFiniteSet( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, subject, rank)) "
+        "/\\ IsFiniteSet( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, subject, rank)') "
+        "/\\ AsyncNext /\\ ~NodeHasDecision(target)' "
+        "/\\ AdequateLeaderTargetRankOwnerCount( "
+        "target, leaderContext, leader, leaderView, subject, rank)' "
+        "> AdequateLeaderTargetRankOwnerCount( "
+        "target, leaderContext, leader, leaderView, subject, rank)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankReplenishmentResidual",
+    ): (
+        "/\\ AdequateLeaderTargetRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, rank) "
+        "/\\ ENABLED <<AdequateLeaderTargetRankReplenishmentAction( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, rank)>>_AsyncAllVars"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCommitQcRebroadcastResidual",
+    ): (
+        "/\\ target # leader "
+        "/\\ AdequateLeaderFrozenTargetCorridor( "
+        "target, leaderContext, leader, leaderView) "
+        "/\\ subject \\in Subjects "
+        "/\\ \\E candidate \\in AsyncCandidateSet: "
+        "/\\ ExactLeaderCurrentRankWitness( "
+        "candidate, DecisionSemanticRank(2), "
+        "leaderContext, leader, leaderView, subject) "
+        "/\\ candidate.kind = \"PersistDecision\" "
+        "/\\ \\E request \\in PersistDecisionRequests(candidate): "
+        "request.rebroadcast"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetProducerResidual",
+    ): (
+        "/\\ AdequateLeaderTargetProtocolSubjectSource( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~(\\E rank \\in AdequateLeaderTargetSemanticRankCarrier: "
+        "AdequateLeaderTargetRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, rank)) "
+        "/\\ ~AdequateLeaderTargetCommitQcRebroadcastResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~AdequateLeaderTargetDueTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~AdequateLeaderTargetRunnerAdmissionResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~AdequateLeaderTargetCertifiedResponseCapacityResidual( "
+        "target, leaderContext, leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetProducerTransportResidual",
+    ): (
+        "\\/ AdequateLeaderTargetCommitQcRebroadcastResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetDueTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetRunnerAdmissionResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetCertifiedResponseCapacityResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetProducerResidual( "
+        "target, leaderContext, leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOpenFrontier",
+    ): (
+        "\\/ AdequateLeaderTargetProducerTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ \\E occurrenceRank \\in "
+        "AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, occurrenceRank)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionSource",
+    ): (
+        "/\\ gst /\\ AdequateResponsiveHonestLeaderViewReached "
+        "/\\ target \\in AsyncCurrentResponsiveVoters "
+        "/\\ ~NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionConvergenceProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds: "
+        "AdequateLeaderTargetDecisionSource(target) "
+        "~> NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderDecisionPrefixAt",
+    ): (
+        "\\A target \\in AsyncVotersAt(initialContext) \\cap (0..limit): "
+        "NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestPacketEmissionResidual",
+    ): (
+        "/\\ ExactDecisionActiveRequestOwner(node, qc) "
+        "/\\ ~ExactDecisionRequestPacketEmissionGoal(node, qc)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceProperty",
+    ): (
+        "/\\ ExactDecisionRequestClockOwnerConvergenceProperty(specification) "
+        "/\\ ExactDecisionRequestRuntimePrefixConvergenceProperty(specification) "
+        "/\\ ExactDecisionRequestHeadGateOwnerConvergenceProperty(specification) "
+        "/\\ ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty( "
+        "specification) "
+        "/\\ ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestClockOwnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc: "
+        "ExactDecisionRequestPacketEmissionResidual(node, qc) "
+        "~> (ExactDecisionRequestPacketEmissionGoal(node, qc) "
+        "\\/ ExactDecisionRequestRetransmitArmedResidual( node, qc))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimePrefixConvergenceProperty",
+    ): (
+        "specification => \\A node, qc: "
+        "/\\ ExactDecisionRequestRetransmitArmedResidual(node, qc) "
+        "~> (ExactDecisionRequestPacketEmissionGoal(node, qc) "
+        "\\/ ExactDecisionRequestSendingRetransmitReady( node, qc)) "
+        "/\\ ExactDecisionRequestSendingRetransmitReady(node, qc) "
+        "~> ExactDecisionRequestPacketEmissionGoal(node, qc)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestHeadGateOwnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc, archive, request, packet: "
+        "ExactDecisionRequestHeadGateOwnerResidual( "
+        "node, qc, archive, request, packet) "
+        "~> (ExactDecisionRequestIngressGoal( "
+        "node, qc, archive, request) "
+        "\\/ ExactDecisionRequestPacketAdmissionReady( "
+        "node, qc, archive, request, packet))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty",
+    ): (
+        "ExactDecisionRequestIngressLaneRunnerConvergenceProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressLaneRunnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc, archive, request: "
+        "ExactDecisionRequestIngressLaneResidual( "
+        "node, qc, archive, request) "
+        "~> ExactDecisionRequestIngressGoal( "
+        "node, qc, archive, request)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc, archive, request, response, packet: "
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerResidual( "
+        "node, qc, archive, request, response, packet) "
+        "~> (ExactDecisionResponseAdmissionGoal(node, qc) "
+        "\\/ ExactDecisionResponsePacketAdmissionReady( "
+        "node, qc, archive, request, response, packet))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+    ): (
+        "\\A initialContext: "
+        "TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "DirectTimeoutViewClosureResidualObligation",
+    ): (
+        "\\A initialContext: "
+        "DirectTimeoutViewClosureResidualProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "LockedBodyDirectClosureResidualProperty",
+    ): (
+        "/\\ TimeoutViewProgressProperty(specification) "
+        "/\\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(specification) "
+        "/\\ RetainedLockLeaderTurnProducerOriginProperty(specification) "
+        "/\\ RetainedLockRankHandoffProperty(specification)"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "RetainedLockTimeoutFedSourceExposureLeaderTurnProperty",
+    ): (
+        "TimeoutViewProgressProperty(specification) "
+        "=> (specification => \\A node \\in ValidatorIds, "
+        "lockedRound \\in Views, subject \\in Subjects: "
+        "RetainedLockModeSource(node, lockedRound, subject) "
+        "~> (RetainedLockModeGoal( node, lockedRound, subject) "
+        "\\/ RetainedLockSourceExposureFrontier("
+        " node, lockedRound, subject)))"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "RetainedLockLeaderTurnProducerOriginProperty",
+    ): (
+        "specification => \\A node \\in ValidatorIds, "
+        "lockedRound \\in Views, subject \\in Subjects, originView \\in Views: "
+        "(RetainedLockExactLeaderTurn( node, lockedRound, subject, originView) "
+        "\\/ RetainedLockCertifiedPrepareTransfer("
+        " node, lockedRound, subject, originView)) "
+        "~> (RetainedLockModeGoal(node, lockedRound, subject) "
+        "\\/ RetainedLockRankedOriginFrontier("
+        " node, lockedRound, subject, originView))"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "RetainedLockRankHandoffProperty",
+    ): (
+        "specification => \\A node \\in ValidatorIds, "
+        "lockedRound \\in Views, subject \\in Subjects, originView \\in Views, "
+        "rank \\in ExactLeaderSemanticRankCarrier: "
+        "RetainedLockCandidateRankFrontier("
+        " node, lockedRound, subject, originView, rank) "
+        "~> (RetainedLockModeGoal(node, lockedRound, subject) "
+        "\\/ \\E lowerRank \\in SetLessThan("
+        " rank, ExactLeaderSemanticRankOrdering, ExactLeaderSemanticRankCarrier): "
+        "RetainedLockCandidateRankFrontier("
+        " node, lockedRound, subject, originView, lowerRank))"
+    ),
     (
         "SumeragiV2DecisionWitnessPreservationProofs",
         "DecisionExactSourceOwner",
@@ -5297,12 +5902,24 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ): (
         "/\\ candidate \\in "
         "IndexedAsync(initialContext)!AsyncCandidateSet "
+        "/\\ IndexedHistoricalRecoveryTargetOwned(initialContext, node) "
         "/\\ candidate.node = node "
         "/\\ candidate.height = initialContext.height "
         "/\\ candidate.view = qc.view "
         "/\\ candidate.subject = qc.subject "
         '/\\ candidate.kind \\in {"DeliverQC", "BeginDecision", '
-        '"PersistDecision"}'
+        '"PersistDecision"} '
+        "/\\ candidate.consumerContext = initialContext "
+        "/\\ IndexedAsync(initialContext)!CandidateConsumerCurrent(candidate) "
+        '/\\ CASE candidate.kind \\in {"DeliverQC", "BeginDecision"} -> '
+        'candidate.class = "Progress" '
+        '[] candidate.kind = "PersistDecision" -> '
+        'candidate.class = "Completion" '
+        "[] OTHER -> FALSE "
+        "/\\ IndexedDecisionWitness(initialContext)! "
+        "ProtectedCandidateOwned(candidate) "
+        "/\\ IndexedHistoricalCertificateCommandLineage( "
+        "initialContext, node, qc, candidate)"
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
@@ -5614,7 +6231,6 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ): (
         "/\\ IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty "
         "/\\ IndexedHistoricalCertificateRankProgressResidualProperty "
-        "/\\ IndexedHistoricalDecisionStageOwnershipResidualProperty "
         "/\\ IndexedHistoricalDecisionRankProgressResidualProperty"
     ),
 }
@@ -5624,6 +6240,238 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
 # In particular, receipt subject equality must come from one-height
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankOrderingWellFounded",
+    ): (
+        "IsWellFoundedOn( AdequateLeaderTargetOccurrenceRankOrdering, "
+        "AdequateLeaderTargetOccurrenceRankCarrier)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRanksReachIndexedDecision",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderTargetRankDescentProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> (AsyncLiveSpecAt(initialContext) "
+        "=> \\A target \\in ValidatorIds, "
+        "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
+        "leaderView \\in Views, subject \\in Subjects, "
+        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank) "
+        "~> NodeHasDecision(target))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix",
+    ): (
+        "\\A initialContext: "
+        "/\\ AsyncLiveSpecAt(initialContext) "
+        "/\\ AdequateLeaderTargetDecisionConvergenceProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> \\A limit \\in Nat: "
+        "(gst /\\ AdequateResponsiveHonestLeaderViewReached "
+        "/\\ ~ResponsiveNodesDecide) "
+        "~> AdequateLeaderDecisionPrefixAt(initialContext, limit)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide",
+    ): (
+        "\\A initialContext: "
+        "/\\ ModelConfiguration "
+        "/\\ AsyncFrozenContextAt(initialContext) "
+        "/\\ AdequateLeaderDecisionPrefixAt(initialContext, N - 1) "
+        "=> ResponsiveNodesDecide"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderTargetSemanticCompositionProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderTargetDecisionConvergenceProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderTargetDecisionConvergenceProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> (AsyncLiveSpecAt(initialContext) "
+        "=> (gst /\\ AdequateResponsiveHonestLeaderViewReached "
+        "/\\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "ExactAdequateLeaderSubkernelsReduceToServiceKernel",
+    ): (
+        "\\A initialContext: "
+        "/\\ AdequateLeaderExactResidualKernelProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "/\\ AdequateLeaderSemanticCompositionProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderServiceKernelProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderServiceKernelObligation",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderServiceKernelProperty(AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestEmissionKernelsDischargeResidual",
+    ): (
+        "\\A initialContext: "
+        "/\\ ExactDecisionRequestClockOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestRuntimePrefixConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionRequestPacketEmissionResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressKernelsDischargeResidual",
+    ): (
+        "\\A initialContext: "
+        "/\\ ExactDecisionRequestHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionRequestIngressResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionServeResponseResidualConvergence",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionServeResponseResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseClaimKernelNarrowsNonPhysicalResidual",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionResponseNonPhysicalHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponsePhysicalKernelNarrowsHeadGateResidual",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionResponseNonPhysicalHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionResponseHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseAdmissionKernelsDischargeResidual",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionResponseHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionResponseAdmissionResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualsDischargeKernels",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionOffSchedulerResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> /\\ ExactDecisionRequestPacketEmissionKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestIngressKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionServeResponseKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionResponseAdmissionKernelProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceDischargesStageService",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionOffSchedulerResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionStageServiceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResidualKernelsDischargeStageService",
+    ): (
+        "\\A initialContext: "
+        "/\\ ExactDecisionStage2BusyClosureProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestPacketEmissionKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestIngressKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionServeResponseKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionResponseAdmissionKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionStageServiceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionStageServiceObligation",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionStageServiceProperty(AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressReduction",
+    ): (
+        "DirectTimeoutViewClosureResidualObligation "
+        "=> AsyncTemporalClosureTimeoutViewProgressObligation"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureLockedBodyReproposalProgressReduction",
+    ): (
+        "\\A initialContext: "
+        "LockedBodyDirectClosureResidualProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "=> LockedBodyReproposalProgressProperty("
+        " AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "DirectRetainedLockDecompositionClosesLockedBodyReproposal",
+    ): (
+        "\\A initialContext: "
+        "/\\ TimeoutViewProgressProperty( AsyncLiveSpecAt(initialContext)) "
+        "/\\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "/\\ RetainedLockLeaderTurnProducerOriginProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "/\\ RetainedLockRankHandoffProperty("
+        " AsyncLiveSpecAt(initialContext)) "
+        "=> LockedBodyReproposalProgressProperty("
+        " AsyncLiveSpecAt(initialContext))"
+    ),
     (
         "SumeragiV2ProgressWitnessFinalClosureProofs",
         "OpenHistoricalRecoveryPreservesDecisionExactSource",
@@ -5694,6 +6542,15 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalServiceKernelsDischargeAuthorityReadyProgress",
+    ): (
+        "/\\ IndexedChainSpec "
+        "/\\ IndexedHistoricalCertificateRankProgressResidualProperty "
+        "/\\ IndexedHistoricalDecisionRankProgressResidualProperty "
+        "=> IndexedExactHistoricalRecoveryFromAuthorityProgress"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
     ): (
         "/\\ IndexedChainSpec "
@@ -5703,6 +6560,202 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
 }
 
 FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankOrderingWellFounded",
+    ): (
+        "AdequateLeaderTargetSemanticRankOrderingWellFounded",
+        "NatLessThanWellFounded",
+        "WFLexPairOrdering",
+        "AdequateLeaderTargetOccurrenceRankOrdering",
+        "AdequateLeaderTargetOccurrenceRankCarrier",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRanksReachIndexedDecision",
+    ): (
+        "AdequateLeaderTargetOccurrenceRankOrderingWellFounded",
+        "WellFoundedLeadsTo",
+        "AdequateLeaderTargetRankDescentProperty",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix",
+    ): (
+        "AdequateLeaderTargetConvergenceDecidesFixedFrozenVoter",
+        "AdequateLeaderDecisionPrefixAtIsStable",
+        "AdequateLeaderAsyncBracketStepPreservesTargetDecision",
+        "AdequateLeaderDecisionPrefixAt",
+        "NatInduction",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide",
+    ): (
+        "FrozenContextFixesResponsiveVoters",
+        "AdequateLeaderDecisionPrefixAt",
+        "ResponsiveNodesDecide",
+        "AsyncVotersAt",
+        "ValidatorIds",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence",
+    ): (
+        "AdequateLeaderTargetRanksReachIndexedDecision",
+        "AdequateLeaderTargetCorridorEntryProperty",
+        "AdequateLeaderTargetProducerTransportClosureProperty",
+        "AdequateLeaderTargetOpenFrontier",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode",
+    ): (
+        "AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix",
+        "FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide",
+        "AdequateLeaderDecisionPrefixAt",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "ExactAdequateLeaderSubkernelsReduceToServiceKernel",
+    ): (
+        "AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence",
+        "AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode",
+        "AdequateLeaderViewReachCompositionProperty",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderServiceKernelObligation",
+    ): (
+        "AdequateLeaderExactClosureResidualObligation",
+        "ExactAdequateLeaderSubkernelsReduceToServiceKernel",
+        "AdequateLeaderExactClosureResidualProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestEmissionKernelsDischargeResidual",
+    ): (
+        "PTL",
+        "ExactDecisionRequestClockOwnerConvergenceProperty",
+        "ExactDecisionRequestRuntimePrefixConvergenceProperty",
+        "ExactDecisionRequestPacketEmissionResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressKernelsDischargeResidual",
+    ): (
+        "ExactDecisionRequestAdmissionHandoffConvergence",
+        "ExactDecisionRequestIngressResidualSplitsAtAdmissionReady",
+        "ExactDecisionRequestIngressLaneRunnerConvergenceProperty",
+        "ExactDecisionRequestIngressResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionServeResponseResidualConvergence",
+    ): (
+        "ExactDecisionServeExitSafetyKernel",
+        "ExactDecisionServeExitSafetyDischargesResidual",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseClaimKernelNarrowsNonPhysicalResidual",
+    ): (
+        "ExactDecisionResponseClaimContentionConvergence",
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty",
+        "ExactDecisionResponseNonPhysicalHeadGateOwnerConvergenceProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponsePhysicalKernelNarrowsHeadGateResidual",
+    ): (
+        "ExactDecisionResponsePhysicalCompletionConvergence",
+        "ExactDecisionResponseAdmissionResidualSplitsAtReady",
+        "ExactDecisionResponseHeadGateOwnerConvergenceProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseAdmissionKernelsDischargeResidual",
+    ): (
+        "ExactDecisionResponseAdmissionHandoffConvergence",
+        "ExactDecisionResponseClaimIngressRunnerConvergence",
+        "ExactDecisionResponseAdmissionResidualSplitsAtReady",
+        "ExactDecisionResponseAdmissionResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualsDischargeKernels",
+    ): (
+        "ExactDecisionRequestEmissionKernelsDischargeResidual",
+        "ExactDecisionRequestIngressKernelsDischargeResidual",
+        "ExactDecisionServeResponseResidualConvergence",
+        "ExactDecisionResponseClaimKernelNarrowsNonPhysicalResidual",
+        "ExactDecisionResponsePhysicalKernelNarrowsHeadGateResidual",
+        "ExactDecisionResponseAdmissionKernelsDischargeResidual",
+        "ExactDecisionOffSchedulerResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResidualKernelsDischargeStageService",
+    ): (
+        "ExactDecisionServiceSourceDecomposition",
+        "ExactDecisionLocalStage2ClosesPhysicalOwnerExit",
+        "ExactDecisionPhysicalExitClosesCandidatePipeline",
+        "ExactDecisionRequestHasResponsiveBodyHoldingAlias",
+        "ExactRequestPacketAdmissionCreatesIngressOwner",
+        "NormalExactRequestIngressCreatesFreshServeOwner",
+        "HistoricalExactRequestIngressCreatesFreshServeOwner",
+        "ExactServeHeadCreatesAuthenticatedResponsePacket",
+        "FreshExactResponsePacketAdmissionAcquiresRecipientClaim",
+        "ExactResponsePacketCoalescingRetainsRouteNeutralClaim",
+        "ExactResponseIngressDrainAtomicallyRetiresAliasesAndCreatesFetchOwner",
+        "ExactDecisionFetchHeldBodySchedulesValidation",
+        "ExactCertifiedFetchStagesBodyAndSchedulesStore",
+        "DecisionStoreSchedulesValidation",
+        "DecisionValidationSchedulesApply",
+        "DecisionApplyCreatesTerminalStage",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceDischargesStageService",
+    ): (
+        "ExactDecisionStage2BusyClosure",
+        "ExactDecisionOffSchedulerResidualsDischargeKernels",
+        "ExactDecisionResidualKernelsDischargeStageService",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionStageServiceObligation",
+    ): (
+        "ExactDecisionOffSchedulerResidualConvergenceObligation",
+        "ExactDecisionOffSchedulerResidualConvergenceDischargesStageService",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressReduction",
+    ): (
+        "DirectTimeoutViewDecompositionClosesTimeoutViewProgress",
+        "DirectTimeoutViewClosureResidualObligation",
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureLockedBodyReproposalProgressReduction",
+    ): (
+        "DirectRetainedLockDecompositionClosesLockedBodyReproposal",
+        "LockedBodyDirectClosureResidualProperty",
+    ),
+    (
+        "SumeragiV2LockedBodyReproposalProgressProofs",
+        "DirectRetainedLockDecompositionClosesLockedBodyReproposal",
+    ): (
+        "RetainedLockRankHandoffClosesRankedFrontier",
+        "RetainedLockTimeoutFedSourceExposureLeaderTurnProperty",
+        "RetainedLockLeaderTurnProducerOriginProperty",
+        "RetainedLockRankedFrontier",
+        "LockedBodyReproposalProgressProperty",
+    ),
     (
         "SumeragiV2DecisionWitnessPreservationProofs",
         "DecisionExactRetentionFramePreservesSource",
@@ -5781,11 +6834,32 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+    ): (
+        "IndexedChainSpecAlwaysDecisionWitnessSupport",
+        "IndexedChainSpecKeepsResponsiveRecoveryDormant",
+        "IndexedChainSpecEstablishesCompositionInvariant",
+        "IndexedHistoricalDecisionStageOwnershipResidualIsEmpty",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalServiceKernelsDischargeAuthorityReadyProgress",
+    ): (
+        "IndexedHistoricalCertificateRankProgressResidualProperty",
+        "IndexedHistoricalDecisionRankProgressResidualProperty",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+        "IndexedChainSpecClosesHistoricalOpenTarget",
+        "IndexedHistoricalCertificateRankConvergence",
+        "IndexedHistoricalDecisionRankConvergence",
+        "IndexedChainSpecClosesHistoricalApplicationReceiptHandoff",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
     ): (
         "IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty",
         "IndexedHistoricalCertificateRankProgressResidualProperty",
-        "IndexedHistoricalDecisionStageOwnershipResidualProperty",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
         "IndexedHistoricalDecisionRankProgressResidualProperty",
         "IndexedChainSpecClosesHistoricalOpenTarget",
         "IndexedHistoricalCertificateRankConvergence",
@@ -5805,10 +6879,6 @@ FIXED_PROOF_FORBIDDEN_MODULE_TOKENS = {
 # ledger order is intentional as well: reviewers should encounter each
 # prerequisite before the theorem which consumes it.
 PROOF_STATUS_DEPENDENCIES = {
-    "chain-durable-receipt-agreement": (
-        "agreement",
-        "no-conflicting-commit-qcs",
-    ),
     "effective-lock-body-acquisition-production-refinement": (
         "effective-lock-body-acquisition-model",
     ),
@@ -5891,35 +6961,10 @@ PROOF_STATUS_DEPENDENCIES = {
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
     ),
-    "historical-recovery-authority-acquisition": (
-        "chain-durable-receipt-agreement",
-        "rotating-leader-liveness",
-        "application-liveness",
-    ),
-    "historical-recovery-certificate-rank-progress": (
-        "async-type-invariant",
-        "async-fair-action-refinement",
-        "progress-witness-preservation",
-        "post-gst-starvation-freedom",
-    ),
-    "historical-recovery-decision-stage-ownership": (
-        "async-type-invariant",
-        "decision-recovery-across-restart",
-        "progress-witness-preservation",
-        "post-gst-starvation-freedom",
-    ),
-    "historical-recovery-decision-rank-progress": (
-        "async-type-invariant",
-        "async-fair-action-refinement",
-        "decision-recovery-across-restart",
-        "progress-witness-preservation",
-        "post-gst-starvation-freedom",
-    ),
     "successor-activation-exact-recovery-production-refinement": (
         "epoch-boundary",
         "decision-recovery-across-restart",
         "successor-activation-starvation-freedom",
-        "terminal-ingress-process-lifetime-absorbency",
     ),
     "genesis-height-successor-handoff": (
         "rotating-leader-liveness",
@@ -5927,16 +6972,13 @@ PROOF_STATUS_DEPENDENCIES = {
         "successor-activation-starvation-freedom",
     ),
     "height-liveness": (
+        "agreement",
+        "no-conflicting-commit-qcs",
         "rotating-leader-liveness",
         "application-liveness",
-        "historical-recovery-authority-acquisition",
-        "historical-recovery-certificate-rank-progress",
-        "historical-recovery-decision-stage-ownership",
-        "historical-recovery-decision-rank-progress",
         "successor-activation-starvation-freedom",
-    ),
-    "typed-rollover-handoff-conditional-local-liveness": (
-        "typed-rollover-handoff-model-safety",
+        "successor-activation-exact-recovery-production-refinement",
+        "genesis-height-successor-handoff",
     ),
 }
 
@@ -6432,18 +7474,18 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 705
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 733
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "2f8fa01bcce6a92e081542786ba82c8afe316d91939c6a0e42eccb5fad508aee"
+    "e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
-    "e92eb18ed0ef23e097e0bb59f002300ddb31b1b3d674b68c50d2bb11fb4da5cb"
+    "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 277
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 278
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "dc6e4c3eece63441e9ba5ffdf6b603665e21cf6086a3a6a1307b45829a678510"
+    "9ac5508323573c9dfc6e4e6f219befd13a62ef59e8c611e6374f5706145b61fd"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -6521,8 +7563,8 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::authoritative_runtime_gate_tests",
         32,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 102),
-    ("production-v2-core", "sumeragi::v2_core::tests", 37),
+    ("production-merge-sidecar", "merge_sidecar::tests", 118),
+    ("production-v2-core", "sumeragi::v2_core::tests", 38),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     (
         "production-v2-core-wal",
@@ -6543,13 +7585,13 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 62),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 51),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 63),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 39),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 31),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 77),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 32),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 83),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -6598,7 +7640,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "consensus_message_control::tests",
         8,
     ),
-    ("production-irohad-network-relay", "network_relay_tests", 3),
+    ("production-irohad-network-relay", "network_relay_tests", 4),
     ("production-irohad-authenticated-via", "tests::relay_fairness", 7),
     (
         "production-irohad-genesis-reply-geometry",
@@ -6726,7 +7768,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout",
     "sumeragi::v2_worker::tests::same_tenure_updates_and_reconnect_preserve_current_item",
     "sumeragi::v2_worker::tests::closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures",
-    "sumeragi::v2_worker::tests::closed_sidecar_reconnect_is_capacity_checked_then_retries_current_item",
+    "sumeragi::v2_worker::tests::completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge",
     "sumeragi::v2_worker::tests::later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress",
     "sumeragi::v2_worker::tests::mixed_source_retry_retains_terminal_flush_target_without_resetting_live_siblings",
     "sumeragi::v2_worker::tests::inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision",
@@ -6940,6 +7982,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_core::tests::later_reproposal_commit_qc_replays_and_applies_its_exact_certified_round",
     "sumeragi::v2_core::tests::valid_commit_qc_supersedes_different_subject_prepare_lock_live_and_replay",
     "sumeragi::v2_effects::tests::different_subject_decision_supersedes_protected_lock_and_frees_losing_capacity",
+    "sumeragi::v2_effects::tests::apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work",
     "sumeragi::v2_core::tests::height_context_requires_one_same_round_parent_commit_geometry",
     "sumeragi::v2_core::tests::same_round_timeout_upgrade_rebinds_lock_and_retains_current_timeout_vote",
     "sumeragi::v2_core::tests::later_reproposal_commit_ack_retires_durable_old_round_commit_pool",
@@ -6970,6 +8013,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_effects::tests::deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign",
     "sumeragi::v2_effects::tests::split_round_commit_signing_is_rejected_before_service_dispatch",
     "sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift",
+    "sumeragi::v2_runner::tests::replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
     "sumeragi::v2_worker::tests::closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance",
     "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
     "sumeragi::v2_worker::tests::unavailable_admission_racing_retirement_is_nonfatal",
@@ -7060,7 +8104,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
         "46a5fc46be8b95eb70516a03c7fc52537238a7fe26545540a1a85413e3465475"
     ),
     "advance_after_attempt": (
-        "99937b997bdc98d6b2aad3c74ce13a66991b3b2a35651ac06e2c10319bbfb273"
+        "e678eb75bf1e124b8c3ac7b196bc9abee8d5429a6f064a1aaf64851291bc0e07"
     ),
     "drive_with_budget_ack": (
         "a4453951bf9775ad83b603cfe9b5f5849cc6251904602cbf76438c6140703bfa"
@@ -7089,13 +8133,13 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
 _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "CertifiedMergeSidecarChunkAdmission::from_admitted_reply": "a2b593a56511c97eae5bfaca2235490ace31a128884729704bb6dc907a98da44",
     "apply_reliable_flush_application": "93912d6c690daa60be7fda65daa0a997a0e55839d3661560ada00aaca8dd8a52",
-    "MergeSidecarTransport::with_limits_and_server_stream_capacity": "1f1bf7fded78b6e92a7fff5c9fe4b4764d3b111e1eaf2363baff6c093f796dd5",
+    "MergeSidecarTransport::with_limits_and_server_stream_capacity": "acdb21ade067f5460c4019cd4fb0f65741d2f2707ccd1ac447d260641dc3b7f1",
     "MergeSidecarTransport::derive_server_request_capacities": "f8b22bf3ac205e2b2743922978abf18539f87b885cab62874e7c86996a3d9870",
     "MergeSidecarTransport::begin_request_or_close": "8fae96ccb47e45e090ba0ddad6359153951f47583e23be35c6eccfa6ce61e3ca",
-    "MergeSidecarTransport::release_unsent_request": "0f85f7a50140586864e8b16916a8e1bbd46e045883d4ac24a6dab47486fd4c8b",
+    "MergeSidecarTransport::release_unsent_request": "dab1c81134717c57640cd64da49a68ab99cf61d474e02d7b4f1c0ee0b398793a",
     "MergeSidecarTransport::release_authorized_server_request_attempts": "713f97a0a252983fffcd258d631f1052cd3801f634d8554d1febcdc65cf689d9",
     "MergeSidecarTransport::park_authorized_server_request_attempts": "a7f6ad8f3a595fe655f0535b11d2564a2a783d60df1cc6bebeadb704606e96f6",
-    "MergeSidecarTransport::reclaim_inactive_outbound_attempts": "9fba277889337046a06feac6bba5b35dd058e032a0bf623599bcc4b868e79962",
+    "MergeSidecarTransport::reclaim_inactive_outbound_attempts": "9600b575eb21edcb26955867d706880f5040c062ee84b45c266efeb5d484a1a7",
     "MergeSidecarTransport::prune_server_gates": "13f9e547c581b576aed5a552fcd2ecd2f0ea7260fe5a72c7bd7a78832ceb61c2",
     "MergeSidecarTransport::server_request_source": "c1c1f62439ac7e654a67db7cd7de13504315c3da463da0ac7d639e8c3722bffd",
     "MergeSidecarTransport::source_gate_count": "61c262742b3758298046503a720335804b1981748c8bc156527dce9705c80bc8",
@@ -7108,14 +8152,14 @@ _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
     "MergeSidecarTransport::alternate_source_is_authorized": "8ccfab565eb86d3527950b783f0ef326303e0a386dc10f268e25f72fcee25421",
     "MergeSidecarTransport::route_source_capacity": "162b152d56446bffa077c6005f4457ce2757a26a73306018a80cc53f68a9ba25",
     "MergeSidecarTransport::can_add_outbound_attempt": "7ec9222597fcb0ada3b06a589d775066cd94335c8d6bb2cfcb2f685fb922c43d",
-    "MergeSidecarTransport::next_server_request_materialization": "77b22d3d97de4c97e08d450f36689f26a938b9674b4386e98ceeaeec02c7efd9",
+    "MergeSidecarTransport::next_server_request_materialization": "445d03272e85e2bf3f7e3f054c2acfa2d8ff6434b86c62defca965bc42bc3002",
     "MergeSidecarTransport::admission_after_fair_materialization_selection": "26e50ac363ea2e8c75497ad2df045ab1dcd4ed2315db16147cd9488be04d82e9",
-    "MergeSidecarTransport::admit_server_request": "452d6055d25c19da187c003f16b8971f2253aee113a18f006756054d97efaac4",
+    "MergeSidecarTransport::admit_server_request": "78fcf00b793e0ef8b871657c83c3b05b8b81149e789470faca831fd8c3b50fc8",
     "MergeSidecarTransport::cancel_unmaterialized_server_request": "40f0831462c1e44e4e55919d9ba9dfc443b6901dd963c47ad79106ce274586fd",
     "MergeSidecarTransport::enqueue_response": "2e11a16de83ba8372b3ad92e58e6b222f9268d70611be2bb1c56f765f4aaa06b",
-    "MergeSidecarTransport::drain_outbound_chunks_durable": "d33df4c3777aba47e5b994ace67ec999a33958a255ee0178d2db5298ceb1d4e8",
-    "MergeSidecarTransport::acknowledge_outbound_chunk": "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887",
-    "MergeSidecarTransport::tick_bounded": "03f814324638910930a423843518a25b97e6dfb21bb670f59f2fe23d4456ba7c",
+    "MergeSidecarTransport::drain_outbound_chunks_durable": "b15f79eea3fa0a065bed3026d821e05a7562e379e24dff34db19c8b32b601ecd",
+    "MergeSidecarTransport::acknowledge_outbound_chunk": "ea52e797318cf35982fc24c9da0d7a40c6aa87df2814ba49612ec4d6a5184fdb",
+    "MergeSidecarTransport::tick_bounded": "8a01af0d92b9474c1b9c4ff0c861d2b29315b4681062e1db668a4b1db543c541",
 }
 
 # Complete seals for the crash-safe semantic request lifecycle. Process-local
@@ -7123,8 +8167,8 @@ _PRODUCTION_MERGE_SIDECAR_SEAM_ITEM_SHA256 = {
 # sequence floors, terminal/pending cursors, and immutable pending-chunk
 # identities may survive a restart.
 _PRODUCTION_MERGE_SIDECAR_LIFECYCLE_ITEM_SHA256 = {
-    "RequestStreamState::allocate": "9c667fcc7a4e8513ec2bead9329ef74950137c4dccbf0d94bc4207a1598b6df1",
-    "RequestStreamState::close": "29a416be43b360cdec38441130f48a8024769a8dd8a787e1c8b875dbae0c89e6",
+    "RequestStreamState::allocate": "035e187a842019c9adf402f2984a0e69ea7de331056e6038d0f3974311e566ee",
+    "RequestStreamState::close": "ea56cf4ad45b41875017f40148321ce2189dc77919fd6dbd60ba83b45107166f",
     "RequestStreamState::emit_close": "662b1d15ddcaa2ba9b0ef4c776e7d30647f5aab383ffddeb5bf6dd567178a552",
     "RequestStreamState::acknowledge_close": "4a2e627dd28de3c332a45c68a351d86bb392ebf07a9c4a4fa8021399bfb78dd3",
     "ServerRequestSource::budget_source": "ff85c7db75fcbff14abacdbd2d23351e5c244b8046989f7ed6d8feb2bfe59663",
@@ -7132,85 +8176,188 @@ _PRODUCTION_MERGE_SIDECAR_LIFECYCLE_ITEM_SHA256 = {
     "CertifiedMergeSidecarGenerationHintV1::canonical_hint_id": "2731d88621ae21e7119162b150578b5419f3b1a7e04676f9565e6d2f78a0ebe7",
     "MergeSidecarLifecycleSnapshotV3::new": "b76fc1b3f9d52cd47e221b55ca35cd814bf86290cac86b7de8c8150dff0d8754",
     "MergeSidecarLifecycleSnapshotV3::integrity_is_valid": "413dd7181f9898e41bb9b9f2bb826ceaa793c44f9a4a12943d36fe58ae32cf0c",
-    "MergeSidecarLifecycleRootHighWaterV3::new": "",
-    "MergeSidecarLifecycleRootHighWaterV3::matches": "",
-    "MergeSidecarLifecycleJournal::open": "171db459c18bd917324ec966d22ffa7a2ad75f8de371a96d43baeaa4cfeaea46",
-    "MergeSidecarLifecycleJournal::state_path_for_generation": "",
-    "MergeSidecarLifecycleJournal::reject_artifact_if_present": "",
-    "MergeSidecarLifecycleJournal::reject_known_temps": "",
-    "MergeSidecarLifecycleJournal::remove_regular_artifact": "",
-    "MergeSidecarLifecycleJournal::discard_uncommitted_temps": "",
-    "MergeSidecarLifecycleJournal::discard_inactive_slot": "",
-    "MergeSidecarLifecycleJournal::validate_directory_entries": "",
-    "MergeSidecarLifecycleJournal::read_bounded_regular": "",
-    "MergeSidecarLifecycleJournal::decode_snapshot": "",
-    "MergeSidecarLifecycleJournal::decode_root_high_water": "",
-    "MergeSidecarLifecycleJournal::recover_initial_commit": "",
-    "MergeSidecarLifecycleJournal::load_pair_strict": "",
-    "MergeSidecarLifecycleJournal::load": "dbab4d2e40f17c45c83d2aee40e964496484c718a17ff4f2039a4c717e73abed",
-    "MergeSidecarLifecycleJournal::write_new_synced": "",
-    "MergeSidecarLifecycleJournal::live_generation": "",
-    "MergeSidecarLifecycleJournal::preflight_next_commit": "",
-    "MergeSidecarLifecycleJournal::persist_next": "",
-    "MergeSidecarTransport::lifecycle_runtime_geometry_v3": "30e6dce6573c027d63f56f117882a654131c1e8a043359ff4bede0e2e4ea5b72",
+    "MergeSidecarLifecycleRootHighWaterV3::bootstrap": "09c144912ad447177997f12fc31de749830f39e500a726e7ca7d0490ccf0de51",
+    "MergeSidecarLifecycleRootHighWaterV3::new": "6fb62886f1fc7515ccb93708a257239f55e2fcb252543fc170427cd2ed4944fe",
+    "MergeSidecarLifecycleRootHighWaterV3::is_bootstrap": "af4f8d7064a8e7d4334a2fd28b6979ce8f97040f9a8fcdf79840e823b6e41621",
+    "MergeSidecarLifecycleRootHighWaterV3::matches": "3138b2e1831a9710b7dcd84570fdeceaef945398cb0bb1e16ba7ff585a431d1f",
+    "MergeSidecarLifecycleJournal::open": "81f2b35d6df08c5cac28ebb95fb240a7e5a949e52283c7f4ea5ccd8a357fdd33",
+    "MergeSidecarLifecycleJournal::state_path": "e1a8db899e4e4ae845a2a5d5c7731c3ec7a4d04a57494a90876c761063b14789",
+    "MergeSidecarLifecycleJournal::state_path_for_generation": "958b5b38f871dc10d788964dd806276f7112376c426412c402ff66d2086acf48",
+    "MergeSidecarLifecycleJournal::temp_path": "4023b2cff04791329db79483fe6ac8dd2af85f90ded291d23c7cbbb33c17bf7a",
+    "MergeSidecarLifecycleJournal::root_high_water_path": "fc93b03a37534d588c93fa488d50dad2909c133463a2d11cf0176bf42c8e05ad",
+    "MergeSidecarLifecycleJournal::root_high_water_temp_path": "775a520e25b9c83c46aa08944341590719b4d59d0d2d12af95fb9d2c968099d8",
+    "MergeSidecarLifecycleJournal::publish_bootstrap_marker": "40c9b879e62f60d03b3a81db96b1c67a9f97fefb36fe5453e7cc44ecdf836c92",
+    "MergeSidecarLifecycleJournal::bootstrap_candidate": "5b0488a94395189e31943072b55da8dc71da1dda18106afeced87f73ed7c1048",
+    "MergeSidecarLifecycleJournal::finalize_validated_open": "86894b3b15406d99916d483471c8ebb16ca3234745e93335768d100fd0bd1b0c",
+    "MergeSidecarLifecycleJournal::sync_directory": "6bebdd14196431dd0c8c9160bca5965b8c902ae8fd9addd79596e6ff65ca9d8b",
+    "MergeSidecarLifecycleJournal::artifact_exists": "f975c5a57d4c64323fa39d6fc2439658d13d3db6b944ad62805feadd841f7edb",
+    "MergeSidecarLifecycleJournal::reject_artifact_if_present": "0d3908089c208e1abb49f232c1191b354960c100f1b3ce7dafceda699adfd7f6",
+    "MergeSidecarLifecycleJournal::reject_known_temps": "3e359c0b5dc40cbb9e51b962ba8c840c9dd9837bca38378b58d38c95346ee06b",
+    "MergeSidecarLifecycleJournal::remove_regular_artifact": "91167e9513b22b8b66d14f6fa3891510e4dcf88964f1ddaad777e6c69d76b911",
+    "MergeSidecarLifecycleJournal::validate_regular_artifact_if_present": "4ab43f67d2bc6776e74b901e5cae02dd27c4259e4b5e525d86f71832893d2528",
+    "MergeSidecarLifecycleJournal::validate_known_temps": "79f498aac06957b42a448cb12169f0e88612792854cf870e9065fc1501b14044",
+    "MergeSidecarLifecycleJournal::discard_uncommitted_temps": "5075863b4359aff4aca8f37895fa497cfbcf82298ddef44e5d439a92e8a337f9",
+    "MergeSidecarLifecycleJournal::discard_inactive_slot": "675c63c3195613a66fd9551590ebedd83e2f58527f13a0ceb04aab1f757926e9",
+    "MergeSidecarLifecycleJournal::validate_directory_entries": "2c13ac3a3cec9f55d88eecf2f7781635f70fd70c824f71750e35332f6b9d2cec",
+    "MergeSidecarLifecycleJournal::read_bounded_regular": "38f7bc44bed7b7c1f1d9847e75f65430dc6bd15532827ce888c0c8ba824e0563",
+    "MergeSidecarLifecycleJournal::decode_snapshot": "2473d8b7f9040a2a041bbc46f9c23a8f8d1940ebc779a455edf63590f5a1c402",
+    "MergeSidecarLifecycleJournal::decode_root_high_water": "76f8a0caa1f65018f82353e36d2bb07846cb8a49583aac60483dd7eab0c818c7",
+    "MergeSidecarLifecycleJournal::load_pair_strict": "c3e273a90e4d180f08476d9bf7dd21b2ce91f0032b227857c09fbbc9b119cc5d",
+    "MergeSidecarLifecycleJournal::load": "d7c2d8180e6579b1b8213fddf5ffcb984ef7025a52e66fa5ed4bc2d26c6bf6c7",
+    "MergeSidecarLifecycleJournal::write_new_synced": "ab267b2611abb24926fad0ad306da0cb44a49eec565cd7450c76f762473fb2fa",
+    "MergeSidecarLifecycleJournal::persist_atomic_replacement": "e8a844216e2110bf463f9884e7bff9d06b8dd0a9d6baff8cf1835bbb29798064",
+    "MergeSidecarLifecycleJournal::live_generation": "8d2d97c739d2a32c7e899751791a8ef9528bcd6a5a1900a0f0f7e017a27a2fde",
+    "MergeSidecarLifecycleJournal::preflight_next_commit": "5c58aa339bb87024e46da01db648c75a7da2e3e78f12fa7a285414ba70e103f0",
+    "MergeSidecarLifecycleJournal::persist_next": "e4b9c82c810f07d1158140e054ffc8e3f07ed143b4e0d68f17e0f3d136c541e6",
+    "MergeSidecarTransport::lifecycle_runtime_geometry_v3": "34f7fde0aec9a4d933b9bfd71afa80c9391911797b2db30074f01db8110d119f",
     "MergeSidecarTransport::lifecycle_geometry": "eae65fb2d75f710c039fec57b4b4cfa0801b6620393a1ce90958c6656cd6496b",
-    "MergeSidecarTransport::lifecycle_geometry_for_server_roster": "7902591d79d577d1cfa0f56bab4ec7598311ed1b3a35cd96ec92e994ac0a9ced",
+    "MergeSidecarTransport::lifecycle_geometry_for_server_roster": "4b6d81251a26903563d0d5a7b309e2b91ebc16fde3e9d78cbae72953d9694d45",
     "MergeSidecarTransport::lifecycle_max_snapshot_bytes_for_attempt_capacity": "1687861693eb80d7b15ee5dc86a8f48227e45a20555318e70c29107c4010e1e3",
     "MergeSidecarTransport::lifecycle_protocol_max_snapshot_bytes": "29795424b1083bf3c351ab3f262b0ee84f13ac0dc903b22767aa0449590ec8e6",
-    "MergeSidecarTransport::lifecycle_snapshot": "90a441a3f66fbf7fc5fb03e7922e9e62a1662262932cbf8af15039b9d5531b19",
-    "MergeSidecarTransport::restore_lifecycle_snapshot": "89a96848460ed1f39612a5341425423df85bc7112b124d144d1a8a3fdd06aa09",
-    "MergeSidecarTransport::configure_prior_lifecycle_server_geometry": "",
-    "MergeSidecarTransport::open_durable_with_server_stream_capacity": "4d49238a78e5464bd86dfa8b5f2d9545f9a9238e30699d930322fc08e94c29fb",
-    "MergeSidecarTransport::persist_lifecycle_projection": "",
-    "MergeSidecarTransport::preflight_lifecycle_mutation": "",
-    "MergeSidecarTransport::persist_lifecycle_state": "a052c4c94221392d81def550fb207ceafb5ccc032b53f900ced4ea35ea2cf936",
-    "MergeSidecarTransport::rehydrate_with_exact_geometry": "e6376342a45af4b80f44aa6c654ca1dc9aea8f33dd585a4594d2a6a1a8ca62aa",
-    "MergeSidecarTransport::rehydrate_with_exact_geometry_after_durable_handoff": "45bff2342700a12963248ccca579d05da2d788eed9f82f78fb1b7b47a0ba8ef7",
+    "MergeSidecarTransport::lifecycle_snapshot": "e51da54b26a259562e37b630f1a3c5e6f6ee6c3dffff2824557fc16801f4e6b5",
+    "MergeSidecarTransport::restore_lifecycle_snapshot": "8627186b8d588686e3cb570af7f57cc72ee6781910adfb59c0c5de37b41d47b2",
+    "MergeSidecarTransport::configure_prior_lifecycle_server_geometry": "ac39616a1ae23408941413d2472553d6234589168219cf31c0a47b7aed7dcfcd",
+    "MergeSidecarTransport::open_durable_with_server_stream_capacity": "3e2ed1cb57775d36918a553dc3e17e065a4e994c87d1e67ddfef2ab3b8344a0a",
+    "MergeSidecarTransport::persist_lifecycle_projection": "721b44da8a5911f197ad7326d8cfcb7919c8df7bbd1ee4413af1817f5b03eb11",
+    "MergeSidecarTransport::preflight_lifecycle_mutation": "e792b37472d616f160d5dd5d2c28f869d35670df261e31ede7e56d8b93b55030",
+    "MergeSidecarTransport::persist_lifecycle_state": "4a8658892bd135d9065f5f8aee9ad6beb73f7f3993b54dc3cb1e7c236bd5fd2b",
+    "MergeSidecarTransport::rehydrate_with_exact_geometry": "95238c6a27265eaf9030443a5c92afdbbbe071ebf1337684f3b8f4b88b25aea2",
+    "MergeSidecarTransport::rehydrate_with_exact_geometry_after_durable_handoff": "d5c8d8cc61fbe16f2ad8b91595ed63f6ca477e0c8b5269be6417ad486472e821",
+    "MergeSidecarTransport::rehydrate_after_lifecycle_restore": "2bde0f988a4a6eacaebdb73d0c19bbd3153320663f64259cbb7e017f78d9e23a",
     "MergeSidecarTransport::validate_retained_height_geometry": "a52a9db9ba2745b1555ff5422edc3c64fcbb3b910ae5f62216009866b706b923",
     "MergeSidecarTransport::requeue_retained_outbound_after_height_rollover": "a09ba68802f834de1a13219085ee6f24e7d1bca666a4c951b80501489eed0be8",
-    "MergeSidecarTransport::allocate_request_sequence": "2c36039a921bbacf11c0c03251012077c67c710e83bb4479d18eed1a0ef884db",
-    "MergeSidecarTransport::close_request_sequence": "e6ff4920fc9eaf21bce317dcd9e17f279d29d24b38a21069d05424ff507a2426",
+    "MergeSidecarTransport::allocate_request_sequence": "4a00c1f454545b38973384a4a4e968d8eb725f80b9d5c9b54b03afed0327c010",
+    "MergeSidecarTransport::close_request_sequence": "d13ef957882ac705a2fdb715f72faf705c2d6c33248b354b61b834f82ce5ffb5",
     "MergeSidecarTransport::begin_close": "023c75991bc11e8528e4692fb11101e1e565f18f496be829eb20a4935f13a9f0",
-    "MergeSidecarTransport::begin_request": "087bb9a1408457ab8fca9ac8a02541a1923633cf1f8941258143a0a2024ba4d4",
+    "MergeSidecarTransport::begin_request": "1e337d236787c31def6238bef35a2e461abcc78e70b47a54347cb7948e29195b",
     "CertifiedMergeSidecarClosedPrefix::covers": "21db3c4644755e3724626fc5c862b41346facb61576c135749144bd17ba803a6",
-    "MergeSidecarTransport::acknowledge_close": "4f06a0af8003535aa11149a821abd3b1d6923ac4e8e73e3362c4a5e7b83f169e",
-    "MergeSidecarTransport::acknowledge_generation_hint": "05488e9a35c8b631657b8b97810b6ea44b89f2f63e8a1434ce7f712f492bd0a2",
-    "MergeSidecarTransport::generation_hint_post": "6bdea387f9a37066f789cfc36388d13659b31db0a3b0522d1463d9e86fb1776e",
-    "MergeSidecarTransport::preflight_server_request_stream": "959a04dd2e05a70f4bcfb40af310c0d191d7bc0a859d53d065ce9de834248d47",
+    "MergeSidecarTransport::acknowledge_close": "a6dc61f720126bf504dba5bc556385739819b18d6d9af845034b7e175d1ad0c5",
+    "MergeSidecarTransport::acknowledge_generation_hint": "86b52bcc4c6063ea5ddf2ce983bd204784d5c129843e5af9f9db50c1d3cd4efd",
+    "MergeSidecarTransport::generation_hint_post": "8f16175266e8ef580a910ddb39208d1963c471d058f164222428a90bf78eb922",
+    "MergeSidecarTransport::preflight_server_request_stream": "039e4f6bf2d7ed58244185b7a5811f40b19737e953a603eed417f960546008c0",
     "MergeSidecarTransport::record_server_closure": "a8027bf18c82e939aed4072172cfe52b3c3116d5325a3f08c0b611ef95ffe6d9",
-    "MergeSidecarTransport::server_generation_is_terminal": "843563a7bdbe7392e9529feb1e28debb1741f367de9470008c697a428e2e0472",
-    "MergeSidecarTransport::transition_server_service_generation": "cf4746396ef250f69f71dd4bf1b73fc3c1750be838a32d2bcec84d6151e9bf1b",
-    "MergeSidecarTransport::prepare_server_service_generation_transition": "40216a63bc6bba4e381fef46a8ad46f69de2d214088bc5b0c7ea14dc7c01addf",
-    "MergeSidecarTransport::commit_server_service_generation_transition": "67e651cb53a042f6d7bd7f443a462884f9ba18002349d7017a3045dbf81fd96e",
+    "MergeSidecarTransport::server_generation_is_terminal": "91daaff340270d5a630e818719ce26a4b02d6264e80c4d4f2114bb2eea378f38",
+    "MergeSidecarTransport::transition_server_service_generation": "442b14db6826182fa67c8563a3dd7412e7fd2bcc8824b8575640512547665675",
+    "MergeSidecarTransport::transition_server_service_generation_after_durable_handoff": "7bf098b2a24c176a5bdfeb473f860986a3219675d10428be7550af1fa249a797",
+    "MergeSidecarTransport::transition_server_service_generation_after_exact_output_fence": "68251fab01ae053907984e39eeac0779f1018d50cc069e791a8a85fe010e369a",
+    "MergeSidecarTransport::prepare_server_service_generation_transition": "ae7d51586773145d9933369af877e09257c66def9ba4300d4c251109cdc0dabb",
+    "MergeSidecarTransport::commit_server_service_generation_transition": "bafcbce053766a2f838c437d8c4f55cbbae22fe22f91e0e5a94944a707146684",
     "MergeSidecarTransport::ensure_server_stream_slot": "54412c913251408bb8da2595fb3fc36ef3b7df4486f09e8c85f8ab821f887597",
     "MergeSidecarTransport::supersede_server_stream": "4bfce430840bb6fd125779e211580bf98b60358736e735d2d124e8726d8a8bc1",
-    "MergeSidecarTransport::advance_server_close_floor": "a9daf86733efe8da4765abd44623a6228d530f22153d5beb5a837bc5e2ae3d9e",
-    "MergeSidecarTransport::admit_server_close": "1dbb3bffa6acdb324880a5ad6d609886f16ca847bfa223e5374adc4409f88784",
-    "MergeSidecarTransport::drain_closed_server_prefixes": "b96990bbabfa97187cc22066e5f2487bd901ce757ba877577ffc122fd87ceb72",
-    "MergeSidecarTransport::server_gate_attempt_count_after_close": "d258301c94f864e444919c518d0332d82dd48dd6045015ea2d1885d1f2ed4251",
-    "MergeSidecarTransport::server_gate_count_after_close": "9834591f3182b0977c4e4a4fc3cc9889e09d2cd48b4a8e8c7acffcc88d06032f",
-    "MergeSidecarTransport::source_gate_count_after_close": "f4dc9d2acc57178280b686c6e53411b7e6e9b9a5b16bd2e0ac827d8b09ac32ef",
+    "MergeSidecarTransport::advance_server_close_floor": "a8b0fe4fd6c15a17c344f1a318e39421efffaf3c24693e1965444d7c4ccb78b9",
+    "MergeSidecarTransport::admit_server_close": "b4f0563eda7a12f58f3715b84f68ded706d03274c1744756ce8ba56a3cb2f073",
+    "MergeSidecarTransport::drain_closed_server_prefixes": "517b76f57cca2c96ed8d1fbd53db8318b4003e09c7401dba9c8478ca7217f1c0",
+    "MergeSidecarTransport::confirm_closed_server_prefix_handoff": "76c4d49654aebfb34456efc2fe5f0ac1737226a954bf3916bffe2ca5319ad7b7",
+    "MergeSidecarTransport::server_gate_attempt_count_after_close": "d10ba051868323f576c5030b9d9c73c4c8debe4ae7bb0da21a04db9864e449f1",
+    "MergeSidecarTransport::server_gate_count_after_close": "7b3476b7ec3e31013a84f9c331795d6c1218d03ad614734c2e17003e554baa0a",
+    "MergeSidecarTransport::source_gate_count_after_close": "a065e18f460113a9ca617675037064f607d592e4edd456744a5ea8a2bcc97a24",
     "MergeSidecarTransport::drain_outbound_chunks_inner": "999e7704f60196377c7e7ca0c1f380b0e774d889ddf4ae34b2bfa084b96fcfee",
-    "MergeSidecarTransport::finish_completed": "c474ec0d78d23e1adc0432aebd9b9fd7b696aba176158cf748cd3aba63c3713d",
-    "MergeSidecarTransport::discard_invalid": "abc15309938a029da860c15e8a5bbe22be37ae4dcfc8fdc22b34c069ae6850ec",
-    "MergeSidecarTransport::retain_pending_blocks": "ac6b7cc61063f0fb4c0979b3a8afc97be1970be9e874b175f778b927dc256260",
+    "MergeSidecarTransport::finish_completed": "f3bfa218ed218197e1450d68ca7538c3dbc45c1ea5e2819035c49baaff3b3d62",
+    "MergeSidecarTransport::discard_invalid": "d63d81f340e4309f0b795a5901f66e71ee0cb315910980012db0ec0f91b4e254",
+    "MergeSidecarTransport::retain_pending_blocks": "498f9767b397cd0466e98d3fe8801d6a8de1d319169c19620a023a9e785e1117",
+}
+
+# Attribute-inclusive seals for every platform branch which establishes the
+# directory/file identity used by the crash-safe lifecycle journal.  These
+# helpers are part of the trust boundary: validating a path and then reopening
+# it without `NOFOLLOW` or without a stable handle/path identity comparison
+# would reintroduce a TOCTOU decode path.
+_PRODUCTION_MERGE_SIDECAR_ARTIFACT_HELPER_SHA256 = {
+    "lifecycle_artifact_identity": (
+        "301e701d0753691df10a350b69a5eea47cdde38195e156c8b6dbaa5e72aa0d61",
+        "9165ef4e4c97ef04d2ae55b5b00605853a2db11688432cbed96a61f567f3a86a",
+        "ee13fb0e994aedad25ddab6ead76f0cf992219ab68beffb348f51b1c532bddaa",
+    ),
+    "lifecycle_artifact_revision": (
+        "119f0656e2127e4c66bc6915ad8df49d2710006aad9744122cb17ead34b51e42",
+        "9bea5709b4c9f9fb0f06d2003e3a26f696af5bf8cfc51b590a842e113cd0956c",
+        "f3123c09a7b193028dbafb465fe169b2bf55d1e00fdba6f185a28d5c33b3b097",
+    ),
+    "lifecycle_artifact_identity_available": (
+        "6b621ac96e7d735fdf061ca29f91228fa68e94eeeeb07f5a8205f56e7f48b225",
+        "c21870b387d5cd786c93f51f3873466a002cd6dc9d532f3c950e7b53e44d4bdc",
+        "f8d258b48fdda51575891c262d03635f0d8026f500740e5c03a24e67012e35d8",
+    ),
+    "lifecycle_artifact_is_single_link": (
+        "91a822912011db14fdf25c7d86a33d69e72e2e25daf250d3513a3bc1252a0b82",
+    ),
+    "lifecycle_artifact_is_reparse_point": (
+        "e0f9e851429da4dfe4f5b2691083c78fbf53272129be634fe06ddd64cbaf9514",
+        "f3613fe601a454d7c1a960b49b86565671cec04b4c6dff410272ed37b722c2c5",
+    ),
+    "lifecycle_artifact_metadata_unchanged": (
+        "2ea5f87b8ceb44ae3ef92320ec86c3c6b88b66d49bbb1dffc9574077189641db",
+    ),
+    "verify_open_lifecycle_directory": (
+        "98f56261beb3cd37739864c2f0223e479177000fa6581bfde5cc85e2418e9da1",
+    ),
+    "open_lifecycle_directory": (
+        "1c480a6f24d1d39a6fe9c7c37bb9cfc738cad69609082b66c60531f141f3fdec",
+        "cfc8db5f4cd9eaee8a95a476440bb53c2f39423b12860d444ffd713c051f1ceb",
+    ),
+    "verify_open_lifecycle_regular": (
+        "b3354225cd5d701857ffc3ddd06b958ceffeb4b3f611d5bb7af9980b7f52d12f",
+    ),
+    "open_lifecycle_regular": (
+        "1762c07b05b671e00fa3b476b61267510a4313aac498d6f440f4b29651e3836e",
+        "536e5ed345f17fe72ce9856541070e24c9cfad92ae8da06e8ef18c4024c54c2e",
+    ),
 }
 
 _PRODUCTION_MERGE_SIDECAR_BOUNDARY_TEST_SHA256 = {
     "authenticated_source_quota_rejects_origin_churn_and_preserves_other_source": (
-        "8b6f2889f202758720b4818272874d1882f63440c68cfdf7549c883ccff4d124"
+        "177b9dcad1c91ebd413bc7824e2a2340c20287fa89d1899f83df154146394233"
     ),
     "legacy_lifecycle_v1_snapshot_is_rejected_without_migration": (
-        "4fa04f7ca875c00bada1dfb075e4516a0d075e233ece3efaa8d536be5149d4b3"
+        "c100cca083e1def146023e86038c60b04ae9a641a2e29dad0a7f2926e7232e83"
     ),
     "durable_responder_restart_preserves_same_hub_gate_budget": (
-        "7407803421c31c492df1ddf65ec5b882522e1f32022a5cde7df88b49e096574d"
+        "2c98602d0876f99438260e9accd99459d09334d014e6707e497cbdf7bdbe3ca6"
     ),
     "fifth_gate_from_one_hub_is_rejected_while_another_hub_progresses": (
         "72591d58cb56aa08d3ea0bce920f7cf36c9a00f6b14593bc5dbf17f3834da444"
     ),
     "quiescent_multi_source_pressure_never_rolls_or_bypasses_source_caps": (
-        "5a90a71da69295489a304aafbca8d0411302789e2a5348f65bb49033d99d4c8d"
+        "e5e5d27f264d8c30229eb80df95e7c95329c5fb42eb3370f0b3a4ddb1bd37342"
+    ),
+    "durable_lifecycle_v3_root_high_water_is_exact_monotonic_and_noop_stable": (
+        "34edbc3a0e29cb88e9c672095506bd8e40aaeedeaf0faa63991baee4aa33c4d1"
+    ),
+    "durable_lifecycle_v3_bootstrap_recovers_first_commit_and_rejects_missing_roots": (
+        "e01fd4052a5a78e492624de151d297dfaf91f44f47894a7645f355e253bf3f48"
+    ),
+    "durable_lifecycle_v3_rejects_crossed_bootstrap_and_committed_root_shapes": (
+        "6288640952d9ea0e72797895aa2de7dd62186daf81da33497bd4bd5a89518c83"
+    ),
+    "durable_lifecycle_v3_recovers_regular_temps_and_rejects_unsafe_artifacts": (
+        "cd06d9140fd9f052787048d9719feba1255e670d4eb0fa619aee24ced110be00"
+    ),
+    "durable_lifecycle_v3_validates_semantics_before_retiring_crash_artifacts": (
+        "b9802b3eb8ebb243b566f6b8fad320369912c600111d3c045f36b9f1674cfd49"
+    ),
+    "durable_lifecycle_v3_rejects_split_generations_and_rehashed_state": (
+        "bee7172a2a75e10ae2d34e2da9ebc8f688bf152cb9c74de324cd38bf9cf0ef10"
+    ),
+    "durable_lifecycle_v3_generation_exhaustion_precedes_close_mutation": (
+        "529af4e365c92c84a976a06f6a1271bb41afc5878a4206bab39bfef06726b908"
+    ),
+    "durable_lifecycle_v3_generation_exhaustion_precedes_writer_flush_cas": (
+        "22bd6d8a616406275daf917c063d1af71d5196ee9953320f4c6615873f8e85d8"
+    ),
+    "durable_lifecycle_v3_recovers_predecessor_before_state_directory_sync": (
+        "6c51610572f862a27b7c4cdb704fd85b9cada24ea849313a61078091782fb518"
+    ),
+    "durable_lifecycle_v3_recovers_predecessor_between_state_and_root_publication": (
+        "37fdf12044f2511e5125de87e8d468d61831be1328ca1778b4737e0518b38920"
+    ),
+    "durable_lifecycle_v3_resyncs_replaced_root_before_predecessor_cleanup": (
+        "d8ac3e60c1d433064f25b8d75226080e3cfe98b0f955de14d29ec769505a631b"
+    ),
+    "durable_lifecycle_v3_recovers_successor_after_root_publication": (
+        "7664893351c81f1a06df874c5a133539e6aab8f8d5ea95158419e2f8c8caa7c1"
+    ),
+    "durable_lifecycle_v3_rejects_missing_state_with_surviving_root_high_water": (
+        "7da31a3cbc8c7d50c7cbb5015a1691b73827385de9598e4fa8cc5db8a53c7295"
     ),
 }
 
@@ -7223,8 +8370,13 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::accept_certified_merge_sidecar": "8e348b518da26f91fff8840d1e5bf4016d783fef4720bc275baba90ebe14a0bd",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar_request": "308ed2709d25b282cb080d8c74cf781a37b84e28c3160536405a3587c749d16b",
     "V2LaneWorkAdapter::accept_certified_merge_sidecar_close": "6ed196ef77d4dfa0a97eba4196df343e16bfd9867550cdf2689a127bc555ffcb",
-    "V2LaneWorkAdapter::apply_closed_server_prefixes": "3bc9edbf0a453801c18540f3bd5ed5d7c8a00cf70b315ed23634c34650f02d59",
+    "V2LaneWorkAdapter::apply_closed_server_prefixes": "ca526c1cdcf5ade6263ec12641207c4edf83b5ca71c48a5ed39c8bcdc972a2db",
+    "V2LaneWorkAdapter::coalesce_closed_sidecar_prefix": "70aeb1f315515d6c69f913afed4e4874b834d74972c68d1058a8b8916b03e771",
     "V2LaneWorkAdapter::drain_closed_sidecar_prefixes": "2d0a07530ab64b95f687a48fa09cd029a40bad9c18ef29bf82e8b624274bf2e3",
+    "V2LaneWorkAdapter::requeue_closed_sidecar_prefixes": "97bdd3f66d265ba00e0cc088af59f005e7cfdc97c138cad9faa64138f944df2d",
+    "V2LaneWorkAdapter::confirm_closed_sidecar_prefix_handoff": "7aaca416f7ad687d7ee0c1b99da038d11dbdc710d81229c340a63bda10476c28",
+    "V2LaneWorkAdapter::stranded_retryable_sidecar_control_index": "09ed26efa19aefc39d448b1bee81d5b070c272557137e89a51c4f1dc6334419b",
+    "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "8e684a41c6ed9799d6fdf7598d7accf8f175f38ff1388058568a6f8bc077c9ea",
     "V2LaneWorkAdapter::persist_anchored_sessions": "40f2ca1c93171337adae168019d2f28ca65acf838da2e9011f6e751ad775876f",
     "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "b716b4d92ddd3c4e80e6999bd7aee543701e2727bef70841c2bf89f38ff5a3f1",
@@ -7238,20 +8390,22 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::prune_finalized_merge_sidecars": "b8400dca9234242c7f6b8583ffabed34eb17fecc23cf5fd81799bec5cd692af7",
     "V2LaneWorkAdapter::sidecar_effect_slots": "13a99e0350b8d59489cc591573adcc2b1f3f775308e9b225f1672649235699e6",
     "V2LaneWorkAdapter::next_sidecar_effect_selection": "614006f927ec384764396c8742a3b05b5a70907dddd8bcf39ed2db0aba4d8975",
-    "V2LaneWorkAdapter::push_merge_sidecar_post": "ae20b174b0777d554f1bfe731c025b24b2cd41cd3ff5bbba89ab6fdf52e33a7c",
-    "V2LaneWorkAdapter::push_merge_sidecar_post_or_restart": "1b55d21cdb67b0d26380a50103e535a305f631b728ebea7225bfae1bdc48375f",
+    "V2LaneWorkAdapter::push_merge_sidecar_post": "89e2c9f8586ac17ba40acbcf14b133193ff0aade68ce717ec24c2820dce07301",
+    "V2LaneWorkAdapter::push_merge_sidecar_post_or_restart": "85ca2f652d8409223ea2fd331d3c9010710301b5aafc0e2082e2b63557eed2e9",
     "V2LaneWorkAdapter::remove_acknowledged_sidecar_retry_effect": "14002f78eb6eee073c72b1c5fa547c69187392e1a2085d8bd5c1e385fbbf2efb",
     "V2LaneWorkAdapter::acknowledge_certified_merge_sidecar_chunk_admission": "60809702ee6e6fca12c654f9e93a453e9a4098be03608ccb11a6513cc5a6b5c5",
-    "V2LaneWorkAdapter::push_merge_sidecar_effect": "42e118f2ddf5141885207bbdcb30f2a2ecda370ee2987f39eec855da73296632",
+    "V2LaneWorkAdapter::push_merge_sidecar_effect": "08a2b77d14faf80060a2ca76a491df474dbbf548b3f0f4a5f95c13d14102c750",
+    "retryable_sidecar_server_control_has_writable_route": "4f7ac1895057d195e13c094178010703e09198a4b6824a96b75739072c1362eb",
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "b5e0e063823dc30e1e36698555fefcad7abef8f0223d61488129dede91e7a80a",
+    "run_inner": "1c60f755614a3bfc42831b16e77643ed648d8607e588f4725ac072920c737c91",
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "320507830881ae53c67850d75b030dcdddab32c0ccf2814f8d6bd6705fced09e",
     "apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
     "apply_certified_merge_sidecar_chunk_admissions": "0243d1f22247947cc44ac474293a9c852c63509fd46f9357e4ce56b3fd0be518",
-    "apply_certified_merge_sidecar_closed_prefixes": "d9575b0cabc5ebb56d3eb8729f535bd56e57252973dde16bfb2e7232ccfcb443",
+    "apply_certified_merge_sidecar_closed_prefixes": "4d27f99c125389f9ffd2cb85b752445882043824f7d5427edc00838ce00417f9",
+    "apply_certified_merge_sidecar_closed_prefixes_with": "8a4969958909c1f7b00e17c71597c4f731dbd3eb0803dfc1a60af0d5250a158b",
     "retry_exact_output_and_apply_sidecar_admissions": "3f05df2b0b705f2adb01ccb3b21de1c2422d947b6f05fb591e316a4a27895422",
     "dispatch_lane_work_effects": "7b7c0358e9fa35a05df7acd0c641b693b01b51926be2180ba02efde110ef774c",
     "retain_active_owned_reply_routes": "bafe4c316b7d50e5b89bb9468dcf47271985b5f17f8277cb7c70bac5df74be87",
@@ -7274,7 +8428,7 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
 )
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "b5e0e063823dc30e1e36698555fefcad7abef8f0223d61488129dede91e7a80a",
+    "run_inner": "1c60f755614a3bfc42831b16e77643ed648d8607e588f4725ac072920c737c91",
     "advance_executor": "321df6c9713c5fb64fa6a0948dff6464afa3d08040e752ae0e19196b9badfb31",
     "advance_pending_tip_recovery_executor": (
         "a85c018053d4b47dd1c36194a66318422f72eb80e3cca3ac2ba9db5f44eeb9dd"
@@ -7301,17 +8455,17 @@ _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "PendingExactFanout::classified_with_reply_routes": "84c22ccbeecfb531f69c7a03b6f659281fb69fde25f013e0aa394afba347914a",
     "PendingExactFanout::retain_active_unowned_reply_targets": "d34c8c2d4f0f4e402bae740f6463445a30453b88761fcb125cc5ac506479819e",
     "PendingExactFanout::reply_target_merge_plan": "d4470015919d5a1d7838b0c33a8a8c2c545808eac2e73e7ed8e5d37db2be0653",
-    "PendingExactFanout::reply_target_merge_plan_with_hooks": "ed556c050d88d4ec3dd661a1fbc59b22b49c714a04de269858c64e22edf3cf99",
-    "PendingExactFanout::preview_coalesce_plan": "b8ff04da8437546283cb12f98b7fef9331f46dc9caf82df664e00aa3ba6bffe3",
-    "PendingExactFanout::commit_coalesce_plan": "262646936ed759198bf3b40161144c19c654455110e53b69ce998bed8f4872c6",
-    "PendingExactFanout::retryable_certified_sidecar_responder_control_target": "aba4258728306282df91c88506a12ee6dc3006b31a61480b3784524f3f59ac9d",
+    "PendingExactFanout::reply_target_merge_plan_with_hooks": "570dd53c526360494d3ac589a2b6f4dbb7c4da81610ab7e57cac4dadb4d20766",
+    "PendingExactFanout::preview_coalesce_plan": "f911b55bc95a4ea4ad07902c651cc090ebe5fb2d488a4adabbd86e22e7b720b2",
+    "PendingExactFanout::commit_coalesce_plan": "a311d1d98cea528b88438f90a8f1d6e87b5adbd1d1b158730765b4e66239cade",
+    "PendingExactFanout::retryable_certified_sidecar_responder_control_target": "6ec5aac36548c23c407f8212aa93e9794a1383f4ce20c517ac6c158f24193cab",
     "DurableExactOutputServiceOwner::is_sealed": "e739a883ce93dc761dcb9ce0673f69e2e280562ab67f3ca94d1a454efa0860b6",
     "DurableExactOutputServiceOwner::seal": "abe0ec8f7915faab4687fa7be6606ab69e8b58f650cf4ba62bf8610eb586e652",
     "DurableExactOutputHandoffReceipt::is_bound_to_transport_owner": "3a991fb6c233282aab23f9e1cf30857457983736bbd15c7da0f25423eb76a2b6",
     "DurableExactOutputHandoffReceipt::matches_predecessor_context": "01cf51ba83773bb7a1b7e20bb17581df680a53f8280dcc5a7afd35663be1f502",
     "DurableExactOutputHandoffReceipt::matches_finality_artifact": "2200062928c7e969f4793c6051724bc806ce4ba8199dc439a0582a6e24b2da90",
     "DurableExactOutputHandoffReceipt::authorizes_immediate_successor": "e99e80f5fd6b36abbb95041e2b0c5ba71e435e11fed7ce456418727f6870ab2f",
-    "PendingExactOutput::new": "e78dcf53b9c5cbc1ef729f31f96f61abb9dfff05a535e246de7360cab433983b",
+    "PendingExactOutput::new": "4d6f8872fd25a2d6041dfaab7d2182d3b43d13fcae408b478fab17f34afc738b",
     "PendingExactOutput::is_pending": "6cd7ecb71f163b7b59e59abcce7f413a4eef60bfbd160950c4afd03a0ff73588",
     "PendingExactOutput::close_certified_sidecar_prefix": "d7e50f6894a043a303ce239e0f37dfbd7a12a7c9a621f0e48f6754a72739c3af",
     "PendingExactOutput::pending_sidecar_flushes": "14c74fcdfe37c137fe20897ab19acbac746b9d3a4f764a939abbbe1bc43b2048",
@@ -7319,12 +8473,12 @@ _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "PendingExactOutput::restore_pending_flush": "ff20f9c93c8cbab55fdeef391e73223cba5bfbc0bf4fac2b9c8130b984ac0d7e",
     "PendingExactOutput::poll_reply_flushes": "bdcb177a425296d471e827d561974ec96bedb9de661681d6a8144f8326c4f372",
     "PendingExactOutput::validate_owned_reply_transfer": "c39a07ac424ad25dc1d2d1d5cffec3daacbbd7a83c029ff289739745acb6f591",
-    "PendingExactOutput::can_enqueue_owned_reply_transfer": "bd313c84f9f925c89a2c9d3b4cc2f310af709aaabe1560eda0ec745c52bdd474",
+    "PendingExactOutput::can_enqueue_owned_reply_transfer": "8fcf9c1dc5edb24b0001104718bf80ff142716e45e36b179f74a430e2b214c38",
     "PendingExactOutput::enqueue": "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6",
-    "PendingExactOutput::enqueue_owned_reply_transfer": "a5b07b139983a354d8051b3ebd0defc627d530fe1fc870af3ca7989b9874d24c",
-    "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership": "11f86225448e3de88b851ac9edf4cc594e9bf78a6a2660e89c74640e1e53b9d5",
+    "PendingExactOutput::enqueue_owned_reply_transfer": "285ad0dcddadc2a95c155a520f636d14932f6c9c2913e7eea7e43cf443e6642b",
+    "PendingExactOutput::project_sidecar_receipt_completions": "e506155b90096fb5980cb878611a5c42190591efebcd7d10d3961061cf925158",
     "PendingExactOutput::retains_retryable_sidecar_responder_control_for": "8f2960dccb011be19e3cb0135ba26138f4020dbc91333bbcd1a73cdcae8d17c1",
-    "PendingExactOutput::enqueue_validated": "fa3553117457f53b21ce3b330011f2c3b8e8718134723c41d196779d0a414d6d",
+    "PendingExactOutput::enqueue_validated": "035f6caf6f60eb2fa8c6a2da471fd60d6f4692061815906378aa115ad29cb92b",
     "PendingExactOutput::handoff_applied_height_to_durable_reconstruction": "e78d702c927524d363d59d1a098bfd6649d6d399e3f0252faac9d500c77b5a80",
     "PendingExactOutput::drive_with_budget_ack": "a4453951bf9775ad83b603cfe9b5f5849cc6251904602cbf76438c6140703bfa",
     "PendingExactOutput::drive_bounded_with_ack": "7e630c6be2466fe0980df81ea194e101b70e4abac9546a379ab9f24c8eb23861",
@@ -7365,33 +8519,39 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "5ed556d54c561a57c50d7636f84fdefaf29e14d1179de7edc245447ca861f1be"
     ),
     "PendingExactFanout::outstanding_reservation_counts": (
-        "c5fa7a719f4095a4f11313c0f87e56742227fbd541f32f1bceb3ea4a23b56d83"
+        "02972f0bfa1e31b0dca617382be3254a8da07177396c69101e068cb02075b3fc"
     ),
     "PendingExactFanout::target_reservation": (
-        "2a9a2d47258feca85e6aa234515847f7e8dfab14c36ebbb97c6680ccffb47b3b"
+        "94273ddf470c326dea9ab618150c7611ebf353a5f2358339bd52b3e382335bcb"
     ),
     "PendingExactFanout::certified_sidecar_topology_progress_target": (
         "fcb909658b3a0e546a8e6e5379ca4437ce4e55c2262f88e7ebb59ab7d8ff428b"
     ),
     "PendingExactFanout::admission_reservation_counts": (
-        "4d4ee3e68dcf3b2a88d78f85960bfb227c33eda8c19742e09a91c6f23ac174c1"
+        "3b5e7800f133b7673650fee75acefd31e56316c2d33ea5405c2b898fd11a8659"
     ),
     "PendingExactFanout::reply_target_merge_plan": (
         "d4470015919d5a1d7838b0c33a8a8c2c545808eac2e73e7ed8e5d37db2be0653"
     ),
     "PendingExactFanout::reply_target_merge_plan_with_hooks": (
-        "ed556c050d88d4ec3dd661a1fbc59b22b49c714a04de269858c64e22edf3cf99"
+        "570dd53c526360494d3ac589a2b6f4dbb7c4da81610ab7e57cac4dadb4d20766"
     ),
     "PendingExactFanout::coalesce_reservation_additions_for_plan": (
-        "003474cffe0b82b2866a6131123375dbb98ec13a60ddb07dccda5672f55414f6"
+        "081e95192953390b7b1b17794f956c9e089d7986bda1c55ce49ddd83ad4f0979"
     ),
-    "PendingExactFanout::preview_coalesce_plan": "b8ff04da8437546283cb12f98b7fef9331f46dc9caf82df664e00aa3ba6bffe3",
-    "PendingExactFanout::commit_coalesce_plan": "262646936ed759198bf3b40161144c19c654455110e53b69ce998bed8f4872c6",
+    "PendingExactFanout::preview_coalesce_plan": "f911b55bc95a4ea4ad07902c651cc090ebe5fb2d488a4adabbd86e22e7b720b2",
+    "PendingExactFanout::commit_coalesce_plan": "a311d1d98cea528b88438f90a8f1d6e87b5adbd1d1b158730765b4e66239cade",
     "PendingExactFanout::can_coalesce_retry": (
         "b5f48359f0342b142f04b6fee8c6e74e7cbeaf5068f1dc628fffe7ad5a971de5"
     ),
+    "PendingExactFanout::has_writable_reply_target": (
+        "a717b59e74c10dda4248c99527c781463eabb0c8ac355f2e718f5b3f3e0f0b9a"
+    ),
+    "PendingExactFanout::is_stranded_retryable_certified_sidecar_responder_control": (
+        "ce27592a9a7e240a207c1b0ea26340edb7e7f25d11f15bdb7ef3d0698446ef49"
+    ),
     "PendingExactOutput::new": (
-        "e78dcf53b9c5cbc1ef729f31f96f61abb9dfff05a535e246de7360cab433983b"
+        "4d6f8872fd25a2d6041dfaab7d2182d3b43d13fcae408b478fab17f34afc738b"
     ),
     "PendingExactOutput::ownership_addition_load": (
         "c566f3dc97560d01457335a290f876f96f5128236bf8cdbbeda6c0c6d14e50ef"
@@ -7404,6 +8564,9 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
     ),
     "PendingExactOutput::ownership_state_after_additions": (
         "a22e2ff976a86ec6218c8a417b2f9b3fd066d16bb9b8edd561fcc00512008ad2"
+    ),
+    "PendingExactOutput::ownership_state_after_replacement": (
+        "80d59ecc4e9300743cf22d82a07712f9c585cbda0cbaf49197ff89bfefc66932"
     ),
     "PendingExactOutput::coalesced_target_geometry_available": (
         "16637dff951694ae9999357a0121a18e520dda07935fb88839625d080e47f403"
@@ -7418,7 +8581,22 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "de94c2648c59bc1e9a4b0ec3c5f4824ad7bdedf153012603c6ddf407c42326e0"
     ),
     "PendingExactOutput::can_enqueue": (
-        "427411851c9990db116b2a5c8c18966e09ce106506f33e3f089a80982629db49"
+        "21e501bc34a7c1b41ca787e5a8c4a48d9e853a8cf7b3960c685ef58e7d33cc0a"
+    ),
+    "PendingExactOutput::stranded_responder_control_replacement_index": (
+        "5a93e8d4bcf188928987ad45e193a7569f25c68f05ca9d7f25a93ba3e96974df"
+    ),
+    "PendingExactOutput::responder_control_replacement_ownership": (
+        "3b28dfe491d895c31600f4c6f871fb04015f7a9214dbb6768431c8484bf6dac6"
+    ),
+    "PendingExactOutput::responder_control_replacement_available": (
+        "1680843d65a96ef27f9c5d68c968dbbea10998b7641194647adede693c3fb4c7"
+    ),
+    "PendingExactOutput::responder_control_replacement_plan": (
+        "1a914ee0f02c0e45e7297282a6a9d415761d610ef303665bd98951ef6136fb79"
+    ),
+    "PendingExactOutput::replace_stranded_responder_control": (
+        "5b87149fac9b75e1690787b5167ed04681676a186f0bd2bfb834ecc5a3c748ff"
     ),
     "PendingExactOutput::enqueue": (
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
@@ -7575,7 +8753,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     "run_inner": (
-        "b5e0e063823dc30e1e36698555fefcad7abef8f0223d61488129dede91e7a80a"
+        "1c60f755614a3bfc42831b16e77643ed648d8607e588f4725ac072920c737c91"
     ),
     "drain_v2_ingress": (
         "5ec7c70967e56f22bd789b3b59b70d844cb2d52318c193711db0c19d94e6ebc9"
@@ -7600,7 +8778,7 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "7c885d78960f5ba305ef6b38131ec30e9bc9292717ddf7c2dd65f6a5c4b5d971"
+        "a315d30d0a478ac13f795355065f533f78df94a896d9bee79a84f7779d4cb7ef"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"
@@ -8763,10 +9941,13 @@ def _require_rust_item_context(
         for attribute in item.attributes
         if re.search(r"(?s)^#\s*\[\s*cfg(?:_attr)?\b", attribute)
     ]
-    if gated:
+    unexpected_gated = [
+        attribute for attribute in gated if attribute not in expected_attributes
+    ]
+    if unexpected_gated:
         errors.append(
             f"{path}:{item.line}: {description} may not be disabled or replaced "
-            f"through cfg/cfg_attr attributes: {gated!r}"
+            f"through unreviewed cfg/cfg_attr attributes: {unexpected_gated!r}"
         )
     elif item.attributes != expected_attributes:
         errors.append(
@@ -12401,20 +13582,53 @@ def _proofless_release_theorem_errors(
                 and obligation.get("module") == module
                 and obligation.get("symbol") == symbol
             ]
-            aggregate_debt = _PROOFLESS_RELEASE_AGGREGATE_DEBT_BY_THEOREM.get(
+            support_id = _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.get(
                 (module, symbol)
             )
-            if not exact_entries and aggregate_debt is not None:
-                aggregate_id, aggregate_symbol = aggregate_debt
-                exact_entries = [
+            direct_consumer_id = (
+                _PROOFLESS_RELEASE_DIRECT_CONSUMER_BY_THEOREM.get(
+                    (module, symbol)
+                )
+            )
+            support_consumer = None
+            if not exact_entries and (
+                support_id is not None or direct_consumer_id is not None
+            ):
+                consumer_id = (
+                    direct_consumer_id
+                    if direct_consumer_id is not None
+                    else SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+                )
+                support_consumer_entries = [
                     obligation
                     for obligation in obligations
                     if isinstance(obligation, dict)
-                    and obligation.get("id") == aggregate_id
-                    and obligation.get("module") == module
-                    and obligation.get("symbol") == aggregate_symbol
+                    and obligation.get("id") == consumer_id
                 ]
+                if len(support_consumer_entries) == 1:
+                    candidate = support_consumer_entries[0]
+                    reviewed_module, reviewed_symbol = (
+                        REQUIRED_PROOF_OBLIGATION_INVENTORY[consumer_id]
+                    )
+                    if (
+                        candidate.get("module") == reviewed_module
+                        and candidate.get("symbol") == reviewed_symbol
+                    ):
+                        support_consumer = candidate
+                        exact_entries = support_consumer_entries
             if len(exact_entries) != 1:
+                if support_id is not None or direct_consumer_id is not None:
+                    consumer_id = (
+                        direct_consumer_id
+                        if direct_consumer_id is not None
+                        else SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+                    )
+                    errors.append(
+                        f"{module}.tla:{extracted[1]}: proofless support "
+                        f"theorem {module}!{symbol} must be transitively "
+                        f"accounted for by exact reviewed consumer {consumer_id}"
+                    )
+                    continue
                 errors.append(
                     f"{module}.tla:{extracted[1]}: proofless release theorem "
                     f"{module}!{symbol} must have exactly one ledger entry using "
@@ -12424,6 +13638,36 @@ def _proofless_release_theorem_errors(
             status = exact_entries[0].get("status")
             obligation_id = exact_entries[0].get("id")
             cross_tool_contract = CROSS_TOOL_REFINEMENT_BY_ID.get(obligation_id)
+            if support_consumer is not None:
+                if support_id in STRICT_PROOFLESS_TEMPORAL_SUPPORT_IDS:
+                    if status == "specified_unproved":
+                        continue
+                    support_label = (
+                        "historical recovery"
+                        if support_id
+                        in HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS
+                        else "temporal closure"
+                    )
+                    errors.append(
+                        f"{module}.tla:{extracted[1]}: proofless "
+                        f"{support_label} support theorem {module}!{symbol} must "
+                        "remain transitively specified_unproved through "
+                        f"consumer {obligation_id}; found consumer status "
+                        f"{status!r}"
+                    )
+                    continue
+                if status == "specified_unproved":
+                    continue
+                if status == "tlaps_proved":
+                    continue
+                if status == "cross_tool_proved" and cross_tool_contract is not None:
+                    continue
+                errors.append(
+                    f"{module}.tla:{extracted[1]}: proofless support theorem "
+                    f"{module}!{symbol} must remain transitively visible through "
+                    f"consumer {obligation_id}; found consumer status {status!r}"
+                )
+                continue
             cross_tool_discharge = (
                 status == "cross_tool_proved"
                 and cross_tool_contract is not None
@@ -12440,56 +13684,70 @@ def _proofless_release_theorem_errors(
 
 
 def _machine_checked_completion_contract_errors() -> list[str]:
-    """Validate the code-owned 70-source/60-target completion projection."""
+    """Validate the exact code-owned 54-obligation completion contract."""
 
     errors: list[str] = []
     source_ids = tuple(REQUIRED_PROOF_OBLIGATION_INVENTORY)
-    excluded_ids = MACHINE_CHECKED_COMPLETION_EXCLUDED_OBLIGATION_IDS
-    excluded_id_set = _MACHINE_CHECKED_COMPLETION_EXCLUDED_ID_SET
     target_ids = MACHINE_CHECKED_COMPLETION_TARGET_IDS
     target_id_set = _MACHINE_CHECKED_COMPLETION_TARGET_ID_SET
 
-    if len(source_ids) != 70:
+    if len(source_ids) != 54 or len(set(source_ids)) != 54:
         errors.append(
-            "reviewed proof source inventory must contain exactly 70 obligations; "
-            f"found {len(source_ids)}"
+            "reviewed proof inventory must contain exactly 54 distinct "
+            f"obligations; found {len(source_ids)} entries and "
+            f"{len(set(source_ids))} distinct IDs"
         )
-    if len(excluded_ids) != 10 or len(excluded_id_set) != 10:
+    support_ids = tuple(SUPPORT_PROOF_OBLIGATION_INVENTORY)
+    if len(support_ids) != 16 or len(set(support_ids)) != 16:
         errors.append(
-            "machine-checked completion exclusion must contain exactly ten "
-            f"distinct obligations; found {len(excluded_ids)} entries and "
-            f"{len(excluded_id_set)} distinct IDs"
+            "proof support inventory must contain exactly sixteen distinct "
+            f"decomposition leaves; found {len(support_ids)} entries and "
+            f"{len(set(support_ids))} distinct IDs"
         )
-    source_excluded_ids = tuple(
-        obligation_id
-        for obligation_id in source_ids
-        if obligation_id in excluded_id_set
+    historical_support_ids = tuple(
+        support_id
+        for support_id in support_ids
+        if support_id.startswith("historical-recovery-")
     )
-    if source_excluded_ids != excluded_ids:
+    expected_historical_support_ids = (
+        HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS[:2]
+        + HISTORICAL_RECOVERY_PROVED_SAFETY_SUPPORT_IDS
+        + HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS[2:]
+    )
+    if historical_support_ids != expected_historical_support_ids:
         errors.append(
-            "machine-checked completion exclusions must be the exact reviewed "
-            f"source-ordered IDs {source_excluded_ids!r}; found {excluded_ids!r}"
+            "historical recovery support accounting must contain exactly "
+            "three proofless temporal leaves and one proved Decision-stage "
+            "ownership safety leaf; found "
+            f"{historical_support_ids!r}"
         )
-    if len(target_ids) != 60 or len(target_id_set) != 60:
+    if set(source_ids) & set(support_ids):
         errors.append(
-            "machine-checked completion target must contain exactly 60 distinct "
-            f"obligations; found {len(target_ids)} entries and "
-            f"{len(target_id_set)} distinct IDs"
+            "top-level proof obligations and support decomposition leaves must "
+            f"be disjoint: {sorted(set(source_ids) & set(support_ids))!r}"
         )
-    if target_id_set & excluded_id_set:
+    if tuple(SUPPORT_PROOF_CONSUMER_BY_ID) != support_ids:
         errors.append(
-            "machine-checked completion target and supporting exclusion overlap: "
-            f"{sorted(target_id_set & excluded_id_set)!r}"
+            "every support decomposition leaf must have one source-ordered "
+            "top-level consumer"
         )
-    if target_id_set | excluded_id_set != set(source_ids):
+    unknown_consumers = sorted(
+        set(SUPPORT_PROOF_CONSUMER_BY_ID.values()) - set(source_ids)
+    )
+    if unknown_consumers:
         errors.append(
-            "machine-checked completion target plus supporting exclusion must "
-            "equal the reviewed 70-entry source inventory"
+            "proof support leaves name unreviewed top-level consumers "
+            f"{unknown_consumers!r}"
+        )
+    if target_ids != source_ids or len(target_id_set) != 54:
+        errors.append(
+            "machine-checked completion target must equal the exact ordered "
+            "54-entry reviewed inventory"
         )
     if tuple(MACHINE_CHECKED_COMPLETION_EXPECTED_STATUS_BY_ID) != target_ids:
         errors.append(
             "machine-checked completion status contract must follow the exact "
-            "60-ID target order"
+            "54-ID target order"
         )
 
     observed_status_counts = {
@@ -12516,7 +13774,7 @@ def _machine_checked_completion_contract_errors() -> list[str]:
 def _machine_checked_completion_status_errors(
     obligations: list[Any],
 ) -> list[str]:
-    """Require exact final statuses for the code-owned 60-obligation target."""
+    """Require exact final statuses for the code-owned 54-obligation target."""
 
     by_id = {
         obligation.get("id"): obligation
@@ -12550,7 +13808,7 @@ def _machine_checked_completion_status_errors(
     if mismatches:
         errors.append(
             "machine_checked_completion=true requires exact statuses for the "
-            "60-obligation target: "
+            "54-obligation target: "
             + "; ".join(mismatches)
         )
     if (
@@ -12612,6 +13870,65 @@ def _proof_obligation_inventory_errors(obligations: list[Any]) -> list[str]:
     return errors
 
 
+def _serve_lifecycle_temporal_contract_errors(formal_dir: Path) -> list[str]:
+    """Require the durable, finite ownership surface that closes replenishment."""
+
+    errors: list[str] = []
+    for module, operators in SERVE_LIFECYCLE_REQUIRED_OPERATORS.items():
+        path = formal_dir / f"{module}.tla"
+        if not path.is_file():
+            errors.append(
+                f"{path}: missing Serve lifecycle temporal-contract module"
+            )
+            continue
+        source = path.read_text(encoding="utf-8")
+        for operator in operators:
+            extracted = _top_level_operator_body(
+                source,
+                operator,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{path}: missing required Serve lifecycle operator {operator}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized in {"TRUE", "FALSE"}:
+                errors.append(
+                    f"{path}:{line}: Serve lifecycle operator {operator} "
+                    "may not be a constant placeholder"
+                )
+
+    exact_path = (
+        formal_dir / "SumeragiV2ExactDecisionStageServiceClosureProofs.tla"
+    )
+    if exact_path.is_file():
+        exact_source = strip_tla_comments(
+            exact_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        arbitrary_budget = re.search(r"\bproducerBudget\b", exact_source)
+        if arbitrary_budget is not None:
+            line = exact_source.count("\n", 0, arbitrary_budget.start()) + 1
+            errors.append(
+                f"{exact_path}:{line}: exact-request closure may not use an "
+                "arbitrary producerBudget; derive the finite episode budget "
+                "from durable lifecycle state"
+            )
+        for symbol in RETIRED_ARBITRARY_PRODUCER_BUDGET_SYMBOLS:
+            match = re.search(rf"\b{re.escape(symbol)}\b", exact_source)
+            if match is None:
+                continue
+            line = exact_source.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{exact_path}:{line}: retired arbitrary-budget residual "
+                f"{symbol} is prohibited"
+            )
+    return errors
+
+
 def _proof_obligation_architecture_errors(
     obligations: list[Any], module_sources: dict[str, str]
 ) -> list[str]:
@@ -12634,6 +13951,44 @@ def _proof_obligation_architecture_errors(
             errors.append(f"{where} must use {module}")
         if obligation.get("symbol") != symbol:
             errors.append(f"{where} must use the direct theorem {symbol}")
+
+    for support_id, (module, symbols) in (
+        SUPPORT_PROOF_OBLIGATION_INVENTORY.items()
+    ):
+        consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+        consumer = by_id.get(consumer_id)
+        if consumer is None:
+            errors.append(
+                f"proof support leaf {support_id} is missing reviewed consumer "
+                f"{consumer_id}"
+            )
+        else:
+            expected_module, expected_symbol = (
+                REQUIRED_PROOF_OBLIGATION_INVENTORY[consumer_id]
+            )
+            if (
+                consumer.get("module") != expected_module
+                or consumer.get("symbol") != expected_symbol
+            ):
+                errors.append(
+                    f"proof support leaf {support_id} must be transitively "
+                    f"consumed by exact reviewed obligation {consumer_id}"
+                )
+        source = module_sources.get(module)
+        if source is None:
+            continue
+        stripped = strip_tla_comments(source)
+        for symbol in symbols.split(" / "):
+            declaration = re.compile(
+                rf"(?m)^[ \t]*(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)"
+                rf"[ \t]+)?{re.escape(symbol)}"
+                rf"\s*(?:\([^)=\n]*\))?\s*=="
+            )
+            if declaration.search(stripped) is None:
+                errors.append(
+                    f"{module}.tla: proof support leaf {support_id} is missing "
+                    f"reviewed declaration {symbol}"
+                )
 
     def check_direct_theorem(
         obligation_id: str,
@@ -12708,15 +14063,27 @@ def _proof_obligation_architecture_errors(
         exact_statement: str,
         forbidden: tuple[str, ...],
     ) -> None:
-        obligation = by_id.get(obligation_id)
-        if obligation is None:
-            errors.append(f"proof ledger is missing required obligation {obligation_id}")
-            return
-        where = f"proof obligation {obligation_id}"
-        if obligation.get("module") != module:
-            errors.append(f"{where} must use {module}")
-        if obligation.get("symbol") != symbol:
-            errors.append(f"{where} must use the direct theorem {symbol}")
+        if obligation_id in SUPPORT_PROOF_OBLIGATION_INVENTORY:
+            consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[obligation_id]
+            consumer = by_id.get(consumer_id)
+            where = f"proof support leaf {obligation_id}"
+            if consumer is None:
+                errors.append(
+                    f"{where} is missing reviewed consumer {consumer_id}"
+                )
+                return
+        else:
+            obligation = by_id.get(obligation_id)
+            if obligation is None:
+                errors.append(
+                    f"proof ledger is missing required obligation {obligation_id}"
+                )
+                return
+            where = f"proof obligation {obligation_id}"
+            if obligation.get("module") != module:
+                errors.append(f"{where} must use {module}")
+            if obligation.get("symbol") != symbol:
+                errors.append(f"{where} must use the direct theorem {symbol}")
         source = module_sources.get(module)
         if source is None:
             return
@@ -12931,7 +14298,17 @@ def _proof_obligation_architecture_errors(
     for obligation_id, exact_statement in (
         EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS.items()
     ):
-        module, symbol = FIXED_PROOF_OBLIGATION_TARGETS[obligation_id]
+        target = FIXED_PROOF_OBLIGATION_TARGETS.get(
+            obligation_id,
+            SUPPORT_PROOF_OBLIGATION_INVENTORY.get(obligation_id),
+        )
+        if target is None:
+            errors.append(
+                f"exact fixed proof contract has no reviewed target "
+                f"{obligation_id}"
+            )
+            continue
+        module, symbol = target
         check_closed_theorem(
             obligation_id,
             symbol,
@@ -12939,24 +14316,6 @@ def _proof_obligation_architecture_errors(
             exact_statement=exact_statement,
             forbidden=(),
         )
-        if (
-            obligation_id not in PROOFLESS_FIXED_DEBT_OBLIGATION_IDS
-            or by_id.get(obligation_id, {}).get("status")
-            != "specified_unproved"
-        ):
-            continue
-        source = module_sources.get(module)
-        if source is None:
-            continue
-        extracted = _top_level_theorem_body(source, symbol)
-        if extracted is None:
-            continue
-        body, line = extracted
-        if re.search(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body):
-            errors.append(
-                f"{module}.tla:{line}: proof-debt theorem {symbol} must remain "
-                "proofless while ledgered specified_unproved"
-            )
     for (
         module,
         symbol,
@@ -19014,14 +20373,44 @@ def _reply_writer_deadline_formal_source_fidelity_errors(
     return errors
 
 
+
 def _typed_rollover_handoff_formal_source_fidelity_errors(
     formal_dir: Path, repo_root: Path = ROOT_DIR
 ) -> list[str]:
-    """Pin the proofless sole-V2 rollover model and its 25 TLC controls."""
+    """Pin the proved/debt V3 rollover split and its 43 TLC controls."""
 
     errors: list[str] = []
     sources: dict[str, str] = {}
     configs: dict[str, str] = {}
+    reviewed_artifacts = tuple(
+        _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256
+    )
+    if (
+        len(reviewed_artifacts) != 48
+        or sum(name.endswith(".cfg") for name in reviewed_artifacts) != 44
+        or sum(name.endswith("_bug.cfg") for name in reviewed_artifacts) != 43
+    ):
+        errors.append(
+            "internal typed rollover source seal must contain exactly "
+            "48 artifacts: four TLA modules, one fixed config, and "
+            "43 mutation configs"
+        )
+    if (
+        len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 7
+        or len(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) != 29
+        or len(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS) != 2
+        or len(
+            set(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS)
+            | set(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS)
+            | set(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS)
+        )
+        != 38
+    ):
+        errors.append(
+            "internal typed rollover proof inventory must contain exactly "
+            "29 proved and 9 proofless theorem declarations "
+            "(7 safety and 2 liveness proofless)"
+        )
     for name, expected_sha256 in (
         _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256.items()
     ):
@@ -19060,30 +20449,6 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             f"{sorted(observed_config_names)!r}"
         )
 
-    def require_exact_operator(
-        source_name: str, symbol: str, expected_body: str
-    ) -> None:
-        source = sources.get(source_name)
-        if source is None:
-            return
-        extracted = _top_level_operator_body(
-            source, symbol, preserve_string_contents=True
-        )
-        path = formal_dir / source_name
-        if extracted is None:
-            errors.append(
-                f"{path}: missing reviewed sole-V2 typed rollover operator {symbol}"
-            )
-            return
-        body, line = extracted
-        normalized = " ".join(body.split())
-        expected = " ".join(expected_body.split())
-        if normalized != expected:
-            errors.append(
-                f"{path}:{line}: {symbol} must equal exact reviewed sole-V2 "
-                f"typed rollover body {expected!r}; found {normalized!r}"
-            )
-
     def require_operator_fragments(
         source_name: str,
         symbol: str,
@@ -19094,13 +20459,14 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         source = sources.get(source_name)
         if source is None:
             return
+        path = formal_dir / source_name
         extracted = _top_level_operator_body(
             source, symbol, preserve_string_contents=True
         )
-        path = formal_dir / source_name
         if extracted is None:
             errors.append(
-                f"{path}: missing reviewed sole-V2 typed rollover operator {symbol}"
+                f"{path}: missing reviewed root-anchored V3 typed rollover "
+                f"operator {symbol}"
             )
             return
         body, line = extracted
@@ -19109,43 +20475,105 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             expected = " ".join(fragment.split())
             if expected not in normalized:
                 errors.append(
-                    f"{path}:{line}: {symbol} must retain sole-V2 typed "
-                    f"rollover contract fragment {fragment!r}"
+                    f"{path}:{line}: {symbol} must retain root-anchored V3 "
+                    f"contract fragment {fragment!r}"
                 )
         for fragment in forbidden:
             rejected = " ".join(fragment.split())
             if rejected in normalized:
                 errors.append(
-                    f"{path}:{line}: {symbol} may not contain retired typed "
-                    f"rollover shortcut {fragment!r}"
+                    f"{path}:{line}: {symbol} may not contain forbidden "
+                    f"reviewed mutation fragment {fragment!r}"
                 )
 
-    def require_theorem_statement(
-        source_name: str, symbol: str, expected_statement: str
+    def require_operator_parameters(
+        source_name: str,
+        symbol: str,
+        expected: tuple[str, ...],
     ) -> None:
         source = sources.get(source_name)
         if source is None:
             return
-        extracted = _top_level_theorem_body(
+        path = formal_dir / source_name
+        stripped = strip_tla_comments(
+            source, preserve_string_contents=True
+        )
+        declaration = re.search(
+            rf"(?m)^{re.escape(symbol)}\s*\(([^)=]*)\)\s*==",
+            stripped,
+        )
+        if declaration is None:
+            errors.append(
+                f"{path}: {symbol} must retain its reviewed root-anchored V3 "
+                "parameter list"
+            )
+            return
+        observed = tuple(
+            parameter.strip()
+            for parameter in declaration.group(1).split(",")
+            if parameter.strip()
+        )
+        if observed != expected:
+            line = stripped.count("\n", 0, declaration.start()) + 1
+            errors.append(
+                f"{path}:{line}: {symbol} parameters must equal exact "
+                f"root-anchored V3 schema {expected!r}; found {observed!r}"
+            )
+
+    def require_exact_operator(
+        source_name: str,
+        symbol: str,
+        expected: str,
+    ) -> None:
+        source = sources.get(source_name)
+        if source is None:
+            return
+        path = formal_dir / source_name
+        extracted = _top_level_operator_body(
             source, symbol, preserve_string_contents=True
         )
-        path = formal_dir / source_name
         if extracted is None:
             errors.append(
-                f"{path}: missing reviewed proofless typed rollover theorem {symbol}"
+                f"{path}: missing reviewed root-anchored V3 typed rollover "
+                f"operator {symbol}"
             )
             return
         body, line = extracted
-        statement = re.split(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS|QED)\b", body, maxsplit=1
-        )[0]
-        normalized = " ".join(statement.split())
-        expected = " ".join(expected_statement.split())
-        if normalized != expected:
+        normalized = " ".join(body.split())
+        reviewed = " ".join(expected.split())
+        if normalized != reviewed:
             errors.append(
-                f"{path}:{line}: {symbol} must state only the reviewed "
-                f"proofless sole-V2 obligation {expected!r}; found {normalized!r}"
+                f"{path}:{line}: {symbol} must equal exact reviewed "
+                f"root-anchored V3 operator body {reviewed!r}; found "
+                f"{normalized!r}"
             )
+
+    def require_theorem_fragments(
+        symbol: str, required: tuple[str, ...]
+    ) -> None:
+        source_name = "SumeragiV2TypedRolloverHandoffProofs.tla"
+        source = sources.get(source_name)
+        if source is None:
+            return
+        path = formal_dir / source_name
+        extracted = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed proofless root-anchored V3 typed "
+                f"rollover theorem {symbol}"
+            )
+            return
+        body, line = extracted
+        normalized = " ".join(body.split())
+        for fragment in required:
+            expected = " ".join(fragment.split())
+            if expected not in normalized:
+                errors.append(
+                    f"{path}:{line}: {symbol} must retain root-anchored V3 "
+                    f"obligation fragment {fragment!r}"
+                )
 
     module_extends = {
         "SumeragiV2TypedRolloverHandoff.tla": "Naturals, TLC",
@@ -19153,6 +20581,9 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "SumeragiV2TypedRolloverHandoff, TLAPS"
         ),
         "SumeragiV2TypedRolloverHandoffMutation.tla": (
+            "SumeragiV2TypedRolloverHandoff"
+        ),
+        "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla": (
             "SumeragiV2TypedRolloverHandoff"
         ),
     }
@@ -19163,9 +20594,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         path = formal_dir / source_name
         stripped = strip_tla_comments(source, preserve_string_contents=True)
         module_name = source_name.removesuffix(".tla")
-        if re.findall(
+        headers = re.findall(
             r"(?m)^---- MODULE ([A-Za-z_][A-Za-z0-9_]*) ----$", stripped
-        ) != [module_name]:
+        )
+        if headers != [module_name]:
             errors.append(
                 f"{path}: typed rollover module header must name {module_name}"
             )
@@ -19176,1032 +20608,1155 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 f"{expected_extends!r}; found {extends!r}"
             )
 
-    retired_executable_tokens = (
+    retired_tokens = (
         "LifecycleSnapshotV1",
-        "LifecycleSnapshotV3",
+        "LifecycleSnapshotV2",
+        "durableLifecycleSnapshotV2",
+        "lifecycleSnapshotPhase",
         "durableHighWater",
-        "HighWaterAheadOfLifecycleSnapshot",
         "PersistNextServiceHighWater",
-        "FailNextServiceHighWaterPersistence",
-        "FailLifecycleSnapshotAfterHighWaterPersistence",
-        "CrashAtHighWaterAheadSnapshot",
-        "RejectTornHighWaterSnapshotOpen",
-        "TypedChangedRosterTransition",
-        "SkipHighWater",
-        "CleanFailNextServiceHighWaterPersistence",
-        "CleanFailLifecycleSnapshotAfterHighWaterPersistence",
+        "HighWaterAheadOfLifecycleSnapshot",
     )
     for source_name, source in sources.items():
         path = formal_dir / source_name
         stripped = strip_tla_comments(source, preserve_string_contents=True)
-        for token in retired_executable_tokens:
-            for match in re.finditer(rf"\b{re.escape(token)}\b", stripped):
-                line = stripped.count("\n", 0, match.start()) + 1
+        for token in retired_tokens:
+            if token in stripped:
                 errors.append(
-                    f"{path}:{line}: retired split/high-water or terminality-"
-                    f"bypass token {token} is prohibited"
+                    f"{path}: retired split/high-water or sole-V2 token "
+                    f"{token} is forbidden in the root-anchored V3 model family"
                 )
 
     model = "SumeragiV2TypedRolloverHandoff.tla"
-    model_source = sources.get(model)
-    if model_source is not None:
-        signature = (
-            "LifecycleSnapshotV2(generation, nextStreamEpoch, serverStreams, "
-            "requestGates) =="
-        )
-        if model_source.count(signature) != 1:
-            errors.append(
-                f"{formal_dir / model}: LifecycleSnapshotV2 must retain exactly "
-                "four coordinates and the sole reviewed V2 signature"
-            )
-        snapshot_set = """LifecycleSnapshotV2Set ==
-  [version: {2},
-   generation: InitialGeneration..GenerationLimit,
-   nextStreamEpoch: InitialNextStreamEpoch..StreamEpochLimit,
-   serverStreams: LifecycleEntryStates,
-   requestGates: LifecycleEntryStates]"""
-        if model_source.count(snapshot_set) != 1:
-            errors.append(
-                f"{formal_dir / model}: LifecycleSnapshotV2Set must retain the "
-                "exact reviewed V2 bounds and five-field record type"
-            )
-
-    exact_model_operators = {
-        "LifecycleSnapshotV2": r"""
-            [version |-> 2,
-             generation |-> generation,
-             nextStreamEpoch |-> nextStreamEpoch,
-             serverStreams |-> serverStreams,
-             requestGates |-> requestGates]
-        """,
-        "LifecycleMemory": r"""
-            <<s.serviceGeneration,
-              s.nextStreamEpoch,
-              s.serverStreamState,
-              s.requestGateState,
-              s.transferState,
-              s.flushState>>
-        """,
-        "DurableLifecycle": "s.durableLifecycleSnapshotV2",
-        "AllOldLifecycleTerminal": r"""
-            /\ state.serverStreamState = "Terminal"
-            /\ state.requestGateState = "Terminal"
-            /\ state.transferState = "Terminal"
-            /\ state.flushState = "Terminal"
-        """,
-        "LifecycleSnapshotV2AheadOfMemory": r"""
-            /\ state.lifecycleSnapshotPhase = "Persisted"
-            /\ state.durableLifecycleSnapshotV2.generation =
-                 state.serviceGeneration + 1
-            /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-            /\ state.durableLifecycleSnapshotV2.requestGates = "Empty"
-        """,
-        "RequesterEpochPersistenceAheadOfMemory": r"""
-            /\ state.requesterEpochPhase = "Persisted"
-            /\ state.pendingStreamEpoch = state.nextStreamEpoch
-            /\ state.durableLifecycleSnapshotV2.nextStreamEpoch =
-                 state.nextStreamEpoch + 1
-        """,
-        "PersistFreshRequesterEpoch": r"""
-            /\ state.requesterEpochPhase = "Idle"
-            /\ state.nextStreamEpoch < StreamEpochLimit
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ LifecycleMemoryMatchesDurableSnapshotV2
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.durableLifecycleSnapshotV2 =
-                      LifecycleSnapshotV2(
-                        state.serviceGeneration,
-                        state.nextStreamEpoch + 1,
-                        state.serverStreamState,
-                        state.requestGateState),
-                    !.requesterEpochPhase = "Persisted",
-                    !.pendingStreamEpoch = state.nextStreamEpoch,
-                    !.capacityRejected = FALSE]
-        """,
-        "PublishFreshRequesterEpoch": r"""
-            /\ RequesterEpochPersistenceAheadOfMemory
-            /\ ~state.restartRequired
-            /\ state.pendingStreamEpoch > state.lastCompletedStreamEpoch
-            /\ state.pendingStreamEpoch # state.skippedStreamEpoch
-            /\ state' =
-                 [state EXCEPT
-                    !.nextStreamEpoch =
-                      state.durableLifecycleSnapshotV2.nextStreamEpoch,
-                    !.requesterEpochPhase = "InUse",
-                    !.activeStreamEpoch = state.pendingStreamEpoch,
-                    !.pendingStreamEpoch = 0]
-        """,
-        "CrashAfterRequesterEpochPersistence": r"""
-            /\ RequesterEpochPersistenceAheadOfMemory
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.successorActive = FALSE,
-                    !.restartRequired = TRUE,
-                    !.failureReason = "CrashAfterRequesterEpochPersistence",
-                    !.skippedStreamEpoch = state.pendingStreamEpoch,
-                    !.epochCrashObserved = TRUE]
-        """,
-        "RestoreRequesterEpochCounterAfterCrash": r"""
-            /\ state.restartRequired
-            /\ state.failureReason = "CrashAfterRequesterEpochPersistence"
-            /\ RequesterEpochPersistenceAheadOfMemory
-            /\ state.epochCrashObserved
-            /\ state' =
-                 [state EXCEPT
-                    !.nextStreamEpoch =
-                      state.durableLifecycleSnapshotV2.nextStreamEpoch,
-                    !.requesterEpochPhase = "Idle",
-                    !.pendingStreamEpoch = 0,
-                    !.activeStreamEpoch = 0,
-                    !.restartRequired = FALSE,
-                    !.failureReason = "None"]
-        """,
-        "RejectRequesterEpochOverflow": r"""
-            /\ state.requesterEpochPhase = "Idle"
-            /\ state.nextStreamEpoch = StreamEpochLimit
-            /\ ~state.capacityRejected
-            /\ state' =
-                 [state EXCEPT !.capacityRejected = TRUE]
-        """,
-        "RejectActiveLifecycleCompaction": r"""
-            /\ ExactRetainedMergeSidecars
-            /\ CompactionNeeded
-            /\ ~AllOldLifecycleTerminal
-            /\ ~state.capacityRejected
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT !.capacityRejected = TRUE]
-        """,
-        "PersistSuccessorLifecycleSnapshotV2": r"""
-            /\ ExactRetainedMergeSidecars
-            /\ CompactionNeeded
-            /\ AllOldLifecycleTerminal
-            /\ state.serviceGeneration < GenerationLimit
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ state.requesterEpochPhase # "Persisted"
-            /\ LifecycleMemoryMatchesDurableSnapshotV2
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.durableLifecycleSnapshotV2 =
-                      LifecycleSnapshotV2(
-                        state.serviceGeneration + 1,
-                        state.nextStreamEpoch,
-                        "Empty",
-                        "Empty"),
-                    !.lifecycleSnapshotPhase = "Persisted",
-                    !.capacityRejected = FALSE]
-        """,
-        "FailSuccessorLifecycleSnapshotV2Persistence": r"""
-            /\ ExactRetainedMergeSidecars
-            /\ CompactionNeeded
-            /\ AllOldLifecycleTerminal
-            /\ state.serviceGeneration < GenerationLimit
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ state.requesterEpochPhase # "Persisted"
-            /\ LifecycleMemoryMatchesDurableSnapshotV2
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.restartRequired = TRUE,
-                    !.failureReason =
-                      "LifecycleSnapshotV2PersistenceFailure"]
-        """,
-        "CrashBeforeLifecycleSnapshotV2Persistence": r"""
-            /\ ExactRetainedMergeSidecars
-            /\ CompactionNeeded
-            /\ AllOldLifecycleTerminal
-            /\ state.serviceGeneration < GenerationLimit
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ LifecycleMemoryMatchesDurableSnapshotV2
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.restartRequired = TRUE,
-                    !.failureReason =
-                      "CrashBeforeLifecycleSnapshotV2Persistence"]
-        """,
-        "RecoverPredecessorLifecycleSnapshotV2": r"""
-            /\ state.restartRequired
-            /\ state.failureReason \in
-                 {"LifecycleSnapshotV2PersistenceFailure",
-                  "CrashBeforeLifecycleSnapshotV2Persistence"}
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ LifecycleMemoryMatchesDurableSnapshotV2
-            /\ state' =
-                 [state EXCEPT
-                    !.restartRequired = FALSE,
-                    !.failureReason = "None"]
-        """,
-        "CrashAfterLifecycleSnapshotV2Persistence": r"""
-            /\ LifecycleSnapshotV2AheadOfMemory
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.restartRequired = TRUE,
-                    !.failureReason =
-                      "CrashAfterLifecycleSnapshotV2Persistence",
-                    !.snapshotCrashObserved = TRUE]
-        """,
-        "RestoreSuccessorLifecycleSnapshotV2AfterCrash": r"""
-            /\ LifecycleSnapshotV2AheadOfMemory
-            /\ state.restartRequired
-            /\ state.failureReason =
-                 "CrashAfterLifecycleSnapshotV2Persistence"
-            /\ state.snapshotCrashObserved
-            /\ state' =
-                 [state EXCEPT
-                    !.serviceGeneration =
-                      state.durableLifecycleSnapshotV2.generation,
-                    !.nextStreamEpoch =
-                      state.durableLifecycleSnapshotV2.nextStreamEpoch,
-                    !.serverStreamState =
-                      state.durableLifecycleSnapshotV2.serverStreams,
-                    !.requestGateState =
-                      state.durableLifecycleSnapshotV2.requestGates,
-                    !.transferState = "Empty",
-                    !.flushState = "Empty",
-                    !.retryableChunk = 0,
-                    !.lifecycleSnapshotPhase = "Restored",
-                    !.restartRequired = FALSE,
-                    !.failureReason = "None"]
-        """,
-        "RejectGenerationOverflow": r"""
-            /\ state.successorActive
-            /\ state.serviceGeneration = GenerationLimit
-            /\ ~state.capacityRejected
-            /\ state' =
-                 [state EXCEPT !.capacityRejected = TRUE]
-        """,
-        "SoleLifecycleSnapshotV2Invariant": r"""
-            /\ state.durableLifecycleSnapshotV2 \in LifecycleSnapshotV2Set
-            /\ state.durableLifecycleSnapshotV2.version = 2
-            /\ state.serviceGeneration <=
-                 state.durableLifecycleSnapshotV2.generation
-            /\ state.nextStreamEpoch <=
-                 state.durableLifecycleSnapshotV2.nextStreamEpoch
-        """,
-        "LifecycleSnapshotPhaseInvariant": r"""
-            CASE state.lifecycleSnapshotPhase = "Current" ->
-                   /\ state.serviceGeneration =
-                        state.durableLifecycleSnapshotV2.generation
-                   /\ state.serverStreamState =
-                        state.durableLifecycleSnapshotV2.serverStreams
-                   /\ state.requestGateState =
-                        state.durableLifecycleSnapshotV2.requestGates
-                   /\ (state.nextStreamEpoch =
-                         state.durableLifecycleSnapshotV2.nextStreamEpoch
-                       \/ RequesterEpochPersistenceAheadOfMemory)
-              [] state.lifecycleSnapshotPhase = "Persisted" ->
-                   /\ LifecycleSnapshotV2AheadOfMemory
-                   /\ AllOldLifecycleTerminal
-              [] state.lifecycleSnapshotPhase = "Restored" ->
-                   /\ LifecycleMemoryMatchesDurableSnapshotV2
-                   /\ state.serverStreamState = "Empty"
-                   /\ state.requestGateState = "Empty"
-                   /\ state.transferState = "Empty"
-                   /\ state.flushState = "Empty"
-              [] state.lifecycleSnapshotPhase = "Published" ->
-                   /\ LifecycleMemoryMatchesDurableSnapshotV2
-                   /\ state.serverStreamState = "Empty"
-                   /\ state.requestGateState = "Empty"
-                   /\ state.transferState = "Empty"
-                   /\ state.flushState = "Empty"
-        """,
-        "TerminalOnlyGenerationAdvanceInvariant": r"""
-            /\ (state.durableLifecycleSnapshotV2.generation >
-                  state.serviceGeneration =>
-                  /\ AllOldLifecycleTerminal
-                  /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-                  /\ state.durableLifecycleSnapshotV2.requestGates = "Empty")
-            /\ (state.serviceGeneration > InitialGeneration =>
-                  /\ state.serverStreamState = "Empty"
-                  /\ state.requestGateState = "Empty"
-                  /\ state.transferState = "Empty"
-                  /\ state.flushState = "Empty")
-            /\ (state.transitionAuthority = "LifecycleV2" =>
-                  /\ state.lifecycleSnapshotPhase = "Published"
-                  /\ state.serviceGeneration =
-                       state.durableLifecycleSnapshotV2.generation
-                  /\ state.receiptStage = "Consumed")
-        """,
-        "RequesterEpochInvariant": r"""
-            /\ state.lastCompletedStreamEpoch < state.nextStreamEpoch
-            /\ (state.pendingStreamEpoch # 0 =>
-                  /\ state.requesterEpochPhase = "Persisted"
-                  /\ state.pendingStreamEpoch >
-                       state.lastCompletedStreamEpoch)
-            /\ (state.activeStreamEpoch # 0 =>
-                  /\ state.requesterEpochPhase = "InUse"
-                  /\ state.activeStreamEpoch >
-                       state.lastCompletedStreamEpoch
-                  /\ state.activeStreamEpoch < state.nextStreamEpoch
-                  /\ state.activeStreamEpoch # state.skippedStreamEpoch)
-            /\ (state.skippedStreamEpoch # 0 =>
-                  state.skippedStreamEpoch <
-                    state.durableLifecycleSnapshotV2.nextStreamEpoch)
-        """,
-        "TypedRolloverSafetyInvariant": r"""
-            /\ TypedRolloverTypeInvariant
-            /\ CompactionGeometryInvariant
-            /\ ReceiptLifecycleInvariant
-            /\ FinalSealRejectsLateEnqueueInvariant
-            /\ MismatchRejectionInvariant
-            /\ FailureLatchInvariant
-            /\ SoleLifecycleSnapshotV2Invariant
-            /\ LifecycleSnapshotPhaseInvariant
-            /\ TerminalOnlyGenerationAdvanceInvariant
-            /\ SameRosterTransportPreservationInvariant
-            /\ RequesterEpochInvariant
-            /\ CrashRecoveryInvariant
-            /\ LateOldCallbackIsolationInvariant
-        """,
-        "CapacityRejectionStepSafety": r"""
-            (/\ ~state.capacityRejected
-             /\ state'.capacityRejected)
-              =>
-                /\ LifecycleMemory(state') = LifecycleMemory(state)
-                /\ DurableLifecycle(state') = DurableLifecycle(state)
-        """,
-        "AtomicLifecycleSnapshotV2PersistenceStepSafety": r"""
-            state'.durableLifecycleSnapshotV2.generation >
-              state.durableLifecycleSnapshotV2.generation
-              =>
-                /\ AllOldLifecycleTerminal
-                /\ state'.durableLifecycleSnapshotV2 =
-                     LifecycleSnapshotV2(
-                       state.serviceGeneration + 1,
-                       state.nextStreamEpoch,
-                       "Empty",
-                       "Empty")
-                /\ LifecycleMemory(state') = LifecycleMemory(state)
-        """,
-        "LifecycleSnapshotV2PublicationStepSafety": r"""
-            state'.serviceGeneration > state.serviceGeneration
-              =>
-                /\ state.durableLifecycleSnapshotV2.generation =
-                     state'.serviceGeneration
-                /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-                /\ state.durableLifecycleSnapshotV2.requestGates = "Empty"
-                /\ state'.serverStreamState = "Empty"
-                /\ state'.requestGateState = "Empty"
-                /\ state'.transferState = "Empty"
-                /\ state'.flushState = "Empty"
-        """,
-        "RequesterEpochUseStepSafety": r"""
-            (/\ state.activeStreamEpoch = 0
-             /\ state'.activeStreamEpoch # 0)
-              =>
-                /\ state.requesterEpochPhase = "Persisted"
-                /\ state.durableLifecycleSnapshotV2.nextStreamEpoch >
-                     state'.activeStreamEpoch
-                /\ state'.nextStreamEpoch =
-                     state.durableLifecycleSnapshotV2.nextStreamEpoch
-                /\ state'.activeStreamEpoch # state.skippedStreamEpoch
-        """,
-        "CapacityRejectionActionProperty": (
-            "[][CapacityRejectionStepSafety]_typedRolloverVars"
+    require_operator_parameters(
+        model,
+        "LifecycleSnapshotV3",
+        (
+            "rootGeneration",
+            "roster",
+            "serviceGeneration",
+            "nextStreamEpoch",
+            "requesterStreamEpoch",
+            "serverStreams",
+            "requestGates",
+            "serverClosePrefix",
         ),
-        "AtomicLifecycleSnapshotV2PersistenceActionProperty": (
-            "[][AtomicLifecycleSnapshotV2PersistenceStepSafety]"
-            "_typedRolloverVars"
+    )
+    require_exact_operator(
+        model,
+        "LifecycleSnapshotV3",
+        """
+        [version |-> 3,
+         rootGeneration |-> rootGeneration,
+         roster |-> roster,
+         serviceGeneration |-> serviceGeneration,
+         nextStreamEpoch |-> nextStreamEpoch,
+         requesterStreamEpoch |-> requesterStreamEpoch,
+         serverStreams |-> serverStreams,
+         requestGates |-> requestGates,
+         serverClosePrefix |-> serverClosePrefix]
+        """,
+    )
+    require_operator_parameters(model, "LifecycleRootV3", ("snapshot",))
+    require_exact_operator(
+        model,
+        "LifecycleRootV3",
+        """
+        [version |-> 3,
+         shape |-> "Committed",
+         rootGeneration |-> snapshot.rootGeneration,
+         snapshotDigest |-> LifecycleSnapshotDigest(snapshot)]
+        """,
+    )
+    require_exact_operator(model, "StateSlots", "{0, 1}")
+    # UnvalidatedRestart fault values are intentionally oracle labels over a
+    # structurally valid durable pair. This model checks fail-closed handling
+    # for each validator outcome; it does not establish reachability of
+    # concrete malformed root, slot, digest, or semantic debris.
+    model_contracts: dict[str, tuple[str, ...]] = {
+        "Init": (
+            'startup = "UnvalidatedRestart"',
+            'startup # "UnvalidatedRestart" => fault = "None"',
+            "startupValidationFault |-> fault",
+            "ELSE LifecycleRootV3(initialSnapshot)",
+            "ELSE InitialLifecycleStateSlotsV3(initialSnapshot)",
+            'restartRequired |-> startup = "UnvalidatedRestart"',
         ),
-        "LifecycleSnapshotV2PublicationActionProperty": (
-            "[][LifecycleSnapshotV2PublicationStepSafety]_typedRolloverVars"
+        "NoLifecycleSnapshot": (
+            "version |-> 0",
+            "rootGeneration |-> 0",
+            "serviceGeneration |-> 0",
+            "requesterStreamEpoch |-> 0",
         ),
-        "RequesterEpochUseActionProperty": (
-            "[][RequesterEpochUseStepSafety]_typedRolloverVars"
+        "LifecycleStateSlot": (
+            "rootGeneration % 2 = 0",
+            "THEN 0 ELSE 1",
+        ),
+        "BootstrapLifecycleRootV3": (
+            'shape |-> "Bootstrap"',
+            "rootGeneration |-> 0",
+            "snapshotDigest |-> NoLifecycleSnapshot",
+        ),
+        "LifecycleRootV3": (
+            'shape |-> "Committed"',
+            "rootGeneration |-> snapshot.rootGeneration",
+            "snapshotDigest |-> LifecycleSnapshotDigest(snapshot)",
+        ),
+        "LifecycleRootShapeIsValid": (
+            'root.shape = "Bootstrap"',
+            "root.rootGeneration = 0",
+            "root.snapshotDigest = NoLifecycleSnapshot",
+            'root.shape = "Committed"',
+            "root.snapshotDigest # NoLifecycleSnapshot",
+        ),
+        "RootSelectedLifecyclePairIsPresent": (
+            's.durableLifecycleRootV3.shape = "Committed"',
+            "SelectedLifecycleSnapshotV3(s) # NoLifecycleSnapshot",
+        ),
+        "RootSelectedLifecyclePairMatches": (
+            "RootSelectedLifecyclePairIsPresent(s)",
+            "SelectedLifecycleSnapshotV3(s).rootGeneration = "
+            "s.durableLifecycleRootV3.rootGeneration",
+            "s.durableLifecycleRootV3.snapshotDigest = "
+            "LifecycleSnapshotDigest(SelectedLifecycleSnapshotV3(s))",
+        ),
+        "LifecycleSnapshotSemanticallyValid": (
+            "snapshot \\in LifecycleSnapshotV3Set",
+            "snapshot.version = 3",
+            "snapshot.rootGeneration # 0",
+            "snapshot.requesterStreamEpoch <= snapshot.nextStreamEpoch",
+        ),
+        "LifecycleJournalReady": (
+            "s.durableJournalValidated",
+            "RootSelectedLifecyclePairMatches(s)",
+            "LifecycleSnapshotSemanticallyValid(DurableSnapshot(s))",
+            "LifecycleStateDirectoryIsSynced(s)",
+            "LifecycleRootDirectoryIsSynced(s)",
+            "~s.crashArtifactsPresent",
+        ),
+        "PredecessorTransportOwnershipOpen": (
+            "state.currentRoster = state.baselineRoster",
+            'state.transitionAuthority = "None"',
+        ),
+        "CreateServiceTransportOwnerPair": (
+            "PredecessorTransportOwnershipOpen",
+            "state.serviceOwnerNonce = NoIdentity",
+            "state.transportOwnerNonce = NoIdentity",
+            'state.receiptStage \\in {"Absent", "Lost"}',
+            "~state.restartRequired",
+            "~state.successorActive",
+        ),
+        "SealAppliedHeightOutputHandoff": (
+            "PredecessorTransportOwnershipOpen",
+            "state.finalityValidated",
+            "state.workerIngressClosed",
+            "state.workerOutstanding = 0",
+            'state.receiptStage = "Absent"',
+            "ExactServiceTransportOwnerPair",
+            "~state.restartRequired",
+            "~state.successorActive",
+        ),
+        "ActivateSameRosterSuccessor": (
+            "PredecessorTransportOwnershipOpen",
+            "state.targetRoster = state.currentRoster",
+            'state.compactionCause = "NoCompaction"',
+            "ExactRetainedMergeSidecars",
+            'state.lifecycleCommitPhase = "Current"',
+            "LifecycleJournalReady(state)",
+            "~state.restartRequired",
+        ),
+        "UnconsumedPredecessorTransportOwnershipInvariant": (
+            'state.receiptStage \\in {"Minted", "Retained"}',
+            "PredecessorTransportOwnershipOpen",
+        ),
+        "DurableCandidateStateSlotAheadOfRoot": (
+            "state.candidateStateSlot = LifecycleStateSlot( "
+            "state.durableLifecycleRootV3.rootGeneration + 1)",
+            "state.candidateStateSlot # SelectedLifecycleStateSlot(state)",
+            "state.durableLifecycleStateSlotsV3[ state.candidateStateSlot] = "
+            "state.candidateLifecycleSnapshotV3",
+            "state.candidateLifecycleSnapshotV3.rootGeneration = "
+            "state.durableLifecycleRootV3.rootGeneration + 1",
+        ),
+        "ValidatedCandidateSuccessorStateSlotAheadOfRoot": (
+            "DurableCandidateStateSlotAheadOfRoot",
+            "state.candidateSemanticallyValidated",
+        ),
+        "PublishInitialLifecycleStateSlotV3": (
+            'state.lifecycleCommitPhase = "Bootstrap"',
+            "state.durableLifecycleRootV3 = BootstrapLifecycleRootV3",
+            "InitialLifecycleSnapshotV3(state.targetRoster)",
+            '!.lifecycleCommitPhase = "BootstrapStateReplaced"',
+            "!.crashArtifactsPresent = TRUE",
+        ),
+        "ValidateBootstrapLifecycleCandidateV3": (
+            '"BootstrapStatePublished", "Restarting"',
+            "LifecycleSnapshotSemanticallyValid( "
+            "InitialLifecycleSnapshotV3(state.targetRoster))",
+            "!.candidateSemanticallyValidated = TRUE",
+        ),
+        "CommitInitialLifecycleRootV3": (
+            "state.candidateSemanticallyValidated",
+            "!.syncedLifecycleRootV3 = state.durableLifecycleRootV3",
+            '!.lifecycleCommitPhase = "Current"',
+            "!.durableJournalValidated = TRUE",
+        ),
+        "ValidateRootSelectedLifecycleV3": (
+            "~state.durableJournalValidated",
+            "LifecycleRootShapeIsValid(state.durableLifecycleRootV3)",
+            "RootSelectedLifecyclePairMatches(state)",
+            "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
+        ),
+        "CleanupValidatedLifecycleArtifactsV3": (
+            "state.durableJournalValidated",
+            "RootSelectedLifecyclePairMatches(state)",
+            "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
+            "state.restartStateDirectoryResynced",
+            "state.restartRootDirectoryResynced",
+            "state.crashArtifactsPresent",
+            "!.durableLifecycleStateSlotsV3[ "
+            "InactiveLifecycleStateSlot(state)] = NoLifecycleSnapshot",
+            "!.cleanupPerformed = TRUE",
+        ),
+        "PersistFreshRequesterEpoch": (
+            "state.nextStreamEpoch < StreamEpochLimit",
+            "state.durableLifecycleRootV3.rootGeneration < "
+            "RootGenerationLimit",
+            "LifecycleJournalReady(state)",
+            "issuedEpoch == state.nextStreamEpoch + 1",
+            "issuedEpoch, issuedEpoch",
+            "!.durableLifecycleStateSlotsV3[ "
+            "LifecycleStateSlot(snapshot.rootGeneration)] = snapshot",
+            "!.durableLifecycleRootV3 = LifecycleRootV3(snapshot)",
+        ),
+        "PublishSuccessorLifecycleStateSlotV3WithAuthority": (
+            "ChangedRosterAuthorityAvailable(authority)",
+            "state.serviceGeneration < ServiceGenerationLimit",
+            "state.durableLifecycleRootV3.rootGeneration < "
+            "RootGenerationLimit",
+            "LifecycleJournalReady(state)",
+            "!.candidateSemanticallyValidated = TRUE",
+            '!.lifecycleCommitPhase = "StateSlotReplaced"',
+        ),
+        "PublishSuccessorLifecycleStateSlotV3": (
+            "\\E authority \\in ChangedRosterAuthorities:",
+            "PublishSuccessorLifecycleStateSlotV3WithAuthority(authority)",
+        ),
+        "CrashAfterLifecycleStateSlotV3Publication": (
+            "ValidatedCandidateSuccessorStateSlotAheadOfRoot",
+            "!.durableJournalValidated = FALSE",
+            "!.crashArtifactsPresent = TRUE",
+            '!.failureReason = "CrashAfterLifecycleStateSlotV3Publication"',
+        ),
+        "RecoverPredecessorLifecycleV3": (
+            "state.durableJournalValidated",
+            "RootSelectedLifecyclePairMatches(state)",
+            "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
+            "LifecycleMemoryMatchesDurableSnapshotV3",
+            "!.crashArtifactsPresent = FALSE",
+            '!.lifecycleCommitPhase = "Current"',
+        ),
+        "ReplaceSuccessorLifecycleRootV3": (
+            "ValidatedCandidateSuccessorStateSlotAheadOfRoot",
+            "LifecycleRootV3( state.candidateLifecycleSnapshotV3)",
+            '!.lifecycleCommitPhase = "RootReplaced"',
+        ),
+        "CommitSuccessorLifecycleRootV3": (
+            'state.lifecycleCommitPhase = "RootReplaced"',
+            "RootSelectedLifecyclePairMatches(state)",
+            "!.syncedLifecycleRootV3 = state.durableLifecycleRootV3",
+            '!.lifecycleCommitPhase = "RootCommitted"',
+        ),
+        "CrashAfterLifecycleRootV3Commit": (
+            "RootCommittedSuccessorAheadOfMemory",
+            "!.durableJournalValidated = FALSE",
+            "!.crashArtifactsPresent = TRUE",
+            '!.failureReason = "CrashAfterLifecycleRootV3Commit"',
+        ),
+        "RestoreSuccessorLifecycleV3AfterCrash": (
+            "RootSelectedSuccessorAheadOfMemory",
+            "state.durableJournalValidated",
+            "RootSelectedLifecyclePairMatches(state)",
+            "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
+            "!.serviceGeneration = DurableSnapshot(state).serviceGeneration",
+            "!.cleanupPerformed = TRUE",
+        ),
+        "RejectServiceGenerationOverflow": (
+            "state.serviceGeneration = ServiceGenerationLimit",
+            "!.capacityRejected = TRUE",
+        ),
+        "FailLifecycleRootGenerationExhaustion": (
+            "state.durableLifecycleRootV3.rootGeneration = "
+            "RootGenerationLimit",
+            "CrashClearedProcessLocalRolloverState(state)",
+            "!.durableJournalValidated = FALSE",
+            "!.restartRequired = TRUE",
+            '!.failureReason = "LifecycleRootGenerationOverflow"',
+        ),
+        "RootAnchoredLifecycleV3Invariant": (
+            "LifecycleRootShapeIsValid(state.durableLifecycleRootV3)",
+            "LifecycleRootShapeIsValid(state.syncedLifecycleRootV3)",
+            "RootSelectedLifecyclePairMatches(state)",
+            "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
+        ),
+        "LifecycleCommitPhaseInvariant": (
+            'state.lifecycleCommitPhase = "BootstrapRootReplaced"',
+            "state.syncedLifecycleRootV3 = BootstrapLifecycleRootV3",
+            "DurableSnapshot(state) = "
+            "InitialLifecycleSnapshotV3(state.targetRoster)",
+            "state.candidatePresent",
+            "~LifecycleRootDirectoryIsSynced(state)",
+        ),
+        "SemanticValidationBeforeCleanupInvariant": (
+            "state.cleanupPerformed => "
+            "/\\ state.durableJournalValidated",
+            "~state.durableJournalValidated => ~state.cleanupPerformed",
+        ),
+        "TypedRolloverSafetyInvariant": (
+            "ExactServiceTransportOwnerPairInvariant",
+            "UnconsumedPredecessorTransportOwnershipInvariant",
+            "RootAnchoredLifecycleV3Invariant",
+            "SemanticValidationBeforeCleanupInvariant",
+            "ValidatedCleanupRemovesInactiveSlotInvariant",
+            "InvalidLifecycleStartupFailsClosedInvariant",
+            "ProcessLocalAuthorityAfterCrashInvariant",
+            "AuthorityGatedGenerationAdvanceInvariant",
+            "RequesterEpochInvariant",
+            "CrashRecoveryInvariant",
+        ),
+        "StateSlotBeforeRootCommitStepSafety": (
+            "~state.candidatePresent",
+            "state'.candidatePresent",
+            "state'.durableLifecycleRootV3 = "
+            "state.durableLifecycleRootV3",
+            "state'.durableLifecycleStateSlotsV3[ "
+            "state'.candidateStateSlot] = "
+            "state'.candidateLifecycleSnapshotV3",
+            "LifecycleMemory(state') = LifecycleMemory(state)",
+        ),
+        "RootCommitBeforeMemoryPublicationStepSafety": (
+            '"RootReplaced", "Restarting"',
+            "state'.syncedLifecycleRootV3 = "
+            "state.durableLifecycleRootV3",
+            "state'.durableLifecycleStateSlotsV3 = "
+            "state.durableLifecycleStateSlotsV3",
+            "LifecycleMemory(state') = LifecycleMemory(state)",
+        ),
+        "RootGenerationMonotonicStepSafety": (
+            "state'.syncedLifecycleRootV3.rootGeneration >= "
+            "state.syncedLifecycleRootV3.rootGeneration",
+            "state'.syncedLifecycleRootV3.rootGeneration = "
+            "state.syncedLifecycleRootV3.rootGeneration + 1",
+            "SyncedSelectedLifecycleStateSlot(state') # "
+            "SyncedSelectedLifecycleStateSlot(state)",
+            "state'.syncedLifecycleRootV3.snapshotDigest = "
+            "LifecycleSnapshotDigest( "
+            "SyncedSelectedLifecycleSnapshotV3(state'))",
+        ),
+        "CrashClearedProcessLocalRolloverState": (
+            "!.serviceOwnerNonce = NoIdentity",
+            "!.transportOwnerNonce = NoIdentity",
+            "!.constructionParent = NoIdentity",
+            "!.constructionSuccessor = NoIdentity",
+            "!.receiptOwnerNonce = NoIdentity",
+            "!.candidatePresent = FALSE",
+            "!.pendingRolloverAuthority = \"None\"",
+            "!.restartFenceAuthorized = FALSE",
+        ),
+        "CrashDropsProcessLocalAuthorityStepSafety": (
+            "state.durableJournalValidated",
+            "~state'.durableJournalValidated",
+            "state'.serviceOwnerNonce = NoIdentity",
+            "state'.transportOwnerNonce = NoIdentity",
+            "~state'.candidatePresent",
+        ),
+        "ValidationFailurePreservesArtifactsStepSafety": (
+            "DurableLifecycle(state') = DurableLifecycle(state)",
+            "CandidateLifecycle(state') = CandidateLifecycle(state)",
+            "state'.crashArtifactsPresent",
+            "~state'.cleanupPerformed",
+        ),
+        "RequesterIncarnationRestoreStepSafety": (
+            'state.failureReason = "CrashAfterRequesterEpochPersistence"',
+            "state'.activeStreamEpoch = "
+            "DurableSnapshot(state).requesterStreamEpoch",
+            "state'.activeStreamEpoch = state'.nextStreamEpoch",
         ),
     }
-    for symbol, expected_body in exact_model_operators.items():
-        require_exact_operator(model, symbol, expected_body)
+    for symbol, fragments in model_contracts.items():
+        require_operator_fragments(model, symbol, fragments)
 
-    next_actions = (
-        "ValidateFinality",
-        "CloseWorkerIngress",
-        "ClearOneWorkerExactOutput",
-        "BuildImmediateSuccessor",
-        "SealAppliedHeightOutputHandoff",
-        "RejectLateExactOutputEnqueue",
-        "RejectForeignOwnerReceipt",
-        "RejectPredecessorContextMismatch",
-        "RejectPredecessorArtifactMismatch",
-        "RejectWrongImmediateSuccessor",
-        "RetainExactHandoffReceipt",
-        "PersistFreshRequesterEpoch",
-        "PublishFreshRequesterEpoch",
-        "CompleteRequesterEpoch",
-        "ReopenRequesterEpochAllocator",
-        "CrashAfterRequesterEpochPersistence",
-        "RestoreRequesterEpochCounterAfterCrash",
-        "RejectRequesterEpochOverflow",
-        "RejectActiveLifecycleCompaction",
-        "TerminalizeServerStream",
-        "TerminalizeRequestGate",
-        "TerminalizeTransfer",
-        "TerminalizeFlush",
-        "PersistSuccessorLifecycleSnapshotV2",
-        "FailSuccessorLifecycleSnapshotV2Persistence",
-        "CrashBeforeLifecycleSnapshotV2Persistence",
-        "RecoverPredecessorLifecycleSnapshotV2",
-        "CrashAfterLifecycleSnapshotV2Persistence",
-        "RestoreSuccessorLifecycleSnapshotV2AfterCrash",
-        "PublishPersistedLifecycleSnapshotV2",
-        "ActivateSameRosterSuccessor",
-        "RejectGenerationOverflow",
-        "ObserveLateOldWriterCallback",
-    )
-    require_exact_operator(
-        model, "Next", " ".join(rf"\/ {action}" for action in next_actions)
-    )
-    require_exact_operator(
-        model, "TypedRolloverSpec", r"/\ Init /\ [][Next]_typedRolloverVars"
-    )
-    require_exact_operator(
+    require_operator_fragments(
         model,
-        "ResponsiveTypedRolloverSpec",
-        r"""
-            /\ TypedRolloverSpec
-            /\ WF_typedRolloverVars(CloseWorkerIngress)
-            /\ WF_typedRolloverVars(ClearOneWorkerExactOutput)
-            /\ WF_typedRolloverVars(BuildImmediateSuccessor)
-            /\ WF_typedRolloverVars(SealAppliedHeightOutputHandoff)
-            /\ WF_typedRolloverVars(RetainExactHandoffReceipt)
-            /\ WF_typedRolloverVars(TerminalizeServerStream)
-            /\ WF_typedRolloverVars(TerminalizeRequestGate)
-            /\ WF_typedRolloverVars(TerminalizeTransfer)
-            /\ WF_typedRolloverVars(TerminalizeFlush)
-            /\ WF_typedRolloverVars(PersistSuccessorLifecycleSnapshotV2)
-            /\ WF_typedRolloverVars(PublishPersistedLifecycleSnapshotV2)
-            /\ WF_typedRolloverVars(ActivateSameRosterSuccessor)
-        """,
-    )
-    require_exact_operator(
-        model,
-        "ResponsiveChangedRosterRolloverLiveness",
-        r"""
-            ResponsiveTypedRolloverSpec =>
-              ((/\ state.targetRoster = "ChangedRoster"
-                /\ state.finalityValidated)
-                ~> ChangedRosterSuccessorActiveWithoutRestart)
-        """,
+        "Next",
+        (
+            "PublishInitialLifecycleStateSlotV3",
+            "ValidateBootstrapLifecycleCandidateV3",
+            "CommitInitialLifecycleRootV3",
+            "ValidateRootSelectedLifecycleV3",
+            "RejectLifecycleRootShapeMismatchV3",
+            "RejectLifecycleSelectedStateMissingV3",
+            "RejectLifecycleGenerationHashMismatchV3",
+            "RejectLifecycleSemanticValidationFailureV3",
+            "ResyncValidatedLifecycleStateDirectoryV3",
+            "ResyncValidatedLifecycleRootDirectoryV3",
+            "CrashDuringValidatedRestartBeforeRootResyncV3",
+            "CleanupValidatedLifecycleArtifactsV3",
+            "PublishSuccessorLifecycleStateSlotV3",
+            "ReplaceSuccessorLifecycleRootV3",
+            "CommitSuccessorLifecycleRootV3",
+            "RestoreSuccessorLifecycleV3AfterCrash",
+            "RejectServiceGenerationOverflow",
+            "FailLifecycleRootGenerationExhaustion",
+        ),
     )
     require_operator_fragments(
         model,
-        "PublishPersistedLifecycleSnapshotV2",
+        "ResponsiveDurableExactOutputNext",
         (
-            r'state.lifecycleSnapshotPhase \in {"Persisted", "Restored"}',
-            r"""
-                IF state.lifecycleSnapshotPhase = "Persisted"
-                  THEN LifecycleSnapshotV2AheadOfMemory
-                  ELSE LifecycleMemoryMatchesDurableSnapshotV2
-            """,
-            'state.durableLifecycleSnapshotV2.serverStreams = "Empty"',
-            'state.durableLifecycleSnapshotV2.requestGates = "Empty"',
-            (
-                "!.serviceGeneration = "
-                "state.durableLifecycleSnapshotV2.generation"
-            ),
-            (
-                "!.nextStreamEpoch = "
-                "state.durableLifecycleSnapshotV2.nextStreamEpoch"
-            ),
-            '!.serverStreamState = "Empty"',
-            '!.requestGateState = "Empty"',
-            '!.transferState = "Empty"',
-            '!.flushState = "Empty"',
-            '!.lifecycleSnapshotPhase = "Published"',
-            '!.transitionAuthority = "LifecycleV2"',
+            "CreateServiceTransportOwnerPair",
+            "RetainExactHandoffReceipt",
+            "PublishDurableExactOutputSuccessorLifecycleStateSlotV3",
+            "SyncSuccessorLifecycleStateDirectoryV3",
+            "ReplaceSuccessorLifecycleRootV3",
+            "CommitSuccessorLifecycleRootV3",
+            "PublishCommittedLifecycleV3ToMemory",
         ),
-        forbidden=('state.lifecycleSnapshotPhase = "Current"',),
     )
-    for symbol in (
-        "TerminalizeServerStream",
-        "TerminalizeRequestGate",
-    ):
-        require_operator_fragments(
-            model,
-            symbol,
-            (
-                'state.lifecycleSnapshotPhase = "Current"',
-                "state.requesterEpochPhase # \"Persisted\"",
-                "!.durableLifecycleSnapshotV2 = LifecycleSnapshotV2(",
-            ),
-        )
+    require_operator_fragments(
+        model,
+        "ResponsiveDurableExactOutputSpec",
+        (
+            "ResponsiveDurableExactOutputInit",
+            "[][ResponsiveDurableExactOutputNext]_typedRolloverVars",
+            "WF_typedRolloverVars( "
+            "PublishDurableExactOutputSuccessorLifecycleStateSlotV3)",
+            "WF_typedRolloverVars(CommitSuccessorLifecycleRootV3)",
+        ),
+    )
+    require_operator_fragments(
+        model,
+        "ResponsiveRestartRestoreNext",
+        (
+            "ValidateRootSelectedLifecycleV3",
+            "ResyncValidatedLifecycleStateDirectoryV3",
+            "ResyncValidatedLifecycleRootDirectoryV3",
+            "CleanupValidatedLifecycleArtifactsV3",
+            "RecoverPredecessorLifecycleV3",
+            "PublishRestartRestoreSuccessorLifecycleStateSlotV3",
+            "CommitSuccessorLifecycleRootV3",
+            "PublishCommittedLifecycleV3ToMemory",
+        ),
+    )
+    require_operator_fragments(
+        model,
+        "ResponsiveRestartRestoreSpec",
+        (
+            "ResponsiveRestartRestoreInit",
+            "[][ResponsiveRestartRestoreNext]_typedRolloverVars",
+            "WF_typedRolloverVars(ValidateRootSelectedLifecycleV3)",
+            "WF_typedRolloverVars( "
+            "PublishRestartRestoreSuccessorLifecycleStateSlotV3)",
+        ),
+    )
+    require_operator_fragments(
+        model,
+        "ResponsiveDurableExactOutputRolloverLiveness",
+        (
+            "ResponsiveDurableExactOutputSpec",
+            "state.finalityValidated",
+            "~> DurableExactOutputSuccessorActiveWithoutRestart",
+        ),
+    )
+    require_operator_fragments(
+        model,
+        "ResponsiveRestartRestoreRolloverLiveness",
+        (
+            "ResponsiveRestartRestoreSpec",
+            "state.restartRequired",
+            "~> RestartRestoreSuccessorActiveWithoutRestart",
+        ),
+    )
 
-    proofs = "SumeragiV2TypedRolloverHandoffProofs.tla"
-    theorem_statements = {
-        "TypedRolloverInitEstablishesSafetyObligation": (
-            "Init => TypedRolloverSafetyInvariant"
+    proofs_name = "SumeragiV2TypedRolloverHandoffProofs.tla"
+    proofs_source = sources.get(proofs_name)
+    proofless_theorems = set(
+        _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS
+    ) | set(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS)
+    proved_theorems = set(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS)
+    expected_theorems = proofless_theorems | proved_theorems
+    if proofs_source is not None:
+        path = formal_dir / proofs_name
+        stripped = strip_tla_comments(
+            proofs_source, preserve_string_contents=True
+        )
+        observed_theorems = set(
+            re.findall(
+                r"(?m)^THEOREM[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*==",
+                stripped,
+            )
+        )
+        if observed_theorems != expected_theorems:
+            errors.append(
+                f"{path}: reviewed root-anchored V3 theorem inventory must "
+                f"equal {sorted(expected_theorems)!r}; found "
+                f"{sorted(observed_theorems)!r}"
+            )
+        for theorem in expected_theorems & observed_theorems:
+            extracted = _top_level_theorem_body(
+                proofs_source, theorem, preserve_string_contents=True
+            )
+            if extracted is None:
+                continue
+            body, line = extracted
+            has_proof = bool(
+                re.search(
+                    r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS|QED)\b",
+                    body,
+                )
+            )
+            if theorem in proofless_theorems and has_proof:
+                errors.append(
+                    f"{path}:{line}: specified_unproved typed rollover "
+                    f"obligations must remain proofless; {theorem} contains "
+                    "a proof directive"
+                )
+            if theorem in proved_theorems and not has_proof:
+                errors.append(
+                    f"{path}:{line}: proved internal typed rollover theorem "
+                    f"{theorem} must retain a proof directive"
+                )
+
+    theorem_contracts = {
+        "BootstrapRootHasExactGenerationZeroShapeObligation": (
+            "state.durableLifecycleRootV3 = BootstrapLifecycleRootV3",
+            "\\A slot \\in StateSlots:",
+            "NoLifecycleSnapshot",
         ),
-        "TerminalCompactionPersistsAtomicSoleV2SnapshotObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ PersistSuccessorLifecycleSnapshotV2
-            =>
-              /\ AllOldLifecycleTerminal
-              /\ state'.durableLifecycleSnapshotV2 =
-                   LifecycleSnapshotV2(
-                     state.serviceGeneration + 1,
-                     state.nextStreamEpoch,
-                     "Empty",
-                     "Empty")
-              /\ LifecycleMemory(state') = LifecycleMemory(state)
-        """,
-        "ActiveLifecycleCompactionReturnsCapacityAtomicallyObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ RejectActiveLifecycleCompaction
-            =>
-              /\ state'.capacityRejected
-              /\ LifecycleMemory(state') = LifecycleMemory(state)
-              /\ DurableLifecycle(state') = DurableLifecycle(state)
-        """,
-        "GenerationOverflowReturnsCapacityAtomicallyObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ RejectGenerationOverflow
-            =>
-              /\ state'.capacityRejected
-              /\ LifecycleMemory(state') = LifecycleMemory(state)
-              /\ DurableLifecycle(state') = DurableLifecycle(state)
-        """,
-        "EpochOverflowReturnsCapacityAtomicallyObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ RejectRequesterEpochOverflow
-            =>
-              /\ state'.capacityRejected
-              /\ LifecycleMemory(state') = LifecycleMemory(state)
-              /\ DurableLifecycle(state') = DurableLifecycle(state)
-        """,
-        "SnapshotPublicationRequiresDurableV2PreimageObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ PublishPersistedLifecycleSnapshotV2
-            =>
-              /\ state.durableLifecycleSnapshotV2.version = 2
-              /\ state.durableLifecycleSnapshotV2.serverStreams = "Empty"
-              /\ state.durableLifecycleSnapshotV2.requestGates = "Empty"
-              /\ state'.serviceGeneration =
-                   state.durableLifecycleSnapshotV2.generation
-              /\ state'.lifecycleSnapshotPhase = "Published"
-        """,
-        "CrashBeforeSnapshotPersistencePreservesPredecessorObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ CrashBeforeLifecycleSnapshotV2Persistence
-            =>
-              /\ state'.restartRequired
-              /\ LifecycleMemory(state') = LifecycleMemory(state)
-              /\ DurableLifecycle(state') = DurableLifecycle(state)
-        """,
-        "CrashAfterSnapshotPersistenceRestoresSuccessorObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ RestoreSuccessorLifecycleSnapshotV2AfterCrash
-            =>
-              /\ LifecycleMemoryMatchesDurableSnapshotV2'
-              /\ state'.lifecycleSnapshotPhase = "Restored"
-              /\ ~state'.successorActive
-        """,
-        "FreshEpochPersistencePrecedesUseObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ PublishFreshRequesterEpoch
-            =>
-              /\ state.requesterEpochPhase = "Persisted"
-              /\ state.durableLifecycleSnapshotV2.nextStreamEpoch >
-                   state'.activeStreamEpoch
-              /\ state'.activeStreamEpoch # state.skippedStreamEpoch
-        """,
-        "CrashAfterEpochPersistenceSkipsEpochObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ RestoreRequesterEpochCounterAfterCrash
-            =>
-              /\ state'.nextStreamEpoch =
-                   state.durableLifecycleSnapshotV2.nextStreamEpoch
-              /\ state'.activeStreamEpoch = 0
-              /\ state'.pendingStreamEpoch = 0
-              /\ state'.skippedStreamEpoch # 0
-        """,
-        "SameRosterPreservesTransportWithoutCompactionObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ ActivateSameRosterSuccessor
-            =>
-              /\ LifecycleMemory(state') = LifecycleMemory(state)
-              /\ DurableLifecycle(state') = DurableLifecycle(state)
-              /\ state'.retryableChunk = 1
-        """,
-        "LateOldCallbackCannotMutateSuccessorObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ ObserveLateOldWriterCallback
-            =>
-              /\ LifecycleMemory(state') = LifecycleMemory(state)
-              /\ DurableLifecycle(state') = DurableLifecycle(state)
-        """,
-        "TypedRolloverNextPreservesSafetyObligation": r"""
-            /\ TypedRolloverSafetyInvariant
-            /\ Next
-            =>
-              TypedRolloverSafetyInvariant'
-        """,
-        "TypedRolloverSpecAlwaysSafeObligation": (
-            "TypedRolloverSpec => []TypedRolloverSafetyInvariant"
+        "BootstrapFirstCommitSelectsExactInitialPairObligation": (
+            "CommitInitialLifecycleRootV3",
+            "RootSelectedLifecyclePairMatches(state')",
+            "LifecycleMemory(state') = LifecycleMemory(state)",
         ),
-        "ResponsiveChangedRosterRolloverLivenessObligation": (
-            "ResponsiveChangedRosterRolloverLiveness"
+        "FreshBootstrapUsesTargetGeometryEpochZeroObligation": (
+            "PublishInitialLifecycleStateSlotV3",
+            "InitialLifecycleSnapshotV3(state.targetRoster)",
+            "state'.candidateLifecycleSnapshotV3.nextStreamEpoch = 0",
+            "state'.candidateLifecycleSnapshotV3.requesterStreamEpoch = 0",
+            'state\'.candidateLifecycleSnapshotV3.serverStreams = "Empty"',
+        ),
+        "EveryCrashDropsProcessLocalAuthorityObligation": (
+            "state.durableJournalValidated",
+            "~state'.durableJournalValidated",
+            "state'.serviceOwnerNonce = NoIdentity",
+            "state'.transportOwnerNonce = NoIdentity",
+            "~state'.candidatePresent",
+            "~state'.restartFenceAuthorized",
+        ),
+        "OnlyValidatedRestartMayFenceAfterCrashObligation": (
+            "~state.restartFenceAuthorized",
+            "state'.restartFenceAuthorized",
+            "state.durableJournalValidated",
+            "state.cleanupPerformed",
+            "state'.validatedRestartObserved",
+        ),
+        "SecondCrashBeforeRootResyncPreservesPredecessorObligation": (
+            "CrashDuringValidatedRestartBeforeRootResyncV3",
+            "state'.durableLifecycleRootV3 = "
+            "state.syncedLifecycleRootV3",
+            "state'.durableLifecycleStateSlotsV3 = "
+            "state.syncedLifecycleStateSlotsV3",
+            "state'.secondCrashObserved",
+        ),
+        "RootSelectedPairBindsGenerationAndDigestObligation": (
+            "RootSelectedLifecyclePairIsPresent(state)",
+            "LifecycleSnapshotDigest( SelectedLifecycleSnapshotV3(state))",
+            "LifecycleSnapshotSemanticallyValid( "
+            "SelectedLifecycleSnapshotV3(state))",
+        ),
+        "MissingRootSelectedStateCannotValidateOrCleanupObligation": (
+            "~RootSelectedLifecyclePairIsPresent(state)",
+            "ValidateRootSelectedLifecycleV3 \\/ "
+            "CleanupValidatedLifecycleArtifactsV3",
+            "FALSE",
+        ),
+        "SemanticValidationPrecedesArtifactCleanupObligation": (
+            "CleanupValidatedLifecycleArtifactsV3",
+            "state.durableJournalValidated",
+            "RootSelectedLifecyclePairMatches(state)",
+            "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
+        ),
+        "RootGenerationExhaustionPoisonsJournalFailAtomicallyObligation": (
+            "FailLifecycleRootGenerationExhaustion",
+            "state'.restartRequired",
+            'state\'.failureReason = "LifecycleRootGenerationOverflow"',
+            "state'.capacityRejected = state.capacityRejected",
+            "DurableLifecycle(state') = DurableLifecycle(state)",
+        ),
+        "CrashBeforeRootCommitRestoresPredecessorObligation": (
+            "RecoverPredecessorLifecycleV3",
+            "state'.currentRoster = DurableSnapshot(state).roster",
+        ),
+        "CrashAfterRootCommitRestoresSuccessorObligation": (
+            "RestoreSuccessorLifecycleV3AfterCrash",
+            'state\'.lifecycleCommitPhase = "Restored"',
+        ),
+        "CrashRestoresExactRequesterIncarnationObligation": (
+            "RestoreRequesterEpochCounterAfterCrash",
+            "state'.nextStreamEpoch = "
+            "DurableSnapshot(state).nextStreamEpoch",
+            "state'.activeStreamEpoch = "
+            "DurableSnapshot(state).requesterStreamEpoch",
+            "state'.activeStreamEpoch = state'.nextStreamEpoch",
         ),
     }
-    proof_source = sources.get(proofs)
-    if proof_source is not None:
-        stripped_proofs = strip_tla_comments(
-            proof_source, preserve_string_contents=True
-        )
-        theorem_inventory = re.findall(
-            r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)"
-            r"[ \t]+([A-Za-z_][A-Za-z0-9_]*)"
-            r"\s*(?:\([^)=\n]*\))?\s*==",
-            stripped_proofs,
-        )
-        if theorem_inventory != list(theorem_statements):
-            errors.append(
-                f"{formal_dir / proofs}: proofless typed rollover theorem "
-                f"inventory must equal {list(theorem_statements)!r}; found "
-                f"{theorem_inventory!r}"
-            )
-        proof_markers = re.findall(
-            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS|QED)\b[^\n]*",
-            stripped_proofs,
-        )
-        if proof_markers:
-            errors.append(
-                f"{formal_dir / proofs}: specified_unproved typed rollover "
-                "obligations must remain proofless and may not contain BY, "
-                f"PROOF, OBVIOUS, or QED; found {proof_markers!r}"
-            )
-    for symbol, statement in theorem_statements.items():
-        require_theorem_statement(proofs, symbol, statement)
+    for theorem, fragments in theorem_contracts.items():
+        require_theorem_fragments(theorem, fragments)
 
-    mutation = "SumeragiV2TypedRolloverHandoffMutation.tla"
-    mutation_modes = (
-        "PrematureSeal",
-        "ForeignOwnerNonce",
-        "IgnoreForeignCandidate",
-        "CleanForeignOwnerReject",
-        "AcceptPredecessorContextMismatch",
-        "AcceptPredecessorArtifactMismatch",
-        "CleanPredecessorContextReject",
-        "CleanPredecessorArtifactReject",
-        "ForeignSuccessor",
-        "CleanWrongSuccessorReject",
-        "LateEnqueue",
-        "CleanLateEnqueueReject",
-        "LoseSameRosterRetry",
-        "LateOldCallback",
-        "UntypedForce",
-        "CleanAtomicV2PersistenceFailure",
-        "CleanCrashAfterAtomicV2Persist",
-        "SkipSnapshotCrashHistory",
-        "OpenSnapshotAheadWithoutRestore",
-        "PublishBeforeAtomicV2Persist",
-        "ActiveStateRoll",
-        "GenerationOverflowWrap",
-        "EpochUseBeforePersist",
-        "EpochReuseAfterCrash",
-        "EpochOverflowWrap",
-    )
-    require_exact_operator(
-        mutation,
-        "MutationModes",
-        "{" + ", ".join(f'"{mode}"' for mode in mutation_modes) + "}",
-    )
-    mutation_actions = (
-        ("PrematureSeal", "PrematureSealAndMint"),
-        ("ForeignOwnerNonce", "RetainForeignOwnerReceipt"),
-        ("IgnoreForeignCandidate", "IgnoreForeignOwnerCandidate"),
-        ("CleanForeignOwnerReject", "CleanRejectForeignOwnerReceipt"),
-        (
-            "AcceptPredecessorContextMismatch",
-            "AcceptPredecessorContextMismatch",
+    mutation_name = "SumeragiV2TypedRolloverHandoffMutation.tla"
+    mutation_modes = {
+        "PrematureSeal": "PrematureSealAndMint",
+        "ForeignOwnerNonce": "RetainForeignOwnerReceipt",
+        "IgnoreForeignCandidate": "IgnoreForeignOwnerCandidate",
+        "CleanForeignOwnerReject": "CleanRejectForeignOwnerReceipt",
+        "AcceptPredecessorContextMismatch": "AcceptPredecessorContextMismatch",
+        "AcceptPredecessorArtifactMismatch": "AcceptPredecessorArtifactMismatch",
+        "CleanPredecessorContextReject": "CleanRejectPredecessorContextMismatch",
+        "CleanPredecessorArtifactReject": "CleanRejectPredecessorArtifactMismatch",
+        "ForeignSuccessor": "RetainForeignSuccessor",
+        "CleanWrongSuccessorReject": "CleanRejectWrongImmediateSuccessor",
+        "LateEnqueue": "EnqueueAfterOwnerSeal",
+        "CleanLateEnqueueReject": "CleanRejectLateExactOutputEnqueue",
+        "LoseSameRosterRetry": "SameRosterDropsRetryableChunk",
+        "SameRosterGenerationRoll": "SameRosterAdvancesGeneration",
+        "LateOldCallback": "LateOldWriterMutatesSuccessor",
+        "UntypedForce": "UntypedActiveLifecycleForce",
+        "CleanStateSlotV3PersistenceFailure": "CleanFailStateSlotV3Persistence",
+        "CleanCrashAfterLifecycleRootV3Commit": (
+            "CleanCrashAfterLifecycleRootV3Commit"
         ),
-        (
-            "AcceptPredecessorArtifactMismatch",
-            "AcceptPredecessorArtifactMismatch",
+        "SkipLifecycleRootV3CrashHistory": "CrashWithoutLifecycleRootV3History",
+        "RecoverUncommittedStateSlot": "RecoverUncommittedStateSlotAsSuccessor",
+        "PublishMemoryBeforeLifecycleRootV3Commit": (
+            "PublishMemoryBeforeLifecycleRootV3Commit"
         ),
-        (
-            "CleanPredecessorContextReject",
-            "CleanRejectPredecessorContextMismatch",
+        "CommitLifecycleRootV3BeforeStateSlot": (
+            "CommitLifecycleRootV3BeforeStateSlot"
         ),
-        (
-            "CleanPredecessorArtifactReject",
-            "CleanRejectPredecessorArtifactMismatch",
+        "ReuseRootSelectedStateSlot": "PublishSuccessorIntoRootSelectedStateSlot",
+        "ActiveOrdinaryRoll": "RollActiveLifecycleStateAsOrdinary",
+        "ServiceGenerationOverflowWrap": "WrapServiceGenerationCounter",
+        "RootGenerationOverflowWrap": "WrapLifecycleRootGenerationCounter",
+        "ForgeAuthenticatedClosePrefix": "ForgeClosePrefixDuringDurableFence",
+        "EpochUseBeforePersist": "UseRequesterEpochBeforePersistence",
+        "LoseRequesterIncarnationAfterCrash": (
+            "LoseRequesterIncarnationAfterCrash"
         ),
-        ("ForeignSuccessor", "RetainForeignSuccessor"),
-        ("CleanWrongSuccessorReject", "CleanRejectWrongImmediateSuccessor"),
-        ("LateEnqueue", "EnqueueAfterOwnerSeal"),
-        ("CleanLateEnqueueReject", "CleanRejectLateExactOutputEnqueue"),
-        ("LoseSameRosterRetry", "SameRosterDropsRetryableChunk"),
-        ("LateOldCallback", "LateOldWriterMutatesSuccessor"),
-        ("UntypedForce", "UntypedActiveLifecycleForce"),
-        (
-            "CleanAtomicV2PersistenceFailure",
-            "CleanFailAtomicV2Persistence",
+        "EpochOverflowWrap": "WrapRequesterEpochCounter",
+        "CrossedLifecycleRootShape": "CrossLifecycleRootShape",
+        "SplitLifecycleGenerationHash": "SplitLifecycleGenerationAndHash",
+        "MissingRootSelectedState": "RemoveRootSelectedLifecycleState",
+        "CleanupBeforeSemanticValidation": (
+            "CleanupLifecycleArtifactsBeforeValidation"
         ),
-        (
-            "CleanCrashAfterAtomicV2Persist",
-            "CleanCrashAfterAtomicV2Persist",
+        "ChangedRosterWithoutGenerationAdvance": (
+            "ChangeRosterWithoutServiceGenerationAdvance"
         ),
-        ("SkipSnapshotCrashHistory", "CrashWithoutSnapshotHistory"),
-        (
-            "OpenSnapshotAheadWithoutRestore",
-            "OpenSnapshotAheadWithoutRestore",
+        "CrossServiceTransportOwnerPair": "CrossServiceTransportOwnerPair",
+        "PreserveProcessReceiptAcrossCrash": "PreserveProcessReceiptAcrossCrash",
+        "CleanupRetainsInactiveSlot": "CleanupRetainsInactiveSlot",
+        "WrongBootstrapLifecycleProjection": (
+            "WrongBootstrapLifecycleProjection"
         ),
-        ("PublishBeforeAtomicV2Persist", "PublishBeforeAtomicV2Persist"),
-        ("ActiveStateRoll", "RollActiveLifecycleState"),
-        ("GenerationOverflowWrap", "WrapGenerationCounter"),
-        ("EpochUseBeforePersist", "UseRequesterEpochBeforePersistence"),
-        ("EpochReuseAfterCrash", "ReuseRequesterEpochAfterCrash"),
-        ("EpochOverflowWrap", "WrapRequesterEpochCounter"),
-    )
-    selected_mutation_body = "CASE " + " [] ".join(
-        f'MutationMode = "{mode}" -> {action}'
-        for mode, action in mutation_actions
-    )
-    require_exact_operator(
-        mutation, "SelectedMutationAction", selected_mutation_body
-    )
-    require_exact_operator(mutation, "MutationNext", r"\/ Next \/ SelectedMutationAction")
-    require_exact_operator(
-        mutation,
-        "MutationSpec",
-        r"/\ MutationConfiguration /\ Init /\ [][MutationNext]_typedRolloverVars",
-    )
-
-    exact_lifecycle_mutants = {
-        "CleanFailAtomicV2Persistence": r"""
-            /\ ExactRetainedMergeSidecars
-            /\ CompactionNeeded
-            /\ AllOldLifecycleTerminal
-            /\ state.serviceGeneration < GenerationLimit
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.failureReason =
-                      "LifecycleSnapshotV2PersistenceFailure"]
-        """,
-        "CleanCrashAfterAtomicV2Persist": r"""
-            /\ LifecycleSnapshotV2AheadOfMemory
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.lifecycleSnapshotPhase = "Restored",
-                    !.snapshotCrashObserved = TRUE]
-        """,
-        "CrashWithoutSnapshotHistory": r"""
-            /\ LifecycleSnapshotV2AheadOfMemory
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.restartRequired = TRUE,
-                    !.failureReason =
-                      "CrashAfterLifecycleSnapshotV2Persistence"]
-        """,
-        "OpenSnapshotAheadWithoutRestore": r"""
-            /\ LifecycleSnapshotV2AheadOfMemory
-            /\ state.restartRequired
-            /\ state.failureReason =
-                 "CrashAfterLifecycleSnapshotV2Persistence"
-            /\ state' =
-                 [state EXCEPT
-                    !.restartRequired = FALSE,
-                    !.failureReason = "None",
-                    !.receiptStage = "Consumed",
-                    !.receiptConsumeCount = 1,
-                    !.successorActive = TRUE,
-                    !.transitionAuthority = "LifecycleV2"]
-        """,
-        "PublishBeforeAtomicV2Persist": r"""
-            /\ ExactRetainedMergeSidecars
-            /\ CompactionNeeded
-            /\ AllOldLifecycleTerminal
-            /\ state.serviceGeneration < GenerationLimit
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ LifecycleMemoryMatchesDurableSnapshotV2
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.serviceGeneration = state.serviceGeneration + 1,
-                    !.serverStreamState = "Empty",
-                    !.requestGateState = "Empty",
-                    !.transferState = "Empty",
-                    !.flushState = "Empty",
-                    !.retryableChunk = 0,
-                    !.lifecycleSnapshotPhase = "Published",
-                    !.receiptStage = "Consumed",
-                    !.receiptConsumeCount = 1,
-                    !.successorActive = TRUE,
-                    !.transitionAuthority = "LifecycleV2"]
-        """,
-        "RollActiveLifecycleState": r"""
-            /\ ExactRetainedMergeSidecars
-            /\ CompactionNeeded
-            /\ ~AllOldLifecycleTerminal
-            /\ state.serviceGeneration < GenerationLimit
-            /\ state.lifecycleSnapshotPhase = "Current"
-            /\ ~state.restartRequired
-            /\ state' =
-                 [state EXCEPT
-                    !.durableLifecycleSnapshotV2 =
-                      LifecycleSnapshotV2(
-                        state.serviceGeneration + 1,
-                        state.nextStreamEpoch,
-                        "Empty",
-                        "Empty"),
-                    !.lifecycleSnapshotPhase = "Persisted"]
-        """,
-        "WrapGenerationCounter": r"""
-            /\ state.successorActive
-            /\ state.serviceGeneration = GenerationLimit
-            /\ state' =
-                 [state EXCEPT
-                    !.serviceGeneration = GenerationLimit + 1,
-                    !.durableLifecycleSnapshotV2 =
-                      LifecycleSnapshotV2(
-                        GenerationLimit + 1,
-                        state.nextStreamEpoch,
-                        "Empty",
-                        "Empty")]
-        """,
-        "UseRequesterEpochBeforePersistence": r"""
-            /\ state.requesterEpochPhase = "Idle"
-            /\ state.nextStreamEpoch < StreamEpochLimit
-            /\ state.activeStreamEpoch = 0
-            /\ state' =
-                 [state EXCEPT
-                    !.requesterEpochPhase = "InUse",
-                    !.activeStreamEpoch = state.nextStreamEpoch]
-        """,
-        "ReuseRequesterEpochAfterCrash": r"""
-            /\ state.restartRequired
-            /\ state.failureReason =
-                 "CrashAfterRequesterEpochPersistence"
-            /\ state.epochCrashObserved
-            /\ state.skippedStreamEpoch # 0
-            /\ state' =
-                 [state EXCEPT
-                    !.nextStreamEpoch =
-                      state.durableLifecycleSnapshotV2.nextStreamEpoch,
-                    !.requesterEpochPhase = "InUse",
-                    !.pendingStreamEpoch = 0,
-                    !.activeStreamEpoch = state.skippedStreamEpoch,
-                    !.restartRequired = FALSE,
-                    !.failureReason = "None"]
-        """,
-        "WrapRequesterEpochCounter": r"""
-            /\ state.requesterEpochPhase = "Idle"
-            /\ state.nextStreamEpoch = StreamEpochLimit
-            /\ state' =
-                 [state EXCEPT
-                    !.nextStreamEpoch = InitialNextStreamEpoch,
-                    !.durableLifecycleSnapshotV2 =
-                      LifecycleSnapshotV2(
-                        state.serviceGeneration,
-                        InitialNextStreamEpoch,
-                        state.serverStreamState,
-                        state.requestGateState),
-                    !.requesterEpochPhase = "InUse",
-                    !.activeStreamEpoch = StreamEpochLimit]
-        """,
+        "SkipBootstrapCrashHistory": "SkipBootstrapCrashHistory",
+        "CleanupBeforeRootParentResync": "CleanupBeforeRootParentResync",
+        "AcceptSemanticInvalidLifecycleState": (
+            "AcceptSemanticInvalidLifecycleState"
+        ),
     }
-    for symbol, body in exact_lifecycle_mutants.items():
-        require_exact_operator(mutation, symbol, body)
+    mutation_source = sources.get(mutation_name)
+    if mutation_source is not None:
+        path = formal_dir / mutation_name
+        extracted = _top_level_operator_body(
+            mutation_source, "MutationModes", preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed root-anchored V3 typed rollover "
+                "operator MutationModes"
+            )
+        else:
+            body, line = extracted
+            observed_modes = set(re.findall(r'"([^"]+)"', body))
+            if observed_modes != set(mutation_modes):
+                errors.append(
+                    f"{path}:{line}: MutationModes must equal exact reviewed "
+                    f"42-mode root-anchored V3 set {sorted(mutation_modes)!r}; "
+                    f"found {sorted(observed_modes)!r}"
+                )
+        selected = _top_level_operator_body(
+            mutation_source,
+            "SelectedMutationAction",
+            preserve_string_contents=True,
+        )
+        if selected is None:
+            errors.append(
+                f"{path}: missing reviewed root-anchored V3 typed rollover "
+                "operator SelectedMutationAction"
+            )
+        else:
+            body, line = selected
+            normalized = " ".join(body.split())
+            for mode, action in mutation_modes.items():
+                fragment = f'MutationMode = "{mode}" -> {action}'
+                if fragment not in normalized:
+                    errors.append(
+                        f"{path}:{line}: SelectedMutationAction must retain "
+                        f"exact root-anchored V3 dispatch {fragment!r}"
+                    )
+
+    require_operator_fragments(
+        mutation_name,
+        "CrossLifecycleRootShape",
+        (
+            'AcceptInvalidLifecycleStartup("LifecycleRootShapeMismatch")',
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "SplitLifecycleGenerationAndHash",
+        (
+            "AcceptInvalidLifecycleStartup( "
+            '"LifecycleGenerationHashMismatch")',
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "RemoveRootSelectedLifecycleState",
+        (
+            'AcceptInvalidLifecycleStartup("LifecycleSelectedStateMissing")',
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "CleanupLifecycleArtifactsBeforeValidation",
+        (
+            "~state.durableJournalValidated",
+            "state.crashArtifactsPresent",
+            "!.crashArtifactsPresent = FALSE",
+            "!.cleanupPerformed = TRUE",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "ChangeRosterWithoutServiceGenerationAdvance",
+        (
+            "ChangedRosterReplacementNeeded",
+            "state.serviceGeneration",
+            'LifecycleSnapshotV3( '
+            "state.durableLifecycleRootV3.rootGeneration + 1, "
+            "state.targetRoster, state.serviceGeneration,",
+            "!.currentRoster = state.targetRoster",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "AcceptInvalidLifecycleStartup",
+        (
+            'state.startupMode = "UnvalidatedRestart"',
+            "state.startupValidationFault = reason",
+            "!.durableJournalValidated = TRUE",
+            "!.crashArtifactsPresent = FALSE",
+            "!.cleanupPerformed = TRUE",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "PreserveProcessReceiptAcrossCrash",
+        (
+            "RequesterEpochPersistenceAheadOfMemory",
+            "ExactRetainedMergeSidecars",
+            "!.durableJournalValidated = FALSE",
+            "!.restartRequired = TRUE",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "CleanupBeforeRootParentResync",
+        (
+            "state.restartStateDirectoryResynced",
+            "~state.restartRootDirectoryResynced",
+            "InactiveLifecycleStateSlot(state)",
+            "!.cleanupPerformed = TRUE",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "WrongBootstrapLifecycleProjection",
+        (
+            'state.lifecycleCommitPhase = "BootstrapStatePublished"',
+            "state.durableLifecycleRootV3 = BootstrapLifecycleRootV3",
+            "state.candidatePresent",
+            "state.candidateSemanticallyValidated",
+            "LifecycleStateDirectoryIsSynced(state)",
+            "state.targetRoster = state.currentRoster",
+            "state.currentRoster = state.baselineRoster",
+            'state.compactionCause = "NoCompaction"',
+            'IF state.targetRoster = "RosterA" '
+            'THEN "RosterB" ELSE "RosterA"',
+            "!.targetRoster = wrongTarget",
+            '!.compactionCause = "RosterGeometryReplacement"',
+            "!.durableLifecycleRootV3 = "
+            "LifecycleRootV3(state.candidateLifecycleSnapshotV3)",
+            '!.lifecycleCommitPhase = "BootstrapRootReplaced"',
+        ),
+    )
+
+    repeated_handoff_mutation_name = (
+        "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla"
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "RepeatedHandoffMutationInit",
+        (
+            "Init",
+            'state.startupMode = "LiveProcess"',
+            "ChangedRosterReplacementNeeded",
+            "state.serviceGeneration < ServiceGenerationLimit",
+            "state.durableLifecycleRootV3.rootGeneration < "
+            "RootGenerationLimit",
+        ),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "ReopenPredecessorTransportAfterRestartRestore",
+        (
+            'state.lifecycleCommitPhase = "Restored"',
+            'state.transitionAuthority = "RestartRestore"',
+            "state.serviceOwnerNonce = NoIdentity",
+            "state.transportOwnerNonce = NoIdentity",
+            'state.receiptStage \\in {"Absent", "Lost"}',
+            "~state.restartRequired",
+            "~state.successorActive",
+            '!.serviceOwnerNonce = "OwnerNonce"',
+            '!.transportOwnerNonce = "OwnerNonce"',
+        ),
+        forbidden=("PredecessorTransportOwnershipOpen",),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "ResealPredecessorTransportAfterRestartRestore",
+        (
+            'state.lifecycleCommitPhase = "Restored"',
+            'state.transitionAuthority = "RestartRestore"',
+            "state.finalityValidated",
+            "state.workerIngressClosed",
+            "state.workerOutstanding = 0",
+            'state.receiptStage = "Absent"',
+            "ExactServiceTransportOwnerPair",
+            "~state.restartRequired",
+            "~state.successorActive",
+            '!.receiptStage = "Minted"',
+            "!.receiptOwnerNonce = state.serviceOwnerNonce",
+        ),
+        forbidden=("PredecessorTransportOwnershipOpen",),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "RepeatedHandoffMutationNext",
+        (
+            "CreateServiceTransportOwnerPair",
+            "SealAppliedHeightOutputHandoff",
+            "RetainExactHandoffReceipt",
+            "CrashAfterLifecycleRootV3Commit",
+            "ValidateRootSelectedLifecycleV3",
+            "CleanupValidatedLifecycleArtifactsV3",
+            "RestoreSuccessorLifecycleV3AfterCrash",
+            "ReopenPredecessorTransportAfterRestartRestore",
+            "ResealPredecessorTransportAfterRestartRestore",
+        ),
+    )
+    require_operator_fragments(
+        repeated_handoff_mutation_name,
+        "RepeatedHandoffMutationSpec",
+        (
+            "RepeatedHandoffMutationInit",
+            "[][RepeatedHandoffMutationNext]_typedRolloverVars",
+        ),
+    )
 
     action_properties = (
         "PROPERTY CapacityRejectionActionProperty",
-        "PROPERTY AtomicLifecycleSnapshotV2PersistenceActionProperty",
-        "PROPERTY LifecycleSnapshotV2PublicationActionProperty",
+        "PROPERTY StateSlotBeforeRootCommitActionProperty",
+        "PROPERTY RootCommitBeforeMemoryPublicationActionProperty",
+        "PROPERTY RootGenerationMonotonicActionProperty",
+        "PROPERTY LifecycleV3PublicationActionProperty",
+        "PROPERTY ForcedFenceDoesNotForgeCloseActionProperty",
         "PROPERTY RequesterEpochUseActionProperty",
+        "PROPERTY CrashDropsProcessLocalAuthorityActionProperty",
+        "PROPERTY ValidationFailurePreservesArtifactsActionProperty",
+        "PROPERTY ValidatedCleanupActionProperty",
+        "PROPERTY RequesterIncarnationRestoreActionProperty",
     )
-    fixed_invariants = (
+    fixed_lines = (
+        "SPECIFICATION TypedRolloverSpec",
+        "CHECK_DEADLOCK FALSE",
         "INVARIANT TypedRolloverTypeInvariant",
         "INVARIANT CompactionGeometryInvariant",
+        "INVARIANT ExactServiceTransportOwnerPairInvariant",
+        "INVARIANT UnconsumedPredecessorTransportOwnershipInvariant",
         "INVARIANT ReceiptLifecycleInvariant",
         "INVARIANT FinalSealRejectsLateEnqueueInvariant",
         "INVARIANT MismatchRejectionInvariant",
         "INVARIANT FailureLatchInvariant",
-        "INVARIANT SoleLifecycleSnapshotV2Invariant",
-        "INVARIANT LifecycleSnapshotPhaseInvariant",
-        "INVARIANT TerminalOnlyGenerationAdvanceInvariant",
+        "INVARIANT RootAnchoredLifecycleV3Invariant",
+        "INVARIANT SemanticValidationBeforeCleanupInvariant",
+        "INVARIANT ValidatedCleanupRemovesInactiveSlotInvariant",
+        "INVARIANT InvalidLifecycleStartupFailsClosedInvariant",
+        "INVARIANT ProcessLocalAuthorityAfterCrashInvariant",
+        "INVARIANT LifecycleCommitPhaseInvariant",
+        "INVARIANT AuthorityGatedGenerationAdvanceInvariant",
         "INVARIANT SameRosterTransportPreservationInvariant",
         "INVARIANT RequesterEpochInvariant",
         "INVARIANT CrashRecoveryInvariant",
+        "INVARIANT NoForgedAuthenticatedClosePrefixInvariant",
         "INVARIANT LateOldCallbackIsolationInvariant",
-    )
-    expected_fixed_lines = (
-        "SPECIFICATION TypedRolloverSpec",
-        "CHECK_DEADLOCK FALSE",
-        *fixed_invariants,
         *action_properties,
     )
     fixed_name = "typed_rollover_handoff_fixed.cfg"
-    fixed_source = configs.get(fixed_name)
-    if fixed_source is not None:
-        fixed_lines = tuple(
-            line.strip()
-            for line in fixed_source.splitlines()
-            if line.strip()
-        )
-        if fixed_lines != expected_fixed_lines:
+    fixed = configs.get(fixed_name)
+    if fixed is not None:
+        observed_lines = tuple(line.strip() for line in fixed.splitlines() if line.strip())
+        if observed_lines != fixed_lines:
             errors.append(
-                f"{formal_dir / fixed_name}: fixed typed rollover configuration "
-                "must contain exactly the 13 sole-V2 invariants and four "
-                f"action properties; found {fixed_lines!r}"
+                f"{formal_dir / fixed_name}: fixed typed rollover "
+                "configuration must contain exactly the reviewed root-anchored "
+                "V3 invariants and eleven action properties"
             )
 
-    config_modes = {
-        "typed_rollover_handoff_active_state_roll_bug.cfg": "ActiveStateRoll",
-        "typed_rollover_handoff_clean_atomic_v2_persistence_failure_bug.cfg": (
-            "CleanAtomicV2PersistenceFailure"
-        ),
-        "typed_rollover_handoff_clean_crash_after_atomic_v2_persist_bug.cfg": (
-            "CleanCrashAfterAtomicV2Persist"
-        ),
-        "typed_rollover_handoff_clean_foreign_owner_reject_bug.cfg": (
-            "CleanForeignOwnerReject"
-        ),
-        "typed_rollover_handoff_clean_late_enqueue_reject_bug.cfg": (
-            "CleanLateEnqueueReject"
-        ),
-        "typed_rollover_handoff_clean_predecessor_artifact_reject_bug.cfg": (
-            "CleanPredecessorArtifactReject"
-        ),
-        "typed_rollover_handoff_clean_predecessor_context_reject_bug.cfg": (
-            "CleanPredecessorContextReject"
-        ),
-        "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg": (
-            "CleanWrongSuccessorReject"
-        ),
-        "typed_rollover_handoff_epoch_overflow_bug.cfg": "EpochOverflowWrap",
-        "typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg": (
-            "EpochReuseAfterCrash"
-        ),
-        "typed_rollover_handoff_epoch_use_before_persist_bug.cfg": (
-            "EpochUseBeforePersist"
-        ),
-        "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg": (
-            "IgnoreForeignCandidate"
-        ),
-        "typed_rollover_handoff_foreign_receipt_bug.cfg": "ForeignOwnerNonce",
-        "typed_rollover_handoff_foreign_successor_bug.cfg": "ForeignSuccessor",
-        "typed_rollover_handoff_generation_overflow_bug.cfg": (
-            "GenerationOverflowWrap"
-        ),
-        "typed_rollover_handoff_late_callback_bug.cfg": "LateOldCallback",
-        "typed_rollover_handoff_late_enqueue_bug.cfg": "LateEnqueue",
-        "typed_rollover_handoff_predecessor_artifact_accept_bug.cfg": (
-            "AcceptPredecessorArtifactMismatch"
-        ),
-        "typed_rollover_handoff_predecessor_context_accept_bug.cfg": (
-            "AcceptPredecessorContextMismatch"
-        ),
-        "typed_rollover_handoff_premature_mint_bug.cfg": "PrematureSeal",
-        "typed_rollover_handoff_publish_before_atomic_v2_persist_bug.cfg": (
-            "PublishBeforeAtomicV2Persist"
-        ),
-        "typed_rollover_handoff_retry_loss_bug.cfg": "LoseSameRosterRetry",
-        "typed_rollover_handoff_skip_snapshot_crash_history_bug.cfg": (
-            "SkipSnapshotCrashHistory"
-        ),
-        "typed_rollover_handoff_snapshot_ahead_without_restore_bug.cfg": (
-            "OpenSnapshotAheadWithoutRestore"
-        ),
-        "typed_rollover_handoff_untyped_force_bug.cfg": "UntypedForce",
+    mutation_config_modes = {
+        name: mode
+        for name, mode in (
+            (
+                "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg",
+                "AcceptSemanticInvalidLifecycleState",
+            ),
+            (
+                "typed_rollover_handoff_active_state_roll_bug.cfg",
+                "ActiveOrdinaryRoll",
+            ),
+            (
+                "typed_rollover_handoff_changed_roster_without_generation_advance_bug.cfg",
+                "ChangedRosterWithoutGenerationAdvance",
+            ),
+            (
+                "typed_rollover_handoff_clean_state_slot_v3_persistence_failure_bug.cfg",
+                "CleanStateSlotV3PersistenceFailure",
+            ),
+            (
+                "typed_rollover_handoff_clean_crash_after_lifecycle_root_v3_commit_bug.cfg",
+                "CleanCrashAfterLifecycleRootV3Commit",
+            ),
+            (
+                "typed_rollover_handoff_clean_foreign_owner_reject_bug.cfg",
+                "CleanForeignOwnerReject",
+            ),
+            (
+                "typed_rollover_handoff_clean_late_enqueue_reject_bug.cfg",
+                "CleanLateEnqueueReject",
+            ),
+            (
+                "typed_rollover_handoff_clean_predecessor_artifact_reject_bug.cfg",
+                "CleanPredecessorArtifactReject",
+            ),
+            (
+                "typed_rollover_handoff_clean_predecessor_context_reject_bug.cfg",
+                "CleanPredecessorContextReject",
+            ),
+            (
+                "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg",
+                "CleanWrongSuccessorReject",
+            ),
+            (
+                "typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg",
+                "CleanupBeforeRootParentResync",
+            ),
+            (
+                "typed_rollover_handoff_cleanup_before_validation_bug.cfg",
+                "CleanupBeforeSemanticValidation",
+            ),
+            (
+                "typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg",
+                "CleanupRetainsInactiveSlot",
+            ),
+            (
+                "typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg",
+                "CrossServiceTransportOwnerPair",
+            ),
+            (
+                "typed_rollover_handoff_crossed_root_shape_bug.cfg",
+                "CrossedLifecycleRootShape",
+            ),
+            (
+                "typed_rollover_handoff_epoch_overflow_bug.cfg",
+                "EpochOverflowWrap",
+            ),
+            (
+                "typed_rollover_handoff_epoch_use_before_persist_bug.cfg",
+                "EpochUseBeforePersist",
+            ),
+            (
+                "typed_rollover_handoff_forged_authenticated_close_prefix_bug.cfg",
+                "ForgeAuthenticatedClosePrefix",
+            ),
+            (
+                "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg",
+                "IgnoreForeignCandidate",
+            ),
+            (
+                "typed_rollover_handoff_foreign_receipt_bug.cfg",
+                "ForeignOwnerNonce",
+            ),
+            (
+                "typed_rollover_handoff_foreign_successor_bug.cfg",
+                "ForeignSuccessor",
+            ),
+            (
+                "typed_rollover_handoff_generation_overflow_bug.cfg",
+                "ServiceGenerationOverflowWrap",
+            ),
+            (
+                "typed_rollover_handoff_late_callback_bug.cfg",
+                "LateOldCallback",
+            ),
+            (
+                "typed_rollover_handoff_late_enqueue_bug.cfg",
+                "LateEnqueue",
+            ),
+            (
+                "typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg",
+                "LoseRequesterIncarnationAfterCrash",
+            ),
+            (
+                "typed_rollover_handoff_missing_selected_state_bug.cfg",
+                "MissingRootSelectedState",
+            ),
+            (
+                "typed_rollover_handoff_predecessor_artifact_accept_bug.cfg",
+                "AcceptPredecessorArtifactMismatch",
+            ),
+            (
+                "typed_rollover_handoff_predecessor_context_accept_bug.cfg",
+                "AcceptPredecessorContextMismatch",
+            ),
+            (
+                "typed_rollover_handoff_premature_mint_bug.cfg",
+                "PrematureSeal",
+            ),
+            (
+                "typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg",
+                "PreserveProcessReceiptAcrossCrash",
+            ),
+            (
+                "typed_rollover_handoff_publish_memory_before_lifecycle_root_v3_commit_bug.cfg",
+                "PublishMemoryBeforeLifecycleRootV3Commit",
+            ),
+            (
+                "typed_rollover_handoff_retry_loss_bug.cfg",
+                "LoseSameRosterRetry",
+            ),
+            (
+                "typed_rollover_handoff_reuse_root_selected_state_slot_bug.cfg",
+                "ReuseRootSelectedStateSlot",
+            ),
+            (
+                "typed_rollover_handoff_root_commit_before_state_slot_bug.cfg",
+                "CommitLifecycleRootV3BeforeStateSlot",
+            ),
+            (
+                "typed_rollover_handoff_root_generation_overflow_bug.cfg",
+                "RootGenerationOverflowWrap",
+            ),
+            (
+                "typed_rollover_handoff_same_roster_generation_roll_bug.cfg",
+                "SameRosterGenerationRoll",
+            ),
+            (
+                "typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg",
+                "SkipBootstrapCrashHistory",
+            ),
+            (
+                "typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg",
+                "SkipLifecycleRootV3CrashHistory",
+            ),
+            (
+                "typed_rollover_handoff_recover_uncommitted_state_slot_bug.cfg",
+                "RecoverUncommittedStateSlot",
+            ),
+            (
+                "typed_rollover_handoff_split_generation_hash_bug.cfg",
+                "SplitLifecycleGenerationHash",
+            ),
+            (
+                "typed_rollover_handoff_untyped_force_bug.cfg",
+                "UntypedForce",
+            ),
+            (
+                "typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg",
+                "WrongBootstrapLifecycleProjection",
+            ),
+        )
     }
-    if set(config_modes.values()) != set(mutation_modes):
-        errors.append(
-            f"{formal_dir}: typed rollover config modes must cover all 25 "
-            "mutation modes exactly once"
-        )
-    mutation_config_tail = (
-        "CHECK_DEADLOCK FALSE",
-        "INVARIANT TypedRolloverSafetyInvariant",
-        *action_properties,
+    repeated_handoff_config_name = (
+        "typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg"
     )
-    for config_name, mode in config_modes.items():
-        source = configs.get(config_name)
-        if source is None:
-            continue
-        lines = tuple(
-            line.strip() for line in source.splitlines() if line.strip()
+    if set(mutation_config_modes) | {
+        repeated_handoff_config_name
+    } != expected_config_names - {fixed_name}:
+        errors.append(
+            f"{formal_dir}: internal typed rollover contract of 42 shared "
+            "configs plus one dedicated repeated-handoff config does not "
+            "match the SHA-sealed inventory"
         )
+    for config_name, mode in mutation_config_modes.items():
+        config = configs.get(config_name)
+        if config is None:
+            continue
         expected_lines = (
             "SPECIFICATION MutationSpec",
             f'CONSTANT MutationMode = "{mode}"',
-            *mutation_config_tail,
+            "CHECK_DEADLOCK FALSE",
+            "INVARIANT TypedRolloverSafetyInvariant",
+            *action_properties,
         )
-        if lines != expected_lines:
+        observed_lines = tuple(
+            line.strip() for line in config.splitlines() if line.strip()
+        )
+        if observed_lines != expected_lines:
             errors.append(
                 f"{formal_dir / config_name}: mutation config must select "
-                f"exact mode {mode} and the four sole-V2 action properties; "
-                f"found {lines!r}"
+                f"exact mode {mode} and the eleven root-anchored V3 action "
+                "properties"
+            )
+
+    repeated_handoff_config = configs.get(repeated_handoff_config_name)
+    if repeated_handoff_config is not None:
+        expected_lines = (
+            "SPECIFICATION RepeatedHandoffMutationSpec",
+            "CHECK_DEADLOCK FALSE",
+            "INVARIANT TypedRolloverSafetyInvariant",
+        )
+        observed_lines = tuple(
+            line.strip()
+            for line in repeated_handoff_config.splitlines()
+            if line.strip()
+        )
+        if observed_lines != expected_lines:
+            errors.append(
+                f"{formal_dir / repeated_handoff_config_name}: dedicated "
+                "repeated-handoff mutation config must select exactly "
+                "RepeatedHandoffMutationSpec and "
+                "TypedRolloverSafetyInvariant"
             )
 
     runner_path = (
@@ -20210,69 +21765,82 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         / "formal"
         / "run_sumeragi_v2_typed_rollover_handoff_mutations.sh"
     )
-    runner: str | None = None
     if not runner_path.is_file() or runner_path.is_symlink():
         errors.append(
             f"{runner_path}: typed rollover-handoff mutation runner must be a "
             "regular file"
         )
     else:
-        runner_payload = runner_path.read_bytes()
-        observed_runner_sha256 = hashlib.sha256(runner_payload).hexdigest()
-        if (
-            observed_runner_sha256
-            != _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256
-        ):
+        payload = runner_path.read_bytes()
+        observed_sha256 = hashlib.sha256(payload).hexdigest()
+        if observed_sha256 != _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256:
             errors.append(
                 f"{runner_path}: typed rollover-handoff mutation runner must "
                 "match exact reviewed SHA-256 "
                 f"{_TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256}; found "
-                f"{observed_runner_sha256}"
+                f"{observed_sha256}"
             )
-        runner = runner_payload.decode("utf-8")
-
-    if runner is not None:
-        sany_loop = (
-            "for module in \\\n"
-            "  SumeragiV2TypedRolloverHandoff \\\n"
-            "  SumeragiV2TypedRolloverHandoffMutation \\\n"
-            "  SumeragiV2TypedRolloverHandoffProofs; do"
-        )
-        if runner.count(sany_loop) != 1:
-            errors.append(
-                f"{runner_path}: runner must SANY-parse the base, mutation, "
-                "and proof modules exactly once"
-            )
-        fixed_markers = (
-            "run_case typed-rollover-fixed",
-            '"$FIXED_MODEL" typed_rollover_handoff_fixed.cfg 0',
-            '"Model checking completed. No error has been found."',
-            (
-                '"6878 states generated, 2799 distinct states found, '
-                '0 states left on queue."'
-            ),
-            '"The depth of the complete state graph search is 26."',
-        )
+        runner = payload.decode("utf-8")
         collapsed_runner = " ".join(runner.split())
-        for marker in fixed_markers:
-            if " ".join(marker.split()) not in collapsed_runner:
+        runner_fragments = (
+            "then run the fixed TLC model and all 43 deterministic mutation "
+            "configurations.",
+            'readonly REPEATED_HANDOFF_MUTATION_MODEL="'
+            'SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla"',
+            'readonly REPEATED_HANDOFF_MUTATION_CONFIG="'
+            "typed_rollover_handoff_repeated_handoff_after_restart_restore_"
+            'bug.cfg"',
+            "for module in \\ SumeragiV2TypedRolloverHandoff \\ "
+            "SumeragiV2TypedRolloverHandoffMutation \\ "
+            "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation \\ "
+            "SumeragiV2TypedRolloverHandoffProofs; do",
+            'run_case typed-rollover-fixed \\ "$FIXED_MODEL" '
+            'typed_rollover_handoff_fixed.cfg 0 \\ '
+            '"Model checking completed. No error has been found."',
+            "readonly EXPECTED_MATRIX_MUTATION_COUNT=42",
+            "readonly EXPECTED_MUTATION_COUNT=43",
+            'readonly INVARIANT_MARKER="Error: Invariant '
+            'TypedRolloverSafetyInvariant is violated."',
+            'actual_configs=("${FORMAL_DIR}"/'
+            "typed_rollover_handoff_*_bug.cfg)",
+            'if [[ "$actual_config" == "$REPEATED_HANDOFF_MUTATION_CONFIG" '
+            "]]; then config_is_expected=true",
+            "for case_spec in \"${mutation_cases[@]}\"; do",
+            'run_case "$label" "$MUTATION_MODEL" "$config" '
+            '"$expected_status" "$expected_marker"',
+            "run_case repeated-handoff-after-restart-restore \\ "
+            '"$REPEATED_HANDOFF_MUTATION_MODEL" \\ '
+            '"$REPEATED_HANDOFF_MUTATION_CONFIG" 12 \\ "$INVARIANT_MARKER"',
+            'echo "[tlc] typed rollover-handoff fixed model and 43-mutant '
+            'root-anchored V3 matrix passed"',
+        )
+        for fragment in runner_fragments:
+            if " ".join(fragment.split()) not in collapsed_runner:
                 errors.append(
-                    f"{runner_path}: fixed typed rollover case must retain "
-                    "exact status/count/depth markers"
+                    f"{runner_path}: typed rollover-handoff runner must retain "
+                    f"exact 43-case root-anchored V3 fragment {fragment!r}"
                 )
-                break
+
         runner_cases = (
+            (
+                "accept-semantic-invalid-lifecycle-state",
+                "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg",
+            ),
             (
                 "active-state-roll",
                 "typed_rollover_handoff_active_state_roll_bug.cfg",
             ),
             (
-                "clean-atomic-v2-persistence-failure",
-                "typed_rollover_handoff_clean_atomic_v2_persistence_failure_bug.cfg",
+                "changed-roster-without-generation-advance",
+                "typed_rollover_handoff_changed_roster_without_generation_advance_bug.cfg",
             ),
             (
-                "clean-crash-after-atomic-v2-persist",
-                "typed_rollover_handoff_clean_crash_after_atomic_v2_persist_bug.cfg",
+                "clean-state-slot-v3-persistence-failure",
+                "typed_rollover_handoff_clean_state_slot_v3_persistence_failure_bug.cfg",
+            ),
+            (
+                "clean-crash-after-lifecycle-root-v3-commit",
+                "typed_rollover_handoff_clean_crash_after_lifecycle_root_v3_commit_bug.cfg",
             ),
             (
                 "clean-foreign-owner-reject",
@@ -20295,16 +21863,36 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg",
             ),
             (
+                "cleanup-before-root-parent-resync",
+                "typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg",
+            ),
+            (
+                "cleanup-before-semantic-validation",
+                "typed_rollover_handoff_cleanup_before_validation_bug.cfg",
+            ),
+            (
+                "cleanup-retains-inactive-slot",
+                "typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg",
+            ),
+            (
+                "cross-service-transport-owner-pair",
+                "typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg",
+            ),
+            (
+                "crossed-lifecycle-root-shape",
+                "typed_rollover_handoff_crossed_root_shape_bug.cfg",
+            ),
+            (
                 "epoch-overflow",
                 "typed_rollover_handoff_epoch_overflow_bug.cfg",
             ),
             (
-                "epoch-reuse-after-crash",
-                "typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg",
-            ),
-            (
                 "epoch-use-before-persist",
                 "typed_rollover_handoff_epoch_use_before_persist_bug.cfg",
+            ),
+            (
+                "forged-authenticated-close-prefix",
+                "typed_rollover_handoff_forged_authenticated_close_prefix_bug.cfg",
             ),
             (
                 "foreign-candidate-ignored",
@@ -20319,7 +21907,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "typed_rollover_handoff_foreign_successor_bug.cfg",
             ),
             (
-                "generation-overflow",
+                "service-generation-overflow",
                 "typed_rollover_handoff_generation_overflow_bug.cfg",
             ),
             (
@@ -20329,6 +21917,14 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             (
                 "late-enqueue",
                 "typed_rollover_handoff_late_enqueue_bug.cfg",
+            ),
+            (
+                "lose-requester-incarnation-after-crash",
+                "typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg",
+            ),
+            (
+                "missing-root-selected-state",
+                "typed_rollover_handoff_missing_selected_state_bug.cfg",
             ),
             (
                 "predecessor-artifact-accept",
@@ -20343,24 +21939,56 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "typed_rollover_handoff_premature_mint_bug.cfg",
             ),
             (
-                "publish-before-atomic-v2-persist",
-                "typed_rollover_handoff_publish_before_atomic_v2_persist_bug.cfg",
+                "preserve-process-receipt-across-crash",
+                "typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg",
+            ),
+            (
+                "publish-memory-before-lifecycle-root-v3-commit",
+                "typed_rollover_handoff_publish_memory_before_lifecycle_root_v3_commit_bug.cfg",
             ),
             (
                 "retry-loss",
                 "typed_rollover_handoff_retry_loss_bug.cfg",
             ),
             (
-                "skip-snapshot-crash-history",
-                "typed_rollover_handoff_skip_snapshot_crash_history_bug.cfg",
+                "reuse-root-selected-state-slot",
+                "typed_rollover_handoff_reuse_root_selected_state_slot_bug.cfg",
             ),
             (
-                "snapshot-ahead-without-restore",
-                "typed_rollover_handoff_snapshot_ahead_without_restore_bug.cfg",
+                "root-commit-before-state-slot",
+                "typed_rollover_handoff_root_commit_before_state_slot_bug.cfg",
+            ),
+            (
+                "root-generation-overflow",
+                "typed_rollover_handoff_root_generation_overflow_bug.cfg",
+            ),
+            (
+                "same-roster-generation-roll",
+                "typed_rollover_handoff_same_roster_generation_roll_bug.cfg",
+            ),
+            (
+                "skip-bootstrap-crash-history",
+                "typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg",
+            ),
+            (
+                "skip-lifecycle-root-v3-crash-history",
+                "typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg",
+            ),
+            (
+                "split-lifecycle-generation-hash",
+                "typed_rollover_handoff_split_generation_hash_bug.cfg",
+            ),
+            (
+                "recover-uncommitted-state-slot",
+                "typed_rollover_handoff_recover_uncommitted_state_slot_bug.cfg",
             ),
             (
                 "untyped-force",
                 "typed_rollover_handoff_untyped_force_bug.cfg",
+            ),
+            (
+                "wrong-bootstrap-lifecycle-projection",
+                "typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg",
             ),
         )
         offsets: list[int] = []
@@ -20381,38 +22009,41 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 f"{runner_path}: typed rollover-handoff mutations must retain "
                 "reviewed order"
             )
-        runner_contract_fragments = (
-            'readonly EXPECTED_MUTATION_COUNT=25',
-            (
-                'readonly INVARIANT_MARKER="Error: Invariant '
-                'TypedRolloverSafetyInvariant is violated."'
-            ),
-            'actual_configs=("${FORMAL_DIR}"/typed_rollover_handoff_*_bug.cfg)',
-            (
-                'if [[ "${#mutation_cases[@]}" -ne '
-                '"$EXPECTED_MUTATION_COUNT" ]]'
-            ),
-            (
-                'if [[ "${#actual_configs[@]}" -ne '
-                '"$EXPECTED_MUTATION_COUNT" ]]'
-            ),
-            'echo "unexpected typed rollover mutation config: ${actual_config}" >&2',
-            'for case_spec in "${mutation_cases[@]}"; do',
-            (
-                'run_case "$label" "$MUTATION_MODEL" "$config" '
-                '"$expected_status" "$expected_marker"'
-            ),
-            (
-                'echo "[tlc] typed rollover-handoff fixed model and '
-                '25-mutant sole-V2 matrix passed"'
-            ),
+
+    ci_path = repo_root / "ci" / "check_sumeragi_formal.sh"
+    if not ci_path.is_file() or ci_path.is_symlink():
+        errors.append(
+            f"{ci_path}: typed rollover-handoff CI gate must be a regular file"
         )
-        for fragment in runner_contract_fragments:
-            if " ".join(fragment.split()) not in collapsed_runner:
-                errors.append(
-                    f"{runner_path}: typed rollover-handoff runner must retain "
-                    f"exact 25-case matrix/inventory fragment {fragment!r}"
-                )
+    else:
+        ci_lines = ci_path.read_text(encoding="utf-8").splitlines()
+        typed_invocation = (
+            "bash scripts/formal/"
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh"
+        )
+        generic_tlc_invocation = (
+            "bash scripts/formal/run_sumeragi_v2_tlc.sh ci"
+        )
+        if ci_lines.count(typed_invocation) != 1:
+            errors.append(
+                f"{ci_path}: formal CI must invoke {typed_invocation!r} "
+                "exactly once"
+            )
+        if ci_lines.count(generic_tlc_invocation) != 1:
+            errors.append(
+                f"{ci_path}: formal CI must invoke "
+                f"{generic_tlc_invocation!r} exactly once"
+            )
+        if (
+            ci_lines.count(typed_invocation) == 1
+            and ci_lines.count(generic_tlc_invocation) == 1
+            and ci_lines.index(typed_invocation)
+            >= ci_lines.index(generic_tlc_invocation)
+        ):
+            errors.append(
+                f"{ci_path}: typed rollover-handoff mutations must run before "
+                "the generic TLC gate"
+            )
     return errors
 
 
@@ -30887,12 +32518,39 @@ pub open spec fn production_async_causal_fifo_after_batch(
 
 
 _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
+    "on_resume_after_replay": (
+        "5110f5c231d638f1b0ec7964f2fab3b91470cfeeae5a59ec320e45a478ca64cd"
+    ),
+    "durable_proposal_is_active": (
+        "dd2dd74ab7257442e5ce7017be1f4579d8716a162960a043763180a0f1016525"
+    ),
+    "proposal_is_safe_for_durable_lock": (
+        "612b97156d1c4a80df60024efa73404adc5df4265464b116be5c8b11b9247619"
+    ),
+    "safe_to_prepare": (
+        "9a6ac51a6cfcd6ffb4a7327372330e5754c5451fbd0a2a2cfb3218a42475c3df"
+    ),
     "wal_apply": "ace7adf6ef605c6a1e37fb087522cc91e8bb66b55b62f45a22a44b101571c3f8",
     "wal_apply_in_place": (
         "7473b0680ec743e30070bc5dcb5ca9d1c7934199852c861fb5e0e9796e7ab709"
     ),
     "local_proposal_directive": (
         "ae8489fea82bd72963f4343745cd838bdc30be67e8f95e0a5e4c1b76a003796e"
+    ),
+    "local_proposal_directive_for_test": (
+        "9bb8bae3eeab780523915b4a196526ae4c45cba8f27336c093bbaa5420ae1709"
+    ),
+    "from_replayed_proposal": (
+        "68339551f22d493c78d862be663e3e753181353fc321c05b57c1105bad77f8d3"
+    ),
+    "replayed_proposal_sign": (
+        "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
+    ),
+    "run_inner": (
+        "1c60f755614a3bfc42831b16e77643ed648d8607e588f4725ac072920c737c91"
+    ),
+    "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
+        "3245d9f8affaf523e99a6049a0aeab2d140cda6c099097390d0d85cafa5d3b5a"
     ),
     "schedule_local_proposal": (
         "bdc7e1b315f8cdb6a7c4c17b1b998ced6b70c267de62299c444d3542b438ad8e"
@@ -31090,7 +32748,91 @@ def _locked_body_reproposal_source_fidelity_errors(
                     "exact action-to-justification proof dependency"
                 )
 
+    directive_path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    directive_source = read_regular(
+        directive_path, "local-proposal directive production source"
+    )
+    if directive_source is not None:
+        directive_structural = mask_rust_comments_and_literals(directive_source)
+        directive_declarations = re.findall(
+            r"(?m)^[ \t]*pub[ \t]*\([ \t]*crate[ \t]*\)[ \t]+"
+            r"struct[ \t]+LocalProposalDirective\b",
+            directive_structural,
+        )
+        if len(directive_declarations) != 1:
+            errors.append(
+                f"{directive_path}: require exactly one crate-visible "
+                "LocalProposalDirective declaration; found "
+                f"{len(directive_declarations)}"
+            )
+        _require_rust_source_token_sequence(
+            directive_path,
+            directive_source,
+            """
+pub(crate) struct LocalProposalDirective {
+    tag: reducer::EventTag,
+    leader: wire::ValidatorIndex,
+    locked_round: Option<wire::ConsensusRound>,
+    locked_subject: Option<wire::BlockSubject>,
+    decided_subject: Option<wire::BlockSubject>,
+}
+""",
+            "LocalProposalDirective production fields must remain private",
+            errors,
+        )
+        directive_for_test = _require_qualified_rust_item(
+            directive_path,
+            directive_source,
+            "LocalProposalDirective",
+            "for_test",
+            errors,
+            "test-only exact local-proposal directive constructor",
+            expected_attributes=("#[cfg(test)]",),
+        )
+        _require_rust_item_token_sha256(
+            directive_path,
+            directive_for_test,
+            _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[
+                "local_proposal_directive_for_test"
+            ],
+            "test-only exact local-proposal directive constructor",
+            errors,
+        )
+
     production_specs = (
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            (
+                (
+                    "on_resume_after_replay",
+                    (("impl", "Reducer"),),
+                    (),
+                    "on_resume_after_replay",
+                    "replay proposal authorization boundary",
+                ),
+                (
+                    "durable_proposal_is_active",
+                    (("impl", "Reducer"),),
+                    (),
+                    "durable_proposal_is_active",
+                    "durable proposal replay authorization kernel",
+                ),
+                (
+                    "proposal_is_safe_for_durable_lock",
+                    (("impl", "Reducer"),),
+                    (),
+                    "proposal_is_safe_for_durable_lock",
+                    "shared live-and-replay safe-value kernel",
+                ),
+                (
+                    "safe_to_prepare",
+                    (("impl", "Reducer"),),
+                    (),
+                    "safe_to_prepare",
+                    "live proposal safe-value call path",
+                ),
+            ),
+        ),
         (
             "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
             (
@@ -31126,6 +32868,27 @@ def _locked_body_reproposal_source_fidelity_errors(
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             (
                 (
+                    "run_inner",
+                    (),
+                    ("#[allow(clippy::too_many_lines)]",),
+                    "run_inner",
+                    "startup replay-owner handoff",
+                ),
+                (
+                    "from_replayed_proposal",
+                    (("impl", "LocalProposalState"),),
+                    (),
+                    "from_replayed_proposal",
+                    "exact replayed-proposal lock-owner authorization kernel",
+                ),
+                (
+                    "replayed_proposal_sign",
+                    (),
+                    (),
+                    "replayed_proposal_sign",
+                    "replayed proposal tag/round/subject projection",
+                ),
+                (
                     "schedule_local_proposal",
                     (),
                     ("#[allow(clippy::too_many_arguments)]",),
@@ -31152,6 +32915,13 @@ def _locked_body_reproposal_source_fidelity_errors(
                     (),
                     "submit_encoded_body",
                     "encoded-body executor admission bridge",
+                ),
+                (
+                    "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+                    (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                    ("#[test]",),
+                    "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
+                    "exact replayed-proposal lock-owner regression",
                 ),
             ),
         ),
@@ -31204,6 +32974,106 @@ def _locked_body_reproposal_source_fidelity_errors(
             path, item, source, description, errors, count=count
         )
 
+    require_sequence(
+        "on_resume_after_replay",
+        """
+} else if let Some(proposal) = self
+    .durable
+    .proposal_intent(round)
+    .filter(|proposal| Self::durable_proposal_is_active(&self.durable, proposal))
+{
+    self.signature_queue
+        .push_back(SignableMessage::Proposal(proposal.clone()));
+}
+""",
+        "replay must filter a durable proposal through current lock authorization before signing",
+    )
+    require_sequence(
+        "durable_proposal_is_active",
+        """
+durable.decision().is_none()
+    && proposal.round() == Round::new(durable.height(), durable.current_view())
+    && durable.timeout_intent(proposal.round()).is_none()
+    && durable.proposal_intent(proposal.round()) == Some(proposal)
+    && exact_justification
+    && Self::proposal_is_safe_for_durable_lock(durable, proposal)
+""",
+        "durable proposal replay authorization must invoke the shared safe-value kernel",
+    )
+    require_sequence(
+        "proposal_is_safe_for_durable_lock",
+        """
+let Some(locked) = durable.locked() else {
+    return true;
+};
+let subject = proposal.manifest().subject();
+if locked.subject() == subject {
+    return true;
+}
+let ProposalJustification::Timeout(certificate) = proposal.justification() else {
+    return false;
+};
+certificate.highest_prepare().is_some_and(|highest| {
+    highest.phase() == Phase::Prepare
+        && highest.subject() == subject
+        && highest.round().view() > locked.round().view()
+})
+""",
+        "the shared safe-value kernel must require the lock subject or a strictly higher matching PrepareQC",
+    )
+    require_sequence(
+        "safe_to_prepare",
+        """
+Self::proposal_is_safe_for_durable_lock(&self.durable, proposal)
+""",
+        "live proposal admission must invoke the same safe-value kernel as replay",
+    )
+    require_sequence(
+        "run_inner",
+        """
+let replayed_proposal = replayed_proposal_sign(&startup_effects);
+""",
+        "startup must retain the replayed proposal tag, round, and subject before consuming effects",
+    )
+    require_sequence(
+        "run_inner",
+        """
+let mut local_proposal_state =
+    LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive);
+""",
+        "startup must bind the retained replay identity to the exact current proposal owner",
+    )
+    require_sequence(
+        "from_replayed_proposal",
+        """
+replayed.tag == owner.tag
+    && replayed.round.height == replayed.tag.height()
+    && replayed.round.view == replayed.tag.view()
+    && owner.decided_subject.is_none()
+    && owner
+        .locked_body
+        .is_none_or(|(locked_round, locked_subject)| {
+            replayed.round.context_id == locked_round.context_id
+                && replayed.round.height == locked_round.height
+                && replayed.subject == locked_subject
+        })
+""",
+        "runner replay authorization must bind tag, round, context, height, and locked subject",
+    )
+    require_sequence(
+        "replayed_proposal_sign",
+        """
+AdapterEffect::Sign {
+    tag,
+    request: SignRequest::Proposal(proposal),
+} => Some(ReplayedProposalSign {
+    tag: *tag,
+    round: proposal.round,
+    subject: proposal.subject,
+}),
+""",
+        "replayed proposal extraction must preserve its exact tag, round, and subject",
+    )
     require_sequence(
         "wal_apply",
         """
@@ -31446,6 +33316,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
     stripped = strip_tla_comments(source)
     errors: list[str] = []
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    core_source = (
+        core_path.read_text(encoding="utf-8") if core_path.is_file() else None
+    )
 
     reviewed_local_theorems: tuple[str, ...] = ()
     observed_local_theorems = tuple(
@@ -32537,6 +34411,43 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "the open-action frame must exclude only that component"
             )
 
+    apply_authority = (
+        "IN /\\ DecisionCertifiedBodyRecoveryAuthority(node, qc)"
+    )
+    if core_source is not None:
+        apply_decision = _top_level_operator_body(
+            core_source, "ApplyDecision", preserve_string_contents=True
+        )
+        if apply_decision is None:
+            errors.append(
+                f"{core_path}: missing source-fidelity operator ApplyDecision"
+            )
+        else:
+            apply_decision_body, apply_decision_line = apply_decision
+            apply_decision_normalized = " ".join(apply_decision_body.split())
+            if apply_decision_normalized.count(apply_authority) != 1:
+                errors.append(
+                    f"{core_path}:{apply_decision_line}: ApplyDecision must "
+                    "require the exact current-context Commit Decision "
+                    "authority once"
+                )
+
+    apply_ready = _top_level_operator_body(
+        source, "ApplyDecisionReady", preserve_string_contents=True
+    )
+    if apply_ready is None:
+        errors.append(
+            f"{path}: missing source-fidelity operator ApplyDecisionReady"
+        )
+    else:
+        apply_ready_body, apply_ready_line = apply_ready
+        apply_ready_normalized = " ".join(apply_ready_body.split())
+        if apply_ready_normalized.count(apply_authority) != 1:
+            errors.append(
+                f"{path}:{apply_ready_line}: ApplyDecisionReady must require "
+                "the exact current-context Commit Decision authority once"
+            )
+
     apply_action = _top_level_operator_body(
         source, "ExecuteApply", preserve_string_contents=True
     )
@@ -32557,6 +34468,21 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{apply_line}: ExecuteApply must atomically retire only "
                 "the applying node's historical recovery target; "
                 f"found direct writes {apply_writes}"
+            )
+        overloaded_provenance = tuple(
+            forbidden
+            for forbidden in (
+                "command.evidence = qc",
+                "ApplyDecision(command.node, command.evidence)",
+            )
+            if forbidden in apply_normalized
+        )
+        if overloaded_provenance:
+            errors.append(
+                f"{path}:{apply_line}: ExecuteApply must resolve application "
+                "authority from the durable current Decision and may not "
+                "overload causal command evidence; found "
+                f"{overloaded_provenance}"
             )
 
     drain_action = _top_level_operator_body(
@@ -36308,7 +38234,7 @@ _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
         "c6e502433ef5249540446d75e0f88f665a7ffc456bf4014216f808fd123f072c"
     ),
     "PendingExactOutput::advance_after_attempt": (
-        "99937b997bdc98d6b2aad3c74ce13a66991b3b2a35651ac06e2c10319bbfb273"
+        "e678eb75bf1e124b8c3ac7b196bc9abee8d5429a6f064a1aaf64851291bc0e07"
     ),
 }
 
@@ -36329,7 +38255,7 @@ _REPLY_WRITER_DEADLINE_WORKER_TEST_SHA256 = {
 
 _REPLY_WRITER_DEADLINE_MERGE_TEST_SHA256 = {
     "sidecar_flush_admission_retains_timeout_attempt_identity": (
-        "343feac620df454cdde5751046c4c28e2f01913f61607701639ff940b261f126"
+        "1ecbc2c924039bdf616a5de23771dc100b9885baef097467894f97c5060c2b1c"
     ),
 }
 
@@ -36755,10 +38681,32 @@ connect_startup_delay_until,
             "exact accepting-connection timeout retirement",
         ),
     )
+    context_qualified_items = {
+        "NetworkReplyFlushAckTestFixture::for_reply",
+        "NetworkReplyFlushAckTestFixture::for_reply_at_attempt",
+    }
     for qualified_name, item_name, context, attributes, description in (
         item_contracts
     ):
-        item = _require_rust_item(network_path, network_source, item_name, errors)
+        if qualified_name in context_qualified_items:
+            matching = [
+                candidate
+                for candidate in rust_items(network_source, item_name)
+                if candidate.brace_context == context
+            ]
+            if len(matching) != 1:
+                errors.append(
+                    f"{network_path}: require exactly one real Rust/Verus "
+                    f"function item named {qualified_name}; found "
+                    f"{len(matching)}"
+                )
+                item = None
+            else:
+                item = matching[0]
+        else:
+            item = _require_rust_item(
+                network_path, network_source, item_name, errors
+            )
         network_items[qualified_name] = item
         _require_rust_item_context(
             network_path,
@@ -38853,26 +40801,37 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
         ),
         (
             "MergeSidecarLifecycleRootHighWaterV3",
-            ("new", "matches"),
+            ("bootstrap", "new", "is_bootstrap", "matches"),
         ),
         (
             "MergeSidecarLifecycleJournal",
             (
                 "open",
+                "state_path",
                 "state_path_for_generation",
+                "temp_path",
+                "root_high_water_path",
+                "root_high_water_temp_path",
+                "publish_bootstrap_marker",
+                "bootstrap_candidate",
+                "finalize_validated_open",
+                "sync_directory",
+                "artifact_exists",
                 "reject_artifact_if_present",
                 "reject_known_temps",
                 "remove_regular_artifact",
+                "validate_regular_artifact_if_present",
+                "validate_known_temps",
                 "discard_uncommitted_temps",
                 "discard_inactive_slot",
                 "validate_directory_entries",
                 "read_bounded_regular",
                 "decode_snapshot",
                 "decode_root_high_water",
-                "recover_initial_commit",
                 "load_pair_strict",
                 "load",
                 "write_new_synced",
+                "persist_atomic_replacement",
                 "live_generation",
                 "preflight_next_commit",
                 "persist_next",
@@ -38895,6 +40854,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 "persist_lifecycle_state",
                 "rehydrate_with_exact_geometry",
                 "rehydrate_with_exact_geometry_after_durable_handoff",
+                "rehydrate_after_lifecycle_restore",
                 "validate_retained_height_geometry",
                 "requeue_retained_outbound_after_height_rollover",
                 "allocate_request_sequence",
@@ -38908,6 +40868,8 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 "record_server_closure",
                 "server_generation_is_terminal",
                 "transition_server_service_generation",
+                "transition_server_service_generation_after_durable_handoff",
+                "transition_server_service_generation_after_exact_output_fence",
                 "prepare_server_service_generation_transition",
                 "commit_server_service_generation_transition",
                 "ensure_server_stream_slot",
@@ -38915,6 +40877,7 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 "advance_server_close_floor",
                 "admit_server_close",
                 "drain_closed_server_prefixes",
+                "confirm_closed_server_prefix_handoff",
                 "server_gate_attempt_count_after_close",
                 "server_gate_count_after_close",
                 "source_gate_count_after_close",
@@ -38934,11 +40897,62 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 item_name,
                 errors,
                 f"crash-safe sidecar lifecycle {qualified_name} production item",
-                expected_attributes=("#[must_use]",)
-                if qualified_name
-                == "CertifiedMergeSidecarGenerationHintV1::canonical_hint_id"
-                else (),
+                expected_attributes=(
+                    ("#[must_use]",)
+                    if qualified_name
+                    == "CertifiedMergeSidecarGenerationHintV1::canonical_hint_id"
+                    else ("#[cfg(test)]",)
+                    if qualified_name == "MergeSidecarLifecycleJournal::state_path"
+                    else ()
+                ),
             )
+
+    for helper_name, expected_sha256 in (
+        _PRODUCTION_MERGE_SIDECAR_ARTIFACT_HELPER_SHA256.items()
+    ):
+        helper_items = rust_items(merge_source, helper_name)
+        for item in helper_items:
+            if (
+                item.brace_context
+                or item.delimiter_context
+                or item.ancestor_inner_attributes
+            ):
+                errors.append(
+                    f"{merge_path}:{item.line}: lifecycle artifact helper "
+                    f"{helper_name} must remain a top-level production item"
+                )
+        observed_sha256 = tuple(
+            sorted(_rust_sealed_item_token_sha256(item) for item in helper_items)
+        )
+        if observed_sha256 != expected_sha256:
+            errors.append(
+                f"{merge_path}: lifecycle artifact helper {helper_name} must "
+                "retain every exact platform-gated implementation digest "
+                f"{expected_sha256!r}; found {observed_sha256!r}"
+            )
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        """
+#[cfg(unix)]
+type LifecycleArtifactIdentity = (u64, u64);
+#[cfg(windows)]
+type LifecycleArtifactIdentity = (Option<u32>, Option<u64>);
+#[cfg(not(any(unix, windows)))]
+type LifecycleArtifactIdentity = ();
+
+#[cfg(unix)]
+type LifecycleArtifactRevision = (u64, i64, i64, i64, i64, u64, u32, u32, u32);
+#[cfg(windows)]
+type LifecycleArtifactRevision = (u64, u64, u64, u32, Option<u32>);
+#[cfg(not(any(unix, windows)))]
+type LifecycleArtifactRevision = ();
+""",
+        "lifecycle path/handle comparisons must retain exact platform identity "
+        "and revision coordinates, with no unsupported-platform approximation",
+        errors,
+        count=1,
+    )
 
     merge_boundary_test_items: dict[str, RustItem | None] = {}
     merge_test_module_context = (
@@ -39194,7 +41208,10 @@ let reclaim = (self.request_streams.len() >= MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)
     .then(|| {
         self.request_streams
             .iter()
-            .find(|(_, stream)| stream.open_sequences.is_empty())
+            .find(|(_, stream)| {
+                stream.open_sequences.is_empty()
+                    && stream.closed_through == stream.acknowledged_through
+            })
             .map(|(peer, _)| peer.clone())
     })
     .flatten();
@@ -39256,7 +41273,7 @@ self.requester == other.requester
         merge_path,
         merge_lifecycle_items.get("MergeSidecarTransport::acknowledge_close"),
         """
-let Some(stream) = self.request_streams.get_mut(sender) else {
+let Some(stream) = self.request_streams.get(sender) else {
     return Ok(false);
 };
 if stream.service_generation != ack.service_generation
@@ -39264,15 +41281,24 @@ if stream.service_generation != ack.service_generation
 {
     return Err(MergeSidecarError::UnsolicitedResponse);
 }
-let advanced = stream.acknowledge_close(ack.closed_through);
-if advanced {
-    let retire = stream.open_sequences.is_empty()
-        && stream.acknowledged_through == stream.next_sequence;
-    if retire {
-        self.request_streams.remove(sender);
-    }
-    self.persist_lifecycle_state()?;
+if ack.closed_through <= stream.acknowledged_through
+    || ack.closed_through > stream.closed_through
+{
+    return Ok(false);
 }
+self.preflight_lifecycle_mutation()?;
+let stream = self
+    .request_streams
+    .get_mut(sender)
+    .expect("preflight cannot remove the checked request stream");
+let advanced = stream.acknowledge_close(ack.closed_through);
+debug_assert!(advanced, "the immutable preflight established ACK progress");
+let retire =
+    stream.open_sequences.is_empty() && stream.acknowledged_through == stream.next_sequence;
+if retire {
+    self.request_streams.remove(sender);
+}
+self.persist_lifecycle_state()?;
 Ok(advanced)
 """,
         "a canonical duplicate CloseAck may be a bounded no-op, while exact-generation progress must retire only a terminal stream and persist before completion",
@@ -39284,12 +41310,27 @@ Ok(advanced)
             "MergeSidecarTransport::drain_closed_server_prefixes"
         ),
         """
-std::mem::take(&mut self.pending_server_closures)
+let prefixes = std::mem::take(&mut self.pending_server_closures)
     .into_iter()
     .map(|(_, prefix)| prefix)
-    .collect()
+    .collect::<Vec<_>>();
+self.server_closure_handoff_pending |= !prefixes.is_empty();
+prefixes
 """,
         "the merge transport must move every coalesced authenticated close prefix exactly once into lane ownership",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::confirm_closed_server_prefix_handoff"
+        ),
+        """
+if self.pending_server_closures.is_empty() {
+    self.server_closure_handoff_pending = false;
+}
+""",
+        "close-prefix handoff may release the rollover fence only after no newly authenticated prefix remains queued",
         errors,
     )
 
@@ -39322,7 +41363,7 @@ std::mem::take(&mut self.pending_server_closures)
                 "can_enqueue_owned_reply_transfer",
                 "enqueue",
                 "enqueue_owned_reply_transfer",
-                "complete_sidecar_targets_with_retained_flush_ownership",
+                "project_sidecar_receipt_completions",
                 "retains_retryable_sidecar_responder_control_for",
                 "enqueue_validated",
                 "handoff_applied_height_to_durable_reconstruction",
@@ -39401,7 +41442,12 @@ std::mem::take(&mut self.pending_server_closures)
         "accept_certified_merge_sidecar_request",
         "accept_certified_merge_sidecar_close",
         "apply_closed_server_prefixes",
+        "coalesce_closed_sidecar_prefix",
         "drain_closed_sidecar_prefixes",
+        "requeue_closed_sidecar_prefixes",
+        "confirm_closed_sidecar_prefix_handoff",
+        "stranded_retryable_sidecar_control_index",
+        "replace_stranded_retryable_sidecar_control",
         "service_next_certified_merge_sidecar_materialization",
         "persist_anchored_sessions",
         "hydrate_canonical_lane_artifacts",
@@ -39448,6 +41494,22 @@ std::mem::take(&mut self.pending_server_closures)
         "lane retryable sidecar responder-control classifier",
         errors,
     )
+    retryable_sidecar_server_control_has_writable_route_item = _require_rust_item(
+        lane_path,
+        lane_source,
+        "retryable_sidecar_server_control_has_writable_route",
+        errors,
+    )
+    _require_rust_item_context(
+        lane_path,
+        retryable_sidecar_server_control_has_writable_route_item,
+        (),
+        "lane retryable sidecar responder-control writable-route classifier",
+        errors,
+    )
+    lane_ack_items["retryable_sidecar_server_control_has_writable_route"] = (
+        retryable_sidecar_server_control_has_writable_route_item
+    )
 
     runner_ack_items: dict[str, RustItem | None] = {}
     for item_name in (
@@ -39457,6 +41519,7 @@ std::mem::take(&mut self.pending_server_closures)
         "apply_bounded_sidecar_admissions",
         "apply_certified_merge_sidecar_chunk_admissions",
         "apply_certified_merge_sidecar_closed_prefixes",
+        "apply_certified_merge_sidecar_closed_prefixes_with",
         "retry_exact_output_and_apply_sidecar_admissions",
         "dispatch_lane_work_effects",
         "retain_active_owned_reply_routes",
@@ -39894,7 +41957,7 @@ struct MergeSidecarLifecycleSnapshotV3 {
 struct MergeSidecarLifecycleRootHighWaterV3 {
     version: u8,
     root_generation: u64,
-    snapshot_hash: HashOf<MergeSidecarLifecycleSnapshotV3>,
+    snapshot_hash: Option<HashOf<MergeSidecarLifecycleSnapshotV3>>,
 }
 """,
         "the root-level V3 high-water must bind the exact snapshot hash and monotonic generation",
@@ -39907,9 +41970,37 @@ struct MergeSidecarLifecycleRootHighWaterV3 {
 self.version == LIFECYCLE_JOURNAL_VERSION_V3
     && self.root_generation != 0
     && self.root_generation == snapshot.payload.root_generation
-    && self.snapshot_hash == HashOf::new(snapshot)
+    && self.snapshot_hash.as_ref() == Some(&HashOf::new(snapshot))
 """,
         "the root-level V3 high-water must authenticate a nonzero generation and exact snapshot bytes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarLifecycleRootHighWaterV3::bootstrap"
+        ),
+        """
+Self {
+    version: LIFECYCLE_JOURNAL_VERSION_V3,
+    root_generation: 0,
+    snapshot_hash: None,
+}
+""",
+        "the bootstrap root must use exactly generation zero with no selected snapshot hash",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarLifecycleRootHighWaterV3::is_bootstrap"
+        ),
+        """
+self.version == LIFECYCLE_JOURNAL_VERSION_V3
+    && self.root_generation == 0
+    && self.snapshot_hash.is_none()
+""",
+        "bootstrap recognition must require the exact generation-zero sentinel shape",
         errors,
     )
     advance_piggybacked_close_floor = _require_qualified_rust_item(
@@ -40026,6 +42117,20 @@ const LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES: usize = 4 * 1024;
         merge_path,
         merge_source,
         """
+enum ServerServiceGenerationRetirement {
+    AuthenticatedTerminal,
+    ExactOutputSuperseded,
+}
+
+struct RestoredLifecycleResponderFence;
+""",
+        "responder generation retirement must distinguish authenticated terminal closure from exact-output supersession, with a private restart fence",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        merge_path,
+        merge_source,
+        """
 struct MergeSidecarLifecycleJournal {
     store_root: PathBuf,
     directory: PathBuf,
@@ -40065,6 +42170,24 @@ let directory = store_root.join(LIFECYCLE_JOURNAL_DIR);
         merge_path,
         merge_lifecycle_items.get("MergeSidecarLifecycleJournal::open"),
         """
+let directory_exists = match fs::symlink_metadata(&directory) {
+    Ok(metadata)
+        if metadata.file_type().is_dir()
+            && !metadata.file_type().is_symlink()
+            && !lifecycle_artifact_is_reparse_point(&metadata) =>
+    {
+        drop(open_lifecycle_directory(&directory)?);
+        true
+    }
+""",
+        "lifecycle startup must reject indirect directories and validate the "
+        "actual no-follow directory handle even when recovery performs no fsync",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarLifecycleJournal::open"),
+        """
 let mut journal = Self {
     store_root: store_root.to_path_buf(),
     directory,
@@ -40082,48 +42205,105 @@ let mut journal = Self {
 let marker_exists = Self::artifact_exists(&journal.root_high_water_path())?;
 match (directory_exists, marker_exists) {
     (false, false) => {
+        journal.publish_bootstrap_marker()?;
         fs::create_dir(&journal.directory)
             .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
         Self::sync_directory(store_root)?;
         Ok((journal, None))
     }
-    (false, true) => Err(MergeSidecarError::LifecycleJournal(
-        "lifecycle root high-water survived without its V3 directory".to_owned(),
-    )),
-    (true, false) => {
-        let snapshot = journal.recover_initial_commit()?;
-        Ok((journal, snapshot))
+    (false, true) => {
+        let marker = journal.decode_root_high_water(&journal.root_high_water_path())?;
+        if !marker.is_bootstrap() {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "committed lifecycle root high-water survived without its V3 directory"
+                    .to_owned(),
+            ));
+        }
+        fs::create_dir(&journal.directory)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        Self::sync_directory(store_root)?;
+        journal.committed = Some(marker);
+        Ok((journal, None))
     }
+    (true, false) => Err(MergeSidecarError::LifecycleJournal(
+        "V3 lifecycle directory survived without its root high-water".to_owned(),
+    )),
     (true, true) => {
+        let marker = journal.decode_root_high_water(&journal.root_high_water_path())?;
+        if marker.is_bootstrap() {
+            journal.committed = Some(marker);
+            let candidate = journal.bootstrap_candidate()?;
+            return Ok((journal, candidate));
+        }
         let (snapshot, marker) = journal.load_pair_strict()?;
         journal.committed = Some(marker);
-        journal.discard_uncommitted_temps()?;
-        journal.discard_inactive_slot()?;
         Ok((journal, Some(snapshot)))
     }
 }
 """,
-        "lifecycle startup must recover only the unique initial slot without a marker, or select exactly the marker-bound slot before discarding uncommitted artifacts",
+        "lifecycle startup must durably publish or recover the exact bootstrap sentinel, select only its generation-one candidate, and otherwise load the committed root-selected pair without cleanup",
         errors,
     )
     _require_rust_token_sequence(
         merge_path,
         merge_lifecycle_items.get("MergeSidecarLifecycleJournal::read_bounded_regular"),
         """
-if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+let path_before = fs::symlink_metadata(path)
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+if path_before.file_type().is_symlink()
+    || lifecycle_artifact_is_reparse_point(&path_before)
+    || !path_before.file_type().is_file()
+    || !lifecycle_artifact_is_single_link(&path_before)
+{
     return Err(MergeSidecarError::LifecycleJournal(format!(
         "unsafe lifecycle {artifact} artifact {}",
         path.display()
     )));
 }
-let len = usize::try_from(metadata.len()).map_err(|_| {
+let len = usize::try_from(path_before.len()).map_err(|_| {
     MergeSidecarError::LifecycleJournal(format!(
         "lifecycle {artifact} length is not representable"
     ))
 })?;
 if len == 0 || len > max_bytes {
 """,
-        "lifecycle recovery must reject symlinks, non-files, empty artifacts, and artifacts beyond their independent bounds",
+        "lifecycle recovery must reject symlinks, reparse points, non-files, "
+        "hard links, empty artifacts, and artifacts beyond their independent bounds",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get("MergeSidecarLifecycleJournal::read_bounded_regular"),
+        """
+let mut file = open_lifecycle_regular(path, artifact)?;
+let (path_opened, opened_before) = verify_open_lifecycle_regular(path, &file, artifact)?;
+if !lifecycle_artifact_metadata_unchanged(&path_before, &path_opened)
+    || !lifecycle_artifact_metadata_unchanged(&path_before, &opened_before)
+{
+    return Err(MergeSidecarError::LifecycleJournal(format!(
+        "lifecycle {artifact} changed while opening"
+    )));
+}
+
+let read_limit = u64::try_from(max_bytes)
+    .unwrap_or(u64::MAX)
+    .saturating_add(1);
+let mut bytes = Vec::with_capacity(len);
+Read::by_ref(&mut file)
+    .take(read_limit)
+    .read_to_end(&mut bytes)
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+let (path_after, opened_after) = verify_open_lifecycle_regular(path, &file, artifact)?;
+let bytes_len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+if bytes.is_empty()
+    || bytes.len() > max_bytes
+    || opened_after.len() != bytes_len
+    || !lifecycle_artifact_metadata_unchanged(&opened_before, &opened_after)
+    || !lifecycle_artifact_metadata_unchanged(&opened_before, &path_after)
+{
+""",
+        "lifecycle recovery must decode only a bounded no-follow handle whose "
+        "path identity and full revision remain stable before and after reading",
         errors,
     )
     _require_rust_token_sequence(
@@ -40141,44 +42321,94 @@ self.directory.join(LIFECYCLE_JOURNAL_SLOT_FILES[slot])
     _require_rust_token_sequence(
         merge_path,
         merge_lifecycle_items.get(
-            "MergeSidecarLifecycleJournal::recover_initial_commit"
+            "MergeSidecarLifecycleJournal::bootstrap_candidate"
         ),
         """
+self.validate_directory_entries()?;
 let even_slot = self.state_path_for_generation(0);
 if Self::artifact_exists(&even_slot)? {
     return Err(MergeSidecarError::LifecycleJournal(
-        "V3 lifecycle journal has an uncommitted non-initial state slot".to_owned(),
+        "bootstrap lifecycle root retained a non-initial state slot".to_owned(),
     ));
 }
 let initial_path = self.state_path_for_generation(1);
 if !Self::artifact_exists(&initial_path)? {
-    self.discard_uncommitted_temps()?;
     return Ok(None);
 }
 let snapshot = self.decode_snapshot(&initial_path)?;
 if snapshot.payload.root_generation != 1 {
 """,
-        "marker-free startup must accept only the unique generation-one slot and reject every non-initial slot",
+        "bootstrap recovery must accept only the unique generation-one slot and reject every non-initial slot",
         errors,
     )
     _require_rust_token_sequence(
         merge_path,
         merge_lifecycle_items.get(
-            "MergeSidecarLifecycleJournal::recover_initial_commit"
+            "MergeSidecarLifecycleJournal::finalize_validated_open"
         ),
         """
+let live_snapshot = self.decode_snapshot(&self.state_path_for_generation(1))?;
+if snapshot.payload.root_generation != 1 || &live_snapshot != snapshot {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "bootstrap lifecycle candidate changed during validation".to_owned(),
+    ));
+}
+self.validate_known_temps()?;
+Self::sync_directory(&self.directory)?;
+Self::remove_regular_artifact(
+    &self.root_high_water_temp_path(),
+    &self.store_root,
+    "root high-water temp",
+)?;
+let marker = MergeSidecarLifecycleRootHighWaterV3::new(snapshot);
+let marker_bytes = norito::to_bytes(&marker)
+    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+if marker_bytes.is_empty()
+    || marker_bytes.len() > LIFECYCLE_ROOT_HIGH_WATER_MAX_BYTES
+{
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle root high-water exceeds its geometry".to_owned(),
+    ));
+}
 Self::write_new_synced(&self.root_high_water_temp_path(), &marker_bytes)?;
-fs::rename(
-    self.root_high_water_temp_path(),
-    self.root_high_water_path(),
-)
-.map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+Self::persist_atomic_replacement(
+    &self.root_high_water_temp_path(),
+    &self.root_high_water_path(),
+)?;
 Self::sync_directory(&self.store_root)?;
-Self::remove_regular_artifact(&self.temp_path(), &self.directory, "state temp")?;
 self.committed = Some(marker);
-Ok(Some(snapshot))
+Self::remove_regular_artifact(
+    &self.temp_path(),
+    &self.directory,
+    "state temp",
+)?;
 """,
-        "the unique initial state becomes committed only after its reconstructed root marker is fsynced",
+        "a validated bootstrap candidate must have its state-directory entry cemented before its exact root marker is durably committed and only then may state debris be removed",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarLifecycleJournal::finalize_validated_open"
+        ),
+        """
+let (live_snapshot, live_marker) = self.load_pair_strict()?;
+if live_marker != committed || &live_snapshot != validated {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "committed lifecycle pair changed during validation".to_owned(),
+    ));
+}
+self.validate_known_temps()?;
+Self::validate_regular_artifact_if_present(
+    &self.state_path_for_generation(committed.root_generation ^ 1),
+    "uncommitted state slot",
+)?;
+Self::sync_directory(&self.directory)?;
+Self::sync_directory(&self.store_root)?;
+self.discard_uncommitted_temps()?;
+self.discard_inactive_slot()
+""",
+        "committed restart recovery must revalidate the selected pair and every cleanup target, resynchronize state then root, and only afterward remove unselected artifacts",
         errors,
     )
     _require_rust_token_sequence(
@@ -40254,29 +42484,39 @@ let marker = norito::decode_from_bytes::<MergeSidecarLifecycleRootHighWaterV3>(&
     })?;
 let canonical = norito::to_bytes(&marker)
     .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+let bootstrap_shape = marker.root_generation == 0 && marker.snapshot_hash.is_none();
+let committed_shape = marker.root_generation != 0 && marker.snapshot_hash.is_some();
 if canonical != bytes
     || marker.version != LIFECYCLE_JOURNAL_VERSION_V3
-    || marker.root_generation == 0
+    || !(bootstrap_shape || committed_shape)
 {
 """,
-        "root high-water recovery must accept only canonical V3 markers with a nonzero generation",
+        "root high-water recovery must accept only canonical V3 markers with either the exact bootstrap shape or a nonzero hash-selected committed shape",
         errors,
     )
     _require_rust_token_sequence(
         merge_path,
         merge_lifecycle_items.get("MergeSidecarLifecycleJournal::load_pair_strict"),
         """
-self.reject_known_temps()?;
 self.validate_directory_entries()?;
-if !Self::artifact_exists(&self.state_path())?
-    || !Self::artifact_exists(&self.root_high_water_path())?
-{
+if !Self::artifact_exists(&self.root_high_water_path())? {
     return Err(MergeSidecarError::LifecycleJournal(
         "lifecycle state and root high-water are not both present".to_owned(),
     ));
 }
-let snapshot = self.decode_snapshot(&self.state_path())?;
 let marker = self.decode_root_high_water(&self.root_high_water_path())?;
+if marker.is_bootstrap() {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "bootstrap lifecycle root does not select a committed state".to_owned(),
+    ));
+}
+let state_path = self.state_path_for_generation(marker.root_generation);
+if !Self::artifact_exists(&state_path)? {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle state and root high-water are not both present".to_owned(),
+    ));
+}
+let snapshot = self.decode_snapshot(&state_path)?;
 if !marker.matches(&snapshot) {
     return Err(MergeSidecarError::LifecycleJournal(
         "lifecycle state and root high-water generation/hash mismatch".to_owned(),
@@ -40284,26 +42524,46 @@ if !marker.matches(&snapshot) {
 }
 Ok((snapshot, marker))
 """,
-        "strict lifecycle recovery must reject temps, unknown artifacts, missing halves, and every state/root generation or hash mismatch",
+        "strict lifecycle recovery must reject unknown artifacts, bootstrap roots, missing root-selected state, and every state/root generation or hash mismatch",
         errors,
     )
     _require_rust_token_sequence(
         merge_path,
         merge_lifecycle_items.get("MergeSidecarLifecycleJournal::load"),
         """
+self.reject_known_temps()?;
+if !Self::artifact_exists(&self.root_high_water_path())? {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle state and root high-water are not both present".to_owned(),
+    ));
+}
+let marker = self.decode_root_high_water(&self.root_high_water_path())?;
+if self.committed.as_ref() != Some(&marker) {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "lifecycle root high-water changed outside the live journal".to_owned(),
+    ));
+}
+if marker.is_bootstrap() {
+    self.validate_directory_entries()?;
+    for name in LIFECYCLE_JOURNAL_SLOT_FILES {
+        if Self::artifact_exists(&self.directory.join(name))? {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "uncommitted lifecycle state appeared beside the live bootstrap root"
+                    .to_owned(),
+            ));
+        }
+    }
+    return Ok(None);
+}
 let (snapshot, marker) = self.load_pair_strict()?;
-if self
-    .committed
-    .as_ref()
-    .is_some_and(|committed| committed != &marker)
-{
+if self.committed.as_ref() != Some(&marker) {
     return Err(MergeSidecarError::LifecycleJournal(
         "lifecycle root high-water changed outside the live journal".to_owned(),
     ));
 }
 Ok(Some(snapshot))
 """,
-        "a live lifecycle journal must reject disk rollback or replacement against its committed root high-water",
+        "a live lifecycle journal must reject root rollback/replacement, preserve the exact empty bootstrap shape, and otherwise return only its committed root-selected pair",
         errors,
     )
     _require_rust_token_sequence(
@@ -40346,7 +42606,7 @@ snapshot.payload_hash = HashOf::new(&snapshot.payload);
 if self
     .committed
     .as_ref()
-    .is_some_and(|marker| marker.snapshot_hash == HashOf::new(&snapshot))
+    .is_some_and(|marker| marker.matches(&snapshot))
 {
     return Ok(snapshot);
 }
@@ -40363,8 +42623,15 @@ let next_generation = current_generation
         """
 self.reject_known_temps()?;
 Self::write_new_synced(&self.temp_path(), &snapshot_bytes)?;
-fs::rename(self.temp_path(), self.state_path())
-    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+let next_state_path = self.state_path_for_generation(next_generation);
+Self::persist_atomic_replacement(&self.temp_path(), &next_state_path)?;
+#[cfg(test)]
+if std::mem::take(&mut self.fail_after_state_replace_before_directory_sync) {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "injected failure after lifecycle state replacement but before directory synchronization"
+            .to_owned(),
+    ));
+}
 Self::sync_directory(&self.directory)?;
 """,
         "V3 publication must durably publish the bounded state artifact before its root high-water",
@@ -40375,16 +42642,27 @@ Self::sync_directory(&self.directory)?;
         merge_lifecycle_items.get("MergeSidecarLifecycleJournal::persist_next"),
         """
 Self::write_new_synced(&self.root_high_water_temp_path(), &marker_bytes)?;
-fs::rename(
-    self.root_high_water_temp_path(),
-    self.root_high_water_path(),
-)
-.map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+Self::persist_atomic_replacement(
+    &self.root_high_water_temp_path(),
+    &self.root_high_water_path(),
+)?;
+#[cfg(test)]
+if std::mem::take(&mut self.fail_after_root_replace_before_store_sync) {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "injected failure after lifecycle root replacement but before store synchronization"
+            .to_owned(),
+    ));
+}
 Self::sync_directory(&self.store_root)?;
+#[cfg(test)]
+if std::mem::take(&mut self.fail_after_root_publish) {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "injected failure after lifecycle root publication".to_owned(),
+    ));
+}
 self.committed = Some(marker);
-Ok(snapshot)
 """,
-        "V3 publication must durably publish the root marker before installing its process-local committed high-water",
+        "V3 publication must durably publish the root marker before installing its process-local committed high-water, with an explicit pre-fsync crash boundary",
         errors,
     )
     _require_rust_token_sequence(
@@ -40670,9 +42948,10 @@ self.server_request_gates = server_request_gates;
 self.outbound.clear();
 self.outbound_order.clear();
 self.pending_server_closures.clear();
+self.server_closure_handoff_pending = false;
 Ok(())
 """,
-        "recovery must install the exact generation and both durable stream maps before discarding process-local output and closure queues",
+        "recovery must install the exact generation and both durable stream maps before discarding process-local output, closure queues, and handoff state",
         errors,
     )
     _require_rust_token_sequence(
@@ -40688,27 +42967,38 @@ let mut transport = Self::with_limits_and_server_stream_capacity(
     server_stream_capacity,
     server_roster_digest,
 )?;
-let (journal, snapshot) = MergeSidecarLifecycleJournal::open(
+let (mut journal, snapshot) = MergeSidecarLifecycleJournal::open(
     store_root,
     transport.lifecycle_protocol_max_snapshot_bytes()?,
 )?;
-if let Some(snapshot) = snapshot {
+let restored = snapshot.is_some();
+if let Some(snapshot) = snapshot.as_ref() {
     transport.configure_prior_lifecycle_server_geometry(&snapshot.payload.geometry)?;
-    transport.restore_lifecycle_snapshot(snapshot, Instant::now())?;
+    transport.restore_lifecycle_snapshot(snapshot.clone(), Instant::now())?;
 }
+journal.finalize_validated_open(snapshot.as_ref())?;
 transport.lifecycle_journal = Some(journal);
-transport = transport.rehydrate_with_exact_geometry(
-    reply_source_capacity,
-    limits,
-    server_stream_capacity,
-    target_roster_digest,
-    Instant::now(),
-)?;
+transport = if restored {
+    transport.rehydrate_after_lifecycle_restore(
+        reply_source_capacity,
+        limits,
+        server_stream_capacity,
+        target_roster_digest,
+        RestoredLifecycleResponderFence,
+    )?
+} else {
+    transport.rehydrate_with_exact_geometry(
+        reply_source_capacity,
+        limits,
+        server_stream_capacity,
+        target_roster_digest,
+        Instant::now(),
+    )?
+};
 transport.persist_lifecycle_state()?;
 Ok(transport)
 """,
-        "live sidecar construction must directly restore canonical V2 state under its "
-        "recorded roster geometry, attach the journal, and republish before service",
+        "live sidecar construction must validate canonical V3 state under its recorded geometry, finalize crash cleanup before attaching the journal, and use typed restart authority before republishing",
         errors,
     )
     _require_rust_token_sequence(
@@ -40763,16 +43053,51 @@ Ok(self)
             "MergeSidecarTransport::rehydrate_with_exact_geometry_after_durable_handoff"
         ),
         """
+self.validate_retained_height_geometry(reply_source_capacity, limits)?;
+if self.server_roster_digest != server_roster_digest {
+    self.transition_server_service_generation_after_durable_handoff(
+        server_stream_capacity,
+        server_roster_digest,
+        authority,
+    )?;
+    return Ok(self);
+}
 drop(authority);
-self.rehydrate_with_exact_geometry(
-    reply_source_capacity,
-    limits,
-    server_stream_capacity,
-    server_roster_digest,
-    now,
-)
+if self.server_stream_capacity != server_stream_capacity {
+    return Err(MergeSidecarError::Capacity(
+        "merge-sidecar retained-height roster capacity drift",
+    ));
+}
+self.server_closure_handoff_pending = false;
+self.requeue_retained_outbound_after_height_rollover();
+Ok(self)
 """,
-        "durable sidecar rehydration must consume the exact rollover authority and delegate to the ordinary terminal-checked geometry transition",
+        "durable sidecar rehydration must consume the exact rollover authority, permit only its changed-roster fence to supersede active responder state, and clear only already-sealed handoff state for an equal roster",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::rehydrate_after_lifecycle_restore"
+        ),
+        """
+self.validate_retained_height_geometry(reply_source_capacity, limits)?;
+if self.server_roster_digest != server_roster_digest {
+    self.transition_server_service_generation_after_exact_output_fence(
+        server_stream_capacity,
+        server_roster_digest,
+    )?;
+    return Ok(self);
+}
+if self.server_stream_capacity != server_stream_capacity {
+    return Err(MergeSidecarError::Capacity(
+        "merge-sidecar retained-height roster capacity drift",
+    ));
+}
+self.requeue_retained_outbound_after_height_rollover();
+Ok(self)
+""",
+        "validated restart rehydration must use its private restoration fence only for a changed-roster durable supersession and otherwise preserve equal-roster state",
         errors,
     )
     _require_rust_token_sequence(
@@ -40904,8 +43229,9 @@ self.server_streams
     && self.outbound.is_empty()
     && self.outbound_order.is_empty()
     && self.pending_server_closures.is_empty()
+    && !self.server_closure_handoff_pending
 """,
-        "responder generation rollover must require every stream terminal and every gate, transfer, flush-order, and pending-closure owner empty",
+        "ordinary responder generation rollover must require every stream terminal and every gate, transfer, flush-order, pending-closure, and drained-prefix handoff owner empty",
         errors,
     )
     _require_rust_token_sequence(
@@ -40923,9 +43249,51 @@ if !self.server_generation_is_terminal() {
         "server semantic requester geometry",
     ));
 }
-self.commit_server_service_generation_transition(plan)
+self.commit_server_service_generation_transition(
+    plan,
+    ServerServiceGenerationRetirement::AuthenticatedTerminal,
+)
 """,
         "ordinary responder generation transition must prepare without mutation, reject nonterminal state, and only then commit the prepared fence",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::transition_server_service_generation_after_durable_handoff"
+        ),
+        """
+drop(authority);
+self.transition_server_service_generation_after_exact_output_fence(
+    server_stream_capacity,
+    server_roster_digest,
+)
+""",
+        "durable handoff rollover must consume its move-only authority before delegating to the exact-output-superseded transition",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::transition_server_service_generation_after_exact_output_fence"
+        ),
+        """
+if self.lifecycle_journal.is_none() {
+    return Err(MergeSidecarError::LifecycleJournal(
+        "authority-gated responder rollover requires a durable lifecycle journal"
+            .to_owned(),
+    ));
+}
+let plan = self.prepare_server_service_generation_transition(
+    server_stream_capacity,
+    server_roster_digest,
+)?;
+self.commit_server_service_generation_transition(
+    plan,
+    ServerServiceGenerationRetirement::ExactOutputSuperseded,
+)
+""",
+        "authority-gated rollover must require the durable journal and commit only the exact-output-superseded retirement mode",
         errors,
     )
     _require_rust_token_sequence(
@@ -41004,9 +43372,45 @@ if self.lifecycle_journal.is_some() {
     self.persist_lifecycle_projection(snapshot)?;
 }
 
-let retired = self
+match retirement {
 """,
-        "responder generation rollover must publish the incremented generation and empty responder tables in the root-anchored V3 snapshot before mutating memory",
+        "responder generation rollover must publish the incremented generation and empty responder tables in the root-anchored V3 snapshot before choosing the authorized in-memory retirement",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::commit_server_service_generation_transition"
+        ),
+        """
+match retirement {
+    ServerServiceGenerationRetirement::AuthenticatedTerminal => {
+        let retired = self
+            .server_streams
+            .iter()
+            .map(|(requester, stream)| (requester.clone(), *stream))
+            .collect::<Vec<_>>();
+        for (requester, stream) in retired {
+            debug_assert_eq!(
+                stream.closed_through, stream.highest_sequence,
+                "ordinary responder rollover requires authenticated terminality"
+            );
+            self.record_server_closure(
+                &requester,
+                self.server_service_generation,
+                stream.stream_epoch,
+                stream.closed_through,
+            );
+        }
+    }
+    ServerServiceGenerationRetirement::ExactOutputSuperseded => {
+        self.pending_server_closures.clear();
+        self.server_closure_handoff_pending = false;
+    }
+}
+self.server_service_generation = plan.next_generation;
+""",
+        "authenticated terminal retirement may emit exact close prefixes, while exact-output supersession must forge none before installing the successor generation",
         errors,
     )
     _require_rust_token_sequence(
@@ -41198,6 +43602,7 @@ server_service_generation: CertifiedMergeSidecarServiceGenerationV1::INITIAL,
 server_streams: BTreeMap::new(),
 materialization_requester_cursor: None,
 pending_server_closures: BTreeMap::new(),
+server_closure_handoff_pending: false,
 lifecycle_journal: None,
 #[cfg(test)]
 obstruct_next_terminal_retirement_persist: false,
@@ -41287,6 +43692,11 @@ if !assembly.current.as_ref().is_some_and(|attempt| {
 }) {
     return Ok(());
 }
+self.preflight_lifecycle_mutation()?;
+let assembly = self
+    .inbound
+    .get_mut(&key)
+    .expect("preflight cannot remove the checked inbound assembly");
 let attempt = assembly
     .current
     .take()
@@ -41315,7 +43725,7 @@ pub(crate) fn release_unsent_request(
     request: &CertifiedMergeSidecarRequestV1,
 ) -> Result<(), MergeSidecarError> {
     let key = (request.entry_hash, request.reference_digest);
-    let Some(assembly) = self.inbound.get_mut(&key) else {
+    let Some(assembly) = self.inbound.get(&key) else {
         return Ok(());
     };
     if !assembly.current.as_ref().is_some_and(|attempt| {
@@ -41327,6 +43737,11 @@ pub(crate) fn release_unsent_request(
     }) {
         return Ok(());
     }
+    self.preflight_lifecycle_mutation()?;
+    let assembly = self
+        .inbound
+        .get_mut(&key)
+        .expect("preflight cannot remove the checked inbound assembly");
     let attempt = assembly
         .current
         .take()
@@ -41344,7 +43759,9 @@ pub(crate) fn release_unsent_request(
     self.persist_lifecycle_state()
 }
 """,
-        "an unsent sidecar request must restore the exact holder cursor, close its durable sequence, and persist before retry",
+        "an unsent sidecar request must preflight generation exhaustion before "
+        "mutation, restore the exact holder cursor, close its durable sequence, "
+        "and persist before retry",
         errors,
     )
     for qualified_name, expected_source, description in (
@@ -42405,6 +44822,26 @@ struct PendingExactTarget {
         "each exact source attempt must isolate payload cursor, actor ticket, writer-flush ownership, and parked state",
         errors,
     )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        """
+struct ResponderControlReplacementPlan {
+    retained_index: usize,
+    replacement_fifo_id: ExactFanoutFifoId,
+    next_fanout_fifo_id: ExactFanoutFifoId,
+    next_fanout_index: usize,
+    source_fifo_owners: BTreeMap<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>,
+    reservation_owner_counts: BTreeMap<ExactTargetReservation, usize>,
+    ownership_units: usize,
+    shared_ownership_units: usize,
+}
+""",
+        "stranded responder-control replacement must precompute every scheduler, "
+        "FIFO, source, reservation, and ownership field before mutation",
+        errors,
+        count=1,
+    )
     _require_exact_rust_tokens(
         worker_path,
         worker_ack_items.get(
@@ -43055,26 +45492,27 @@ match self.validate_fanout_bounds(fanout) {
     _require_rust_token_sequence(
         worker_path,
         worker_ack_items.get(
-            "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership"
+            "PendingExactOutput::project_sidecar_receipt_completions"
         ),
         """
 let [message] = fanout.messages.as_slice() else {
-    return Ok(false);
+    return Ok(());
 };
 let NetworkMessage::CertifiedMergeSidecar(message) = message else {
-    return Ok(false);
+    return Ok(());
 };
 let CertifiedMergeSidecarMessage::Chunk(_) = message.as_ref() else {
-    return Ok(false);
+    return Ok(());
 };
 """,
-        "retained sidecar flush suppression must apply only to one exact immutable response chunk",
+        "sidecar receipt completion projection must apply only to one exact "
+        "immutable response chunk",
         errors,
     )
     _require_rust_token_sequence(
         worker_path,
         worker_ack_items.get(
-            "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership"
+            "PendingExactOutput::project_sidecar_receipt_completions"
         ),
         """
 let source_terminal = self.admitted_sidecar_chunks.iter().any(|admission| {
@@ -43092,7 +45530,7 @@ if source_terminal {
     _require_rust_token_sequence(
         worker_path,
         worker_ack_items.get(
-            "PendingExactOutput::complete_sidecar_targets_with_retained_flush_ownership"
+            "PendingExactOutput::project_sidecar_receipt_completions"
         ),
         """
 for route in &completed_routes {
@@ -43114,8 +45552,13 @@ for route in &completed_routes {
 if !self.validate_owned_reply_transfer(&mut fanout)? {
     return Ok(true);
 }
-let _source_retained =
-    self.complete_sidecar_targets_with_retained_flush_ownership(&mut fanout)?;
+self.project_sidecar_receipt_completions(&mut fanout)?;
+if self
+    .stranded_responder_control_replacement_index(&fanout)
+    .is_some()
+{
+    return self.responder_control_replacement_available(&fanout);
+}
 if self
     .fanouts
     .iter()
@@ -43124,11 +45567,12 @@ if self
     return self.capacity_available_for(&fanout);
 }
 if self.retains_retryable_sidecar_responder_control_for(&fanout) {
-    return Ok(true);
+    return Ok(false);
 }
 self.capacity_available_for(&fanout)
 """,
-        "owned reply capacity preflight must consume only a same-target duplicate responder control without charging capacity",
+        "owned reply capacity preflight must project flushed receipt completion "
+        "before replacement, coalescing, duplicate-control, and capacity decisions",
         errors,
     )
     _require_rust_token_sequence(
@@ -43148,16 +45592,11 @@ self.enqueue_validated(fanout)
 if !self.validate_owned_reply_transfer(&mut fanout)? {
     return Ok(ExactFanoutOwnership::Owned);
 }
-let source_retained =
-    self.complete_sidecar_targets_with_retained_flush_ownership(&mut fanout)?;
-let ownership = self.enqueue_validated(fanout)?;
-if source_retained {
-    Ok(ExactFanoutOwnership::SourceRetained)
-} else {
-    Ok(ownership)
-}
+self.project_sidecar_receipt_completions(&mut fanout)?;
+self.enqueue_validated(fanout)
 """,
-        "owned reply enqueue must preserve lane source ownership when a terminal writer receipt suppresses one source before the atomic ownership-changing kernel",
+        "owned reply enqueue must project terminal receipt cursors and return the "
+        "atomic ownership-changing kernel result without a dead retained-source override",
         errors,
     )
     _require_rust_token_sequence(
@@ -43564,30 +46003,51 @@ Ok(
         """
 for prefix in self.merge_sidecars.drain_closed_server_prefixes() {
     let requester = prefix.requester.clone();
+    changed |= self.coalesce_closed_sidecar_prefix(prefix.clone());
+    let effects_before = self.sidecar_effects.len();
+""",
+        "lane work must route every authenticated close through the shared "
+        "dominance function before removing its covered queued effects",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::coalesce_closed_sidecar_prefix"),
+        """
+fn coalesce_closed_sidecar_prefix(
+    &mut self,
+    prefix: CertifiedMergeSidecarClosedPrefix,
+) -> bool {
+    let requester = prefix.requester.clone();
     match self.closed_sidecar_prefixes.get_mut(&requester) {
         Some(retained) if prefix.covers(retained) => {
-            if retained != &prefix {
-                *retained = prefix.clone();
-                changed = true;
+            if retained == &prefix {
+                false
+            } else {
+                *retained = prefix;
+                true
             }
         }
-        Some(retained) if retained.covers(&prefix) => {}
+        Some(retained) if retained.covers(&prefix) => false,
         Some(retained) => {
             debug_assert_eq!(retained.service_generation, prefix.service_generation);
             debug_assert_eq!(retained.stream_epoch, prefix.stream_epoch);
-            if prefix.closed_through > retained.closed_through {
+            if prefix.closed_through <= retained.closed_through {
+                false
+            } else {
                 retained.closed_through = prefix.closed_through;
-                changed = true;
+                true
             }
         }
         None => {
-            self.closed_sidecar_prefixes
-                .insert(requester.clone(), prefix.clone());
-            changed = true;
+            self.closed_sidecar_prefixes.insert(requester, prefix);
+            true
         }
     }
+}
 """,
-        "lane work must retain one requester-bound dominant close prefix without regressing generation, epoch, or cumulative sequence",
+        "lane close-prefix coalescing must retain exactly one requester-bound "
+        "lexicographic maximum without regressing generation, epoch, or floor",
         errors,
     )
     _require_rust_token_sequence(
@@ -43627,6 +46087,35 @@ std::mem::take(&mut self.closed_sidecar_prefixes)
     .collect()
 """,
         "lane work must move each dominant close prefix exactly once into runner ownership",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::requeue_closed_sidecar_prefixes"),
+        """
+pub(crate) fn requeue_closed_sidecar_prefixes(
+    &mut self,
+    prefixes: impl IntoIterator<Item = CertifiedMergeSidecarClosedPrefix>,
+) {
+    for prefix in prefixes {
+        let _ = self.coalesce_closed_sidecar_prefix(prefix);
+    }
+}
+""",
+        "a failed runner handoff must restore its complete suffix through the "
+        "same monotonic close-prefix coalescer",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        lane_path,
+        lane_ack_items.get("V2LaneWorkAdapter::confirm_closed_sidecar_prefix_handoff"),
+        """
+pub(crate) fn confirm_closed_sidecar_prefix_handoff(&mut self) {
+    self.merge_sidecars.confirm_closed_server_prefix_handoff();
+}
+""",
+        "lane work may release the responder rollover fence only through the "
+        "transport confirmation step",
         errors,
     )
     _require_rust_token_sequence(
@@ -43717,15 +46206,42 @@ fn apply_certified_merge_sidecar_closed_prefixes(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
 ) -> Result<(), V2RunnerError> {
-    for prefix in lane_work.drain_closed_sidecar_prefixes() {
+    apply_certified_merge_sidecar_closed_prefixes_with(lane_work, |prefix| {
         services
-            .close_certified_merge_sidecar_prefix(&prefix)
-            .map_err(V2RunnerError::Service)?;
+            .close_certified_merge_sidecar_prefix(prefix)
+            .map(|_| ())
+    })
+}
+""",
+        "the production runner must use the rollback-safe close-prefix handoff "
+        "primitive for the worker exact-output owner",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        runner_path,
+        runner_ack_items.get("apply_certified_merge_sidecar_closed_prefixes_with"),
+        """
+fn apply_certified_merge_sidecar_closed_prefixes_with(
+    lane_work: &mut V2LaneWorkAdapter,
+    mut apply: impl FnMut(&CertifiedMergeSidecarClosedPrefix) -> Result<(), String>,
+) -> Result<(), V2RunnerError> {
+    let mut prefixes = std::collections::VecDeque::from(lane_work.drain_closed_sidecar_prefixes());
+    let had_prefixes = !prefixes.is_empty();
+    while let Some(prefix) = prefixes.pop_front() {
+        if let Err(error) = apply(&prefix) {
+            lane_work.requeue_closed_sidecar_prefixes(std::iter::once(prefix).chain(prefixes));
+            return Err(V2RunnerError::Service(error));
+        }
+    }
+    if had_prefixes {
+        lane_work.confirm_closed_sidecar_prefix_handoff();
     }
     Ok(())
 }
 """,
-        "runner must move every lane close prefix into the worker exact-output owner before later dispatch",
+        "runner close-prefix handoff must preserve order, requeue the failing "
+        "prefix and complete suffix, and confirm the rollover fence only after "
+        "the entire drained batch succeeds",
         errors,
     )
     _require_rust_token_sequence(
@@ -44183,17 +46699,35 @@ if !matches!(&effect, V2LaneWorkEffect::PostCertifiedMergeSidecar { .. })
 }
 let key = lane_work_effect_key(&effect);
 if self.sidecar_effect_keys.contains(&key) {
-    return self
+    let Some(index) = self
         .sidecar_effects
-        .iter_mut()
-        .find(|queued| lane_work_effect_key(queued) == key)
-        .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, &effect));
+        .iter()
+        .position(|queued| lane_work_effect_key(queued) == key)
+    else {
+        return false;
+    };
+    if self
+        .sidecar_effects
+        .get_mut(index)
+        .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, &effect))
+    {
+        return true;
+    }
+    if !lane_work_effect_reply_routes_are_valid(&effect)
+        || self.stranded_retryable_sidecar_control_index(&effect) != Some(index)
+    {
+        return false;
+    }
+    return self.replace_stranded_retryable_sidecar_control(index, key, effect);
 }
 if !lane_work_effect_reply_routes_are_valid(&effect) {
     return false;
 }
 let retryable_peer = retryable_sidecar_server_control_peer(&effect).cloned();
 if let Some(peer) = &retryable_peer {
+    if let Some(index) = self.stranded_retryable_sidecar_control_index(&effect) {
+        return self.replace_stranded_retryable_sidecar_control(index, key, effect);
+    }
     if self
         .sidecar_effects
         .iter()
@@ -45025,9 +47559,13 @@ for (target_index, target) in self.targets.iter().enumerate() {
         })?;
     for class in exact_output_classes(*classes) {
         let reservation = self.target_reservation(semantic_target, class);
+        if reservation.kind == ExactTargetReservationKind::SidecarReplyControl {
+            reservations.entry(reservation).or_insert(1);
+            continue;
+        }
         let count = reservations.entry(reservation).or_default();
 """,
-        "each independent source attempt charges every outstanding semantic target/class unit after its own cursor, with topology progress isolated by reservation kind",
+        "each independent source attempt charges every outstanding semantic target/class unit after its own cursor, with responder-control progress shared per semantic target and topology progress isolated by reservation kind",
         errors,
     )
     _require_exact_rust_tokens(
@@ -45041,6 +47579,10 @@ fn target_reservation(
 ) -> ExactTargetReservation {
     let kind = if self.certified_sidecar_topology_progress_target() == Some(semantic_target) {
         ExactTargetReservationKind::SidecarTopologyProgress
+    } else if self.retryable_certified_sidecar_responder_control_target()
+        == Some(semantic_target)
+    {
+        ExactTargetReservationKind::SidecarReplyControl
     } else {
         ExactTargetReservationKind::Reliable
     };
@@ -45051,7 +47593,9 @@ fn target_reservation(
     }
 }
 """,
-        "reservation identity must isolate requester-owned topology progress from reliable reply-source ownership for the same frozen target",
+        "reservation identity must isolate requester-owned topology progress and "
+        "retryable responder control from reliable reply-source ownership for "
+        "the same frozen target",
         errors,
     )
     _require_rust_token_sequence(
@@ -45279,25 +47823,47 @@ if let Some(prior_index) = prior_index {
 if !used_prior.insert(prior_index) {
     return Err("Sumeragi v2 retry updated one reply attempt twice".to_owned());
 }
-if self.target_is_complete(prior_index)
-    && !candidate.target_is_complete(candidate_index)
-    && update == NetworkReplyRouteSourceUpdate::Reconnected
-    && candidate.is_certified_sidecar_chunk_fanout()
-{
-    plan.push(ReplyTargetMerge::Reactivate {
-        prior_index,
-        candidate_index,
-    });
-} else {
-    plan.push(ReplyTargetMerge::Update {
-        prior_index,
-        candidate_index,
-        update,
-    });
+plan.push(ReplyTargetMerge::Update {
+    prior_index,
+    candidate_index,
+    update,
+});
+""",
+        "same-source coalescing must preserve the retained source cursor while "
+        "updating only its authenticated route capability",
+        errors,
+    )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        """
+enum ReplyTargetMerge {
+    Park {
+        prior_index: usize,
+    },
+    Update {
+        prior_index: usize,
+        candidate_index: usize,
+        update: NetworkReplyRouteSourceUpdate,
+    },
+    Append {
+        candidate_index: usize,
+    },
 }
 """,
-        "same-source coalescing must reject terminal-candidate cursor regression and restrict reactivation to a reconnected certified-sidecar chunk",
+        "reply-target merge plans must not expose a terminal-cursor "
+        "reactivation operation",
         errors,
+        count=1,
+    )
+    _require_rust_source_token_sequence(
+        worker_path,
+        worker_source,
+        "ReplyTargetMerge::Reactivate",
+        "no coalescing path may reset a retained terminal reply cursor from a "
+        "newly materialized candidate",
+        errors,
+        count=0,
     )
     _require_rust_token_sequence(
         worker_path,
@@ -45364,10 +47930,7 @@ let (merged_routes, ingress_ownership) =
         """
 let added_mask = match *merge {
     ReplyTargetMerge::Park { .. } | ReplyTargetMerge::Update { .. } => 0,
-    ReplyTargetMerge::Reactivate {
-        candidate_index, ..
-    }
-    | ReplyTargetMerge::Append { candidate_index } => {
+    ReplyTargetMerge::Append { candidate_index } => {
         let candidate_target =
             candidate.targets.get(candidate_index).ok_or_else(|| {
                 "Sumeragi v2 retry candidate disappeared before reservation preflight"
@@ -45383,7 +47946,8 @@ let added_mask = match *merge {
     }
 };
 """,
-        "parking and ordinary same-source updates retain reservation ownership while closed-writer reactivation and a new source charge exactly the candidate cursor suffix",
+        "parking and every same-source route update retain reservation ownership "
+        "while only a genuinely new source charges its candidate cursor suffix",
         errors,
     )
     _require_rust_token_sequence(
@@ -45417,38 +47981,6 @@ NetworkReplyRouteSourceUpdate::Reconnected => {
 }
 """,
         "the coalesce preview must preserve the retained message cursor while only unparking a reconnected source",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        worker_ack_items.get("PendingExactFanout::preview_coalesce_plan"),
-        """
-ReplyTargetMerge::Reactivate {
-    prior_index,
-    candidate_index,
-} => {
-    let target = targets.get_mut(prior_index).ok_or_else(|| {
-        "Sumeragi v2 sidecar reactivation target disappeared before commit"
-            .to_owned()
-    })?;
-    let candidate_target =
-        candidate.targets.get(candidate_index).ok_or_else(|| {
-            "Sumeragi v2 sidecar reactivation candidate disappeared before commit"
-                .to_owned()
-        })?;
-    if !matches!(target.0, ExactTargetRoute::Reply(_))
-        || !matches!(candidate_target.route, ExactTargetRoute::Reply(_))
-    {
-        return Err(
-            "Sumeragi v2 sidecar reactivation changed route kind".to_owned()
-        );
-    }
-    target.0 = candidate_target.route.clone();
-    target.1 = candidate_target.message_index;
-    target.2 = false;
-}
-""",
-        "closed-writer sidecar reactivation must retry the candidate current-item cursor and unpark only that source",
         errors,
     )
     _require_rust_token_sequence(
@@ -45513,20 +48045,6 @@ self.peers.push(candidate.peers[candidate_index].clone());
         worker_path,
         reservation_items.get("PendingExactFanout::commit_coalesce_plan"),
         """
-let target = &mut self.targets[prior_index];
-target.apply_reply_route_update(
-    candidate_route,
-    NetworkReplyRouteSourceUpdate::Reconnected,
-);
-target.message_index = candidate_target.message_index;
-""",
-        "closed-writer sidecar commit must install the reconnected capability before restoring exactly the previewed current-item cursor",
-        errors,
-    )
-    _require_rust_token_sequence(
-        worker_path,
-        reservation_items.get("PendingExactFanout::commit_coalesce_plan"),
-        """
 self.targets.push(PendingExactTarget {
     route: candidate_target.route.clone(),
     message_index: candidate_target.message_index,
@@ -45571,6 +48089,11 @@ let reserved_target_classes = frozen_semantic_targets
                 class: ExactOutputClass::Lane,
                 kind: ExactTargetReservationKind::SidecarTopologyProgress,
             }])
+            .chain([ExactTargetReservation {
+                semantic_target: semantic_target.clone(),
+                class: ExactOutputClass::Lane,
+                kind: ExactTargetReservationKind::SidecarReplyControl,
+            }])
     })
     .collect::<BTreeSet<_>>();
 let sidecar_admission_capacity = shared_ownership_unit_capacity
@@ -45585,7 +48108,9 @@ let ownership_unit_capacity = shared_ownership_unit_capacity
     .checked_add(reserved_target_classes.len())
     .ok_or_else(|| "Sumeragi v2 outbound corridor capacity overflowed".to_owned())?;
 """,
-        "corridor construction reserves one ownership unit for every frozen validator/class pair",
+        "corridor construction reserves one ownership unit for every frozen "
+        "validator/class pair plus independent topology-progress and retryable "
+        "reply-control units",
         errors,
     )
     _require_rust_token_sequence(
@@ -45657,6 +48182,12 @@ Ok(target_count <= self.max_peers_per_fanout
         """
 self.validate_fanout_bounds(fanout)?;
 if self
+    .stranded_responder_control_replacement_index(fanout)
+    .is_some()
+{
+    return self.responder_control_replacement_available(fanout);
+}
+if self
     .fanouts
     .iter()
     .any(|pending| pending.can_coalesce_retry(fanout))
@@ -45664,11 +48195,13 @@ if self
     return self.capacity_available_for(fanout);
 }
 if self.retains_retryable_sidecar_responder_control_for(fanout) {
-    return Ok(true);
+    return Ok(false);
 }
 self.capacity_available_for(fanout)
 """,
-        "lane-effect preflight must validate geometry, consume only a same-target duplicate responder control, and otherwise charge reservation capacity",
+        "lane-effect preflight must validate geometry, preflight a safely "
+        "replaceable responder control, retain a distinct duplicate at lane "
+        "ownership, and otherwise charge reservation capacity",
         errors,
     )
     _require_rust_token_sequence(
@@ -45728,13 +48261,28 @@ for (reservation, added) in additions {
 if fanout.is_complete() {
     return Ok(ExactFanoutOwnership::Owned);
 }
+if self
+    .stranded_responder_control_replacement_index(&fanout)
+    .is_some()
+{
+    return self
+        .replace_stranded_responder_control(fanout)
+        .map(|replaced| {
+            if replaced {
+                ExactFanoutOwnership::Owned
+            } else {
+                ExactFanoutOwnership::SourceRetained
+            }
+        });
+}
 if let Some(index) = self
     .fanouts
     .iter()
     .position(|pending| pending.can_coalesce_retry(&fanout))
 {
 """,
-        "worker exact output must coalesce an exact authenticated retry before applying any reproducible responder-control suppression",
+        "worker exact output must retire a safely stranded responder control "
+        "before coalescing an exact authenticated retry",
         errors,
     )
     _require_rust_token_sequence(
@@ -45742,11 +48290,13 @@ if let Some(index) = self
         worker_ack_items.get("PendingExactOutput::enqueue_validated"),
         """
 if self.retains_retryable_sidecar_responder_control_for(&fanout) {
-    return Ok(ExactFanoutOwnership::Owned);
+    return Ok(ExactFanoutOwnership::SourceRetained);
 }
 let ownership_additions = fanout.outstanding_reservation_counts()?;
 """,
-        "worker exact output may retain at most one retryable responder control per semantic target while preserving independent controls and ordinary progress for other targets",
+        "worker exact output may retain at most one retryable responder control "
+        "per semantic target while leaving the distinct successor in lane "
+        "ownership",
         errors,
     )
     _require_rust_token_sequence(
@@ -49206,13 +51756,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "close_ingress_for_rollover(ingress_ready, block_ingress)",
             ),
         )
-        run_inner = region(
-            runner_path,
-            runner_source,
-            "run_inner",
-            "fn run_inner(",
-            "\nfn replayed_proposal_sign_tag(",
-        )
+        run_inner = run_inner_item.source if run_inner_item is not None else ""
         require_tokens(
             runner_path,
             "run_inner recovery ownership",
@@ -50403,6 +52947,47 @@ def _successor_activation_rank_source_fidelity_errors(
             )
 
     theorem_contracts = {
+        "ExactDurableParentApplicationHasAdmissibleSuccessorContext": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in ValidatorIds, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "/\\ Chain!ChainEpochInvariant "
+            "/\\ ExactDurableParentApplication(parentContext, node, application) "
+            "=> CanonicalIndexedContext(parentContext.height + 1) "
+            "\\in AdmissibleContextRecords",
+            (
+                "Chain!ChainEpochTypeInvariant",
+                "Chain!NodesDoNotOutrunCertificates",
+                "Chain!CertifiedPrefixBacked",
+                "FrozenContextAdmissible",
+                "Isa",
+            ),
+        ),
+        "SuccessorActivationProgressPreservesProtocolInvariant": (
+            "\\A selectedParent \\in AdmissibleContextRecords, "
+            "selectedNode \\in ValidatorIds: "
+            "Chain!ChainEpochInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ IndexedSuccessorActivationProgressStep( "
+            "selectedParent, selectedNode) "
+            "=> SuccessorActivationProtocolInvariant'",
+            (
+                "ExactDurableParentApplicationHasAdmissibleSuccessorContext",
+                "ExpandENABLED",
+                "Isa",
+            ),
+        ),
+        "IndexedActionPreservesSuccessorActivationProtocolInvariant": (
+            "IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ IndexedChainNext "
+            "=> SuccessorActivationProtocolInvariant'",
+            (
+                "IndexedProductActionPreservesSuccessorActivationProtocolInvariant",
+                "SuccessorActivationProgressPreservesProtocolInvariant",
+                "DEF IndexedCompositionInvariant",
+            ),
+        ),
         "CleanCompleteTipRestartDescendsPublishedTier": (
             "\\A parentContext \\in AdmissibleContextRecords, "
             "node \\in Responsive, "
@@ -50463,6 +53048,24 @@ def _successor_activation_rank_source_fidelity_errors(
                 "Isa",
             ),
         ),
+        "SuccessorActivationFailureFreeProgressExitsCurrentRank": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "/\\ Chain!ChainEpochInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ <<IndexedSuccessorActivationProgressStep( "
+            "parentContext, node)>>_(IndexedChainVars) "
+            "=> SuccessorActivationRankExit(parentContext, node, rank)'",
+            (
+                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
+                "SuccessorActivationProgressPreservesProtocolInvariant",
+                "Isa",
+            ),
+        ),
         "FailureFreeSuccessorActivationRankLeadsToExit": (
             "\\A parentContext \\in AdmissibleContextRecords, "
             "node \\in Responsive, "
@@ -50475,6 +53078,8 @@ def _successor_activation_rank_source_fidelity_errors(
                 "SuccessorActivationFailureFreeRankPersistsOrExits",
                 "SuccessorActivationAtRankEnablesFairProgress",
                 "SuccessorActivationFailureFreeProgressExitsCurrentRank",
+                "Chain!ChainEpochInvariant",
+                "DEF IndexedCompositionInvariant",
                 "WF_IndexedChainVars",
                 "PTL",
             ),
@@ -50555,6 +53160,15 @@ def _successor_activation_rank_source_fidelity_errors(
             ),
         ),
     }
+    exact_proof_token_counts = {
+        "IndexedActionPreservesSuccessorActivationProtocolInvariant": {
+            "DEF IndexedCompositionInvariant": 2,
+        },
+        "FailureFreeSuccessorActivationRankLeadsToExit": {
+            "Chain!ChainEpochInvariant": 1,
+            "DEF IndexedCompositionInvariant": 1,
+        },
+    }
     for symbol, (exact_statement, required_proof_tokens) in (
         theorem_contracts.items()
     ):
@@ -50588,6 +53202,16 @@ def _successor_activation_rank_source_fidelity_errors(
                 errors.append(
                     f"{proof_path}:{line}: {symbol} proof must invoke "
                     f"{required_token}"
+                )
+        for exact_token, exact_count in exact_proof_token_counts.get(
+            symbol, {}
+        ).items():
+            observed_count = observed_proof.count(exact_token)
+            if observed_count != exact_count:
+                errors.append(
+                    f"{proof_path}:{line}: {symbol} proof must contain "
+                    f"{exact_token!r} exactly {exact_count} time(s); found "
+                    f"{observed_count}"
                 )
         if re.search(
             r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
@@ -54550,6 +57174,24 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_LIVENESS_RELEASE_COUNT}"
         )
 
+    typed_rollover_release_fragments = (
+        "readonly expected_typed_rollover_formal_mutation_count=43",
+        "observed_typed_rollover_formal_mutation_count=\"$(",
+        "    scripts/formal/"
+        "run_sumeragi_v2_typed_rollover_handoff_mutations.sh\n)",
+        "!= expected_typed_rollover_formal_mutation_count)); then",
+        'echo "[tlc] typed rollover-handoff fixed model and 43-mutant '
+        'root-anchored V3 matrix passed"',
+        "  scripts/formal/"
+        "run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then",
+    )
+    for fragment in typed_rollover_release_fragments:
+        if source.count(fragment) != 1:
+            errors.append(
+                f"{release_path}: release corridor must retain the exact "
+                f"43-mutation typed rollover contract fragment {fragment!r}"
+            )
+
     multilane_focus_rows: list[tuple[str, str, str]] = []
     for array_name, leg_id, package in _PRODUCTION_MULTILANE_FOCUS_CONTRACTS:
         multilane_focus_rows.extend(
@@ -54669,8 +57311,8 @@ def _production_liveness_release_inventory_errors(
             f"({_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT} total lines)"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 330:
-        errors.append("internal release-regression seal must contain exactly 330 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 332:
+        errors.append("internal release-regression seal must contain exactly 332 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -55343,21 +57985,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory therefore contains 705 tests across 38 modules.\n"
+            "current inventory therefore contains 733 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "705-test, 38-module inventory. The complete source-sealed\n"
+            "733-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory therefore contains 705 exact tests "
+            "current source-bound inventory therefore contains 733 exact tests "
             "across\n38 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
@@ -55985,7 +58627,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
         "758d3e233c9143ac6f60e85521d65d1d04d556ddda3aa0bda7da6ab269e783c1"
     ),
     "SumeragiV2NonRegularCommandExecutionReadyProofs.tla": (
-        "24495e085be1d2ad641c93d3eb9887731eecf96ba0072932316f28ab415f0930"
+        "b86cedd16802ce5f00f85a336749c5cf2c2a5d5b064ea54027eb5d93fc537507"
     ),
     "SumeragiV2CommandExecutionReadyProofs.tla": (
         "16927b07a9dfb5a45322f4d8a0de6daeeb7f009d551fc4dd56864208a11ddb35"
@@ -55995,7 +58637,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
 
 _READINESS_TOOL_SOURCE_SHA256 = {
     "ci/check_sumeragi_formal.sh": (
-        "eecfb49d40b334a93589c732ab598912fcd6c62149b03d874bd2152c207978fe"
+        "bdce15f99bf1b1db9842d243a0b16df46602e1f20bb8d6c1800fde2ed3b37230"
     ),
     "scripts/formal/check_sumeragi_v2_begin_timeout_ready_contract.py": (
         "70676b4b572c1b6cbd420ffbcc3f638a151fa3cb60d094d52c27556e6cfee4da"
@@ -56004,7 +58646,7 @@ _READINESS_TOOL_SOURCE_SHA256 = {
         "b9840b7f6de6abbc62a27ea52ce59b8c7237ed7fceaf460c62b4d2cc976de42b"
     ),
     "scripts/formal/check_sumeragi_v2_command_execution_ready_contract.py": (
-        "611b4bb10cbc36a787adab3d9018931e74de885e40a8de641660d9b5cbdd5462"
+        "607f4f7e7f4b98706e175099a30da305a72d295df8ac1f6554cc914c69145b63"
     ),
     "scripts/formal/run_sumeragi_v2_command_execution_ready_mutation.sh": (
         "6f15888c8d6c4b28273e197e15e9fa19346d11d7669da84be3cc7c5f2cb8b5e5"
@@ -56456,10 +59098,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "533255b708b6c9f084a369b02264a448674e357c2d34f2dde396ca222568354f"
+        "99bc9bee30268e5b4511838ab5e40e93bacdd163b71a9b5874d51bcb72154ef4"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "39db66a694be27a6243b773f073af8b7e01a1348482041e6e40dc7763a80f3e2"
+        "0e18b3c7c1663b9ea8f2ba8e691d4403d22c7e007f52c86a62c4cc6066268b05"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "5c0e3d9acd7ca82304ff752338ab69f93962f6d85658c568119e5e09b69edb52"
@@ -56468,16 +59110,16 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "9fb4335289c39dae60b9a8299902e57a64d258070e61e331941c24201519c947"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "d9b9799d17ac1f84b9e166ad04640606c55337c474cc5a29a7bd8ceb45a6613c"
+        "dd40226dee2b05dc4763c2c50ad26163dddeb9d1bb1d1417cd7157c31c20414a"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "833b33f94b232078fcc03518e552c51aed987bea51ac6fc34cdb2aac7e6598a3"
+        "bdc97dc6d54243f4887a1794e76e5d96969a83ab4986548fccff8ef9dc2ad45f"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "06d94aa8755853ae13a2ed539882d569607fc12c68c655f905c4802583ebeddf"
+        "afdfb8a69492d30ee3af986954ef1a6600eb569396b077c79ce2907ee4f29411"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "c64307cb8a40f5f5c4e36455e0cccf930da2b6fde3980274aa05d7af84bce576"
+        "b0a35d3ed66c22fa6b37fc4cd0155ebcfb00de47afeb6ddf89f609f3bbdc70e0"
     ),
 }
 
@@ -56507,7 +59149,7 @@ _LOCAL_PROPOSAL_TIMEOUT_RUST_ITEM_SHA256 = {
         "7473b0680ec743e30070bc5dcb5ca9d1c7934199852c861fb5e0e9796e7ab709"
     ),
     "reducer_active_proposal": (
-        "2b875bd55465ad5b1f60349961a940ee8d92379eaf3441c971c5136ee7be662d"
+        "dd2dd74ab7257442e5ce7017be1f4579d8716a162960a043763180a0f1016525"
     ),
     "reducer_local_proposal": (
         "99de499e1686f8e88376fa7a3a1542bfb5e7e9a413d1106e39de2601ad9aec85"
@@ -58592,6 +61234,7 @@ def validate_ledger(
         _locked_body_reproposal_mutation_runner_errors(formal_dir, ROOT_DIR)
     )
     errors.extend(_async_source_fidelity_errors(formal_dir))
+    errors.extend(_serve_lifecycle_temporal_contract_errors(formal_dir))
     errors.extend(
         _local_runner_service_contract_source_fidelity_errors(
             ledger,

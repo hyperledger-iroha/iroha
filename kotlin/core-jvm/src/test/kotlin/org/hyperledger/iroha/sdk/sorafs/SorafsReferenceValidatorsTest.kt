@@ -685,6 +685,32 @@ class SorafsReferenceValidatorsTest {
             assertTrue(outcome.contains("\"generated_at\": 123"), path)
             assertTrue(outcome.contains("\"sorafs.reference.appeal_finance\""), path)
         }
+
+        val exactProfiles =
+            listOf(
+                "cancel_asset_lock_v1.to" to
+                    "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+                "negative/cancel_asset_lock_zero_expected_v1.to" to
+                    (
+                        "appeal_finance_cancel_asset_lock_zero_expected_negative_" +
+                            "validation_outcome_v1.json"
+                    ),
+            )
+        for ((path, expectedName) in exactProfiles) {
+            val label = path.substringAfterLast('/')
+            val outcome =
+                SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJson(
+                    fixture("sorafs_manifest", "appeal_finance", *path.split('/').toTypedArray()),
+                    label = label,
+                    generatedAtUnix = 123,
+                )
+            assertEquals(
+                fixture("sorafs_manifest", "reference_sdk", expectedName)
+                    .toString(Charsets.UTF_8),
+                outcome,
+                path,
+            )
+        }
     }
 
     @Test

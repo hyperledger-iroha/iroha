@@ -33,6 +33,7 @@ readonly autoscale_drain_test="nexus_autoscale_two_phase_drain_closes_certifies_
 readonly autoscale_drain_qualified_test="nexus::autoscale_localnet::${autoscale_drain_test}"
 readonly native_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
 readonly native_grouped_pruning_marker="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
+readonly canonical_production_test_count=733
 
 require_nonignored_test() {
   local path="$1"
@@ -116,7 +117,7 @@ require_exact_token \
   "readonly expected_multilane_focus_test_count=277"
 require_exact_token \
   "$release_runner" \
-  "readonly expected_production_liveness_test_count=704"
+  "readonly expected_production_liveness_test_count=${canonical_production_test_count}"
 require_exact_token \
   "$release_runner" \
   "  readonly expected_corridor_leg_count=81"
@@ -157,7 +158,7 @@ require_exact_token \
   "_G_UNIT_TEST_COUNT = 277"
 require_exact_token \
   "$release_receipt_writer" \
-  "_PRODUCTION_TEST_COUNT = 704"
+  "_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"
 require_exact_token \
   "$release_receipt_writer" \
   "_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = ("
@@ -174,7 +175,10 @@ for grouped_suite in \
   require_exact_token "$release_receipt_writer" "$grouped_suite"
 done
 
-python3 -I -S - "$release_runner" "$release_receipt_writer" <<'PY'
+python3 -I -S - \
+  "$release_runner" \
+  "$release_receipt_writer" \
+  "$canonical_production_test_count" <<'PY'
 from __future__ import annotations
 
 import ast
@@ -189,6 +193,7 @@ source = runner.read_text(encoding="utf-8")
 lines = source.splitlines()
 receipt_writer = Path(sys.argv[2])
 receipt_source = receipt_writer.read_text(encoding="utf-8")
+canonical_production_test_count = int(sys.argv[3])
 
 
 def reject(message: str) -> None:
@@ -209,8 +214,14 @@ production_body = source.split(production_marker, 1)[1].split("\n)", 1)[0]
 production_tests = [
     line.strip() for line in production_body.splitlines() if line.strip()
 ]
-if len(production_tests) != 704 or len(set(production_tests)) != 704:
-    reject("production inventory must contain exactly 704 unique tests")
+if (
+    len(production_tests) != canonical_production_test_count
+    or len(set(production_tests)) != canonical_production_test_count
+):
+    reject(
+        "production inventory must contain exactly "
+        f"{canonical_production_test_count} unique tests"
+    )
 
 receipt_tree = ast.parse(receipt_source, filename=str(receipt_writer))
 receipt_assignments: dict[str, object] = {}
@@ -223,26 +234,38 @@ for node in receipt_tree.body:
         and target.id in {"_PRODUCTION_TEST_COUNT", "_PRODUCTION_MODULES"}
     ):
         receipt_assignments[target.id] = ast.literal_eval(node.value)
-if receipt_assignments.get("_PRODUCTION_TEST_COUNT") != 704:
-    reject("receipt writer production count must equal 704")
+if (
+    receipt_assignments.get("_PRODUCTION_TEST_COUNT")
+    != canonical_production_test_count
+):
+    reject(
+        "receipt writer production count must equal "
+        f"{canonical_production_test_count}"
+    )
 production_modules = receipt_assignments.get("_PRODUCTION_MODULES")
 if not isinstance(production_modules, tuple) or len(production_modules) != 38:
     reject("receipt writer must bind exactly 38 production modules")
 module_counts = {
     module: count for _leg_id, module, count in production_modules
 }
-if len(module_counts) != 38 or sum(module_counts.values()) != 704:
-    reject("receipt writer production-module counts must sum exactly to 704")
+if (
+    len(module_counts) != 38
+    or sum(module_counts.values()) != canonical_production_test_count
+):
+    reject(
+        "receipt writer production-module counts must sum exactly to "
+        f"{canonical_production_test_count}"
+    )
 expected_changed_module_counts = {
     "sumeragi::authoritative_runtime_gate_tests": 32,
-    "merge_sidecar::tests": 102,
-    "sumeragi::v2_lane_work::tests": 51,
-    "sumeragi::v2_runner::tests": 30,
-    "sumeragi::v2_worker::tests": 77,
+    "merge_sidecar::tests": 118,
+    "sumeragi::v2_lane_work::tests": 53,
+    "sumeragi::v2_runner::tests": 32,
+    "sumeragi::v2_worker::tests": 83,
     "network::tests": 84,
     "network::inbound_source_memory_bound_tests": 2,
     "network::handle_update_tests": 4,
-    "network_relay_tests": 3,
+    "network_relay_tests": 4,
 }
 if any(
     module_counts.get(module) != expected
@@ -265,10 +288,13 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "fd2176898c873bc00fae598689f6bf0e"
-    "c2f9cd5de58ccf37fbe6713a061811da"
+    "e75c51803aac27dd973d1a31e786dec2"
+    "da0b0be3d984c2f333c3efbb853f3a66"
 ):
-    reject("canonical 704-test production TSV digest changed")
+    reject(
+        f"canonical {canonical_production_test_count}-test production TSV "
+        "digest changed"
+    )
 
 
 wait_definition = exact_line("wait_for_external_cargo() {")
@@ -1135,4 +1161,4 @@ if [[ "$(grep -Fxc -- "    env \"\${ENV_VARS[@]}\" IROHA_MULTILANE_RELEASE_MODE=
   exit 1
 fi
 
-echo "[multilane-release-inventory] 81 corridor legs, exact 704/704 production tests across 38 modules, exact 277/277 G-UNIT (101 core, 119 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"
+echo "[multilane-release-inventory] 81 corridor legs, exact ${canonical_production_test_count}/${canonical_production_test_count} production tests across 38 modules, exact 277/277 G-UNIT (101 core, 119 queue-journal, 7 config, 8 data-model, 39 Torii, 1 Torii-shared, 2 integration), four mandatory G-4P gates, guarded Cargo execution, and Rust-owned grouped SDK corpus regeneration/parity are source-bound (fixture_sha256=${grouped_fixture_sha256}, suite_source_manifest_sha256=${grouped_suite_source_manifest_sha256})"

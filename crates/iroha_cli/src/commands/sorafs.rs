@@ -31,7 +31,8 @@ use hex::{decode, decode_to_slice, encode};
 use iroha::{
     client::{
         Client, SorafsAliasListFilter, SorafsAppealFinanceReadbackFilter,
-        SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions,
+        SorafsBillingAcknowledgementProof, SorafsBillingStatementListFilter,
+        SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions, SorafsHedgingProjectionFilter,
         SorafsModerationBallotEventsFilter, SorafsModerationBallotsFilter,
         SorafsModerationModelRegistryFilter, SorafsModerationQuarantineFilter,
         SorafsModerationQuarantineObjectStoreRequest, SorafsModerationQuarantineReleaseRequest,
@@ -480,6 +481,12 @@ pub enum Command {
     /// Repair queue helpers (list, claim, close, escalate).
     #[command(subcommand)]
     Repair(RepairCommand),
+    /// Authenticated billing statement and reconciliation reads.
+    #[command(subcommand)]
+    Billing(BillingCommand),
+    /// Authenticated finalized hedging projection reads.
+    #[command(subcommand)]
+    Hedging(HedgingCommand),
     /// GC inspection helpers (no manual deletions).
     #[command(subcommand)]
     Gc(GcCommand),
@@ -504,6 +511,637 @@ impl Run for ReserveCommand {
             Self::Ledger(args) => args.run(context),
             Self::Lifecycle(args) => args.run(context),
         }
+    }
+}
+
+const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
+const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: usize = 64 * 1024;
+
+fn required_nonzero_lower_hex32(value: &str, flag: &str) -> Result<String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre!(
+            "{flag} must be exactly 64 lowercase hexadecimal characters"
+        ));
+    }
+    if value.bytes().all(|byte| byte == b'0') {
+        return Err(eyre!("{flag} must be non-zero"));
+    }
+    Ok(value.to_owned())
+}
+
+fn required_hedging_billing_page_limit(limit: u16) -> Result<u16> {
+    if !(1..=SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1).contains(&limit) {
+        return Err(eyre!(
+            "--limit must be within 1..={SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1}"
+        ));
+    }
+    Ok(limit)
+}
+
+/// Authenticated SoraFS billing statement and reconciliation commands.
+#[derive(clap::Subcommand, Debug)]
+pub enum BillingCommand {
+    /// Fetch the supervised billing projector status and current anchor.
+    Status(BillingStatusArgs),
+    /// List owner-isolated published statements from an exact checkpoint.
+    Statements(BillingStatementsArgs),
+    /// Fetch one exact published statement as canonical Norito.
+    Statement(BillingStatementArgs),
+    /// Submit an externally authenticated owner acknowledgement.
+    Acknowledge(BillingAcknowledgeArgs),
+    /// Fetch payload-free delivery reconciliation status.
+    Reconciliation(BillingReconciliationArgs),
+}
+
+impl Run for BillingCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Status(args) => args.run(context),
+            Self::Statements(args) => args.run(context),
+            Self::Statement(args) => args.run(context),
+            Self::Acknowledge(args) => args.run(context),
+            Self::Reconciliation(args) => args.run(context),
+        }
+    }
+}
+
+/// Fetch supervised billing projector status.
+#[derive(clap::Args, Debug, Default)]
+pub struct BillingStatusArgs {}
+
+impl Run for BillingStatusArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_billing_status)
+    }
+}
+
+impl BillingStatusArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client) -> Result<Response<Vec<u8>>>,
+    {
+        let client = context.client_from_config();
+        render_json_response(context, get(&client)?)
+    }
+}
+
+/// List owner-isolated published billing statements.
+#[derive(clap::Args, Debug)]
+pub struct BillingStatementsArgs {
+    /// Exact non-zero lowercase checkpoint fingerprint from billing status.
+    #[arg(long = "expected-checkpoint-fingerprint", value_name = "HEX")]
+    expected_checkpoint_fingerprint: String,
+    /// Optional exclusive non-zero lowercase statement identifier.
+    #[arg(long = "after-statement-id", value_name = "HEX")]
+    after_statement_id: Option<String>,
+    /// Required page size in the inclusive range 1 through 100.
+    #[arg(long, value_name = "COUNT")]
+    limit: u16,
+}
+
+impl Run for BillingStatementsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_billing_statements)
+    }
+}
+
+impl BillingStatementsArgs {
+    fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, SorafsBillingStatementListFilter<'_>) -> Result<Response<Vec<u8>>>,
+    {
+        let checkpoint = required_nonzero_lower_hex32(
+            &self.expected_checkpoint_fingerprint,
+            "--expected-checkpoint-fingerprint",
+        )?;
+        let after_statement_id = self
+            .after_statement_id
+            .as_deref()
+            .map(|value| required_nonzero_lower_hex32(value, "--after-statement-id"))
+            .transpose()?;
+        let limit = required_hedging_billing_page_limit(self.limit)?;
+        let filter = SorafsBillingStatementListFilter {
+            expected_checkpoint_fingerprint_hex: &checkpoint,
+            after_statement_id_hex: after_statement_id.as_deref(),
+            limit,
+        };
+        let client = context.client_from_config();
+        render_json_response(context, list(&client, filter)?)
+    }
+}
+
+/// Fetch one published billing statement.
+#[derive(clap::Args, Debug)]
+pub struct BillingStatementArgs {
+    /// Exact non-zero lowercase statement identifier.
+    #[arg(long = "statement-id", value_name = "HEX")]
+    statement_id: String,
+    /// Exact non-zero lowercase checkpoint fingerprint from billing status.
+    #[arg(long = "expected-checkpoint-fingerprint", value_name = "HEX")]
+    expected_checkpoint_fingerprint: String,
+    /// Destination for the canonical Norito statement bytes.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+}
+
+impl Run for BillingStatementArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_billing_statement)
+    }
+}
+
+impl BillingStatementArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let statement_id = required_nonzero_lower_hex32(&self.statement_id, "--statement-id")?;
+        let checkpoint = required_nonzero_lower_hex32(
+            &self.expected_checkpoint_fingerprint,
+            "--expected-checkpoint-fingerprint",
+        )?;
+        let client = context.client_from_config();
+        let response = get(&client, &statement_id, &checkpoint)?;
+        write_billing_statement_response(
+            context,
+            response,
+            &self.output,
+            &statement_id,
+            &checkpoint,
+        )
+    }
+}
+
+fn write_billing_statement_response<C: RunContext>(
+    context: &mut C,
+    response: Response<Vec<u8>>,
+    output: &Path,
+    statement_id: &str,
+    checkpoint: &str,
+) -> Result<()> {
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .map(str::to_owned);
+    let body = response.into_body();
+    if status != StatusCode::OK {
+        return Err(make_http_error(status, &body));
+    }
+    if content_type.as_deref() != Some("application/x-norito") {
+        return Err(eyre!(
+            "billing statement response for `{statement_id}` must use application/x-norito"
+        ));
+    }
+    if body.is_empty() {
+        return Err(eyre!(
+            "billing statement response for `{statement_id}` was empty"
+        ));
+    }
+    let mut output_file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .wrap_err_with(|| {
+            format!(
+                "failed to create canonical billing statement `{}` without replacing an existing path",
+                output.display()
+            )
+        })?;
+    let output_metadata = output_file.metadata().wrap_err_with(|| {
+        format!(
+            "failed to inspect newly created canonical billing statement `{}`",
+            output.display()
+        )
+    })?;
+    if !output_metadata.is_file() {
+        return Err(eyre!(
+            "canonical billing statement output `{}` must be a regular file",
+            output.display()
+        ));
+    }
+    output_file.write_all(&body).wrap_err_with(|| {
+        format!(
+            "failed to write canonical billing statement `{}`",
+            output.display()
+        )
+    })?;
+    output_file.flush().wrap_err_with(|| {
+        format!(
+            "failed to flush canonical billing statement `{}`",
+            output.display()
+        )
+    })?;
+    context.print_data(&norito::json!({
+        "statement_id": statement_id,
+        "expected_checkpoint_fingerprint": checkpoint,
+        "output": (output.display().to_string()),
+        "bytes_written": (u64::try_from(body.len()).unwrap_or(u64::MAX)),
+        "content_type": "application/x-norito"
+    }))
+}
+
+/// Submit one owner acknowledgement for a published billing statement.
+#[derive(clap::Args, Debug)]
+pub struct BillingAcknowledgeArgs {
+    /// Exact non-zero lowercase statement identifier.
+    #[arg(long = "statement-id", value_name = "HEX")]
+    statement_id: String,
+    /// Exact non-zero lowercase checkpoint fingerprint from billing status.
+    #[arg(long = "expected-checkpoint-fingerprint", value_name = "HEX")]
+    expected_checkpoint_fingerprint: String,
+    /// Non-zero lowercase 32-byte idempotency nonce authenticated by the external proof.
+    #[arg(long = "request-nonce", value_name = "HEX")]
+    request_nonce: String,
+    /// Binary external-authority authentication proof, bounded to 64 KiB.
+    #[arg(long = "authentication-proof", value_name = "PATH")]
+    authentication_proof: PathBuf,
+}
+
+impl Run for BillingAcknowledgeArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(
+            context,
+            Client::post_sorafs_billing_statement_acknowledgement,
+        )
+    }
+}
+
+impl BillingAcknowledgeArgs {
+    fn run_with<C, F>(&self, context: &mut C, acknowledge: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(
+            &Client,
+            &str,
+            &str,
+            &SorafsBillingAcknowledgementProof,
+        ) -> Result<Response<Vec<u8>>>,
+    {
+        let statement_id = required_nonzero_lower_hex32(&self.statement_id, "--statement-id")?;
+        let checkpoint = required_nonzero_lower_hex32(
+            &self.expected_checkpoint_fingerprint,
+            "--expected-checkpoint-fingerprint",
+        )?;
+        let authentication_proof = read_billing_acknowledgement_proof(&self.authentication_proof)?;
+        let proof = SorafsBillingAcknowledgementProof::try_from_hex(
+            &self.request_nonce,
+            authentication_proof,
+        )?;
+        let client = context.client_from_config();
+        render_json_response(
+            context,
+            acknowledge(&client, &statement_id, &checkpoint, &proof)?,
+        )
+    }
+}
+
+#[cfg(unix)]
+type BillingProofFileIdentity = (u64, u64);
+#[cfg(windows)]
+type BillingProofFileIdentity = (Option<u32>, Option<u64>);
+#[cfg(not(any(unix, windows)))]
+type BillingProofFileIdentity = ();
+
+#[cfg(unix)]
+fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(windows)]
+fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
+    use std::os::windows::fs::MetadataExt as _;
+
+    (metadata.volume_serial_number(), metadata.file_index())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn billing_proof_file_identity(_metadata: &fs::Metadata) -> BillingProofFileIdentity {}
+
+#[cfg(unix)]
+const fn billing_proof_file_identity_available(_identity: BillingProofFileIdentity) -> bool {
+    true
+}
+
+#[cfg(windows)]
+const fn billing_proof_file_identity_available(identity: BillingProofFileIdentity) -> bool {
+    identity.0.is_some() && identity.1.is_some()
+}
+
+#[cfg(not(any(unix, windows)))]
+const fn billing_proof_file_identity_available(_identity: BillingProofFileIdentity) -> bool {
+    false
+}
+
+fn billing_proof_file_is_single_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        metadata.nlink() == 1
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        metadata.number_of_links() == Some(1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+#[cfg(windows)]
+fn billing_proof_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn billing_proof_file_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn billing_proof_file_is_indirect(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink() || billing_proof_file_is_reparse_point(metadata)
+}
+
+#[cfg(unix)]
+fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    billing_proof_file_identity(left) == billing_proof_file_identity(right)
+        && left.nlink() == 1
+        && right.nlink() == 1
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(windows)]
+fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    billing_proof_file_identity_available(billing_proof_file_identity(left))
+        && billing_proof_file_identity(left) == billing_proof_file_identity(right)
+        && left.number_of_links() == Some(1)
+        && right.number_of_links() == Some(1)
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn billing_proof_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
+    let descriptor = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )
+    .wrap_err_with(|| {
+        format!(
+            "failed to securely open billing acknowledgement proof `{}`",
+            path.display()
+        )
+    })?;
+    Ok(fs::File::from(descriptor))
+}
+
+#[cfg(windows)]
+fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path).wrap_err_with(|| {
+        format!(
+            "failed to securely open billing acknowledgement proof `{}`",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
+    Err(eyre!(
+        "billing acknowledgement proof `{}` cannot be opened because this platform does not expose a stable direct-file identity",
+        path.display()
+    ))
+}
+
+fn read_billing_acknowledgement_proof(path: &Path) -> Result<Vec<u8>> {
+    let path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to inspect billing acknowledgement proof `{}`",
+            path.display()
+        )
+    })?;
+    if billing_proof_file_is_indirect(&path_metadata)
+        || !path_metadata.file_type().is_file()
+        || !billing_proof_file_identity_available(billing_proof_file_identity(&path_metadata))
+        || !billing_proof_file_is_single_link(&path_metadata)
+    {
+        return Err(eyre!(
+            "billing acknowledgement proof `{}` must be a regular non-symlink file with a stable single-link identity",
+            path.display()
+        ));
+    }
+    if path_metadata.len() == 0
+        || path_metadata.len() > SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as u64
+    {
+        return Err(eyre!(
+            "billing acknowledgement proof `{}` must contain between 1 and {SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes",
+            path.display()
+        ));
+    }
+    let expected_len = usize::try_from(path_metadata.len()).map_err(|_| {
+        eyre!(
+            "billing acknowledgement proof `{}` length is not representable on this host",
+            path.display()
+        )
+    })?;
+    let mut file = open_direct_billing_acknowledgement_proof(path)?;
+    let opened_metadata = file.metadata().wrap_err_with(|| {
+        format!(
+            "failed to inspect opened billing acknowledgement proof `{}`",
+            path.display()
+        )
+    })?;
+    if billing_proof_file_is_indirect(&opened_metadata)
+        || !opened_metadata.is_file()
+        || !billing_proof_metadata_unchanged(&path_metadata, &opened_metadata)
+    {
+        return Err(eyre!(
+            "billing acknowledgement proof `{}` changed between inspection and open",
+            path.display()
+        ));
+    }
+    let bytes = read_billing_acknowledgement_proof_exact(path, &mut file, expected_len)?;
+    let after_file_metadata = file.metadata().wrap_err_with(|| {
+        format!(
+            "failed to re-inspect opened billing acknowledgement proof `{}`",
+            path.display()
+        )
+    })?;
+    let after_path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to re-inspect billing acknowledgement proof `{}`",
+            path.display()
+        )
+    })?;
+    if billing_proof_file_is_indirect(&after_file_metadata)
+        || !after_file_metadata.is_file()
+        || billing_proof_file_is_indirect(&after_path_metadata)
+        || !after_path_metadata.file_type().is_file()
+        || !billing_proof_metadata_unchanged(&opened_metadata, &after_file_metadata)
+        || !billing_proof_metadata_unchanged(&opened_metadata, &after_path_metadata)
+        || after_file_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(eyre!(
+            "billing acknowledgement proof `{}` changed while it was read",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn read_billing_acknowledgement_proof_exact(
+    path: &Path,
+    reader: &mut impl Read,
+    expected_len: usize,
+) -> Result<Vec<u8>> {
+    let mut bytes = vec![0_u8; expected_len];
+    if let Err(error) = reader.read_exact(&mut bytes) {
+        if error.kind() == io::ErrorKind::UnexpectedEof {
+            return Err(eyre!(
+                "billing acknowledgement proof `{}` changed length while it was read",
+                path.display()
+            ));
+        }
+        return Err(error).wrap_err_with(|| {
+            format!(
+                "failed to read billing acknowledgement proof `{}`",
+                path.display()
+            )
+        });
+    }
+    let mut trailing = [0_u8; 1];
+    if reader.read(&mut trailing).wrap_err_with(|| {
+        format!(
+            "failed to finish reading billing acknowledgement proof `{}`",
+            path.display()
+        )
+    })? != 0
+    {
+        return Err(eyre!(
+            "billing acknowledgement proof `{}` changed length while it was read",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Fetch payload-free billing reconciliation status.
+#[derive(clap::Args, Debug, Default)]
+pub struct BillingReconciliationArgs {}
+
+impl Run for BillingReconciliationArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_billing_reconciliation)
+    }
+}
+
+impl BillingReconciliationArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client) -> Result<Response<Vec<u8>>>,
+    {
+        let client = context.client_from_config();
+        render_json_response(context, get(&client)?)
+    }
+}
+
+/// Read-only finalized SoraFS hedging projections.
+#[derive(clap::Subcommand, Debug)]
+pub enum HedgingCommand {
+    /// List finalized XOR exposure, including below-threshold periods.
+    Exposure(HedgingProjectionArgs),
+    /// List deterministic governed hedge intents without executing them.
+    Intents(HedgingProjectionArgs),
+}
+
+impl Run for HedgingCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Exposure(args) => args.run_with(context, Client::get_sorafs_hedging_exposure),
+            Self::Intents(args) => args.run_with(context, Client::get_sorafs_hedging_intents),
+        }
+    }
+}
+
+/// Exact-checkpoint pagination arguments shared by hedging projections.
+#[derive(clap::Args, Debug)]
+pub struct HedgingProjectionArgs {
+    /// Exact non-zero lowercase checkpoint fingerprint from billing status.
+    #[arg(long = "expected-checkpoint-fingerprint", value_name = "HEX")]
+    expected_checkpoint_fingerprint: String,
+    /// Optional exclusive non-zero lowercase opaque cursor.
+    #[arg(long, value_name = "HEX")]
+    after: Option<String>,
+    /// Required page size in the inclusive range 1 through 100.
+    #[arg(long, value_name = "COUNT")]
+    limit: u16,
+}
+
+impl HedgingProjectionArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, SorafsHedgingProjectionFilter<'_>) -> Result<Response<Vec<u8>>>,
+    {
+        let checkpoint = required_nonzero_lower_hex32(
+            &self.expected_checkpoint_fingerprint,
+            "--expected-checkpoint-fingerprint",
+        )?;
+        let after = self
+            .after
+            .as_deref()
+            .map(|value| required_nonzero_lower_hex32(value, "--after"))
+            .transpose()?;
+        let limit = required_hedging_billing_page_limit(self.limit)?;
+        let filter = SorafsHedgingProjectionFilter {
+            expected_checkpoint_fingerprint_hex: &checkpoint,
+            after_hex: after.as_deref(),
+            limit,
+        };
+        let client = context.client_from_config();
+        render_json_response(context, get(&client, filter)?)
     }
 }
 
@@ -5642,6 +6280,8 @@ impl Run for Command {
             Command::Transparency(cmd) => cmd.run(context),
             Command::Moderation(cmd) => cmd.run(context),
             Command::Repair(cmd) => cmd.run(context),
+            Command::Billing(cmd) => cmd.run(context),
+            Command::Hedging(cmd) => cmd.run(context),
             Command::Gc(cmd) => cmd.run(context),
             Command::Fetch(args) => args.run(context),
         }
@@ -18319,6 +18959,475 @@ mod tests {
 
         assert!(message.contains("SoraFS CLI nonce OS RNG failed"));
         assert!(message.contains("failing SoraFS CLI nonce RNG"));
+    }
+
+    #[test]
+    fn hedging_billing_subcommands_parse_all_read_and_ack_routes() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser)]
+        struct Parser {
+            #[command(subcommand)]
+            command: Command,
+        }
+
+        let checkpoint = "11".repeat(32);
+        let statement_id = "22".repeat(32);
+        let request_nonce = "33".repeat(32);
+        let commands = [
+            vec![
+                "sorafs-test".to_owned(),
+                "billing".to_owned(),
+                "status".to_owned(),
+            ],
+            vec![
+                "sorafs-test".to_owned(),
+                "billing".to_owned(),
+                "statements".to_owned(),
+                "--expected-checkpoint-fingerprint".to_owned(),
+                checkpoint.clone(),
+                "--limit".to_owned(),
+                "10".to_owned(),
+            ],
+            vec![
+                "sorafs-test".to_owned(),
+                "billing".to_owned(),
+                "statement".to_owned(),
+                "--statement-id".to_owned(),
+                statement_id.clone(),
+                "--expected-checkpoint-fingerprint".to_owned(),
+                checkpoint.clone(),
+                "--output".to_owned(),
+                "statement.norito".to_owned(),
+            ],
+            vec![
+                "sorafs-test".to_owned(),
+                "billing".to_owned(),
+                "acknowledge".to_owned(),
+                "--statement-id".to_owned(),
+                statement_id,
+                "--expected-checkpoint-fingerprint".to_owned(),
+                checkpoint.clone(),
+                "--request-nonce".to_owned(),
+                request_nonce,
+                "--authentication-proof".to_owned(),
+                "proof.bin".to_owned(),
+            ],
+            vec![
+                "sorafs-test".to_owned(),
+                "billing".to_owned(),
+                "reconciliation".to_owned(),
+            ],
+            vec![
+                "sorafs-test".to_owned(),
+                "hedging".to_owned(),
+                "exposure".to_owned(),
+                "--expected-checkpoint-fingerprint".to_owned(),
+                checkpoint.clone(),
+                "--limit".to_owned(),
+                "10".to_owned(),
+            ],
+            vec![
+                "sorafs-test".to_owned(),
+                "hedging".to_owned(),
+                "intents".to_owned(),
+                "--expected-checkpoint-fingerprint".to_owned(),
+                checkpoint,
+                "--limit".to_owned(),
+                "10".to_owned(),
+            ],
+        ];
+
+        for command in commands {
+            let parsed = Parser::try_parse_from(command).expect("hedging/billing command parses");
+            let _ = parsed.command;
+        }
+    }
+
+    #[test]
+    fn billing_statements_cli_builds_exact_checkpoint_filter() {
+        let checkpoint = "11".repeat(32);
+        let after_statement_id = "22".repeat(32);
+        let args = BillingStatementsArgs {
+            expected_checkpoint_fingerprint: checkpoint.clone(),
+            after_statement_id: Some(after_statement_id.clone()),
+            limit: 25,
+        };
+        let mut context = TestContext::new();
+
+        args.run_with(&mut context, |_client, filter| {
+            assert_eq!(
+                filter.expected_checkpoint_fingerprint_hex,
+                checkpoint.as_str()
+            );
+            assert_eq!(
+                filter.after_statement_id_hex,
+                Some(after_statement_id.as_str())
+            );
+            assert_eq!(filter.limit, 25);
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "items": [],
+                    "next_after_statement_id": null
+                }))?)
+                .expect("billing statement page response"))
+        })
+        .expect("billing statement list succeeds");
+
+        assert_eq!(context.printed.len(), 1);
+        assert!(context.printed[0].contains("\"items\""));
+    }
+
+    #[test]
+    fn hedging_projection_cli_builds_read_only_exact_checkpoint_filter() {
+        let checkpoint = "33".repeat(32);
+        let after = "44".repeat(32);
+        let args = HedgingProjectionArgs {
+            expected_checkpoint_fingerprint: checkpoint.clone(),
+            after: Some(after.clone()),
+            limit: 100,
+        };
+        let mut context = TestContext::new();
+
+        args.run_with(&mut context, |_client, filter| {
+            assert_eq!(
+                filter.expected_checkpoint_fingerprint_hex,
+                checkpoint.as_str()
+            );
+            assert_eq!(filter.after_hex, Some(after.as_str()));
+            assert_eq!(filter.limit, 100);
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "items": [],
+                    "automatic_execution_enabled": false
+                }))?)
+                .expect("hedging projection response"))
+        })
+        .expect("hedging projection read succeeds");
+
+        assert_eq!(context.printed.len(), 1);
+        let output: Value =
+            norito::json::from_str(&context.printed[0]).expect("projection output JSON");
+        assert_eq!(
+            output
+                .get("automatic_execution_enabled")
+                .and_then(Value::as_bool),
+            Some(false),
+            "projection output must preserve the disabled execution claim",
+        );
+    }
+
+    #[test]
+    fn billing_acknowledgement_cli_reads_bounded_binary_proof() {
+        let checkpoint = "55".repeat(32);
+        let statement_id = "66".repeat(32);
+        let request_nonce = "77".repeat(32);
+        let mut proof_file = NamedTempFile::new().expect("proof file");
+        proof_file
+            .write_all(&[0xA5; 48])
+            .expect("write authentication proof");
+        let args = BillingAcknowledgeArgs {
+            statement_id: statement_id.clone(),
+            expected_checkpoint_fingerprint: checkpoint.clone(),
+            request_nonce: request_nonce.clone(),
+            authentication_proof: proof_file.path().to_path_buf(),
+        };
+        let expected =
+            SorafsBillingAcknowledgementProof::try_from_hex(&request_nonce, vec![0xA5; 48])
+                .expect("expected proof");
+        let mut context = TestContext::new();
+
+        args.run_with(
+            &mut context,
+            |_client, actual_statement_id, actual_checkpoint, proof| {
+                assert_eq!(actual_statement_id, statement_id);
+                assert_eq!(actual_checkpoint, checkpoint);
+                assert_eq!(proof, &expected);
+                assert!(
+                    format!("{proof:?}").contains("[REDACTED]"),
+                    "proof debug output must not expose authentication bytes"
+                );
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "acknowledged": true
+                    }))?)
+                    .expect("billing acknowledgement response"))
+            },
+        )
+        .expect("billing acknowledgement succeeds");
+
+        assert_eq!(context.printed.len(), 1);
+        let output: Value =
+            norito::json::from_str(&context.printed[0]).expect("acknowledgement output JSON");
+        assert_eq!(
+            output.get("acknowledged").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn hedging_billing_cli_rejects_non_regular_and_oversized_proofs() {
+        let proof_dir = TempDir::new().expect("proof directory");
+        let error = read_billing_acknowledgement_proof(proof_dir.path())
+            .expect_err("directory proof must fail closed");
+        assert!(error.to_string().contains("regular non-symlink file"));
+
+        let oversized = proof_dir.path().join("oversized-proof.bin");
+        fs::write(
+            &oversized,
+            vec![0xA5; SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 + 1],
+        )
+        .expect("write oversized proof");
+        let error = read_billing_acknowledgement_proof(&oversized)
+            .expect_err("oversized proof must fail closed");
+        assert!(error.to_string().contains("must contain between 1 and"));
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn hedging_billing_cli_rejects_multiply_linked_proof() {
+        let proof_dir = TempDir::new().expect("proof directory");
+        let target = proof_dir.path().join("proof-target.bin");
+        let alias = proof_dir.path().join("proof-alias.bin");
+        fs::write(&target, [0xA5; 32]).expect("write proof target");
+        fs::hard_link(&target, &alias).expect("create proof hard link");
+
+        let error = read_billing_acknowledgement_proof(&target)
+            .expect_err("multiply linked proof must fail closed");
+        assert!(error.to_string().contains("stable single-link identity"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hedging_billing_cli_rejects_symlink_proof() {
+        use std::os::unix::fs::symlink;
+
+        let proof_dir = TempDir::new().expect("proof directory");
+        let target = proof_dir.path().join("proof-target.bin");
+        let link = proof_dir.path().join("proof-link.bin");
+        fs::write(&target, [0xA5; 32]).expect("write proof target");
+        symlink(&target, &link).expect("create proof symlink");
+
+        let error =
+            read_billing_acknowledgement_proof(&link).expect_err("symlink proof must fail closed");
+        assert!(error.to_string().contains("regular non-symlink file"));
+    }
+
+    #[test]
+    fn billing_proof_reader_retains_windows_direct_identity_guards() {
+        let source = include_str!("sorafs.rs");
+
+        for required_guard in [
+            "FILE_FLAG_OPEN_REPARSE_POINT",
+            "metadata.volume_serial_number()",
+            "metadata.file_index()",
+            "left.file_size() == right.file_size()",
+            "left.last_write_time() == right.last_write_time()",
+            "left.creation_time() == right.creation_time()",
+            "billing_proof_metadata_unchanged(&path_metadata, &opened_metadata)",
+            "billing_proof_metadata_unchanged(&opened_metadata, &after_file_metadata)",
+            "billing_proof_metadata_unchanged(&opened_metadata, &after_path_metadata)",
+            "this platform does not expose a stable direct-file identity",
+        ] {
+            assert!(
+                source.contains(required_guard),
+                "billing proof reader lost required direct-file guard `{required_guard}`"
+            );
+        }
+    }
+
+    #[test]
+    fn hedging_billing_proof_exact_read_detects_length_drift() {
+        let path = Path::new("drifting-proof.bin");
+        let mut truncated = std::io::Cursor::new(vec![0xA5; 3]);
+        let error = read_billing_acknowledgement_proof_exact(path, &mut truncated, 4)
+            .expect_err("truncated proof must fail closed");
+        assert!(error.to_string().contains("changed length"));
+
+        let mut extended = std::io::Cursor::new(vec![0xA5; 5]);
+        let error = read_billing_acknowledgement_proof_exact(path, &mut extended, 4)
+            .expect_err("extended proof must fail closed");
+        assert!(error.to_string().contains("changed length"));
+    }
+
+    #[test]
+    fn billing_statement_cli_writes_exact_norito_response() {
+        let checkpoint = "88".repeat(32);
+        let statement_id = "99".repeat(32);
+        let output_dir = TempDir::new().expect("statement output directory");
+        let output = output_dir.path().join("statement.norito");
+        let args = BillingStatementArgs {
+            statement_id: statement_id.clone(),
+            expected_checkpoint_fingerprint: checkpoint.clone(),
+            output: output.clone(),
+        };
+        let expected_bytes = vec![0x4E, 0x52, 0x54, 0x31];
+        let mut context = TestContext::new();
+
+        args.run_with(&mut context, |_client, actual_id, actual_checkpoint| {
+            assert_eq!(actual_id, statement_id);
+            assert_eq!(actual_checkpoint, checkpoint);
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/x-norito")
+                .body(expected_bytes.clone())
+                .expect("published statement response"))
+        })
+        .expect("published statement write succeeds");
+
+        assert_eq!(
+            fs::read(output).expect("read written statement"),
+            expected_bytes
+        );
+        assert_eq!(context.printed.len(), 1);
+        let summary: Value =
+            norito::json::from_str(&context.printed[0]).expect("statement summary JSON");
+        assert_eq!(
+            summary.get("bytes_written").and_then(Value::as_u64),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn billing_statement_cli_refuses_to_clobber_existing_file() {
+        let output_dir = TempDir::new().expect("statement output directory");
+        let output = output_dir.path().join("statement.norito");
+        let original = b"existing-statement".to_vec();
+        fs::write(&output, &original).expect("write existing statement");
+        let args = BillingStatementArgs {
+            statement_id: "99".repeat(32),
+            expected_checkpoint_fingerprint: "88".repeat(32),
+            output: output.clone(),
+        };
+        let mut context = TestContext::new();
+
+        let error = args
+            .run_with(&mut context, |_client, _statement_id, _checkpoint| {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/x-norito")
+                    .body(vec![0x4E, 0x52, 0x54, 0x31])
+                    .expect("published statement response"))
+            })
+            .expect_err("existing output must fail closed");
+
+        assert!(error.to_string().contains("without replacing"));
+        assert_eq!(
+            fs::read(&output).expect("read preserved statement"),
+            original
+        );
+        assert!(context.printed.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn billing_statement_cli_refuses_to_follow_output_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let output_dir = TempDir::new().expect("statement output directory");
+        let target = output_dir.path().join("target.norito");
+        let output = output_dir.path().join("statement.norito");
+        let original = b"target-statement".to_vec();
+        fs::write(&target, &original).expect("write statement target");
+        symlink(&target, &output).expect("create output symlink");
+        let args = BillingStatementArgs {
+            statement_id: "99".repeat(32),
+            expected_checkpoint_fingerprint: "88".repeat(32),
+            output: output.clone(),
+        };
+        let mut context = TestContext::new();
+
+        let error = args
+            .run_with(&mut context, |_client, _statement_id, _checkpoint| {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/x-norito")
+                    .body(vec![0x4E, 0x52, 0x54, 0x31])
+                    .expect("published statement response"))
+            })
+            .expect_err("symlink output must fail closed");
+
+        assert!(error.to_string().contains("without replacing"));
+        assert_eq!(
+            fs::read(&target).expect("read preserved target statement"),
+            original
+        );
+        assert!(
+            fs::symlink_metadata(&output)
+                .expect("inspect preserved output symlink")
+                .file_type()
+                .is_symlink()
+        );
+        assert!(context.printed.is_empty());
+    }
+
+    #[test]
+    fn billing_statement_cli_rejects_substituted_media_type() {
+        let output_dir = TempDir::new().expect("statement output directory");
+        let output = output_dir.path().join("statement.norito");
+        let args = BillingStatementArgs {
+            statement_id: "99".repeat(32),
+            expected_checkpoint_fingerprint: "88".repeat(32),
+            output: output.clone(),
+        };
+        let mut context = TestContext::new();
+
+        let error = args
+            .run_with(&mut context, |_client, _statement_id, _checkpoint| {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(br#"{"substituted":true}"#.to_vec())
+                    .expect("substituted statement response"))
+            })
+            .expect_err("non-Norito response must fail closed");
+
+        assert!(error.to_string().contains("application/x-norito"));
+        assert!(
+            !output.exists(),
+            "substituted response must not be persisted"
+        );
+        assert!(context.printed.is_empty());
+    }
+
+    #[test]
+    fn hedging_billing_cli_rejects_aliases_and_invalid_bounds_before_http() {
+        let mut context = TestContext::new();
+        let uppercase = "AA".repeat(32);
+        let list = BillingStatementsArgs {
+            expected_checkpoint_fingerprint: uppercase,
+            after_statement_id: None,
+            limit: 1,
+        };
+        let error = list
+            .run_with(&mut context, |_client, _filter| {
+                unreachable!("invalid checkpoint must fail before HTTP")
+            })
+            .expect_err("uppercase checkpoint rejected");
+        assert!(error.to_string().contains("lowercase hexadecimal"));
+
+        let projection = HedgingProjectionArgs {
+            expected_checkpoint_fingerprint: "11".repeat(32),
+            after: None,
+            limit: SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1 + 1,
+        };
+        let error = projection
+            .run_with(&mut context, |_client, _filter| {
+                unreachable!("invalid limit must fail before HTTP")
+            })
+            .expect_err("out-of-range limit rejected");
+        assert!(error.to_string().contains("--limit"));
+
+        let zero_nonce = SorafsBillingAcknowledgementProof::try_from_hex(&"00".repeat(32), vec![1])
+            .expect_err("zero nonce rejected");
+        assert!(zero_nonce.to_string().contains("request nonce"));
+        assert!(context.printed.is_empty());
     }
 
     #[test]

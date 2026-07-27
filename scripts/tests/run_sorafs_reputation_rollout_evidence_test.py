@@ -18,9 +18,17 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+AUTH_ACCOUNT = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
+
 
 def write_payload(path: Path) -> Path:
     path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def write_auth_key(path: Path) -> Path:
+    path.write_text("runtime-only-test-key\n", encoding="utf-8")
+    path.chmod(0o600)
     return path
 
 
@@ -32,6 +40,10 @@ def complete_args(tmp_path: Path) -> list[str]:
         "/usr/local/bin/sorafs_cli",
         "--torii-url",
         "https://torii.example",
+        "--auth-account",
+        AUTH_ACCOUNT,
+        "--auth-private-key-file",
+        str(write_auth_key(payload_dir / "reputation-reader.key")),
         "--snapshot",
         str(write_payload(payload_dir / "reputation-snapshot.to")),
         "--publish-evidence",
@@ -71,7 +83,7 @@ def write_args_file(path: Path, args: list[str]) -> Path:
     for index in range(0, len(args), 2):
         option = args[index]
         value = args[index + 1]
-        lines.append(f"{option} {json.dumps(value)}")
+        lines.append(f"{option} {json.dumps(value, ensure_ascii=False)}")
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
@@ -145,6 +157,22 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
     )
     fetch = plan["steps"][1]["command"]
     assert "--format=json" in fetch
+    torii_url = "--torii-url=https://torii.example"
+    auth_account = f"--auth-account={AUTH_ACCOUNT}"
+    auth_key = (
+        f"--auth-private-key-file="
+        f"{args[args.index('--auth-private-key-file') + 1]}"
+    )
+    for step_index in (0, 1, 3):
+        command = plan["steps"][step_index]["command"]
+        assert command.count(torii_url) == 1
+        assert command.count(auth_account) == 1
+        assert command.count(auth_key) == 1
+    for step_index in (2, 4):
+        command = plan["steps"][step_index]["command"]
+        assert torii_url not in command
+        assert auth_account not in command
+        assert auth_key not in command
     verify = plan["steps"][2]["command"]
     assert "--provider-id=provider-a" in verify
     verifier = plan["steps"][4]["command"]
@@ -161,6 +189,8 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
         f"publish={args[args.index('--publish-evidence') + 1]}"
         in verifier
     )
+    out_dir = Path(args[args.index("--out-dir") + 1])
+    assert not out_dir.exists()
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
@@ -345,6 +375,61 @@ def test_response_file_dry_run_prints_complete_reputation_plan(
     assert "events" in plan["evidence_contract"]
 
 
+def test_response_file_rejects_duplicate_auth_options_without_values(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    for index, option in enumerate(("--auth-account", "--auth-private-key-file")):
+        case_dir = tmp_path / f"duplicate-auth-{index}"
+        case_dir.mkdir()
+        args_file = write_args_file(
+            case_dir / "reputation-rollout.args",
+            complete_args(case_dir),
+        )
+        duplicate_value = (
+            "private-key-account-placeholder"
+            if option == "--auth-account"
+            else str(case_dir / "private-key-material.key")
+        )
+        args_file.write_text(
+            f"{args_file.read_text(encoding='utf-8')}\n"
+            f"{option} {json.dumps(duplicate_value)}\n",
+            encoding="utf-8",
+        )
+
+        assert MODULE.main([f"@{args_file}", "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        option_label = MODULE.OPTION_DIAGNOSTIC_LABELS.get(option, option)
+        assert f"{option_label} must be supplied at most once" in captured.err
+        assert duplicate_value not in captured.err
+        assert captured.out == ""
+
+
+def test_auth_option_prefix_abbreviations_fail_without_values(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    for index, (option, abbreviated) in enumerate(
+        (
+            ("--auth-account", "--auth-acc"),
+            ("--auth-private-key-file", "--auth-private-key-f"),
+        )
+    ):
+        case_dir = tmp_path / f"abbreviated-auth-{index}"
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        value = args[args.index(option) + 1]
+        args[args.index(option)] = abbreviated
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert "unsupported reputation rollout option" in captured.err
+        assert value not in captured.err
+        assert captured.out == ""
+
+
 def test_missing_provider_proof_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     provider_id = "provider-a-private-key-placeholder"
@@ -463,20 +548,171 @@ def test_provider_proof_rejects_padded_or_unicode_components_without_trimming(
         assert escaped_spec not in diagnostics
 
 
-def test_provider_id_rejects_padded_or_unicode_values_before_plan(
+def test_provider_id_rejects_values_outside_exact_torii_grammar_before_plan(
     tmp_path: Path,
 ) -> None:
     parsed_args = MODULE.parse_args(complete_args(tmp_path))
 
-    for provider_id in (" provider-a", "provider-a ", "provider-a\u200d", "provider-a\u202e"):
+    for provider_id in (
+        " provider-a",
+        "provider-a ",
+        "provider-a\u200d",
+        "provider-a\u202e",
+        "provider/a",
+        "provider%2Fa",
+        "provider?query",
+        "provider#fragment",
+        "provider=alias",
+        "provideré",
+        ".",
+        "..",
+        "p" * 257,
+    ):
         parsed_args.provider_id = [provider_id]
         errors = MODULE.validate_inputs(parsed_args)
         diagnostics = "\n".join(errors)
         escaped_provider_id = provider_id.encode("unicode_escape").decode("ascii")
 
-        assert "--provider-id must be canonical" in diagnostics
-        assert provider_id not in diagnostics
-        assert escaped_provider_id not in diagnostics
+        assert MODULE.REPUTATION_PROVIDER_ID_ERROR in diagnostics
+        if provider_id not in {".", ".."}:
+            assert provider_id not in diagnostics
+            assert escaped_provider_id not in diagnostics
+
+
+def test_provider_ids_preserve_exact_collision_free_sharded_artifact_paths() -> None:
+    provider_ids = (
+        "a",
+        "aa",
+        "provider-a",
+        "provider_a",
+        "provider.a",
+        "provider:a",
+        "provider..a",
+        "A0",
+        "p" * 256,
+    )
+
+    paths = [
+        MODULE.provider_artifact_name(provider_id, "provider")
+        for provider_id in provider_ids
+    ]
+
+    assert len(paths) == len(set(paths))
+    for provider_id, path in zip(provider_ids, paths):
+        assert path.parts[0] == "provider-by-provider-id"
+        assert path.parts[-1] == "artifact.json"
+        hex_chunks = path.parts[1:-1]
+        assert hex_chunks
+        assert all(
+            0 < len(chunk) <= MODULE.PROVIDER_ARTIFACT_HEX_CHUNK_CHARS
+            and len(chunk) % 2 == 0
+            and set(chunk) <= set("0123456789abcdef")
+            for chunk in hex_chunks
+        )
+        assert all(
+            len(chunk) == MODULE.PROVIDER_ARTIFACT_HEX_CHUNK_CHARS
+            for chunk in hex_chunks[:-1]
+        )
+        assert bytes.fromhex("".join(hex_chunks)).decode("ascii") == provider_id
+    assert all(MODULE.provider_id_is_canonical(provider_id) for provider_id in provider_ids)
+
+
+def test_provider_artifact_suffix_is_schema_closed() -> None:
+    try:
+        MODULE.provider_artifact_name("provider-a", "../verify")
+    except ValueError as error:
+        assert str(error) == "provider artifact suffix must be provider or verify"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("unsafe provider artifact suffix must be rejected")
+
+
+def test_prepare_provider_artifact_parent_creates_only_planned_shards(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    step = plan[1]
+    args.out_dir.mkdir()
+
+    assert MODULE.prepare_reputation_artifact_parent(step, args.out_dir) == []
+    assert step.artifact is not None
+    assert step.artifact.parent.is_dir()
+    assert not step.artifact.exists()
+    assert not (args.out_dir / "verify-by-provider-id").exists()
+
+
+def test_prepare_provider_artifact_parent_rejects_tampered_layout(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    step = plan[1]
+    args.out_dir.mkdir()
+    tampered = MODULE.CommandPlan(
+        step.label,
+        args.out_dir / "provider-by-provider-id" / ".." / "artifact.json",
+        step.command,
+    )
+
+    assert MODULE.prepare_reputation_artifact_parent(tampered, args.out_dir) == [
+        "provider artifact path must match its canonical sharded layout"
+    ]
+    assert list(args.out_dir.iterdir()) == []
+
+
+def test_prepare_provider_artifact_parent_rejects_symlinked_namespace(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    step = plan[1]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    args.out_dir.mkdir()
+    namespace = args.out_dir / "provider-by-provider-id"
+    namespace.symlink_to(outside, target_is_directory=True)
+
+    errors = MODULE.prepare_reputation_artifact_parent(step, args.out_dir)
+
+    assert any("must not be a symlink" in error for error in errors)
+    assert list(outside.iterdir()) == []
+
+
+def test_run_plan_installs_reputation_artifact_preparation_callback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    captured: dict[str, object] = {}
+
+    def fake_run_command_plan(command_plan, out_dir, *, prepare_step):
+        captured["plan"] = command_plan
+        captured["out_dir"] = out_dir
+        captured["prepare_step"] = prepare_step
+        return 17
+
+    monkeypatch.setattr(MODULE, "run_command_plan", fake_run_command_plan)
+
+    assert MODULE.run_plan(plan, args.out_dir) == 17
+    assert captured["plan"] is plan
+    assert captured["out_dir"] == args.out_dir
+    assert callable(captured["prepare_step"])
+
+
+def test_provider_proof_rejects_provider_id_outside_torii_grammar() -> None:
+    for spec in (
+        "provider/a=/runtime/proof.to",
+        "provider%2Fa=/runtime/proof.to",
+        "provideré=/runtime/proof.to",
+        f"{'p' * 257}=/runtime/proof.to",
+    ):
+        try:
+            MODULE.split_provider_proof_spec(spec)
+        except ValueError as error:
+            assert str(error) == "--provider-proof must use PROVIDER_ID=PATH form"
+        else:  # pragma: no cover - defensive
+            raise AssertionError("invalid provider id must be rejected")
 
 
 def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
@@ -492,6 +728,68 @@ def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> 
     assert "--metrics-evidence" not in captured.err
     assert str(missing) not in captured.err
     assert captured.out == ""
+
+
+def test_missing_auth_signing_file_fails_before_plan_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    missing = tmp_path / "missing-reader.key"
+    args[args.index("--auth-private-key-file") + 1] = str(missing)
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "input evidence file must exist and be a file" in captured.err
+    assert str(missing) not in captured.err
+    assert captured.out == ""
+
+
+def test_auth_account_rejects_alias_and_sensitive_values_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    for index, (account, expected_diagnostic) in enumerate(
+        (
+            ("merchant@paynet", MODULE.AUTH_ACCOUNT_ERROR),
+            (
+                "private_key_account_placeholder",
+                "SoraFS runner passthrough arguments must not contain",
+            ),
+        )
+    ):
+        case_dir = tmp_path / f"auth-account-{index}"
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        args[args.index("--auth-account") + 1] = account
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert expected_diagnostic in captured.err
+        assert account not in captured.err
+        assert captured.out == ""
+
+
+def test_auth_account_candidate_shape_tracks_i105_sentinels_and_alphabet() -> None:
+    payload = "1234567"
+    for account in (
+        f"sora{payload}",
+        f"test{payload}",
+        f"dev{payload}",
+        f"n42{payload}",
+        AUTH_ACCOUNT,
+    ):
+        assert MODULE.auth_account_is_i105_candidate(account)
+
+    for account in (
+        "",
+        "merchant@paynet",
+        f"n0{payload}",
+        f"n00042{payload}",
+        "sora1234560",
+        "sora123456",
+    ):
+        assert not MODULE.auth_account_is_i105_candidate(account)
 
 
 def test_invalid_freshness_args_fail_before_plan(tmp_path: Path, capsys) -> None:
@@ -511,6 +809,34 @@ def test_invalid_freshness_args_fail_before_plan(tmp_path: Path, capsys) -> None
 
         captured = capsys.readouterr()
         assert "must be positive" in captured.err
+        assert captured.out == ""
+
+
+def test_watch_bounds_match_cli_and_torii_before_plan(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    cases = (
+        ("--watch-since", str(1 << 64), "unsigned 64-bit"),
+        ("--watch-limit", "501", "within 1..=500"),
+        ("--watch-max-polls", str(1 << 64), "unsigned 64-bit"),
+        ("--watch-poll-interval-ms", str(1 << 64), "unsigned 64-bit"),
+    )
+
+    for index, (option, value, diagnostic) in enumerate(cases):
+        case_dir = tmp_path / f"watch-bound-{index}"
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        if option in args:
+            args[args.index(option) + 1] = value
+        else:
+            args.extend([option, value])
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert diagnostic in captured.err
+        assert value not in captured.err
         assert captured.out == ""
 
 

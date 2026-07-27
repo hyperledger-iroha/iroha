@@ -18,10 +18,13 @@ use iroha_data_model::sorafs::{
 use crate::{
     metering::SmoothingConfig,
     pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
-    provider_ingest_outbox::ProviderIngestOutboxPolicyV1,
+    provider_ingest_outbox::{
+        ProviderIngestCheckpointProviderBindingV1, ProviderIngestOutboxPolicyV1,
+    },
     transparency::{
         PrivacyAggregateCycleConfig, PrivacyAggregateMetricSchemaV1, PrivacyAggregatePopulationV1,
         PrivacyAggregateScheduleConfig, PrivacyCompositionBudgetPolicyV1,
+        TransparencyRuntimeProviderBindingV1,
     },
 };
 
@@ -40,8 +43,11 @@ pub struct StorageConfig {
     moderation_screening_enabled: bool,
     moderation_screening_authority_bundle_path: Option<PathBuf>,
     moderation_screening_authority_bundle_digest: Option<[u8; 32]>,
+    moderation_quarantine_key_provider:
+        Option<actual::SorafsModerationQuarantineKeyProviderBinding>,
     pdp_provider: PdpProviderProtocolPolicyV1,
     provider_ingest_outbox_policy: Option<ProviderIngestOutboxPolicyV1>,
+    provider_ingest_checkpoint_provider: Option<ProviderIngestCheckpointProviderBindingV1>,
     runtime_retention: RuntimeRetentionPolicy,
     alias: Option<String>,
     adverts: AdvertOverrides,
@@ -52,6 +58,8 @@ pub struct StorageConfig {
     hedging_feed_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     privacy_aggregate_policy: Option<PrivacyAggregatePolicyConfig>,
+    privacy_cycle_prf_provider_binding: Option<TransparencyRuntimeProviderBindingV1>,
+    privacy_release_anchor_provider_binding: Option<TransparencyRuntimeProviderBindingV1>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
@@ -139,6 +147,14 @@ impl StorageConfig {
         self.moderation_screening_authority_bundle_digest
     }
 
+    /// Exact public identity and policy of the runtime quarantine-key provider.
+    #[must_use]
+    pub fn moderation_quarantine_key_provider(
+        &self,
+    ) -> Option<&actual::SorafsModerationQuarantineKeyProviderBinding> {
+        self.moderation_quarantine_key_provider.as_ref()
+    }
+
     /// Durable admission-bound PDP provider protocol policy.
     #[must_use]
     pub fn pdp_provider_policy(&self) -> PdpProviderProtocolPolicyV1 {
@@ -149,6 +165,14 @@ impl StorageConfig {
     #[must_use]
     pub fn provider_ingest_outbox_policy(&self) -> Option<ProviderIngestOutboxPolicyV1> {
         self.provider_ingest_outbox_policy
+    }
+
+    /// Exact public binding of the external sealed provider-ingest checkpoint store.
+    #[must_use]
+    pub fn provider_ingest_checkpoint_provider(
+        &self,
+    ) -> Option<&ProviderIngestCheckpointProviderBindingV1> {
+        self.provider_ingest_checkpoint_provider.as_ref()
     }
 
     /// Safety ceilings for auxiliary runtime state and replay histories.
@@ -209,6 +233,22 @@ impl StorageConfig {
     #[must_use]
     pub fn privacy_aggregate_policy(&self) -> Option<&PrivacyAggregatePolicyConfig> {
         self.privacy_aggregate_policy.as_ref()
+    }
+
+    /// Exact production threshold-PRF provider binding for configured DP cycles.
+    #[must_use]
+    pub fn privacy_cycle_prf_provider_binding(
+        &self,
+    ) -> Option<&TransparencyRuntimeProviderBindingV1> {
+        self.privacy_cycle_prf_provider_binding.as_ref()
+    }
+
+    /// Exact production finalized release-anchor binding for privacy cycles.
+    #[must_use]
+    pub fn privacy_release_anchor_provider_binding(
+        &self,
+    ) -> Option<&TransparencyRuntimeProviderBindingV1> {
+        self.privacy_release_anchor_provider_binding.as_ref()
     }
 
     /// Optional config-backed evidence-viewer audit-report due-cycle scheduler.
@@ -290,6 +330,7 @@ impl StorageConfig {
                 .clone(),
             moderation_screening_authority_bundle_digest: storage
                 .moderation_screening_authority_bundle_digest,
+            moderation_quarantine_key_provider: storage.moderation_quarantine_key_provider.clone(),
             pdp_provider: PdpProviderProtocolPolicyV1 {
                 version: PDP_PROVIDER_POLICY_VERSION_V1,
                 max_pending_records: storage.pdp_provider.max_pending_records,
@@ -318,6 +359,13 @@ impl StorageConfig {
                     max_status_page_size: runtime.outbox.max_status_page_size,
                 },
             ),
+            provider_ingest_checkpoint_provider: storage.provider_ingest_runtime.as_ref().map(
+                |runtime| ProviderIngestCheckpointProviderBindingV1 {
+                    handle: runtime.checkpoint_store_handle.clone(),
+                    revision: runtime.checkpoint_store_revision,
+                    policy_digest: runtime.checkpoint_store_policy_digest,
+                },
+            ),
             runtime_retention: RuntimeRetentionPolicy::from(storage.runtime),
             alias: storage.alias.clone(),
             adverts: AdvertOverrides::from(&storage.adverts),
@@ -328,6 +376,16 @@ impl StorageConfig {
             hedging_feed_trust_policy_path: storage.hedging_feed_trust_policy_path.clone(),
             privacy_aggregate_schedule: storage.privacy_aggregates.clone().into_schedule_config(),
             privacy_aggregate_policy: storage.privacy_aggregates.clone().into_policy_config(),
+            privacy_cycle_prf_provider_binding: storage
+                .privacy_aggregates
+                .cycle_prf_provider
+                .as_ref()
+                .map(transparency_runtime_provider_binding),
+            privacy_release_anchor_provider_binding: storage
+                .privacy_aggregates
+                .release_anchor_provider
+                .as_ref()
+                .map(transparency_runtime_provider_binding),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
@@ -449,6 +507,16 @@ impl StorageConfigBuilder {
         self
     }
 
+    /// Set the exact public identity and policy of the quarantine-key provider.
+    #[must_use]
+    pub fn moderation_quarantine_key_provider(
+        mut self,
+        binding: Option<actual::SorafsModerationQuarantineKeyProviderBinding>,
+    ) -> Self {
+        self.inner.moderation_quarantine_key_provider = binding;
+        self
+    }
+
     /// Override the durable admission-bound PDP provider protocol policy.
     #[must_use]
     pub fn pdp_provider_policy(mut self, policy: PdpProviderProtocolPolicyV1) -> Self {
@@ -463,6 +531,16 @@ impl StorageConfigBuilder {
         policy: Option<ProviderIngestOutboxPolicyV1>,
     ) -> Self {
         self.inner.provider_ingest_outbox_policy = policy;
+        self
+    }
+
+    /// Bind the production external sealed provider-ingest checkpoint store.
+    #[must_use]
+    pub fn provider_ingest_checkpoint_provider(
+        mut self,
+        binding: Option<ProviderIngestCheckpointProviderBindingV1>,
+    ) -> Self {
+        self.inner.provider_ingest_checkpoint_provider = binding;
         self
     }
 
@@ -532,6 +610,26 @@ impl StorageConfigBuilder {
         policy: Option<PrivacyAggregatePolicyConfig>,
     ) -> Self {
         self.inner.privacy_aggregate_policy = policy;
+        self
+    }
+
+    /// Override the exact production threshold-PRF provider binding.
+    #[must_use]
+    pub fn privacy_cycle_prf_provider_binding(
+        mut self,
+        binding: Option<TransparencyRuntimeProviderBindingV1>,
+    ) -> Self {
+        self.inner.privacy_cycle_prf_provider_binding = binding;
+        self
+    }
+
+    /// Override the exact production finalized release-anchor binding.
+    #[must_use]
+    pub fn privacy_release_anchor_provider_binding(
+        mut self,
+        binding: Option<TransparencyRuntimeProviderBindingV1>,
+    ) -> Self {
+        self.inner.privacy_release_anchor_provider_binding = binding;
         self
     }
 
@@ -1078,6 +1176,17 @@ impl PrivacyAggregatePolicyConfig {
     pub const fn composition_budget(&self) -> PrivacyCompositionBudgetPolicyV1 {
         self.composition_budget
     }
+}
+
+fn transparency_runtime_provider_binding(
+    binding: &actual::SorafsTransparencyRuntimeProviderBinding,
+) -> TransparencyRuntimeProviderBindingV1 {
+    TransparencyRuntimeProviderBindingV1::try_new(
+        binding.handle.clone(),
+        binding.revision,
+        binding.policy_digest,
+    )
+    .expect("iroha_config validated the transparency runtime provider binding")
 }
 
 trait PrivacyAggregatePolicyConfigExt {
@@ -1737,6 +1846,16 @@ mod tests {
                 unit: "count".to_string(),
             }],
             policy_digest: Some([0xC0; 32]),
+            cycle_prf_provider: Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: "threshold-prf:transparency:primary".to_owned(),
+                revision: 7,
+                policy_digest: [0xD1; 32],
+            }),
+            release_anchor_provider: Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: "governance-dag:transparency:primary".to_owned(),
+                revision: 9,
+                policy_digest: [0xE1; 32],
+            }),
             ..actual::SorafsPrivacyAggregateSchedule::default()
         };
         actual.evidence_viewer_audits = actual::SorafsEvidenceViewerAuditSchedule {
@@ -1835,6 +1954,28 @@ mod tests {
         assert_eq!(cycle_policy.policy_digest, [0xC0; 32]);
         assert_eq!(privacy_policy.policy_digest(), [0xC0; 32]);
         assert!(privacy_policy.requires_cycle_prf());
+        assert_eq!(
+            cfg.privacy_cycle_prf_provider_binding(),
+            Some(
+                &TransparencyRuntimeProviderBindingV1::try_new(
+                    "threshold-prf:transparency:primary",
+                    7,
+                    [0xD1; 32],
+                )
+                .expect("valid threshold-PRF provider binding")
+            )
+        );
+        assert_eq!(
+            cfg.privacy_release_anchor_provider_binding(),
+            Some(
+                &TransparencyRuntimeProviderBindingV1::try_new(
+                    "governance-dag:transparency:primary",
+                    9,
+                    [0xE1; 32],
+                )
+                .expect("valid release-anchor provider binding")
+            )
+        );
         assert_eq!(cycle_policy.privacy.epsilon_numerator, Some(4));
         assert_eq!(cycle_policy.privacy.epsilon_denominator, Some(5));
         assert_eq!(cycle_policy.privacy.delta_ppb, Some(0));
@@ -1890,6 +2031,8 @@ mod tests {
         let cfg = StorageConfig::from(&actual);
         assert_eq!(cfg.privacy_aggregate_schedule(), None);
         assert_eq!(cfg.privacy_aggregate_policy(), None);
+        assert_eq!(cfg.privacy_cycle_prf_provider_binding(), None);
+        assert_eq!(cfg.privacy_release_anchor_provider_binding(), None);
     }
 
     #[test]

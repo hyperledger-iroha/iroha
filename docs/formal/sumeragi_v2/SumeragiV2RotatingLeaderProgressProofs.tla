@@ -11,12 +11,12 @@ claim:
 
   (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide.
 
-The reverse direction was already proved by the locked-body leaf: GST is
+Both directions are proved locally in this rotating-leader leaf.  GST is
 stable, so reaching an honest-leader view and then discharging that view
-composes to aggregate Decision.  This module proves the forward direction:
-aggregate Decision is itself an allowed target of the first clause and
-directly discharges the second clause.  The equivalence removes duplicated
-temporal debt without importing the open release aggregate.
+composes to aggregate Decision; conversely, aggregate Decision is itself an
+allowed target of the first clause and directly discharges the second clause.
+The lower locked-body leaf does not participate in this equivalence and does
+not import or assume the resulting Decision convergence.
 
 The remaining production-specific work is exposed below as an adequate
 leader-service kernel.  The timeout arithmetic already proves that a view
@@ -55,6 +55,44 @@ THEOREM AsyncLiveSpecHasRepresentableAdequateTimeout ==
 BY AdequateViewTimeoutExists
    DEF AsyncLiveSpecAt, AsyncSpecAt, AsyncInitAt, AsyncBaseInitAt,
        InitAt
+
+(***************************************************************************
+The two rotating-leader clauses compose to aggregate responsive Decision.
+This theorem belongs here, above the locked-body dependency: it is useful for
+the adequate-leader reduction but is not allowed to close retained-lock
+reproposal by terminal-Decision subsumption.
+***************************************************************************)
+
+THEOREM RotatingLeaderProgressSuppliesResponsiveDecisionConvergence ==
+  \A initialContext:
+    RotatingLeaderProgressProperty(AsyncLiveSpecAt(initialContext))
+      => ResponsiveDecisionConvergenceProperty(
+           AsyncLiveSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                RotatingLeaderProgressProperty(
+                  AsyncLiveSpecAt(initialContext))
+         PROVE ResponsiveDecisionConvergenceProperty(
+                 AsyncLiveSpecAt(initialContext))
+    <2>1. ASSUME AsyncLiveSpecAt(initialContext)
+           PROVE (gst /\ ~ResponsiveNodesDecide)
+                   ~> ResponsiveNodesDecide
+      <3>1. AsyncSpecAt(initialContext)
+        BY <2>1, AsyncLiveSpecProjectsAsyncSpec
+      <3>2. AsyncSpecAt(initialContext) => [](gst => []gst)
+        BY AsyncSpecKeepsGstOnceSet
+      <3>3. (gst /\ ~ResponsiveNodesDecide)
+               ~> (ResponsiveHonestLeaderViewReached
+                     \/ ResponsiveNodesDecide)
+        BY <1>1, <2>1 DEF RotatingLeaderProgressProperty
+      <3>4. (gst /\ ResponsiveHonestLeaderViewReached
+                    /\ ~ResponsiveNodesDecide)
+               ~> ResponsiveNodesDecide
+        BY <1>1, <2>1 DEF RotatingLeaderProgressProperty
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
+    <2> QED BY <2>1
+         DEF ResponsiveDecisionConvergenceProperty
+  <1> QED BY <1>1
 
 (***************************************************************************
 The imported rank closure already drains every protected Normal
@@ -224,48 +262,5 @@ THEOREM AdequateLeaderServiceKernelSuppliesRotatingLeaderProgress ==
            AsyncLiveSpecAt(initialContext))
 BY AdequateLeaderServiceKernelSuppliesDecisionConvergence,
    ResponsiveDecisionConvergenceSuppliesRotatingLeaderProgress
-
-(***************************************************************************
-Dependent-debt collapse.
-
-Once the single adequate leader-service kernel is proved from the concrete
-fair actions and semantic successor ranks, it closes the rotating-leader
-property and, through the two acyclic leaves imported above, the exact
-timeout/view and locked-body reproposal properties as well.
-***************************************************************************)
-
-THEOREM AdequateLeaderServiceKernelClosesDependentProgress ==
-  \A initialContext:
-    AdequateLeaderServiceKernelProperty(
-      AsyncLiveSpecAt(initialContext))
-      => /\ RotatingLeaderProgressProperty(
-               AsyncLiveSpecAt(initialContext))
-         /\ TimeoutViewProgressProperty(
-              AsyncLiveSpecAt(initialContext))
-         /\ LockedBodyReproposalProgressProperty(
-              AsyncLiveSpecAt(initialContext))
-PROOF
-  <1>1. ASSUME NEW initialContext,
-                AdequateLeaderServiceKernelProperty(
-                  AsyncLiveSpecAt(initialContext))
-         PROVE /\ RotatingLeaderProgressProperty(
-                      AsyncLiveSpecAt(initialContext))
-                /\ TimeoutViewProgressProperty(
-                     AsyncLiveSpecAt(initialContext))
-                /\ LockedBodyReproposalProgressProperty(
-                     AsyncLiveSpecAt(initialContext))
-    <2>1. RotatingLeaderProgressProperty(
-             AsyncLiveSpecAt(initialContext))
-      BY <1>1,
-         AdequateLeaderServiceKernelSuppliesRotatingLeaderProgress
-    <2>2. TimeoutViewProgressProperty(
-             AsyncLiveSpecAt(initialContext))
-      BY <2>1,
-         RotatingLeaderProgressPropertyImpliesTimeoutViewProgressProperty
-    <2>3. LockedBodyReproposalProgressProperty(
-             AsyncLiveSpecAt(initialContext))
-      BY <2>1, RotatingLeaderProgressClosesLockedBodyReproposal
-    <2> QED BY <2>1, <2>2, <2>3
-  <1> QED BY <1>1
 
 =============================================================================

@@ -164,7 +164,7 @@ from iroha_torii_client.native_amx import (
 from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
 from .connect import ConnectSessionInfo
 from .event_filter import DataEventFilter, ensure_event_filter
-from ._privacy_backends import _require_production_verify_backend_label
+from ._privacy_backends import _require_verifier_backend_registry_label_v1
 from .privacy_catalog import (
     get_privacy_algorithm_descriptors,
     privacy_capabilities as _privacy_capabilities,
@@ -360,7 +360,7 @@ def _normalize_zk_verifying_key_submission_payload(
     *,
     require_gas_schedule: bool,
 ) -> None:
-    body["backend"] = _require_production_verify_backend_label(
+    body["backend"] = _require_verifier_backend_registry_label_v1(
         body.get("backend"),
         f"{context}.backend",
     )
@@ -606,7 +606,7 @@ def _zk_ace_asset_metadata_entry(
 
 def _zk_ace_verifier_key_state(verifier_key: Union[str, Mapping[str, Any]]) -> Dict[str, str]:
     if isinstance(verifier_key, Mapping):
-        backend = _require_production_verify_backend_label(
+        backend = _require_verifier_backend_registry_label_v1(
             verifier_key.get("backend"),
             "verifier_key.backend",
         )
@@ -616,7 +616,9 @@ def _zk_ace_verifier_key_state(verifier_key: Union[str, Mapping[str, Any]]) -> D
         if ":" not in literal:
             raise ValueError("verifier_key must include a backend prefix")
         backend, name = literal.rsplit(":", 1)
-        backend = _require_production_verify_backend_label(backend, "verifier_key.backend")
+        backend = _require_verifier_backend_registry_label_v1(
+            backend, "verifier_key.backend"
+        )
         name = _require_exact_non_empty_string(name, "verifier_key.name")
     return {"backend": backend, "name": name}
 
@@ -1488,45 +1490,1036 @@ def _normalize_sorafs_digest_hex(value: Any, context: str) -> str:
 
 def _normalize_sorafs_reputation_snapshot_id_hex(value: Any, context: str) -> str:
     if not isinstance(value, str):
-        raise TypeError(f"{context} must be a 16-byte hex string")
-    literal = value.strip()
-    if literal.startswith(("0x", "0X")):
-        literal = literal[2:].strip()
-    if not re.fullmatch(r"[0-9a-fA-F]{32}", literal):
-        raise ValueError(f"{context} must be a 16-byte hex string")
-    return literal.lower()
+        raise TypeError(f"{context} must be exactly 32 lowercase hexadecimal characters")
+    if not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ValueError(f"{context} must be exactly 32 lowercase hexadecimal characters")
+    if value == "0" * 32:
+        raise ValueError(f"{context} must be nonzero")
+    return value
 
 
 def _normalize_sorafs_reputation_provider_id(value: Any, context: str) -> str:
-    provider_id = _require_non_empty_string(value, context)
+    provider_id = _require_exact_non_empty_string(value, context)
     if len(provider_id) > 256:
         raise ValueError(f"{context} must be at most 256 characters")
     if not re.fullmatch(r"[0-9A-Za-z_.:-]+", provider_id):
         raise ValueError(f"{context} contains unsupported characters")
+    if provider_id in {".", ".."}:
+        raise ValueError(f"{context} must not be a URL dot segment")
     return provider_id
+
+
+_SORAFS_REPUTATION_RESPONSE_MAX_BYTES = 4_194_304
+_SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES = 65_536
+_SORAFS_REPUTATION_U64_MAX = (1 << 64) - 1
+_SORAFS_REPUTATION_SNAPSHOT_FIELDS = frozenset(
+    {
+        "snapshot_id_hex",
+        "generated_at_unix",
+        "previous_snapshot_id_hex",
+        "merkle_root_hex",
+        "provider_count",
+        "returned_provider_count",
+        "limit",
+        "truncated_providers",
+        "alpha_bps",
+        "current_score_weight_bps",
+        "weights",
+        "providers",
+    }
+)
+_SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS = frozenset(
+    {
+        "snapshot_id_hex",
+        "generated_at_unix",
+        "merkle_root_hex",
+        "provider",
+        "proof",
+    }
+)
+_SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS = frozenset(
+    {
+        "snapshot_id_hex",
+        "generated_at_unix",
+        "alpha_bps",
+        "current_score_weight_bps",
+        "weights",
+    }
+)
+_SORAFS_REPUTATION_WEIGHTS_FIELDS = frozenset(
+    {
+        "version",
+        "por_success_bps",
+        "pdp_success_bps",
+        "potr_success_bps",
+        "latency_bps",
+        "dispute_bps",
+        "token_violation_bps",
+        "repair_breach_bps",
+    }
+)
+_SORAFS_REPUTATION_PROVIDER_FIELDS = frozenset(
+    {
+        "provider_id",
+        "score_bps",
+        "degradation_flags",
+        "raw_metrics",
+        "raw_metrics_hash_hex",
+    }
+)
+_SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS = frozenset(
+    {
+        "version",
+        "por_success_bps",
+        "pdp_success_bps",
+        "potr_success_bps",
+        "latency_health_bps",
+        "dispute_rate_bps",
+        "token_violation_rate_bps",
+        "repair_breach_rate_bps",
+    }
+)
+_SORAFS_REPUTATION_DEGRADATION_FLAG_FIELDS = frozenset({"flag", "value"})
+_SORAFS_REPUTATION_PROOF_FIELDS = frozenset(
+    {"provider_id", "leaf_index", "leaf_count", "siblings_hex"}
+)
+_SORAFS_REPUTATION_EVENT_FIELDS = frozenset(
+    {
+        "version",
+        "sequence",
+        "snapshot_id_hex",
+        "generated_at_unix",
+        "merkle_root_hex",
+        "provider_count",
+        "previous_snapshot_id_hex",
+    }
+)
+_SORAFS_REPUTATION_EVENT_PAGE_FIELDS = frozenset(
+    {"since", "limit", "count", "next_since", "events"}
+)
+_SORAFS_REPUTATION_DEGRADATION_FLAG_ORDER = (
+    "reserve_warning",
+    "reserve_grace",
+    "reserve_delinquent",
+    "reserve_default",
+    "proof_success_below90",
+    "proof_success_below80",
+    "active_dispute",
+    "slashing_event",
+    "low_score",
+)
+_SORAFS_REPUTATION_DEGRADATION_FLAGS = frozenset(
+    _SORAFS_REPUTATION_DEGRADATION_FLAG_ORDER
+)
+
+
+def _decode_sorafs_reputation_json_bytes(
+    body: Any,
+    context: str,
+    *,
+    maximum_bytes: int = _SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
+) -> Any:
+    if not isinstance(body, (bytes, bytearray, memoryview)):
+        raise ValueError(f"{context} body must be bytes")
+    raw = bytes(body)
+    if not raw:
+        raise ValueError(f"{context} returned an empty body")
+    if len(raw) > maximum_bytes:
+        raise ValueError(f"{context} body exceeds the {maximum_bytes}-byte limit")
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raise ValueError(f"{context} body must not contain a UTF-8 BOM")
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{context} body must be strict UTF-8") from exc
+    if not text or text != text.strip():
+        raise ValueError(f"{context} body must be exact JSON without surrounding data")
+
+    def _object_pairs(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+        decoded: Dict[str, Any] = {}
+        for key, value in pairs:
+            if key in decoded:
+                raise ValueError(f"{context} body contains duplicate object key {key!r}")
+            decoded[key] = value
+        return decoded
+
+    def _integer(literal: str) -> int:
+        if not re.fullmatch(r"(?:0|[1-9][0-9]*)", literal):
+            raise ValueError(f"{context} body contains a noncanonical unsigned integer")
+        return int(literal)
+
+    def _float(literal: str) -> float:
+        raise ValueError(f"{context} body must not contain floating-point numbers: {literal}")
+
+    def _constant(literal: str) -> Any:
+        raise ValueError(f"{context} body must not contain non-finite value {literal}")
+
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_object_pairs,
+            parse_int=_integer,
+            parse_float=_float,
+            parse_constant=_constant,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{context} body must contain one exact JSON value") from exc
+
+
+def _decode_sorafs_reputation_sse_json(payload: str) -> Any:
+    context = "SoraFS reputation SSE data"
+    if not isinstance(payload, str) or not payload:
+        raise ValueError(f"{context} must be exact compact JSON")
+    if any(character.isspace() for character in payload):
+        raise ValueError(f"{context} must be exact compact JSON")
+    return _decode_sorafs_reputation_json_bytes(
+        payload.encode("utf-8"),
+        context,
+    )
+
+
+def _sorafs_reputation_object(value: Any, context: str) -> Dict[str, Any]:
+    if type(value) is not dict:
+        raise ValueError(f"{context} must be a JSON object")
+    return value
+
+
+def _sorafs_reputation_list(value: Any, context: str) -> List[Any]:
+    if type(value) is not list:
+        raise ValueError(f"{context} must be a JSON array")
+    return value
+
+
+def _sorafs_reputation_exact_fields(
+    value: Dict[str, Any],
+    expected: frozenset[str],
+    context: str,
+) -> None:
+    actual = frozenset(value)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ValueError(
+            f"{context} fields are not canonical; missing={missing} extra={extra}"
+        )
+
+
+def _sorafs_reputation_exact_string(value: Any, context: str) -> str:
+    if type(value) is not str or not value or value != value.strip():
+        raise ValueError(f"{context} must be an exact non-empty string")
+    return value
+
+
+def _sorafs_reputation_provider_id(value: Any, context: str) -> str:
+    provider_id = _sorafs_reputation_exact_string(value, context)
+    if len(provider_id) > 256 or not re.fullmatch(r"[0-9A-Za-z_.:-]+", provider_id):
+        raise ValueError(
+            f"{context} must be 1..256 ASCII characters from [A-Za-z0-9_.:-]"
+        )
+    if provider_id in {".", ".."}:
+        raise ValueError(f"{context} must not be a URL dot segment")
+    return provider_id
+
+
+def _sorafs_reputation_snapshot_id(value: Any, context: str) -> str:
+    if type(value) is not str or not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ValueError(f"{context} must be exactly 32 lowercase hexadecimal characters")
+    if value == "0" * 32:
+        raise ValueError(f"{context} must be nonzero")
+    return value
+
+
+def _sorafs_reputation_optional_snapshot_id(value: Any, context: str) -> Optional[str]:
+    return None if value is None else _sorafs_reputation_snapshot_id(value, context)
+
+
+def _sorafs_reputation_digest(value: Any, context: str) -> str:
+    if type(value) is not str or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ValueError(f"{context} must be exactly 64 lowercase hexadecimal characters")
+    return value
+
+
+def _sorafs_reputation_u64(
+    value: Any,
+    context: str,
+    *,
+    allow_zero: bool,
+) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{context} must be a canonical unsigned integer")
+    if value < 0 or value > _SORAFS_REPUTATION_U64_MAX:
+        raise ValueError(f"{context} must fit canonical u64")
+    if not allow_zero and value == 0:
+        raise ValueError(f"{context} must be positive")
+    return value
+
+
+def _sorafs_reputation_optional_u64(
+    value: Any,
+    context: str,
+    *,
+    allow_zero: bool,
+) -> Optional[int]:
+    return (
+        None
+        if value is None
+        else _sorafs_reputation_u64(value, context, allow_zero=allow_zero)
+    )
+
+
+def _sorafs_reputation_bounded_int(
+    value: Any,
+    context: str,
+    minimum: int,
+    maximum: int,
+) -> int:
+    parsed = _sorafs_reputation_u64(value, context, allow_zero=minimum == 0)
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{context} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def _sorafs_reputation_exact_int(value: Any, context: str, expected: int) -> int:
+    parsed = _sorafs_reputation_bounded_int(value, context, expected, expected)
+    if parsed != expected:
+        raise ValueError(f"{context} must equal {expected}")
+    return parsed
+
+
+def _validate_sorafs_reputation_weights(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    weights = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        weights,
+        _SORAFS_REPUTATION_WEIGHTS_FIELDS,
+        context,
+    )
+    _sorafs_reputation_exact_int(weights["version"], f"{context}.version", 1)
+    fields = (
+        "por_success_bps",
+        "pdp_success_bps",
+        "potr_success_bps",
+        "latency_bps",
+        "dispute_bps",
+        "token_violation_bps",
+        "repair_breach_bps",
+    )
+    total = sum(
+        _sorafs_reputation_bounded_int(
+            weights[field_name],
+            f"{context}.{field_name}",
+            0,
+            10_000,
+        )
+        for field_name in fields
+    )
+    if total != 10_000:
+        raise ValueError(f"{context} basis-point fields must sum to exactly 10000")
+    return weights
+
+
+def _validate_sorafs_reputation_provider_metrics(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    metrics = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        metrics,
+        _SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS,
+        context,
+    )
+    _sorafs_reputation_exact_int(metrics["version"], f"{context}.version", 1)
+    for field_name in (
+        "por_success_bps",
+        "pdp_success_bps",
+        "potr_success_bps",
+        "latency_health_bps",
+        "dispute_rate_bps",
+        "token_violation_rate_bps",
+        "repair_breach_rate_bps",
+    ):
+        _sorafs_reputation_bounded_int(
+            metrics[field_name],
+            f"{context}.{field_name}",
+            0,
+            10_000,
+        )
+    return metrics
+
+
+def _validate_sorafs_reputation_provider(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    provider = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        provider,
+        _SORAFS_REPUTATION_PROVIDER_FIELDS,
+        context,
+    )
+    _sorafs_reputation_provider_id(provider["provider_id"], f"{context}.provider_id")
+    _sorafs_reputation_bounded_int(provider["score_bps"], f"{context}.score_bps", 500, 9_900)
+    flags = _sorafs_reputation_list(
+        provider["degradation_flags"],
+        f"{context}.degradation_flags",
+    )
+    labels: List[str] = []
+    for index, value in enumerate(flags):
+        flag_context = f"{context}.degradation_flags[{index}]"
+        flag = _sorafs_reputation_object(value, flag_context)
+        _sorafs_reputation_exact_fields(
+            flag,
+            _SORAFS_REPUTATION_DEGRADATION_FLAG_FIELDS,
+            flag_context,
+        )
+        if flag["value"] is not None:
+            raise ValueError(f"{flag_context}.value must be null")
+        label = _sorafs_reputation_exact_string(flag["flag"], f"{flag_context}.flag")
+        if label not in _SORAFS_REPUTATION_DEGRADATION_FLAGS:
+            raise ValueError(f"{flag_context}.flag is unsupported")
+        labels.append(label)
+    if len(labels) > 5 or len(set(labels)) != len(labels):
+        raise ValueError(
+            f"{context}.degradation_flags must be unique and contain at most five entries"
+        )
+    order = {
+        label: index
+        for index, label in enumerate(_SORAFS_REPUTATION_DEGRADATION_FLAG_ORDER)
+    }
+    if any(order[left] >= order[right] for left, right in zip(labels, labels[1:], strict=False)):
+        raise ValueError(f"{context}.degradation_flags must use canonical enum order")
+    _validate_sorafs_reputation_provider_metrics(
+        provider["raw_metrics"],
+        f"{context}.raw_metrics",
+    )
+    _sorafs_reputation_digest(
+        provider["raw_metrics_hash_hex"],
+        f"{context}.raw_metrics_hash_hex",
+    )
+    return provider
+
+
+def _sorafs_reputation_merkle_depth(leaf_count: int) -> int:
+    width = leaf_count
+    depth = 0
+    while width > 1:
+        width = (width + 1) // 2
+        depth += 1
+    return depth
+
+
+def _validate_sorafs_reputation_proof(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    proof = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        proof,
+        _SORAFS_REPUTATION_PROOF_FIELDS,
+        context,
+    )
+    _sorafs_reputation_provider_id(proof["provider_id"], f"{context}.provider_id")
+    leaf_index = _sorafs_reputation_bounded_int(
+        proof["leaf_index"],
+        f"{context}.leaf_index",
+        0,
+        65_535,
+    )
+    leaf_count = _sorafs_reputation_bounded_int(
+        proof["leaf_count"],
+        f"{context}.leaf_count",
+        1,
+        65_536,
+    )
+    if leaf_index >= leaf_count:
+        raise ValueError(f"{context}.leaf_index must be less than leaf_count")
+    siblings = _sorafs_reputation_list(proof["siblings_hex"], f"{context}.siblings_hex")
+    for index, sibling in enumerate(siblings):
+        _sorafs_reputation_digest(sibling, f"{context}.siblings_hex[{index}]")
+    if len(siblings) != _sorafs_reputation_merkle_depth(leaf_count):
+        raise ValueError(
+            f"{context}.siblings_hex must have the exact Merkle depth for leaf_count"
+        )
+    return proof
+
+
+def _validate_sorafs_reputation_event(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    event = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        event,
+        _SORAFS_REPUTATION_EVENT_FIELDS,
+        context,
+    )
+    _sorafs_reputation_exact_int(event["version"], f"{context}.version", 1)
+    _sorafs_reputation_u64(event["sequence"], f"{context}.sequence", allow_zero=False)
+    snapshot_id = _sorafs_reputation_snapshot_id(
+        event["snapshot_id_hex"],
+        f"{context}.snapshot_id_hex",
+    )
+    _sorafs_reputation_u64(
+        event["generated_at_unix"],
+        f"{context}.generated_at_unix",
+        allow_zero=False,
+    )
+    _sorafs_reputation_digest(event["merkle_root_hex"], f"{context}.merkle_root_hex")
+    _sorafs_reputation_bounded_int(
+        event["provider_count"],
+        f"{context}.provider_count",
+        1,
+        65_536,
+    )
+    previous = _sorafs_reputation_optional_snapshot_id(
+        event["previous_snapshot_id_hex"],
+        f"{context}.previous_snapshot_id_hex",
+    )
+    if previous == snapshot_id:
+        raise ValueError(
+            f"{context}.previous_snapshot_id_hex must differ from snapshot_id_hex"
+        )
+    return event
+
+
+def _validate_sorafs_reputation_snapshot(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    snapshot = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        snapshot,
+        _SORAFS_REPUTATION_SNAPSHOT_FIELDS,
+        context,
+    )
+    snapshot_id = _sorafs_reputation_snapshot_id(
+        snapshot["snapshot_id_hex"],
+        f"{context}.snapshot_id_hex",
+    )
+    _sorafs_reputation_u64(
+        snapshot["generated_at_unix"],
+        f"{context}.generated_at_unix",
+        allow_zero=False,
+    )
+    previous = _sorafs_reputation_optional_snapshot_id(
+        snapshot["previous_snapshot_id_hex"],
+        f"{context}.previous_snapshot_id_hex",
+    )
+    if previous == snapshot_id:
+        raise ValueError(
+            f"{context}.previous_snapshot_id_hex must differ from snapshot_id_hex"
+        )
+    _sorafs_reputation_digest(snapshot["merkle_root_hex"], f"{context}.merkle_root_hex")
+    provider_count = _sorafs_reputation_bounded_int(
+        snapshot["provider_count"],
+        f"{context}.provider_count",
+        1,
+        65_536,
+    )
+    returned_count = _sorafs_reputation_bounded_int(
+        snapshot["returned_provider_count"],
+        f"{context}.returned_provider_count",
+        1,
+        500,
+    )
+    limit = _sorafs_reputation_bounded_int(
+        snapshot["limit"],
+        f"{context}.limit",
+        1,
+        500,
+    )
+    providers = _sorafs_reputation_list(snapshot["providers"], f"{context}.providers")
+    for index, provider in enumerate(providers):
+        _validate_sorafs_reputation_provider(provider, f"{context}.providers[{index}]")
+    provider_ids = [provider["provider_id"] for provider in providers]
+    if any(
+        left >= right
+        for left, right in zip(provider_ids, provider_ids[1:], strict=False)
+    ):
+        raise ValueError(f"{context}.providers must be strictly ordered by provider_id")
+    if returned_count != len(providers):
+        raise ValueError(
+            f"{context}.returned_provider_count must equal providers.length"
+        )
+    if returned_count != min(provider_count, limit):
+        raise ValueError(
+            f"{context}.returned_provider_count must equal min(provider_count, limit)"
+        )
+    truncated = snapshot["truncated_providers"]
+    if type(truncated) is not bool:
+        raise ValueError(f"{context}.truncated_providers must be a boolean")
+    if truncated != (provider_count > returned_count):
+        raise ValueError(
+            f"{context}.truncated_providers is inconsistent with provider counts"
+        )
+    _sorafs_reputation_exact_int(snapshot["alpha_bps"], f"{context}.alpha_bps", 8_500)
+    _sorafs_reputation_exact_int(
+        snapshot["current_score_weight_bps"],
+        f"{context}.current_score_weight_bps",
+        7_000,
+    )
+    _validate_sorafs_reputation_weights(snapshot["weights"], f"{context}.weights")
+    return snapshot
+
+
+def _validate_sorafs_reputation_provider_response(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    response = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        response,
+        _SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS,
+        context,
+    )
+    _sorafs_reputation_snapshot_id(
+        response["snapshot_id_hex"],
+        f"{context}.snapshot_id_hex",
+    )
+    _sorafs_reputation_u64(
+        response["generated_at_unix"],
+        f"{context}.generated_at_unix",
+        allow_zero=False,
+    )
+    _sorafs_reputation_digest(response["merkle_root_hex"], f"{context}.merkle_root_hex")
+    provider = _validate_sorafs_reputation_provider(
+        response["provider"],
+        f"{context}.provider",
+    )
+    proof = _validate_sorafs_reputation_proof(response["proof"], f"{context}.proof")
+    if provider["provider_id"] != proof["provider_id"]:
+        raise ValueError(f"{context}.proof must reference the returned provider")
+    return response
+
+
+def _validate_sorafs_reputation_weights_response(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    response = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        response,
+        _SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS,
+        context,
+    )
+    _sorafs_reputation_snapshot_id(
+        response["snapshot_id_hex"],
+        f"{context}.snapshot_id_hex",
+    )
+    _sorafs_reputation_u64(
+        response["generated_at_unix"],
+        f"{context}.generated_at_unix",
+        allow_zero=False,
+    )
+    _sorafs_reputation_exact_int(response["alpha_bps"], f"{context}.alpha_bps", 8_500)
+    _sorafs_reputation_exact_int(
+        response["current_score_weight_bps"],
+        f"{context}.current_score_weight_bps",
+        7_000,
+    )
+    _validate_sorafs_reputation_weights(response["weights"], f"{context}.weights")
+    return response
+
+
+def _validate_sorafs_reputation_event_page(
+    value: Any,
+    context: str,
+) -> Dict[str, Any]:
+    page = _sorafs_reputation_object(value, context)
+    _sorafs_reputation_exact_fields(
+        page,
+        _SORAFS_REPUTATION_EVENT_PAGE_FIELDS,
+        context,
+    )
+    since = _sorafs_reputation_optional_u64(
+        page["since"],
+        f"{context}.since",
+        allow_zero=True,
+    )
+    limit = _sorafs_reputation_bounded_int(page["limit"], f"{context}.limit", 1, 500)
+    count = _sorafs_reputation_bounded_int(page["count"], f"{context}.count", 0, 500)
+    events = _sorafs_reputation_list(page["events"], f"{context}.events")
+    for index, event in enumerate(events):
+        _validate_sorafs_reputation_event(event, f"{context}.events[{index}]")
+    if count != len(events):
+        raise ValueError(f"{context}.count must equal events.length")
+    if count > limit:
+        raise ValueError(f"{context}.count must not exceed limit")
+    next_since = _sorafs_reputation_optional_u64(
+        page["next_since"],
+        f"{context}.next_since",
+        allow_zero=False,
+    )
+    expected_next = events[-1]["sequence"] if events else None
+    if next_since != expected_next:
+        raise ValueError(f"{context}.next_since must equal the last event sequence")
+    previous_sequence = since if since is not None else 0
+    for index, event in enumerate(events):
+        sequence = event["sequence"]
+        if (index == 0 and sequence <= previous_sequence) or (
+            index > 0 and sequence != previous_sequence + 1
+        ):
+            raise ValueError(
+                f"{context} sequences must increase after since and be contiguous within the page"
+            )
+        previous_sequence = sequence
+    for previous, current in zip(events, events[1:], strict=False):
+        if current["previous_snapshot_id_hex"] != previous["snapshot_id_hex"]:
+            raise ValueError(
+                f"{context} previous_snapshot_id_hex must link adjacent events"
+            )
+        if current["generated_at_unix"] <= previous["generated_at_unix"]:
+            raise ValueError(f"{context} generated_at_unix must strictly increase")
+    return page
+
+
+def _parse_and_validate_sorafs_reputation_response(
+    response: requests.Response,
+    validator: Callable[[Any, str], Dict[str, Any]],
+    context: str,
+) -> Dict[str, Any]:
+    payload = _decode_sorafs_reputation_json_bytes(
+        _read_bounded_sorafs_reputation_response(
+            response,
+            _SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
+            context,
+            expected_content_type="application/json",
+        ),
+        context,
+    )
+    return validator(payload, context)
+
+
+def _read_bounded_sorafs_reputation_response(
+    response: requests.Response,
+    maximum_bytes: int,
+    context: str,
+    *,
+    expected_content_type: str,
+) -> bytes:
+    """Read one identity-encoded response under an actual-byte ceiling."""
+
+    try:
+        content_encoding = response.headers.get("Content-Encoding")
+        if content_encoding is not None and content_encoding.lower() != "identity":
+            raise ValueError(f"{context} Content-Encoding must be identity")
+
+        content_type = response.headers.get("Content-Type")
+        if content_type is None or content_type.split(";", 1)[0].strip().lower() != (
+            expected_content_type
+        ):
+            raise ValueError(
+                f"{context} Content-Type must be {expected_content_type}"
+            )
+
+        declared_length: Optional[int] = None
+        raw_content_length = response.headers.get("Content-Length")
+        if raw_content_length is not None:
+            if re.fullmatch(r"(?:0|[1-9][0-9]*)", raw_content_length) is None:
+                raise ValueError(
+                    f"{context} Content-Length must be a canonical unsigned decimal integer"
+                )
+            declared_length = int(raw_content_length)
+            if declared_length > maximum_bytes:
+                raise ValueError(f"{context} response exceeds its byte limit")
+
+        if isinstance(getattr(response, "_content", False), bytes):
+            raise ValueError(f"{context} transport prebuffered the response body")
+
+        output = bytearray()
+        for chunk in response.iter_content(chunk_size=8_192, decode_unicode=False):
+            if not chunk:
+                continue
+            if not isinstance(chunk, (bytes, bytearray)):
+                raise TypeError(f"{context} response yielded a non-byte chunk")
+            if len(chunk) > maximum_bytes - len(output):
+                raise ValueError(f"{context} response exceeds its byte limit")
+            output.extend(chunk)
+        body = bytes(output)
+
+        if declared_length is not None and declared_length != len(body):
+            raise ValueError(f"{context} response length did not match Content-Length")
+        return body
+    finally:
+        response.close()
+
+
+def _expect_sorafs_reputation_status(
+    response: requests.Response,
+    expected: Iterable[int],
+    context: str,
+) -> None:
+    """Reject unexpected statuses without reading or rendering response bytes."""
+
+    expected_set = set(expected)
+    if response.status_code in expected_set:
+        return
+    response.close()
+    raise RuntimeError(
+        f"{context} returned unexpected status {response.status_code}; "
+        f"expected {sorted(expected_set)}"
+    )
+
+
+def _require_sorafs_reputation_one_shot_transport(
+    session: requests.Session,
+    url: str,
+    context: str,
+) -> None:
+    """Fail before signing when the selected requests adapter may retry."""
+
+    try:
+        adapter = session.get_adapter(url)
+        retry_policy = adapter.max_retries
+        retry_total = retry_policy.total
+    except (AttributeError, LookupError, ValueError) as exc:
+        raise ValueError(
+            f"{context} requires a verifiable one-shot HTTP transport"
+        ) from exc
+    if retry_total is not False and retry_total != 0:
+        raise ValueError(f"{context} requires transport retries to be disabled")
+
+
+def _validate_sorafs_reputation_sse_event(event: SseEvent) -> SseEvent:
+    context = "SoraFS reputation SSE event"
+    if event.retry is not None:
+        raise ValueError(f"{context} must not carry a retry field")
+    fields: List[str] = []
+    for line in event.raw.split("\n"):
+        if not line or line.startswith(":"):
+            raise ValueError(f"{context} must use the exact field profile")
+        field_name, separator, _ = line.partition(":")
+        if not separator:
+            raise ValueError(f"{context} must use the exact field profile")
+        fields.append(field_name)
+    if event.event == "reputation_snapshot":
+        if sorted(fields) != ["data", "event", "id"]:
+            raise ValueError(f"{context} must use exactly one id, event, and data field")
+        payload = _validate_sorafs_reputation_event(
+            event.data,
+            f"{context}.data",
+        )
+        if (
+            type(event.id) is not str
+            or not re.fullmatch(r"[1-9][0-9]*", event.id)
+            or int(event.id) > _SORAFS_REPUTATION_U64_MAX
+        ):
+            raise ValueError(f"{context} id must be a positive canonical u64")
+        if int(event.id) != payload["sequence"]:
+            raise ValueError(f"{context} id must equal data.sequence")
+        return event
+    if event.event == "lagged":
+        if event.id is not None:
+            raise ValueError(f"{context} lagged frames must not carry an id")
+        if sorted(fields) != ["data", "event"]:
+            raise ValueError(f"{context} lagged frames must use one event and data field")
+        _sorafs_reputation_u64(
+            event.data,
+            f"{context}.lagged_count",
+            allow_zero=False,
+        )
+        return event
+    raise ValueError(f"{context} type {event.event!r} is unsupported")
+
+
+_SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS = frozenset(
+    {
+        "x-iroha-account",
+        "x-iroha-signature",
+        "x-iroha-timestamp-ms",
+        "x-iroha-nonce",
+        "x-iroha-witness",
+    }
+)
+
+
+def _sorafs_reputation_auth_entries(
+    headers: Optional[Mapping[str, Any]],
+    context: str,
+) -> Dict[str, Tuple[str, Any]]:
+    entries: Dict[str, Tuple[str, Any]] = {}
+    if headers is None:
+        return entries
+    for raw_name, value in headers.items():
+        name = str(raw_name)
+        normalized = name.lower()
+        if normalized not in _SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS:
+            continue
+        if normalized in entries:
+            raise ValueError(f"{context} contains duplicate canonical authentication header {name}")
+        entries[normalized] = (name, value)
+    return entries
+
+
+def _normalize_sorafs_reputation_canonical_auth(
+    canonical_auth: Any,
+    context: str,
+    *,
+    expected_discriminant: int,
+) -> ToriiCanonicalRequestAuth:
+    if not isinstance(canonical_auth, ToriiCanonicalRequestAuth):
+        raise TypeError(f"{context} must be ToriiCanonicalRequestAuth")
+    account_id = _require_exact_non_empty_string(
+        canonical_auth.account_id,
+        f"{context}.account_id",
+    )
+    if (
+        _normalize_canonical_account_id(
+            account_id,
+            f"{context}.account_id",
+            expected_discriminant=expected_discriminant,
+        )
+        != account_id
+    ):
+        raise ValueError(f"{context}.account_id must be exact and canonical")
+    if not callable(canonical_auth.signer):
+        raise TypeError(f"{context}.signer must be callable")
+    return canonical_auth
+
+
+def _normalize_sorafs_reputation_witness_header(value: Any, context: str) -> str:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError(f"{context} must be exact canonical standard base64")
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{context} must be exact canonical standard base64") from exc
+    if not decoded or base64.b64encode(decoded).decode("ascii") != value:
+        raise ValueError(f"{context} must be exact canonical standard base64")
+    return value
+
+
+def _sorafs_reputation_request_auth(
+    *,
+    canonical_auth: Optional[ToriiCanonicalRequestAuth],
+    headers: Dict[str, Any],
+    default_headers: Mapping[str, str],
+    context: str,
+    expected_discriminant: int,
+) -> Tuple[Dict[str, str], Optional[ToriiCanonicalRequestAuth]]:
+    if _sorafs_reputation_auth_entries(
+        default_headers,
+        "ToriiClient.default_headers",
+    ):
+        raise ValueError(
+            f"{context} requires per-request canonical authentication; "
+            "canonical auth headers are not accepted through default_headers"
+        )
+
+    entries = _sorafs_reputation_auth_entries(headers, f"{context}.headers")
+    if canonical_auth is not None:
+        if entries:
+            raise ValueError(f"{context} accepts exactly one canonical authentication mode")
+        return (
+            _validated_sorafs_reputation_header_strings(headers, context),
+            _normalize_sorafs_reputation_canonical_auth(
+                canonical_auth,
+                f"{context}.canonical_auth",
+                expected_discriminant=expected_discriminant,
+            ),
+        )
+
+    proof_fields = [
+        name
+        for name in ("x-iroha-signature", "x-iroha-timestamp-ms", "x-iroha-nonce")
+        if name in entries
+    ]
+    if proof_fields:
+        raise ValueError(
+            f"{context}.headers cannot supply signature proof fields directly; use canonical_auth"
+        )
+    witness = entries.get("x-iroha-witness")
+    if witness is None:
+        raise ValueError(f"{context} requires canonical_auth or an exact X-Iroha-Witness header")
+    _set_exact_header(
+        headers,
+        "X-Iroha-Witness",
+        _normalize_sorafs_reputation_witness_header(
+            witness[1],
+            f"{context}.headers.X-Iroha-Witness",
+        ),
+    )
+    account = entries.get("x-iroha-account")
+    if account is not None:
+        account_id = _require_exact_non_empty_string(
+            account[1],
+            f"{context}.headers.X-Iroha-Account",
+        )
+        canonical_account = _normalize_canonical_account_id(
+            account_id,
+            f"{context}.headers.X-Iroha-Account",
+            expected_discriminant=expected_discriminant,
+        )
+        if canonical_account != account_id:
+            raise ValueError(f"{context}.headers.X-Iroha-Account must be exact and canonical")
+        _set_exact_header(headers, "X-Iroha-Account", canonical_account)
+    return _validated_sorafs_reputation_header_strings(headers, context), None
+
+
+def _validated_sorafs_reputation_header_strings(
+    headers: Mapping[str, Any],
+    context: str,
+) -> Dict[str, str]:
+    final_headers: Dict[str, str] = {}
+    for name, value in headers.items():
+        if not isinstance(value, str):
+            raise TypeError(f"{context}.headers.{name} must be a string")
+        final_headers[name] = value
+    return final_headers
 
 
 def _sorafs_reputation_headers(
     *,
     if_none_match: Optional[str] = None,
-    etag: Optional[str] = None,
     headers: Optional[Mapping[str, str]] = None,
     context: str,
-) -> Dict[str, str]:
-    if if_none_match is not None and etag is not None:
-        raise ValueError(f"{context} accepts only one of if_none_match or etag")
-    final_headers: Dict[str, str] = {"Accept": "application/json"}
+    accept: str = "application/json",
+) -> Dict[str, Any]:
+    final_headers: Dict[str, Any] = {}
     if headers is not None:
         if not isinstance(headers, Mapping):
             raise TypeError(f"{context}.headers must be a mapping")
-        final_headers.update({str(key): str(value) for key, value in headers.items()})
-    validator = if_none_match if if_none_match is not None else etag
-    if validator is not None:
-        final_headers["If-None-Match"] = _require_non_empty_string(
-            validator,
+        for raw_key, value in headers.items():
+            key = str(raw_key)
+            final_headers[key] = (
+                value
+                if key.lower() in _SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS
+                else str(value)
+            )
+    _set_exact_header(final_headers, "Accept", accept)
+    _set_exact_header(final_headers, "Accept-Encoding", "identity")
+    if if_none_match is not None:
+        if any(name.lower() == "if-none-match" for name in final_headers):
+            raise ValueError(f"{context} accepts If-None-Match only through if_none_match")
+        final_headers["If-None-Match"] = _require_exact_non_empty_string(
+            if_none_match,
             f"{context}.if_none_match",
         )
     return final_headers
+
+
+def _normalize_sorafs_reputation_decimal(
+    value: Any,
+    context: str,
+    *,
+    allow_zero: bool,
+    maximum: int,
+) -> str:
+    if isinstance(value, bool):
+        raise TypeError(f"{context} must be a canonical unsigned decimal integer")
+    if isinstance(value, int):
+        number = value
+    elif isinstance(value, str) and re.fullmatch(r"(?:0|[1-9][0-9]*)", value):
+        number = int(value)
+    else:
+        raise TypeError(f"{context} must be a canonical unsigned decimal integer")
+    if number < 0 or (number == 0 and not allow_zero):
+        raise ValueError(f"{context} must be {'non-negative' if allow_zero else 'positive'}")
+    if number > maximum:
+        raise ValueError(f"{context} must be at most {maximum}")
+    return str(number)
 
 
 def _sorafs_reputation_event_params(
@@ -1534,19 +2527,21 @@ def _sorafs_reputation_event_params(
     since: Optional[Any] = None,
     limit: Optional[Any] = None,
     context: str,
-) -> Optional[Dict[str, int]]:
-    params: Dict[str, int] = {}
+) -> Optional[Dict[str, str]]:
+    params: Dict[str, str] = {}
     if since is not None:
-        params["since"] = _normalize_sorafs_unsigned_integer(
+        params["since"] = _normalize_sorafs_reputation_decimal(
             since,
             f"{context}.since",
             allow_zero=True,
+            maximum=(1 << 64) - 1,
         )
     if limit is not None:
-        params["limit"] = _normalize_sorafs_unsigned_integer(
+        params["limit"] = _normalize_sorafs_reputation_decimal(
             limit,
             f"{context}.limit",
             allow_zero=False,
+            maximum=500,
         )
     return params or None
 
@@ -12009,41 +13004,122 @@ class ToriiClient(_BaseToriiClient):
 
         return _events()
 
+    def _sorafs_reputation_request_target(
+        self,
+        path: str,
+        params: Optional[Mapping[str, str]],
+    ) -> str:
+        parsed = urlparse(f"{self._base_url}{path}")
+        query = urlencode(params or {})
+        return parsed.path if not query else f"{parsed.path}?{query}"
+
+    def _sorafs_reputation_authenticated_headers(
+        self,
+        *,
+        path: str,
+        params: Optional[Mapping[str, str]],
+        canonical_auth: Optional[ToriiCanonicalRequestAuth],
+        headers: Dict[str, Any],
+        context: str,
+    ) -> Dict[str, str]:
+        final_headers, signer_auth = _sorafs_reputation_request_auth(
+            canonical_auth=canonical_auth,
+            headers=headers,
+            default_headers=self._default_headers,
+            context=context,
+            expected_discriminant=self._chain_discriminant,
+        )
+        if signer_auth is None:
+            return final_headers
+        signed_headers = build_canonical_request_headers(
+            account_id=signer_auth.account_id,
+            signer=signer_auth.signer,
+            method="GET",
+            path=self._sorafs_reputation_request_target(path, params),
+            body=b"",
+            timestamp_ms=signer_auth.timestamp_ms,
+            nonce=signer_auth.nonce,
+        )
+        for name, value in signed_headers.items():
+            _set_exact_header(final_headers, name, value)
+        return final_headers
+
+    def _get_sorafs_reputation(
+        self,
+        path: str,
+        *,
+        params: Optional[Mapping[str, str]] = None,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth],
+        if_none_match: Optional[str],
+        headers: Optional[Mapping[str, str]],
+        timeout: Optional[float],
+        context: str,
+    ) -> requests.Response:
+        _require_sorafs_reputation_one_shot_transport(
+            self._session,
+            f"{self._base_url}{path}",
+            context,
+        )
+        final_headers = self._sorafs_reputation_authenticated_headers(
+            path=path,
+            params=params,
+            canonical_auth=canonical_auth,
+            headers=_sorafs_reputation_headers(
+                if_none_match=if_none_match,
+                headers=headers,
+                context=context,
+            ),
+            context=context,
+        )
+        return self._request(
+            "GET",
+            path,
+            params=params,
+            headers=final_headers,
+            timeout=timeout,
+            allow_retry=False,
+            allow_redirects=False,
+            stream=True,
+        )
+
     def get_sorafs_reputation_latest(
         self,
         *,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
         if_none_match: Optional[str] = None,
-        etag: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
-        """Fetch the latest SoraFS reputation snapshot summary."""
+        """Fetch the authenticated latest SoraFS reputation snapshot summary."""
 
-        response = self._request(
-            "GET",
+        response = self._get_sorafs_reputation(
             "/v1/sorafs/reputation/latest",
-            headers=_sorafs_reputation_headers(
-                if_none_match=if_none_match,
-                etag=etag,
-                headers=headers,
-                context="get_sorafs_reputation_latest",
-            ),
+            canonical_auth=canonical_auth,
+            if_none_match=if_none_match,
+            headers=headers,
             timeout=timeout,
+            context="get_sorafs_reputation_latest",
         )
-        self._expect_status(response, (200, 304, 404))
+        _expect_sorafs_reputation_status(
+            response,
+            (200, 304, 404),
+            "SoraFS reputation latest endpoint",
+        )
         if response.status_code in {304, 404}:
+            response.close()
             return None
-        payload = type(self)._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("sorafs reputation latest endpoint returned no payload")
-        return payload
+        return _parse_and_validate_sorafs_reputation_response(
+            response,
+            _validate_sorafs_reputation_snapshot,
+            "SoraFS reputation latest response",
+        )
 
     def get_sorafs_reputation_provider(
         self,
         provider_id: str,
         *,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
         if_none_match: Optional[str] = None,
-        etag: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
@@ -12053,31 +13129,40 @@ class ToriiClient(_BaseToriiClient):
             provider_id,
             "get_sorafs_reputation_provider.provider_id",
         )
-        response = self._request(
-            "GET",
-            f"/v1/sorafs/reputation/providers/{quote(normalized_provider, safe='')}",
-            headers=_sorafs_reputation_headers(
-                if_none_match=if_none_match,
-                etag=etag,
-                headers=headers,
-                context="get_sorafs_reputation_provider",
-            ),
+        path = f"/v1/sorafs/reputation/providers/{quote(normalized_provider, safe=':')}"
+        response = self._get_sorafs_reputation(
+            path,
+            canonical_auth=canonical_auth,
+            if_none_match=if_none_match,
+            headers=headers,
             timeout=timeout,
+            context="get_sorafs_reputation_provider",
         )
-        self._expect_status(response, (200, 304, 404))
+        _expect_sorafs_reputation_status(
+            response,
+            (200, 304, 404),
+            "SoraFS reputation provider endpoint",
+        )
         if response.status_code in {304, 404}:
+            response.close()
             return None
-        payload = type(self)._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("sorafs reputation provider endpoint returned no payload")
+        payload = _parse_and_validate_sorafs_reputation_response(
+            response,
+            _validate_sorafs_reputation_provider_response,
+            "SoraFS reputation provider response",
+        )
+        if payload["provider"]["provider_id"] != normalized_provider:
+            raise ValueError(
+                "SoraFS reputation provider response does not match the requested provider"
+            )
         return payload
 
     def get_sorafs_reputation_snapshot(
         self,
         snapshot_id_hex: str,
         *,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
         if_none_match: Optional[str] = None,
-        etag: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
@@ -12087,88 +13172,117 @@ class ToriiClient(_BaseToriiClient):
             snapshot_id_hex,
             "get_sorafs_reputation_snapshot.snapshot_id_hex",
         )
-        response = self._request(
-            "GET",
+        response = self._get_sorafs_reputation(
             f"/v1/sorafs/reputation/snapshots/{normalized_snapshot_id}",
-            headers=_sorafs_reputation_headers(
-                if_none_match=if_none_match,
-                etag=etag,
-                headers=headers,
-                context="get_sorafs_reputation_snapshot",
-            ),
+            canonical_auth=canonical_auth,
+            if_none_match=if_none_match,
+            headers=headers,
             timeout=timeout,
+            context="get_sorafs_reputation_snapshot",
         )
-        self._expect_status(response, (200, 304, 404))
+        _expect_sorafs_reputation_status(
+            response,
+            (200, 304, 404),
+            "SoraFS reputation snapshot endpoint",
+        )
         if response.status_code in {304, 404}:
+            response.close()
             return None
-        payload = type(self)._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("sorafs reputation snapshot endpoint returned no payload")
+        payload = _parse_and_validate_sorafs_reputation_response(
+            response,
+            _validate_sorafs_reputation_snapshot,
+            "SoraFS reputation snapshot response",
+        )
+        if payload["snapshot_id_hex"] != normalized_snapshot_id:
+            raise ValueError(
+                "SoraFS reputation snapshot response does not match the requested snapshot"
+            )
         return payload
 
     def get_sorafs_reputation_weights(
         self,
         *,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
         if_none_match: Optional[str] = None,
-        etag: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
         """Fetch active SoraFS reputation scoring weights."""
 
-        response = self._request(
-            "GET",
+        response = self._get_sorafs_reputation(
             "/v1/sorafs/reputation/weights",
-            headers=_sorafs_reputation_headers(
-                if_none_match=if_none_match,
-                etag=etag,
-                headers=headers,
-                context="get_sorafs_reputation_weights",
-            ),
+            canonical_auth=canonical_auth,
+            if_none_match=if_none_match,
+            headers=headers,
             timeout=timeout,
+            context="get_sorafs_reputation_weights",
         )
-        self._expect_status(response, (200, 304, 404))
+        _expect_sorafs_reputation_status(
+            response,
+            (200, 304, 404),
+            "SoraFS reputation weights endpoint",
+        )
         if response.status_code in {304, 404}:
+            response.close()
             return None
-        payload = type(self)._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("sorafs reputation weights endpoint returned no payload")
-        return payload
+        return _parse_and_validate_sorafs_reputation_response(
+            response,
+            _validate_sorafs_reputation_weights_response,
+            "SoraFS reputation weights response",
+        )
 
     def list_sorafs_reputation_events(
         self,
         *,
         since: Optional[Any] = None,
         limit: Optional[Any] = None,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
         if_none_match: Optional[str] = None,
-        etag: Optional[str] = None,
         headers: Optional[Mapping[str, str]] = None,
         timeout: Optional[float] = None,
     ) -> Optional[Any]:
         """List SoraFS reputation snapshot events."""
 
-        response = self._request(
-            "GET",
-            "/v1/sorafs/reputation/events",
-            params=_sorafs_reputation_event_params(
-                since=since,
-                limit=limit,
-                context="list_sorafs_reputation_events",
-            ),
-            headers=_sorafs_reputation_headers(
-                if_none_match=if_none_match,
-                etag=etag,
-                headers=headers,
-                context="list_sorafs_reputation_events",
-            ),
-            timeout=timeout,
+        params = _sorafs_reputation_event_params(
+            since=since,
+            limit=limit,
+            context="list_sorafs_reputation_events",
         )
-        self._expect_status(response, (200, 304))
+        response = self._get_sorafs_reputation(
+            "/v1/sorafs/reputation/events",
+            params=params,
+            canonical_auth=canonical_auth,
+            if_none_match=if_none_match,
+            headers=headers,
+            timeout=timeout,
+            context="list_sorafs_reputation_events",
+        )
+        _expect_sorafs_reputation_status(
+            response,
+            (200, 304),
+            "SoraFS reputation events endpoint",
+        )
         if response.status_code == 304:
+            response.close()
             return None
-        payload = type(self)._maybe_json(response)
-        if payload is None:
-            raise RuntimeError("sorafs reputation events endpoint returned no payload")
+        payload = _parse_and_validate_sorafs_reputation_response(
+            response,
+            _validate_sorafs_reputation_event_page,
+            "SoraFS reputation events response",
+        )
+        expected_since = (
+            int(params["since"])
+            if params is not None and "since" in params
+            else None
+        )
+        if payload["since"] != expected_since:
+            raise ValueError(
+                "SoraFS reputation events response since does not match the request"
+            )
+        if params is not None and "limit" in params and payload["limit"] != int(params["limit"]):
+            raise ValueError(
+                "SoraFS reputation events response limit does not match the request"
+            )
         return payload
 
     def stream_sorafs_reputation_events(
@@ -12176,52 +13290,90 @@ class ToriiClient(_BaseToriiClient):
         *,
         since: Optional[Any] = None,
         limit: Optional[Any] = None,
+        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        headers: Optional[Mapping[str, str]] = None,
         timeout: Optional[float] = None,
-        max_retries: int = 3,
-        backoff_base: float = 0.5,
-        last_event_id: Optional[str] = None,
-        resume: bool = False,
         on_event: Optional[Callable[..., None]] = None,
-        cursor: Optional[EventCursor] = None,
         with_metadata: bool = False,
         decode_json: bool = True,
     ):
-        """Stream SoraFS reputation snapshot events via `/v1/sorafs/reputation/events/stream`."""
+        """Stream one strictly validated authenticated reputation request."""
 
         params = _sorafs_reputation_event_params(
             since=since,
             limit=limit,
             context="stream_sorafs_reputation_events",
         )
-        initial_event_id = last_event_id if last_event_id is not None else (
-            cursor.last_event_id if cursor is not None else None
+        if decode_json is not True:
+            raise ValueError(
+                "stream_sorafs_reputation_events requires strict JSON decoding"
+            )
+        _require_sorafs_reputation_one_shot_transport(
+            self._session,
+            f"{self._base_url}/v1/sorafs/reputation/events/stream",
+            "stream_sorafs_reputation_events",
         )
-        should_resume = resume or cursor is not None or last_event_id is not None
+        base_headers, signer_auth = _sorafs_reputation_request_auth(
+            canonical_auth=canonical_auth,
+            headers=_sorafs_reputation_headers(
+                headers=headers,
+                context="stream_sorafs_reputation_events",
+                accept="text/event-stream",
+            ),
+            default_headers=self._default_headers,
+            context="stream_sorafs_reputation_events",
+            expected_discriminant=self._chain_discriminant,
+        )
+        if any(
+            str(name).lower() == "last-event-id"
+            for source in (base_headers, self._default_headers)
+            for name in source
+        ):
+            raise ValueError(
+                "stream_sorafs_reputation_events does not accept Last-Event-ID; "
+                "use the finalized since cursor"
+            )
+        path = "/v1/sorafs/reputation/events/stream"
 
-        def _handle(event: SseEvent) -> None:
-            if on_event is None:
-                return
-            if with_metadata:
-                on_event(event)
-            else:
-                on_event(event.data, event.id)
+        def _auth_headers_for_attempt() -> Mapping[str, str]:
+            if signer_auth is None:
+                return dict(base_headers)
+            return self._sorafs_reputation_authenticated_headers(
+                path=path,
+                params=params,
+                canonical_auth=signer_auth,
+                headers=dict(base_headers),
+                context="stream_sorafs_reputation_events",
+            )
 
         iterator = self._stream_sse(
-            "/v1/sorafs/reputation/events/stream",
+            path,
             params=params,
+            headers_factory=_auth_headers_for_attempt,
             timeout=timeout,
-            max_retries=max_retries,
-            backoff_base=backoff_base,
-            last_event_id=initial_event_id,
-            resume=should_resume,
-            decode_json=decode_json,
-            cursor=cursor,
-            allow_resume=True,
-            on_event=_handle if on_event is not None else None,
+            max_retries=0,
+            decode_json=True,
+            allow_resume=False,
+            allow_redirects=False,
+            strict_utf8=True,
+            maximum_event_bytes=_SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES,
+            json_loader=_decode_sorafs_reputation_sse_json,
+            expected_content_type="text/event-stream",
+            require_identity_encoding=True,
+            payload_free_errors=True,
         )
-        if with_metadata:
-            return iterator
-        return (event.data for event in iterator)
+
+        def _events():
+            for event in iterator:
+                validated = _validate_sorafs_reputation_sse_event(event)
+                if on_event is not None:
+                    if with_metadata:
+                        on_event(validated)
+                    else:
+                        on_event(validated.data, validated.id)
+                yield validated if with_metadata else validated.data
+
+        return _events()
 
     # -------------------------
     # SoraFS Proof-of-Retrievability APIs
@@ -13891,6 +15043,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = None,
         allow_retry: bool = True,
         allow_redirects: bool = True,
+        stream: bool = False,
     ) -> requests.Response:
         if json_body is not None and data is not None:
             raise ValueError("provide either `json_body` or `data`, not both")
@@ -13924,6 +15077,7 @@ class ToriiClient(_BaseToriiClient):
                     data=payload,
                     timeout=request_timeout,
                     allow_redirects=allow_redirects,
+                    stream=stream,
                 )
             except requests.RequestException:
                 if attempt == max_attempts - 1:
@@ -16013,7 +17167,7 @@ class ToriiClient(_BaseToriiClient):
         return self._request(
             "GET",
             "/v1/zk/vk/"
-            f"{quote(_require_production_verify_backend_label(backend, 'backend'), safe='')}/"
+            f"{quote(_require_verifier_backend_registry_label_v1(backend, 'backend'), safe='')}/"
             f"{quote(_require_exact_non_empty_string(name, 'name'), safe='')}",
         )
 
@@ -18263,6 +19417,7 @@ class ToriiClient(_BaseToriiClient):
         lines: Iterable[str],
         *,
         decode_json: bool = True,
+        json_loader: Optional[Callable[[str], Any]] = None,
     ) -> Optional[SseEvent]:
         raw_lines = list(lines)
         data_chunks: List[str] = []
@@ -18291,10 +19446,13 @@ class ToriiClient(_BaseToriiClient):
         if data_chunks:
             joined = "\n".join(data_chunks)
             if decode_json:
-                try:
-                    payload = json.loads(joined)
-                except json.JSONDecodeError:
-                    payload = joined
+                if json_loader is not None:
+                    payload = json_loader(joined)
+                else:
+                    try:
+                        payload = json.loads(joined)
+                    except json.JSONDecodeError:
+                        payload = joined
             else:
                 payload = joined
         else:
@@ -18313,6 +19471,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         params: Optional[Mapping[str, Any]] = None,
         headers: Optional[Mapping[str, str]] = None,
+        headers_factory: Optional[Callable[[], Mapping[str, str]]] = None,
         timeout: Optional[float] = None,
         max_retries: Optional[int] = 3,
         backoff_base: float = 0.5,
@@ -18321,9 +19480,18 @@ class ToriiClient(_BaseToriiClient):
         decode_json: bool = True,
         cursor: Optional[EventCursor] = None,
         allow_resume: bool = False,
+        allow_redirects: bool = True,
+        strict_utf8: bool = False,
+        maximum_event_bytes: Optional[int] = None,
+        json_loader: Optional[Callable[[str], Any]] = None,
         on_event: Optional[Callable[[SseEvent], None]] = None,
+        expected_content_type: Optional[str] = None,
+        require_identity_encoding: bool = False,
+        payload_free_errors: bool = False,
     ):
         url = f"{self._base_url}{path}"
+        if headers is not None and headers_factory is not None:
+            raise ValueError("_stream_sse accepts only one of headers or headers_factory")
         if not allow_resume and (last_event_id is not None or resume or cursor is not None):
             raise ValueError(f"{path} does not support SSE replay")
         active_last_id = (
@@ -18356,8 +19524,9 @@ class ToriiClient(_BaseToriiClient):
                 try:
                     final_headers: Dict[str, str] = dict(self._default_headers)
                     final_headers.pop("Accept", None)
-                    if headers:
-                        final_headers.update(headers)
+                    attempt_headers = headers_factory() if headers_factory is not None else headers
+                    if attempt_headers:
+                        final_headers.update(attempt_headers)
                     if not allow_resume:
                         for name in tuple(final_headers):
                             if name.lower() == "last-event-id":
@@ -18371,26 +19540,96 @@ class ToriiClient(_BaseToriiClient):
                         headers=final_headers or None,
                         stream=True,
                         timeout=timeout,
+                        allow_redirects=allow_redirects,
                     ) as response:
-                        self._expect_status(response, {200})
+                        if payload_free_errors:
+                            _expect_sorafs_reputation_status(
+                                response,
+                                {200},
+                                path,
+                            )
+                        else:
+                            self._expect_status(response, {200})
+                        if require_identity_encoding:
+                            content_encoding = response.headers.get("Content-Encoding")
+                            if (
+                                content_encoding is not None
+                                and content_encoding.lower() != "identity"
+                            ):
+                                raise ValueError(
+                                    f"{path} Content-Encoding must be identity"
+                                )
+                        if expected_content_type is not None:
+                            content_type = response.headers.get("Content-Type")
+                            if (
+                                content_type is None
+                                or content_type.split(";", 1)[0].strip().lower()
+                                != expected_content_type
+                            ):
+                                raise ValueError(
+                                    f"{path} Content-Type must be "
+                                    f"{expected_content_type}"
+                                )
                         attempt = 0
                         backoff = max(backoff_base, 0.0)
                         buffer: list[str] = []
-                        for raw_line in response.iter_lines(decode_unicode=True):
+                        buffered_bytes = 0
+                        first_line = True
+                        for raw_line in response.iter_lines(decode_unicode=not strict_utf8):
                             if raw_line is None:
                                 continue
-                            line = raw_line.strip()
+                            if strict_utf8:
+                                if not isinstance(raw_line, (bytes, bytearray, memoryview)):
+                                    raise ValueError(
+                                        f"{path} SSE body yielded a non-byte line"
+                                    )
+                                raw_bytes = bytes(raw_line)
+                                if first_line and raw_bytes.startswith(b"\xef\xbb\xbf"):
+                                    raise ValueError(
+                                        f"{path} SSE body must not contain a UTF-8 BOM"
+                                    )
+                                try:
+                                    decoded_line = raw_bytes.decode("utf-8", "strict")
+                                except UnicodeDecodeError as exc:
+                                    raise ValueError(
+                                        f"{path} SSE body must be strict UTF-8"
+                                    ) from exc
+                                line_bytes = len(raw_bytes) + 1
+                            else:
+                                decoded_line = raw_line
+                                line_bytes = len(str(raw_line).encode("utf-8")) + 1
+                            first_line = False
+                            buffered_bytes += line_bytes
+                            if (
+                                maximum_event_bytes is not None
+                                and buffered_bytes > maximum_event_bytes
+                            ):
+                                raise ValueError(
+                                    f"{path} SSE event exceeds its "
+                                    f"{maximum_event_bytes}-byte size bound"
+                                )
+                            line = decoded_line if strict_utf8 else decoded_line.strip()
                             if not line:
                                 if buffer:
-                                    event = self._parse_sse_event(buffer, decode_json=decode_json)
+                                    event = self._parse_sse_event(
+                                        buffer,
+                                        decode_json=decode_json,
+                                        json_loader=json_loader,
+                                    )
                                     buffer.clear()
                                     if event is None:
+                                        buffered_bytes = 0
                                         continue
                                     yield process_event(event)
+                                buffered_bytes = 0
                                 continue
                             buffer.append(line)
                         if buffer:
-                            event = self._parse_sse_event(buffer, decode_json=decode_json)
+                            event = self._parse_sse_event(
+                                buffer,
+                                decode_json=decode_json,
+                                json_loader=json_loader,
+                            )
                             buffer.clear()
                             if event is not None:
                                 yield process_event(event)

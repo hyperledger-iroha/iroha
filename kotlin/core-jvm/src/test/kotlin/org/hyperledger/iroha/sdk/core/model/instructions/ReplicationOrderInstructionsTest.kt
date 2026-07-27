@@ -8,6 +8,30 @@ import kotlin.test.assertFailsWith
 
 class ReplicationOrderInstructionsTest {
     private val orderId = "44".repeat(32)
+    private val providerId = "11".repeat(32)
+    private val providerOwner =
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+    private val policyId = "21".repeat(32)
+    private val predecessorDigest = "32".repeat(32)
+    private val policyDigest = "43".repeat(32)
+    private val blockHash = "54".repeat(32)
+
+    private fun authority(
+        revision: Long = 2,
+        predecessor: String? = predecessorDigest,
+        owner: String = providerOwner,
+    ) = ProviderIngestCompletionAuthorityV1(
+        providerOwner = owner,
+        signerPolicy = ProviderIngestCompletionSignerPolicyV1(
+            policyId = policyId,
+            revision = revision,
+            predecessorDigest = predecessor,
+            policyDigest = policyDigest,
+        ),
+    )
+
+    private fun anchor(height: Long = 41) =
+        ProviderIngestFinalizedAnchorV1(height, blockHash)
 
     @Test
     fun `issue arguments are canonical and roundtrip`() {
@@ -71,18 +95,82 @@ class ReplicationOrderInstructionsTest {
 
     @Test
     fun `complete and expire roundtrip and reject malformed epochs`() {
-        val providerId = "11".repeat(32)
-        val complete = CompleteReplicationOrderInstruction(orderId, providerId, 28)
+        val complete = CompleteReplicationOrderInstruction(
+            orderId,
+            providerId,
+            28,
+            authority(),
+            3,
+            anchor(),
+        )
+        assertEquals(
+            setOf(
+                "action",
+                "order_id",
+                "provider_id",
+                "completion_epoch",
+                "expected_authority",
+                "expected_assignment_revision",
+                "finalized_anchor",
+            ),
+            complete.arguments.keys,
+        )
         assertEquals(complete, CompleteReplicationOrderInstruction.fromArguments(complete.arguments))
         val expire = ExpireReplicationOrderInstruction(orderId, 29)
         assertEquals("ExpireReplicationOrder", expire.arguments["action"])
         assertEquals(expire, ExpireReplicationOrderInstruction.fromArguments(expire.arguments))
 
         assertFailsWith<IllegalArgumentException> {
-            CompleteReplicationOrderInstruction(orderId, providerId, -1)
+            CompleteReplicationOrderInstruction(
+                orderId,
+                providerId,
+                -1,
+                authority(),
+                3,
+                anchor(),
+            )
         }
         assertFailsWith<IllegalArgumentException> {
-            CompleteReplicationOrderInstruction(orderId, "00".repeat(32), 28)
+            CompleteReplicationOrderInstruction(
+                orderId,
+                "00".repeat(32),
+                28,
+                authority(),
+                3,
+                anchor(),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CompleteReplicationOrderInstruction(
+                orderId,
+                providerId,
+                28,
+                authority(),
+                0,
+                anchor(),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            authority(revision = 2, predecessor = null)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            authority(revision = 1, predecessor = predecessorDigest)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            authority(owner = " $providerOwner")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            anchor(height = 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            CompleteReplicationOrderInstruction.fromArguments(
+                mapOf(
+                    "action" to "CompleteReplicationOrder",
+                    "order_id" to orderId,
+                    "provider_id" to providerId,
+                    "completion_epoch" to "28",
+                ),
+            )
         }
         assertFailsWith<IllegalArgumentException> {
             ExpireReplicationOrderInstruction(orderId, -1)

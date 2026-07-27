@@ -1198,16 +1198,17 @@ fn no_store_response(mut response: Response) -> Response {
 fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response {
     use GatewayComplianceError::{
         CatalogEquivocation, CatalogNotFresh, CheckpointConflict, Decompression, DnsRebinding,
-        DuplicateSigner, Encoding, FeedTransportNotQualified, FeedTransportStale,
-        FeedTransportSubstituted, FeedTransportTestMarked, FeedTransportUnavailable, FetchTimeout,
-        GatewayEquivocation, GatewayQuorumNotMet, HistoryFull, IdempotencyConflict,
-        IdempotencyRegistryFull, InvalidAcknowledgement, InvalidCatalog, InvalidCheckpoint,
-        InvalidFeed, InvalidPolicy, InvalidPredecessor, InvalidRollback, InvalidSignature,
-        LeaseHeld, MissingRequiredFeed, MutationTimeInvalid, NoLastKnownGood, NoServingCatalog,
-        NoStagedCatalog, NonCanonical, NonPublicAddress, Persistence, PolicyDigestMismatch,
-        PromotionTargetMismatch, QuorumNotMet, ResourceLimit, RevokedSigner,
-        RollbackTargetMismatch, SequenceOverflow, StatePoisoned, TimeOverflow, TooManyRedirects,
-        TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl, UntrustedSigner,
+        DuplicateSigner, Encoding, FeedTransportNotQualified, FeedTransportOperationFailed,
+        FeedTransportStale, FeedTransportSubstituted, FeedTransportTestMarked,
+        FeedTransportUnavailable, FeedTransportUnqualified, FetchTimeout, GatewayEquivocation,
+        GatewayQuorumNotMet, HistoryFull, IdempotencyConflict, IdempotencyRegistryFull,
+        InvalidAcknowledgement, InvalidCatalog, InvalidCheckpoint, InvalidFeed, InvalidPolicy,
+        InvalidPredecessor, InvalidRollback, InvalidSignature, LeaseHeld, MissingRequiredFeed,
+        MutationTimeInvalid, NoLastKnownGood, NoServingCatalog, NoStagedCatalog, NonCanonical,
+        NonPublicAddress, Persistence, PolicyDigestMismatch, PromotionTargetMismatch, QuorumNotMet,
+        ResourceLimit, RevokedSigner, RollbackTargetMismatch, SequenceOverflow, StatePoisoned,
+        TimeOverflow, TooManyRedirects, TrustPinMismatch, UnknownFeed, UnsafeAddressSet, UnsafeUrl,
+        UntrustedSigner,
     };
 
     let (status, code, message) = match &error {
@@ -1245,6 +1246,8 @@ fn gateway_compliance_error_response(error: GatewayComplianceError) -> Response 
         ),
         FeedTransportNotQualified
         | FeedTransportUnavailable
+        | FeedTransportUnqualified
+        | FeedTransportOperationFailed
         | FeedTransportSubstituted
         | FeedTransportStale
         | FeedTransportTestMarked => (
@@ -1398,6 +1401,16 @@ mod tests {
         );
         assert_eq!(
             gateway_compliance_error_response(GatewayComplianceError::FeedTransportSubstituted)
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            gateway_compliance_error_response(GatewayComplianceError::FeedTransportUnqualified)
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            gateway_compliance_error_response(GatewayComplianceError::FeedTransportOperationFailed)
                 .status(),
             StatusCode::SERVICE_UNAVAILABLE
         );

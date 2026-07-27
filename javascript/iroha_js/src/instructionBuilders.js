@@ -271,6 +271,29 @@ function assertExactNonBlankString(value, name) {
   return raw;
 }
 
+function assertWellFormedUtf16(value, name) {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        fail(
+          ValidationErrorCode.INVALID_STRING,
+          `${name} must not contain unpaired UTF-16 surrogates`,
+          name,
+        );
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must not contain unpaired UTF-16 surrogates`,
+        name,
+      );
+    }
+  }
+}
+
 function readSingleAlias(source, aliases, name, description) {
   const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(source, key));
   if (present.length > 1) {
@@ -327,6 +350,7 @@ function asPositiveQuantity(value, name) {
 
 function normalizeAssetLockId(value, name) {
   const lockId = assertExactNonBlankString(value, name);
+  assertWellFormedUtf16(lockId, name);
   const lockIdBytes = Buffer.from(lockId, "utf8");
   if (lockIdBytes.length > CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1) {
     fail(
@@ -475,6 +499,20 @@ function assertAllowedFields(source, allowed, name) {
         ValidationErrorCode.INVALID_OBJECT,
         `${name}.${label} must be an enumerable data field`,
         `${name}.${label}`,
+      );
+    }
+  }
+}
+
+function assertExactFields(source, fields, name) {
+  const allowed = new Set(fields);
+  assertAllowedFields(source, allowed, name);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${field} is required`,
+        `${name}.${field}`,
       );
     }
   }
@@ -10641,6 +10679,96 @@ function normalizeSorafsReplicationIdentifier(value, name) {
   return value;
 }
 
+function normalizeSorafsProviderOwner(value, name) {
+  if (typeof value !== "string" || value.trim() !== value) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must be an exact canonical I105 account id`,
+      name,
+    );
+  }
+  const normalized = normalizeAccountId(value, name);
+  if (normalized !== value) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must be an exact canonical I105 account id`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function normalizeProviderIngestCompletionSignerPolicy(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(
+    source,
+    ["policyId", "revision", "predecessorDigest", "policyDigest"],
+    name,
+  );
+  const revision = asPositiveInteger(source.revision, `${name}.revision`);
+  const predecessorDigest = source.predecessorDigest;
+  if (revision === 1) {
+    if (predecessorDigest !== null) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.predecessorDigest must be null at revision 1`,
+        `${name}.predecessorDigest`,
+      );
+    }
+  } else if (predecessorDigest === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.predecessorDigest is required after revision 1`,
+      `${name}.predecessorDigest`,
+    );
+  }
+  return {
+    policy_id: normalizeSorafsReplicationIdentifier(
+      source.policyId,
+      `${name}.policyId`,
+    ),
+    revision,
+    predecessor_digest:
+      predecessorDigest === null
+        ? null
+        : normalizeSorafsReplicationIdentifier(
+            predecessorDigest,
+            `${name}.predecessorDigest`,
+          ),
+    policy_digest: normalizeSorafsReplicationIdentifier(
+      source.policyDigest,
+      `${name}.policyDigest`,
+    ),
+  };
+}
+
+function normalizeProviderIngestCompletionAuthority(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(source, ["providerOwner", "signerPolicy"], name);
+  return {
+    provider_owner: normalizeSorafsProviderOwner(
+      source.providerOwner,
+      `${name}.providerOwner`,
+    ),
+    signer_policy: normalizeProviderIngestCompletionSignerPolicy(
+      source.signerPolicy,
+      `${name}.signerPolicy`,
+    ),
+  };
+}
+
+function normalizeProviderIngestFinalizedAnchor(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(source, ["height", "blockHash"], name);
+  return {
+    height: asPositiveInteger(source.height, `${name}.height`),
+    block_hash: normalizeSorafsReplicationIdentifier(
+      source.blockHash,
+      `${name}.blockHash`,
+    ),
+  };
+}
+
 function normalizeSorafsReplicationPayload(value, name) {
   if (
     typeof value === "string" &&
@@ -10719,14 +10847,25 @@ export function buildIssueReplicationOrderInstruction(options) {
 /**
  * Build the canonical provider-specific `CompleteReplicationOrder` instruction.
  *
- * @param {{orderId: string, providerId: string, completionEpoch: number|string|bigint}} options
- * @returns {{CompleteReplicationOrder: {order_id: string, provider_id: string, completion_epoch: number}}}
+ * The six top-level fields bind the completion to the exact owner, governed
+ * signer-policy chain, assignment revision, and finalized chain prefix that
+ * were checked before submission.
+ *
+ * @param {{orderId: string, providerId: string, completionEpoch: number|string|bigint, expectedAuthority: {providerOwner: string, signerPolicy: {policyId: string, revision: number|string|bigint, predecessorDigest: string|null, policyDigest: string}}, expectedAssignmentRevision: number|string|bigint, finalizedAnchor: {height: number|string|bigint, blockHash: string}}} options
+ * @returns {{CompleteReplicationOrder: {order_id: string, provider_id: string, completion_epoch: number, expected_authority: {provider_owner: string, signer_policy: {policy_id: string, revision: number, predecessor_digest: string|null, policy_digest: string}}, expected_assignment_revision: number, finalized_anchor: {height: number, block_hash: string}}}}
  */
 export function buildCompleteReplicationOrderInstruction(options) {
   const source = assertPlainObject(options, "completeReplicationOrder");
-  assertAllowedFields(
+  assertExactFields(
     source,
-    new Set(["orderId", "providerId", "completionEpoch"]),
+    [
+      "orderId",
+      "providerId",
+      "completionEpoch",
+      "expectedAuthority",
+      "expectedAssignmentRevision",
+      "finalizedAnchor",
+    ],
     "completeReplicationOrder",
   );
   return {
@@ -10742,6 +10881,18 @@ export function buildCompleteReplicationOrderInstruction(options) {
       completion_epoch: asNonNegativeInteger(
         source.completionEpoch,
         "completeReplicationOrder.completionEpoch",
+      ),
+      expected_authority: normalizeProviderIngestCompletionAuthority(
+        source.expectedAuthority,
+        "completeReplicationOrder.expectedAuthority",
+      ),
+      expected_assignment_revision: asPositiveInteger(
+        source.expectedAssignmentRevision,
+        "completeReplicationOrder.expectedAssignmentRevision",
+      ),
+      finalized_anchor: normalizeProviderIngestFinalizedAnchor(
+        source.finalizedAnchor,
+        "completeReplicationOrder.finalizedAnchor",
       ),
     },
   };

@@ -10,10 +10,11 @@ The rank, starvation, and complete indexed progress-witness preservation
 obligations are proved in the lower closure modules.  In particular, the
 Decision and historical locked-body witnesses now survive every runner,
 non-runner, crash, restart, and replay arm before projecting to the open
-progress kernel.  Timeout/view progress and locked-body reproposal are not
-independent scheduler debts: both admit Decision as a terminal outcome and
-are proved below from the same responsive-Decision convergence.  Rotating
-leader progress is reduced to the exact adequate-leader service kernel,
+progress kernel.  Timeout/view progress is the first explicit temporal leaf.
+Locked-body reproposal consumes that leaf through the direct retained-lock
+reduction and no longer closes by responsive-Decision subsumption.  Rotating
+leader progress is reduced separately to the exact adequate-leader service
+kernel,
 application completion is reduced to the exact Decision-stage service
 pipeline retained by the final witness layer.  Height productivity is closed
 by the exact tick-blocked Runtime proof: weak fairness returns every undecided
@@ -21,10 +22,15 @@ responsive voter to Local, while durable Decision receipts accumulate over the
 finite frozen roster.  The two declarations without proof are the complete
 remaining abstract temporal debt.  The leader declaration is the conjunction
 of exact scheduler-origin readiness, physical transport/ordinary-runner/
-timeout-quorum convergence, and fixed-identity semantic phase composition;
+timeout-quorum convergence, and target/context/leader/view/subject-indexed
+semantic phase composition.  Its occurrence rank counts every distinct
+target/leader owner at the frozen semantic rank; equal-count replacement and
+count-increasing producer replenishment remain explicit non-progress debt.
 the recipient-local certified-response capacity arm is already proved from
 the dedicated runtime slot and fair claim runner.  The Decision declaration
-contains only its exact off-scheduler residuals.  The Decision-local Stage-2
+contains exactly the request clock-owner, Runtime-prefix, request
+head/gate-owner, request admission/coalescing, and nonphysical nonclaim
+response head/gate-owner residuals.  The Decision-local Stage-2
 Busy owner and protected Serve FIFO starvation are proved in their dedicated
 closure leaf.  Keeping the open declarations above their eventual
 proof-bearing leaves prevents a strict leaf run from accepting either broad
@@ -103,17 +109,36 @@ THEOREM AsyncTemporalClosureRotatingLeaderProgressObligation ==
 BY AdequateLeaderServiceKernelObligation,
    AdequateLeaderServiceKernelSuppliesRotatingLeaderProgress
 
-THEOREM AsyncTemporalClosureTimeoutViewProgressObligation ==
+AsyncTemporalClosureTimeoutViewProgressObligation ==
   \A initialContext:
     TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))
-BY AsyncTemporalClosureRotatingLeaderProgressObligation,
-   RotatingLeaderProgressPropertyImpliesTimeoutViewProgressProperty
 
-THEOREM AsyncTemporalClosureLockedBodyReproposalProgressObligation ==
+DirectTimeoutViewClosureResidualObligation ==
   \A initialContext:
-    LockedBodyReproposalProgressProperty(AsyncLiveSpecAt(initialContext))
-BY AsyncTemporalClosureRotatingLeaderProgressObligation,
-   RotatingLeaderProgressClosesLockedBodyReproposal
+    DirectTimeoutViewClosureResidualProperty(
+      AsyncLiveSpecAt(initialContext))
+
+THEOREM AsyncTemporalClosureTimeoutViewProgressReduction ==
+  DirectTimeoutViewClosureResidualObligation
+    => AsyncTemporalClosureTimeoutViewProgressObligation
+BY DirectTimeoutViewDecompositionClosesTimeoutViewProgress
+   DEF DirectTimeoutViewClosureResidualObligation,
+       AsyncTemporalClosureTimeoutViewProgressObligation
+
+LockedBodyDirectClosureResidualProperty(specification) ==
+  /\ TimeoutViewProgressProperty(specification)
+  /\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(specification)
+  /\ RetainedLockLeaderTurnProducerOriginProperty(specification)
+  /\ RetainedLockRankHandoffProperty(specification)
+
+THEOREM AsyncTemporalClosureLockedBodyReproposalProgressReduction ==
+  \A initialContext:
+    LockedBodyDirectClosureResidualProperty(
+      AsyncLiveSpecAt(initialContext))
+      => LockedBodyReproposalProgressProperty(
+           AsyncLiveSpecAt(initialContext))
+BY DirectRetainedLockDecompositionClosesLockedBodyReproposal
+   DEF LockedBodyDirectClosureResidualProperty
 
 THEOREM ExactDecisionOffSchedulerResidualConvergenceObligation ==
   \A initialContext:

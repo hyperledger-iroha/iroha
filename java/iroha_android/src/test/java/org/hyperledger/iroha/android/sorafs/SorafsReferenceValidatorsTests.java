@@ -705,6 +705,31 @@ public final class SorafsReferenceValidatorsTests {
       assert outcome.contains("\"sorafs.reference.appeal_finance\"")
           : path + ": " + outcome;
     }
+
+    final String[][] exactProfiles = {
+      {
+        "cancel_asset_lock_v1.to",
+        "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
+      },
+      {
+        "negative/cancel_asset_lock_zero_expected_v1.to",
+        "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json"
+      },
+    };
+    for (final String[] profile : exactProfiles) {
+      final String path = profile[0];
+      final String label = path.substring(path.lastIndexOf('/') + 1);
+      final String outcome =
+          SorafsReferenceValidators.validateAppealFinanceCancelAssetLockJson(
+              sorafsFixture(path),
+              label,
+              123L);
+      assert new String(
+                  fixture("sorafs_manifest", "reference_sdk", profile[1]),
+                  StandardCharsets.UTF_8)
+              .equals(outcome)
+          : path + ": " + outcome;
+    }
   }
 
   private static void validatesLinkedFixtureBundleWhenNativeBridgeIsAvailable()

@@ -4240,6 +4240,8 @@ struct NetworkActorProgressState {
     waiters: HashMap<ActorProgressSource, VecDeque<NetworkActorProgressWaiter>>,
     waiter_count: usize,
     waiters_by_class: [usize; ActorProgressClass::COUNT],
+    #[cfg(any(test, feature = "test-fixtures"))]
+    ticket_drop_cancellations: usize,
 }
 
 /// Per-source service position owned by a caller retrying progress admission.
@@ -4390,6 +4392,120 @@ impl Drop for NetworkActorAdmissionTicket {
             self.budget.cancel(&self.source, self.id, self.shape);
             self.active = false;
         }
+    }
+}
+
+/// Test-only owner of a genuine actor-admission waiter and its cancellation witness.
+///
+/// This fixture is absent unless tests or the `test-fixtures` feature are
+/// enabled. It lets dependent-crate tests move a real admission ticket through
+/// an ownership container without exposing the production budget internals.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[derive(Clone, Debug)]
+pub struct NetworkActorAdmissionTicketTestFixture {
+    budget: Arc<NetworkActorProgressBudget>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl NetworkActorAdmissionTicketTestFixture {
+    /// Create an active admission ticket bound to an exact canonical reply.
+    #[must_use]
+    pub fn for_reply<T>(
+        post: &Post<T>,
+        route: &NetworkReplyRoute,
+    ) -> (Self, NetworkActorAdmissionTicket)
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        Self::for_reply_at_attempt(post, route, 0)
+    }
+
+    /// Create a reply admission ticket bound to one adaptive timeout generation.
+    #[must_use]
+    pub fn for_reply_at_attempt<T>(
+        post: &Post<T>,
+        route: &NetworkReplyRoute,
+        reply_writer_timeout_attempt: u8,
+    ) -> (Self, NetworkActorAdmissionTicket)
+    where
+        T: Pload + message::ClassifyTopic,
+    {
+        assert!(
+            route.is_reply_writable(),
+            "test reply route must accept admission"
+        );
+        assert_eq!(
+            &post.peer_id,
+            route.semantic_target(),
+            "test reply post must retain the route's semantic target"
+        );
+        let topic = post.data.topic();
+        let subscriber_route = post.data.subscriber_route();
+        assert!(
+            is_reliable_progress_route(topic, subscriber_route),
+            "test reply post must use a reliable-progress route"
+        );
+        let mut canonical_post = post.clone();
+        canonical_post.priority =
+            canonical_outbound_priority(topic, subscriber_route, canonical_post.priority);
+        let stream_wire_bytes = ncore::encoded_payload_len(&canonical_post.data)
+            .expect("test reply payload must have a canonical Norito encoding")
+            .max(1);
+        let canonical = NetworkMessage::Post(canonical_post);
+        let class = ActorProgressClass::for_route(topic, subscriber_route)
+            .expect("reliable test reply route must have an actor class");
+        let authority = ProgressDeliveryAuthority::Reply(route.clone());
+        let shape = ProgressTicketShape {
+            topic,
+            stream_wire_bytes,
+            broadcast: false,
+            reply_writer_timeout_attempt: Some(reply_writer_timeout_attempt),
+            request_digest: progress_ticket_request_digest(&canonical),
+            authority: Some(authority.identity()),
+        };
+        let source = ActorProgressSource {
+            target: Some(route.tenure.delivery_peer.clone()),
+            class,
+        };
+        let fixture = Self {
+            budget: NetworkActorProgressBudget::new(stream_wire_bytes, 1, 1)
+                .expect("test actor admission geometry must fit"),
+        };
+        let ProgressLeaseAttempt::Ready { lease, ticket } = fixture.budget.try_reserve_for_source(
+            stream_wire_bytes,
+            shape,
+            source,
+            Some(&authority),
+            None,
+        ) else {
+            panic!("fresh test actor admission ticket must own rank one");
+        };
+        // This is the state returned to a caller when actor-queue admission
+        // fails after budget reservation: the lease returns to the budget,
+        // while the exact waiter ticket and canonical post stay caller-owned.
+        drop(lease);
+        debug_assert_eq!(ticket.rank(), Some(1));
+        (fixture, ticket)
+    }
+
+    /// Return the number of live waiters in this isolated budget.
+    #[must_use]
+    pub fn waiter_count(&self) -> usize {
+        self.budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .waiter_count
+    }
+
+    /// Return the number of exact waiters removed by admission-ticket drop.
+    #[must_use]
+    pub fn ticket_drop_cancellations(&self) -> usize {
+        self.budget
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .ticket_drop_cancellations
     }
 }
 
@@ -5517,6 +5633,13 @@ impl NetworkActorProgressBudget {
             state.waiters_by_class[class_index] = state.waiters_by_class[class_index]
                 .checked_sub(1)
                 .expect("progress ticket cancellation must match class ownership");
+            #[cfg(any(test, feature = "test-fixtures"))]
+            {
+                state.ticket_drop_cancellations = state
+                    .ticket_drop_cancellations
+                    .checked_add(1)
+                    .expect("bounded test ticket cancellation count cannot overflow");
+            }
         }
         if state.waiters.get(source).is_some_and(VecDeque::is_empty) {
             state.waiters.remove(source);

@@ -1,0 +1,38 @@
+{
+  "status": "Ok",
+  "code": "SFS-OK-000",
+  "category": "validation",
+  "message": "appeal-finance CancelAssetLock payload accepted",
+  "action": null,
+  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "telemetry_tags": [
+    "sorafs.reference.appeal_finance",
+    "sorafs.reference.code.SFS-OK-000"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "CancelAssetLock"
+    },
+    {
+      "key": "escrow_id_hex",
+      "value": "73ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11bdc799dfdb7ea29851f"
+    },
+    {
+      "key": "expected_remaining_amount",
+      "value": "20"
+    },
+    {
+      "key": "canonical_bytes",
+      "value": "85"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "cancel_asset_lock",
+      "path": "cancel_asset_lock_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 123
+}

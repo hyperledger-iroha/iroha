@@ -2479,7 +2479,14 @@ fn canonical_validation_fee_draft_instruction(
             "validation-fee governance supports plain referendum voting only"
         ));
     }
-    let proposal_kind = request.proposal.proposal_kind();
+    if let Some(reason) = request.plain_electorate_rules.invariant_error() {
+        return Err(eyre!(
+            "invalid validation-fee PLAIN electorate rules: {reason}"
+        ));
+    }
+    let proposal_kind = request
+        .proposal
+        .proposal_kind(&request.plain_electorate_rules);
     let instruction = match &request.proposal {
         ValidationFeeProposalDraftPayloadV1::Policy {
             policy,
@@ -2509,6 +2516,7 @@ fn canonical_validation_fee_draft_instruction(
                 iroha_data_model::governance::types::ValidationFeePolicyProposal {
                     policy: policy.clone(),
                     payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
+                    plain_electorate_rules: request.plain_electorate_rules.clone(),
                 },
             );
             debug_assert_eq!(kind, proposal_kind);
@@ -2517,6 +2525,7 @@ fn canonical_validation_fee_draft_instruction(
                 payout_lifecycle_proposal_id: *payout_lifecycle_proposal_id,
                 referendum_window: request.referendum_window,
                 mode: Some(VotingMode::Plain),
+                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into();
             instruction
@@ -2537,6 +2546,7 @@ fn canonical_validation_fee_draft_instruction(
                 payout_binding: payout_binding.clone(),
                 referendum_window: request.referendum_window,
                 mode: Some(VotingMode::Plain),
+                plain_electorate_rules: request.plain_electorate_rules.clone(),
             }
             .into();
             instruction
@@ -4189,7 +4199,7 @@ impl ZkProofsFilter<'_> {
 
 fn validate_zk_proofs_filter(filter: &ZkProofsFilter<'_>) -> Result<()> {
     if let Some(backend) = filter.backend {
-        require_production_verify_backend_label(backend, "zk proofs filter backend")?;
+        require_verifier_backend_registry_label_v1(backend, "zk proofs filter backend")?;
     }
     Ok(())
 }
@@ -4283,7 +4293,7 @@ fn require_json_backend_field<'a>(
         .get(field)
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("{context} must be a string"))?;
-    require_production_verify_backend_label(backend, context)
+    require_verifier_backend_registry_label_v1(backend, context)
 }
 
 fn require_json_non_empty_string_field<'a>(
@@ -4614,264 +4624,20 @@ fn validate_optional_json_backend_object(
     Ok(())
 }
 
-const ZK_PRODUCTION_BACKEND_HALO2_IPA: &str = "halo2/ipa";
-const ZK_PRODUCTION_BACKEND_STARK_FRI: &str = "stark/fri";
-
-const ZK_PRODUCTION_STARK_FRI_PROFILES: &[&str] = &[
-    "sha256-goldilocks",
-    "poseidon2-goldilocks",
-    "sha256_goldilocks.v1",
-];
-
-const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
-    "halo2/pasta/kaigi-roster-v1",
-    "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-overlay-bind",
-    "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
-    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-];
-
-const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &["debug", "mock", "fixture", "dev"];
-const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] =
-    &["test", "dummy", "fake", "stub", "sample", "placeholder"];
-const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
-    "productionready",
-    "productionhardened",
-    "productionenabled",
-    "productionapproved",
-    "productioncertified",
-    "productionclaim",
-    "claimedproduction",
-    "mainnetready",
-    "mainnetcomplete",
-    "mainnetclaim",
-    "claimedmainnet",
-    "mainnetcertified",
-    "mainnetapproved",
-    "mainnetrelease",
-    "auditedproduction",
-    "externallyaudited",
-    "thirdpartyaudited",
-    "boiaudited",
-    "auditedmainnet",
-    "externalaudit",
-    "auditpassed",
-    "auditapproved",
-    "auditsignoff",
-    "auditclaim",
-    "claimedaudit",
-    "securityreviewpassed",
-    "securityauditpassed",
-    "securityaudited",
-    "externalsecurityreview",
-    "certifiedproduction",
-    "certifiedmainnet",
-    "releaseready",
-    "releaseapproved",
-    "releasecertified",
-];
-
-fn require_production_verify_backend_label<'a>(backend: &'a str, context: &str) -> Result<&'a str> {
-    if backend.trim().is_empty() {
-        return Err(eyre!("{context} must be a non-empty string"));
-    }
-    if !is_production_verify_backend_label(backend) {
+fn require_verifier_backend_registry_label_v1<'a>(
+    backend: &'a str,
+    context: &str,
+) -> Result<&'a str> {
+    if !is_verifier_backend_registry_label_v1(backend) {
         return Err(eyre!(
-            "{context} uses unsupported production verifier backend `{backend}`"
+            "{context} is not an exact supported verifier-registry label: `{backend}`"
         ));
     }
     Ok(backend)
 }
 
-fn is_production_verify_backend_label(backend: &str) -> bool {
-    if backend.is_empty()
-        || backend.trim() != backend
-        || !is_portable_verify_backend_label(backend)
-        || is_production_claim_backend_label(backend)
-        || is_trusted_setup_backend_label(backend)
-        || is_developer_only_backend_label(backend)
-    {
-        return false;
-    }
-
-    backend == ZK_PRODUCTION_BACKEND_HALO2_IPA
-        || is_stark_fri_production_backend_label(backend)
-        || is_native_halo2_pasta_production_backend_label(backend)
-}
-
-fn is_portable_verify_backend_label(backend: &str) -> bool {
-    if backend.is_empty() || backend.trim() != backend {
-        return false;
-    }
-    let Some(first) = backend.as_bytes().first() else {
-        return false;
-    };
-    let Some(last) = backend.as_bytes().last() else {
-        return false;
-    };
-    if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
-        return false;
-    }
-    if backend.as_bytes().iter().any(|&byte| {
-        !matches!(
-            byte,
-            b'a'..=b'z' | b'0'..=b'9' | b'/' | b'_' | b'.' | b':' | b'-'
-        )
-    }) {
-        return false;
-    }
-    !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]
-        .iter()
-        .any(|separator| backend.contains(separator))
-}
-
-fn is_production_claim_backend_label(backend: &str) -> bool {
-    let compact = compact_privacy_backend_label(backend);
-    PRODUCTION_CLAIM_BACKEND_FRAGMENTS
-        .iter()
-        .any(|fragment| compact.contains(fragment))
-}
-
-fn is_stark_fri_production_backend_label(backend: &str) -> bool {
-    backend == ZK_PRODUCTION_BACKEND_STARK_FRI
-        || backend
-            .strip_prefix("stark/fri/")
-            .is_some_and(|profile| ZK_PRODUCTION_STARK_FRI_PROFILES.contains(&profile))
-}
-
-fn is_native_halo2_pasta_production_backend_label(backend: &str) -> bool {
-    normalize_native_halo2_pasta_backend_label(backend)
-        .as_deref()
-        .is_some_and(|normalized| ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.contains(&normalized))
-}
-
-fn normalize_native_halo2_pasta_backend_label(backend: &str) -> Option<String> {
-    if backend.is_empty() || backend.trim() != backend {
-        return None;
-    }
-    for (prefix, target_prefix) in [
-        ("halo2/pasta/ipa/", "halo2/pasta/"),
-        ("halo2/pasta/", "halo2/pasta/"),
-        ("halo2/ipa::", "halo2/pasta/"),
-        ("halo2/ipa:", "halo2/pasta/"),
-        ("halo2/ipa/", "halo2/pasta/"),
-    ] {
-        if let Some(rest) = backend.strip_prefix(prefix) {
-            return (!rest.is_empty()).then(|| format!("{target_prefix}{rest}"));
-        }
-    }
-    None
-}
-
-fn is_trusted_setup_backend_label(backend: &str) -> bool {
-    let backend = backend.to_ascii_lowercase();
-    let compact = compact_privacy_backend_label(&backend);
-    has_trusted_setup_backend_segment(&backend)
-        || [
-            "groth16",
-            "kzg",
-            "bn254",
-            "bn256",
-            "bls12381",
-            "bls12",
-            "srs",
-            "crs",
-            "ptau",
-            "ceremony",
-            "trustedsetup",
-            "structuredreferencestring",
-            "universalsrs",
-            "powersoftau",
-        ]
-        .iter()
-        .any(|token| compact.contains(token))
-        || backend == "groth16"
-        || backend.starts_with("groth16/")
-        || backend == "kzg"
-        || backend.starts_with("kzg/")
-        || backend == "bn254"
-        || backend == "bn256"
-        || backend == "bls12_381"
-        || backend == "bls12-381"
-        || backend == "halo2/bn254"
-        || backend.starts_with("halo2/bn254/")
-        || backend.contains("/bn254")
-        || backend.contains(":bn254")
-        || backend.contains("/bn256")
-        || backend.contains(":bn256")
-        || backend.contains("/bls12")
-        || backend.contains(":bls12")
-        || backend == "halo2/kzg"
-        || backend.starts_with("halo2/kzg/")
-        || backend.contains("/kzg")
-        || backend.contains(":kzg")
-}
-
-fn has_trusted_setup_backend_segment(backend: &str) -> bool {
-    const TRUSTED_SETUP_SEGMENTS: &[&str] = &[
-        "groth16",
-        "kzg",
-        "bn254",
-        "bn256",
-        "bls12",
-        "srs",
-        "crs",
-        "ptau",
-        "ceremony",
-        "powersoftau",
-    ];
-    backend
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .any(|segment| TRUSTED_SETUP_SEGMENTS.contains(&segment))
-}
-
-fn is_developer_only_backend_label(backend: &str) -> bool {
-    let backend = backend.to_ascii_lowercase();
-    let mut letter_run = String::new();
-    for token in backend
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-    {
-        if is_developer_only_direct_backend_token(token) {
-            return true;
-        }
-        if token.len() == 1 {
-            letter_run.push_str(token);
-        } else {
-            if is_developer_only_compact_backend_run(&letter_run) {
-                return true;
-            }
-            letter_run.clear();
-        }
-    }
-    is_developer_only_compact_backend_run(&letter_run)
-}
-
-fn is_developer_only_direct_backend_token(token: &str) -> bool {
-    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
-        .iter()
-        .any(|reserved| token.contains(reserved))
-        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&token)
-}
-
-fn is_developer_only_compact_backend_run(run: &str) -> bool {
-    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
-        .iter()
-        .any(|reserved| run.contains(reserved))
-        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&run)
-}
-
-fn compact_privacy_backend_label(value: &str) -> String {
-    value
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .map(|ch| ch.to_ascii_lowercase())
-        .collect()
+fn is_verifier_backend_registry_label_v1(backend: &str) -> bool {
+    iroha_data_model::zk::is_verifier_backend_registry_label_v1(backend)
 }
 
 fn normalize_hex32_lower(value: &str, context: &str) -> Result<String> {
@@ -5331,6 +5097,160 @@ impl SorafsReserveEventsReadbackFilter<'_> {
             url.query_pairs_mut()
                 .append_pair("after_event_index", &index.to_string());
         }
+    }
+}
+
+const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
+const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: usize = 64 * 1024;
+
+fn require_nonzero_lower_hex32<'a>(value: &'a str, context: &str) -> Result<&'a str> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre!(
+            "{context} must be exactly 64 lowercase hexadecimal characters"
+        ));
+    }
+    if value.bytes().all(|byte| byte == b'0') {
+        return Err(eyre!("{context} must be non-zero"));
+    }
+    Ok(value)
+}
+
+fn require_sorafs_hedging_billing_page_limit(limit: u16) -> Result<u16> {
+    if !(1..=SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1).contains(&limit) {
+        return Err(eyre!(
+            "SoraFS hedging/billing page limit must be within 1..={SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1}"
+        ));
+    }
+    Ok(limit)
+}
+
+/// Required exact-checkpoint filter for an owner-isolated billing statement page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsBillingStatementListFilter<'a> {
+    /// Non-zero canonical lowercase checkpoint fingerprint.
+    pub expected_checkpoint_fingerprint_hex: &'a str,
+    /// Optional exclusive non-zero canonical lowercase statement identifier.
+    pub after_statement_id_hex: Option<&'a str>,
+    /// Required bounded page size in the inclusive range 1 through 100.
+    pub limit: u16,
+}
+
+impl SorafsBillingStatementListFilter<'_> {
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let checkpoint = require_nonzero_lower_hex32(
+            self.expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        let limit = require_sorafs_hedging_billing_page_limit(self.limit)?;
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        if let Some(after) = self.after_statement_id_hex {
+            url.query_pairs_mut().append_pair(
+                "after_statement_id",
+                require_nonzero_lower_hex32(after, "after statement identifier")?,
+            );
+        }
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        Ok(())
+    }
+}
+
+/// Required exact-checkpoint filter for finalized hedging projection pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsHedgingProjectionFilter<'a> {
+    /// Non-zero canonical lowercase checkpoint fingerprint.
+    pub expected_checkpoint_fingerprint_hex: &'a str,
+    /// Optional exclusive non-zero canonical lowercase projection cursor.
+    pub after_hex: Option<&'a str>,
+    /// Required bounded page size in the inclusive range 1 through 100.
+    pub limit: u16,
+}
+
+impl SorafsHedgingProjectionFilter<'_> {
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let checkpoint = require_nonzero_lower_hex32(
+            self.expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        let limit = require_sorafs_hedging_billing_page_limit(self.limit)?;
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        if let Some(after) = self.after_hex {
+            url.query_pairs_mut().append_pair(
+                "after",
+                require_nonzero_lower_hex32(after, "hedging projection cursor")?,
+            );
+        }
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        Ok(())
+    }
+}
+
+/// Canonical owner proof submitted when acknowledging one published billing statement.
+#[derive(
+    Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
+pub struct SorafsBillingAcknowledgementProof {
+    request_nonce: [u8; 32],
+    authentication_proof: Vec<u8>,
+}
+
+impl fmt::Debug for SorafsBillingAcknowledgementProof {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SorafsBillingAcknowledgementProof")
+            .field("request_nonce", &hex::encode(self.request_nonce))
+            .field("authentication_proof", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl SorafsBillingAcknowledgementProof {
+    /// Construct a bounded proof from an exact non-zero lowercase request nonce.
+    ///
+    /// # Errors
+    /// Returns an error if the nonce is not canonical or the proof is empty or exceeds 64 KiB.
+    pub fn try_from_hex(request_nonce_hex: &str, authentication_proof: Vec<u8>) -> Result<Self> {
+        let request_nonce_hex = require_nonzero_lower_hex32(
+            request_nonce_hex,
+            "billing acknowledgement request nonce",
+        )?;
+        if authentication_proof.is_empty()
+            || authentication_proof.len() > SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
+        {
+            return Err(eyre!(
+                "billing acknowledgement authentication proof must contain 1..={SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes"
+            ));
+        }
+        let mut request_nonce = [0_u8; 32];
+        hex::decode_to_slice(request_nonce_hex, &mut request_nonce)
+            .wrap_err("failed to decode canonical billing acknowledgement request nonce")?;
+        Ok(Self {
+            request_nonce,
+            authentication_proof,
+        })
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.request_nonce == [0; 32] {
+            return Err(eyre!(
+                "billing acknowledgement request nonce must be non-zero"
+            ));
+        }
+        if self.authentication_proof.is_empty()
+            || self.authentication_proof.len() > SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
+        {
+            return Err(eyre!(
+                "billing acknowledgement authentication proof must contain 1..={SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -7232,7 +7152,7 @@ impl Client {
                 "offline readiness response contains both {field} and a {unavailable_blocker} blocker"
             ));
         }
-        if verifier.id.backend != ZK_PRODUCTION_BACKEND_HALO2_IPA
+        if verifier.id.backend != "halo2/ipa"
             || verifier.id.name != expected_role
             || verifier.circuit_id != expected_circuit_id
         {
@@ -9099,6 +9019,7 @@ mod status_tests {
             },
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -9154,6 +9075,7 @@ mod status_tests {
             },
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -9202,6 +9124,7 @@ mod status_tests {
             },
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -10247,7 +10170,7 @@ mod evidence_http_tests {
             });
             let message = err.to_string();
             assert!(
-                message.contains("unsupported production verifier backend")
+                message.contains("exact supported verifier-registry label")
                     || message.contains("must match"),
                 "unexpected verify JSON error: {message}"
             );
@@ -10277,7 +10200,7 @@ mod evidence_http_tests {
 
         assert!(
             err.to_string()
-                .contains("unsupported production verifier backend"),
+                .contains("exact supported verifier-registry label"),
             "unexpected submit-proof JSON error: {err}"
         );
         assert!(
@@ -17859,6 +17782,151 @@ impl Client {
         self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Appeal, transaction)
     }
 
+    /// Fetch the supervised SoraFS billing projector status.
+    ///
+    /// # Errors
+    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
+    pub fn get_sorafs_billing_status(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/status");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Fetch one exact-checkpoint owner-isolated page of published billing statements.
+    ///
+    /// # Errors
+    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
+    /// signing or request construction fails, or the HTTP call fails.
+    pub fn get_sorafs_billing_statements(
+        &self,
+        filter: SorafsBillingStatementListFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/billing/statements");
+        filter.apply_to_url(&mut url)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Fetch one exact owned published billing statement as canonical Norito bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the statement identifier or checkpoint fingerprint is noncanonical,
+    /// canonical request signing or request construction fails, or the HTTP call fails.
+    pub fn get_sorafs_billing_statement(
+        &self,
+        statement_id_hex: &str,
+        expected_checkpoint_fingerprint_hex: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let statement_id =
+            require_nonzero_lower_hex32(statement_id_hex, "billing statement identifier")?;
+        let checkpoint = require_nonzero_lower_hex32(
+            expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        let mut url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/billing/statements",
+            &[statement_id],
+        );
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_NORITO),
+        )
+    }
+
+    /// Submit one canonical owner acknowledgement for a published billing statement.
+    ///
+    /// # Errors
+    /// Returns an error if identifiers or proof fields are noncanonical, Norito serialization or
+    /// canonical request signing fails, request construction fails, or the HTTP call fails.
+    pub fn post_sorafs_billing_statement_acknowledgement(
+        &self,
+        statement_id_hex: &str,
+        expected_checkpoint_fingerprint_hex: &str,
+        proof: &SorafsBillingAcknowledgementProof,
+    ) -> Result<Response<Vec<u8>>> {
+        let statement_id =
+            require_nonzero_lower_hex32(statement_id_hex, "billing statement identifier")?;
+        let checkpoint = require_nonzero_lower_hex32(
+            expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        proof.validate()?;
+        let body = norito::to_bytes(proof)
+            .wrap_err("failed to encode canonical billing acknowledgement proof")?;
+        let mut url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/billing/statements",
+            &[statement_id, "acknowledgements"],
+        );
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Fetch payload-free SoraFS billing delivery reconciliation status.
+    ///
+    /// # Errors
+    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
+    pub fn get_sorafs_billing_reconciliation(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/reconciliation");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Fetch one exact-checkpoint page of finalized SoraFS hedging exposure.
+    ///
+    /// Automatic hedge execution is not exposed by this read-only client method.
+    ///
+    /// # Errors
+    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
+    /// signing or request construction fails, or the HTTP call fails.
+    pub fn get_sorafs_hedging_exposure(
+        &self,
+        filter: SorafsHedgingProjectionFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        self.get_sorafs_hedging_projection("v1/sorafs/hedging/exposure", filter)
+    }
+
+    /// Fetch one exact-checkpoint page of governed SoraFS hedge intents.
+    ///
+    /// This method returns intent projections only and cannot submit hedge execution.
+    ///
+    /// # Errors
+    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
+    /// signing or request construction fails, or the HTTP call fails.
+    pub fn get_sorafs_hedging_intents(
+        &self,
+        filter: SorafsHedgingProjectionFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        self.get_sorafs_hedging_projection("v1/sorafs/hedging/intents", filter)
+    }
+
+    fn get_sorafs_hedging_projection(
+        &self,
+        route: &str,
+        filter: SorafsHedgingProjectionFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, route);
+        filter.apply_to_url(&mut url)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
     /// Convenience: GET `/v1/sorafs/moderation/quarantine` to list local moderation quarantine records.
     ///
     /// # Errors
@@ -21685,7 +21753,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_proof_json(&self, backend: &str, hash_hex: &str) -> Result<norito::json::Value> {
-        let backend = require_production_verify_backend_label(backend, "zk proof backend")?;
+        let backend = require_verifier_backend_registry_label_v1(backend, "zk proof backend")?;
         let hash_hex = normalize_hex32_lower(hash_hex, "zk proof hash")?;
         let url = join_torii_url_with_path_segments(
             &self.torii_url,
@@ -21945,7 +22013,8 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_vk_json(&self, backend: &str, name: &str) -> Result<norito::json::Value> {
-        let backend = require_production_verify_backend_label(backend, "zk verifying key backend")?;
+        let backend =
+            require_verifier_backend_registry_label_v1(backend, "zk verifying key backend")?;
         let name = require_non_empty_path_segment(name, "zk verifying key name")?;
         let url = join_torii_url_with_path_segments(&self.torii_url, "v1/zk/vk", &[backend, name]);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
@@ -23932,9 +24001,9 @@ mod url_join_tests {
     use url::Url;
 
     use super::{
-        ZkProofsFilter, is_production_verify_backend_label, join_torii_url,
+        ZkProofsFilter, is_verifier_backend_registry_label_v1, join_torii_url,
         join_torii_url_with_path_segments, normalize_hex32_lower,
-        require_production_verify_backend_label, validate_zk_proofs_filter,
+        require_verifier_backend_registry_label_v1, validate_zk_proofs_filter,
     };
 
     #[test]
@@ -23983,25 +24052,15 @@ mod url_join_tests {
     }
 
     #[test]
-    fn zk_client_backend_guard_accepts_current_production_backends() {
-        for backend in [
-            "halo2/ipa",
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kaigi-roster-v1",
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
-        ] {
+    fn zk_client_backend_guard_accepts_exact_registry_labels() {
+        for &backend in iroha_data_model::zk::ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(
-                is_production_verify_backend_label(backend),
-                "production backend {backend} must be admitted"
+                is_verifier_backend_registry_label_v1(backend),
+                "registry label {backend} must be admitted"
             );
             assert_eq!(
-                require_production_verify_backend_label(backend, "backend")
-                    .expect("production backend"),
+                require_verifier_backend_registry_label_v1(backend, "backend")
+                    .expect("exact registry label"),
                 backend
             );
         }
@@ -24019,7 +24078,10 @@ mod url_join_tests {
             "halo2/ipa\0",
             "HALO2/IPA",
             "stark/FRI",
+            "halo2/ipa:ivm-execution-v1",
             "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa/ivm-execution-v1",
+            "halo2/pasta/ipa/ivm-execution-v1",
             "halo2//ipa",
             "halo2/ipa:",
             "halo2/ipa.",
@@ -24083,13 +24145,13 @@ mod url_join_tests {
             "mock/dev",
         ] {
             assert!(
-                !is_production_verify_backend_label(backend),
+                !is_verifier_backend_registry_label_v1(backend),
                 "unsupported backend {backend:?} must stay fail-closed"
             );
-            let err = require_production_verify_backend_label(backend, "backend")
+            let err = require_verifier_backend_registry_label_v1(backend, "backend")
                 .expect_err("unsupported backend rejected");
             assert!(
-                format!("{err}").contains("unsupported production verifier backend"),
+                format!("{err}").contains("exact supported verifier-registry label"),
                 "unexpected backend error for {backend:?}: {err}"
             );
         }
@@ -24114,7 +24176,7 @@ mod url_join_tests {
             };
             let err = validate_zk_proofs_filter(&filter)
                 .expect_err("unsupported filter backend rejected");
-            assert!(format!("{err}").contains("unsupported production verifier backend"));
+            assert!(format!("{err}").contains("exact supported verifier-registry label"));
         }
     }
 
@@ -30361,6 +30423,7 @@ mod tests {
             stack: StackStatus::default(),
             sumeragi: None,
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -31364,6 +31427,216 @@ mod tests {
                 "unexpected error for {ticket_id:?}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn sorafs_hedging_billing_methods_send_exact_signed_requests() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let checkpoint = "11".repeat(32);
+        let statement_id = "22".repeat(32);
+        let after_statement_id = "33".repeat(32);
+        let projection_cursor = "44".repeat(32);
+        let request_nonce = "55".repeat(32);
+        let proof = SorafsBillingAcknowledgementProof::try_from_hex(&request_nonce, vec![0xA5; 48])
+            .expect("canonical acknowledgement proof");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_billing_status()
+                .expect("billing status request");
+            client
+                .get_sorafs_billing_statements(SorafsBillingStatementListFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_statement_id_hex: Some(&after_statement_id),
+                    limit: 25,
+                })
+                .expect("billing statements request");
+            client
+                .get_sorafs_billing_statement(&statement_id, &checkpoint)
+                .expect("billing statement request");
+            client
+                .post_sorafs_billing_statement_acknowledgement(&statement_id, &checkpoint, &proof)
+                .expect("billing acknowledgement request");
+            client
+                .get_sorafs_billing_reconciliation()
+                .expect("billing reconciliation request");
+            client
+                .get_sorafs_hedging_exposure(SorafsHedgingProjectionFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_hex: Some(&projection_cursor),
+                    limit: 50,
+                })
+                .expect("hedging exposure request");
+            client
+                .get_sorafs_hedging_intents(SorafsHedgingProjectionFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_hex: None,
+                    limit: 100,
+                })
+                .expect("hedging intents request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        assert_eq!(snapshots.len(), 7);
+        for snapshot in snapshots.iter() {
+            assert_canonical_account_signed_request(&client, snapshot);
+        }
+
+        assert_eq!(snapshots[0].method, HttpMethod::GET);
+        assert_eq!(snapshots[0].url.path(), "/v1/sorafs/billing/status");
+        assert_eq!(snapshots[0].url.query(), None);
+        assert_single_accept_header(&snapshots[0], APPLICATION_JSON);
+
+        assert_eq!(snapshots[1].method, HttpMethod::GET);
+        assert_eq!(snapshots[1].url.path(), "/v1/sorafs/billing/statements");
+        assert_eq!(
+            snapshots[1].url.query(),
+            Some(
+                format!(
+                    "expected_checkpoint_fingerprint={checkpoint}&after_statement_id={after_statement_id}&limit=25"
+                )
+                .as_str()
+            )
+        );
+        assert_single_accept_header(&snapshots[1], APPLICATION_JSON);
+
+        assert_eq!(snapshots[2].method, HttpMethod::GET);
+        assert_eq!(
+            snapshots[2].url.path(),
+            format!("/v1/sorafs/billing/statements/{statement_id}")
+        );
+        assert_eq!(
+            snapshots[2].url.query(),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}").as_str())
+        );
+        assert_single_accept_header(&snapshots[2], APPLICATION_NORITO);
+
+        assert_eq!(snapshots[3].method, HttpMethod::POST);
+        assert_eq!(
+            snapshots[3].url.path(),
+            format!("/v1/sorafs/billing/statements/{statement_id}/acknowledgements")
+        );
+        assert_eq!(
+            snapshots[3].url.query(),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}").as_str())
+        );
+        assert_single_accept_header(&snapshots[3], APPLICATION_JSON);
+        let acknowledgement_headers: HashMap<_, _> = snapshots[3].headers.iter().cloned().collect();
+        assert_eq!(
+            acknowledgement_headers.get("content-type"),
+            Some(&APPLICATION_NORITO.to_owned())
+        );
+        assert_eq!(
+            snapshots[3].body,
+            norito::to_bytes(&proof).expect("encode expected acknowledgement proof")
+        );
+
+        assert_eq!(snapshots[4].method, HttpMethod::GET);
+        assert_eq!(snapshots[4].url.path(), "/v1/sorafs/billing/reconciliation");
+        assert_eq!(snapshots[4].url.query(), None);
+        assert_single_accept_header(&snapshots[4], APPLICATION_JSON);
+
+        assert_eq!(snapshots[5].method, HttpMethod::GET);
+        assert_eq!(snapshots[5].url.path(), "/v1/sorafs/hedging/exposure");
+        assert_eq!(
+            snapshots[5].url.query(),
+            Some(
+                format!(
+                    "expected_checkpoint_fingerprint={checkpoint}&after={projection_cursor}&limit=50"
+                )
+                .as_str()
+            )
+        );
+        assert_single_accept_header(&snapshots[5], APPLICATION_JSON);
+
+        assert_eq!(snapshots[6].method, HttpMethod::GET);
+        assert_eq!(snapshots[6].url.path(), "/v1/sorafs/hedging/intents");
+        assert_eq!(
+            snapshots[6].url.query(),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}&limit=100").as_str())
+        );
+        assert_single_accept_header(&snapshots[6], APPLICATION_JSON);
+    }
+
+    #[test]
+    fn sorafs_hedging_billing_inputs_are_strict_and_bounded() {
+        let client = client_with_base_url(base_url());
+        let checkpoint = "11".repeat(32);
+        let statement_id = "22".repeat(32);
+
+        for invalid in [
+            "AA".repeat(32),
+            format!("0x{}", "11".repeat(32)),
+            format!(" {}", "11".repeat(32)),
+            "00".repeat(32),
+            "11".repeat(31),
+        ] {
+            let list_error = client
+                .get_sorafs_billing_statements(SorafsBillingStatementListFilter {
+                    expected_checkpoint_fingerprint_hex: &invalid,
+                    after_statement_id_hex: None,
+                    limit: 1,
+                })
+                .expect_err("noncanonical checkpoint must fail before sending");
+            assert!(
+                list_error.to_string().contains("checkpoint fingerprint"),
+                "unexpected checkpoint error for {invalid:?}: {list_error}"
+            );
+
+            let statement_error = client
+                .get_sorafs_billing_statement(&invalid, &checkpoint)
+                .expect_err("noncanonical statement identifier must fail before sending");
+            assert!(
+                statement_error.to_string().contains("statement identifier"),
+                "unexpected statement error for {invalid:?}: {statement_error}"
+            );
+        }
+
+        for limit in [0, 101] {
+            let error = client
+                .get_sorafs_hedging_exposure(SorafsHedgingProjectionFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_hex: None,
+                    limit,
+                })
+                .expect_err("out-of-range page limit must fail before sending");
+            assert!(error.to_string().contains("page limit"));
+        }
+
+        let uppercase_cursor = "AA".repeat(32);
+        let cursor_error = client
+            .get_sorafs_hedging_intents(SorafsHedgingProjectionFilter {
+                expected_checkpoint_fingerprint_hex: &checkpoint,
+                after_hex: Some(&uppercase_cursor),
+                limit: 1,
+            })
+            .expect_err("uppercase cursor must fail before sending");
+        assert!(cursor_error.to_string().contains("projection cursor"));
+
+        let empty_proof = SorafsBillingAcknowledgementProof::try_from_hex(&checkpoint, Vec::new())
+            .expect_err("empty acknowledgement proof must fail");
+        assert!(empty_proof.to_string().contains("authentication proof"));
+        let zero_nonce = SorafsBillingAcknowledgementProof::try_from_hex(&"00".repeat(32), vec![1])
+            .expect_err("zero acknowledgement nonce must fail");
+        assert!(zero_nonce.to_string().contains("request nonce"));
+
+        let proof = SorafsBillingAcknowledgementProof::try_from_hex(&checkpoint, vec![1])
+            .expect("valid proof");
+        let uppercase_checkpoint = "AA".repeat(32);
+        let acknowledgement_error = client
+            .post_sorafs_billing_statement_acknowledgement(
+                &statement_id,
+                &uppercase_checkpoint,
+                &proof,
+            )
+            .expect_err("uppercase acknowledgement anchor must fail before sending");
+        assert!(
+            acknowledgement_error
+                .to_string()
+                .contains("checkpoint fingerprint")
+        );
     }
 
     #[test]

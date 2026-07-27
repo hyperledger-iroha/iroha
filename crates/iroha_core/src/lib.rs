@@ -139,6 +139,8 @@ pub mod privacy_engines;
 pub mod privacy_profiles;
 /// Durable records produced by verified first-release privacy actions.
 pub mod privacy_state;
+/// Exhaustive native proof verification and verified-effect derivation.
+pub(crate) mod privacy_verifier;
 /// Query API types and execution.
 pub mod query;
 /// Transaction queue and mempool logic.

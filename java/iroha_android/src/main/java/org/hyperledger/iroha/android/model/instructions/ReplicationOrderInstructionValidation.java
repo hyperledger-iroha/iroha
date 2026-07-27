@@ -47,6 +47,27 @@ final class ReplicationOrderInstructionValidation {
     return value;
   }
 
+  static String requireDigest(final String value, final String fieldName) {
+    Objects.requireNonNull(value, fieldName);
+    if (!value.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException(
+          fieldName + " must contain exactly 64 lowercase hexadecimal characters");
+    }
+    boolean nonzero = false;
+    for (int i = 0; i < value.length(); i++) {
+      nonzero |= value.charAt(i) != '0';
+    }
+    if (!nonzero) {
+      throw new IllegalArgumentException(fieldName + " must not be the zero digest");
+    }
+    return value;
+  }
+
+  static String requireProviderOwner(final String value) {
+    return org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+        value, "providerOwner");
+  }
+
   static String encodeOrderId(final byte[] value) {
     Objects.requireNonNull(value, "orderId");
     if (value.length != ORDER_ID_BYTES) {
@@ -100,6 +121,13 @@ final class ReplicationOrderInstructionValidation {
   static long requireEpoch(final long value, final String fieldName) {
     if (value < 0) {
       throw new IllegalArgumentException(fieldName + " must be non-negative");
+    }
+    return value;
+  }
+
+  static long requirePositiveRevision(final long value, final String fieldName) {
+    if (value <= 0) {
+      throw new IllegalArgumentException(fieldName + " must be greater than zero");
     }
     return value;
   }

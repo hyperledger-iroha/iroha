@@ -150,3 +150,33 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "name: Build host SoraFS reference native bridge" in mobile
     assert "npm run build:native" in read("ci/sdk_sorafs_orchestrator.sh")
     assert "bash ci/sdk_sorafs_orchestrator.sh" in parity
+
+
+def test_python_native_lane_covers_appeal_finance_and_provider_ingest_without_skips() -> None:
+    """The Python ABI-21 lane must exercise every native SoraFS V1 profile."""
+
+    runner = read("ci/check_sorafs_python_native_sdk.sh")
+    ignore_rules = read(".gitignore")
+    assert 'if [[ "${PYTHON_VERSION}" != "3.12" ]]' in runner
+    assert 'git -C "${ROOT_DIR}" ls-files -- \\' in runner
+    for native_pattern in ("*.so", "*.so.*", "*.dylib", "*.pyd", "*.dll"):
+        assert (
+            f"'python/iroha_python/src/iroha_python/{native_pattern}'" in runner
+        )
+        assert (
+            f"python/iroha_python/src/iroha_python/{native_pattern}" in ignore_rules
+        )
+    assert "Python native SDK artifacts must be rebuilt in the ABI-21 lane, not tracked" in runner
+    assert 'export VIRTUAL_ENV="${SDK_SESSION}/venv"' in runner
+    assert 'export PATH="${VIRTUAL_ENV}/bin:${PATH}"' in runner
+    assert '"${VENV_PYTHON}" -m maturin develop --release --locked' in runner
+    assert (
+        '"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py"'
+        in runner
+    )
+    assert "tests/cancel_asset_lock_v1_test.py" in runner
+    assert "tests/sorafs_reference_validation_test.py" in runner
+    assert "tests/sorafs_replication_instruction_test.py" in runner
+    assert '--junitxml "${JUNIT_REPORT}"' in runner
+    assert 'skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)' in runner
+    assert "SoraFS native Python SDK parity may not contain skipped tests" in runner

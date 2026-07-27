@@ -108,6 +108,17 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 
 ## 2. Finalized Registration → Provider Ingest → Fetch
 
+Before enabling the provider worker, bind
+`[sorafs.storage.provider_ingest_runtime]` to the deployment's exact
+`checkpoint_store_handle`, non-zero `checkpoint_store_revision`, and non-zero
+`checkpoint_store_policy_digest_hex`, and inject the matching sealed monotonic
+checkpoint provider together with the authenticated source and governed signer
+resolver. These fields are public identity/policy pins only; credentials and
+private keys remain runtime-only. Missing, substituted, stale, or test-marked
+providers must stop startup. Do not replace a failed provider with the local
+checkpoint file: the external sealed head is authoritative and
+`provider_ingest_outbox_v1.to` is only a revalidated cache.
+
 1. Produce a manifest + payload bundle (for example with
    `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Submit the canonical caller-signed registration transaction through
@@ -118,6 +129,9 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
    outbox identity binds the finalized cursor, manifest digest, provider id,
    and replication-order id; duplicate delivery is idempotent and exhausted
    retries are visible in the provider dead-letter inventory.
+   The sealed checkpoint record must advance monotonically and bind the exact
+   predecessor revision/checkpoint digest, bounded canonical checkpoint bytes
+   and digest, and deterministic CAS revision.
 4. Fetch the provider-ingested data:
 
    ```bash
@@ -135,11 +149,25 @@ gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs:1207】【cr
 ## 3. Restart Recovery Drill
 
 1. Complete one provider-outbox ingest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the
+2. Record the sealed provider's public head sequence, revision, checkpoint
+   digest, and predecessor binding through the deployment-owned provider
+   operations plane. The local cache may be absent, match that head, or be
+   exactly one predecessor behind it; any other relationship must fail startup.
+3. Restart the Torii process (or the entire node). Startup must requalify the
+   configured provider before and after loading its head and revalidate or
+   rewrite the local cache from that authoritative record.
+4. Re-submit the fetch request. The payload must still be retrievable and the
    returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the
+5. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the
    persisted manifests after the reboot.
+
+For CAS timeout/unknown-result drills, the provider adapter must report an
+ambiguous outcome and permit immediate authoritative readback. The exact
+successor proves the write committed. The exact unchanged predecessor yields
+`CheckpointCasUnchanged` and is safe to retry. Any different head, failed
+readback, or provider identity/policy drift is an ambiguous durability failure;
+stop the worker and investigate rather than editing the cache or advancing the
+cursor manually.
 
 ## 4. Capacity Rejection Test
 

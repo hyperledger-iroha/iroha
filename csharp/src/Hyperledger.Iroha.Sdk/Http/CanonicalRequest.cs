@@ -6,7 +6,7 @@ using Hyperledger.Iroha.Crypto;
 
 namespace Hyperledger.Iroha.Http;
 
-public static class CanonicalRequest
+public static partial class CanonicalRequest
 {
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
 

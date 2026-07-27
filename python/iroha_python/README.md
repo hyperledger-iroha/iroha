@@ -1699,6 +1699,19 @@ Connect frame encoding and crypto helpers require the compiled
 `iroha_python._crypto` extension. Run `maturin develop --release` from this
 directory before running tests that exercise Connect payloads.
 
+From the repository root, the SoraFS V1 native parity lane uses exact Python
+3.12 and rebuilds the ABI-21 extension from the current clean source revision:
+
+```bash
+SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
+  bash ci/check_sorafs_python_native_sdk.sh
+```
+
+Native extension files are build outputs and must remain untracked. The lane
+rejects prebuilt `.so`, `.dylib`, `.pyd`, or `.dll` files in the package source
+tree, authenticates the freshly built artifact, and fails if any required
+native SDK test is skipped.
+
 ## Integration tests
 
 The SDK ships an opt-in integration harness that exercises runtime and metadata
@@ -1926,6 +1939,9 @@ from iroha_python import (
     CompleteReplicationOrderInstruction,
     ExpireReplicationOrderInstruction,
     IssueReplicationOrderInstruction,
+    ProviderIngestCompletionAuthorityV1,
+    ProviderIngestCompletionSignerPolicyV1,
+    ProviderIngestFinalizedAnchorV1,
 )
 
 issue = IssueReplicationOrderInstruction(
@@ -1938,17 +1954,33 @@ complete = CompleteReplicationOrderInstruction(
     order_id,
     provider_id,
     completion_epoch=27,
+    expected_authority=ProviderIngestCompletionAuthorityV1(
+        provider_owner=provider_owner,
+        signer_policy=ProviderIngestCompletionSignerPolicyV1(
+            policy_id=policy_id,
+            revision=2,
+            predecessor_digest=predecessor_digest,
+            policy_digest=policy_digest,
+        ),
+    ),
+    expected_assignment_revision=3,
+    finalized_anchor=ProviderIngestFinalizedAnchorV1(
+        height=41,
+        block_hash=block_hash,
+    ),
 )
 expire = ExpireReplicationOrderInstruction(order_id, expiration_epoch=29)
 ```
 
 IDs are exact non-zero lowercase 64-hex strings. Issue validates bounded,
 canonical base64/Norito framing plus the embedded order ID, target, provider
-ordering, and deadline. Completion always requires
-`order_id + provider_id + completion_epoch`; the retired two-field shape and
-unknown fields fail decoding. Call `.to_payload()` for exact Rust/Norito JSON or
-`.to_instruction()` after rebuilding the native extension from the same source
-revision.
+ordering, and deadline. Completion always requires the exact six-field hard cut:
+`order_id`, `provider_id`, `completion_epoch`, `expected_authority`,
+`expected_assignment_revision`, and `finalized_anchor`. The authority retains
+the provider owner and four-part signer-policy chain; legacy, missing, and
+unknown fields fail decoding. Call `.to_payload()` for exact Rust/Norito JSON
+or `.to_instruction()` after rebuilding the native extension from the same
+source revision.
 
 ## Configuration & overrides
 

@@ -732,10 +732,10 @@ pub mod isi {
             ));
         }
         let expected_backend_tag =
-            crate::zk::production_verify_backend_tag(&verifier.proof_backend).ok_or_else(|| {
+            crate::zk::verifier_backend_registry_tag_v1(&verifier.proof_backend).ok_or_else(|| {
                 Error::InvariantViolation(
                     format!(
-                        "RAM-LFE proof verifier backend {} is not admitted by the production verifier registry",
+                        "RAM-LFE proof verifier backend {} is not admitted by the native verifier registry",
                         verifier.proof_backend
                     )
                     .into(),
@@ -923,7 +923,7 @@ pub mod isi {
             );
 
             for (backend, expected_message) in [
-                ("halo2/ipa:production-ready", "production verifier registry"),
+                ("halo2/ipa:production-ready", "native verifier registry"),
                 ("stark/fri/sha256-goldilocks", "must use Halo2 IPA Pasta"),
             ] {
                 let mut backend_verifier = verifier.clone();

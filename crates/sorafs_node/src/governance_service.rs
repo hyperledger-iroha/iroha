@@ -187,8 +187,11 @@ impl GovernanceDagServiceRuntimeProviders {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GovernanceDagServiceRuntimeProviderBindingsV1 {
     ipfs_authenticator_handle: String,
+    ipfs_authenticator_qualification: GovernanceDagRuntimeProviderQualificationV1,
     head_authenticator_handle: Option<String>,
+    head_authenticator_qualification: Option<GovernanceDagRuntimeProviderQualificationV1>,
     checkpoint_store_handle: String,
+    checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
 }
 
 impl GovernanceDagServiceRuntimeProviderBindingsV1 {
@@ -198,16 +201,40 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
         &self.ipfs_authenticator_handle
     }
 
+    /// Exact configured Kubo/IPFS/IPNS authenticator qualification.
+    #[must_use]
+    pub const fn ipfs_authenticator_qualification(
+        &self,
+    ) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.ipfs_authenticator_qualification
+    }
+
     /// Stable handle for signed-head authentication, when that mode is active.
     #[must_use]
     pub fn head_authenticator_handle(&self) -> Option<&str> {
         self.head_authenticator_handle.as_deref()
     }
 
+    /// Exact configured signed-head authenticator qualification, when active.
+    #[must_use]
+    pub const fn head_authenticator_qualification(
+        &self,
+    ) -> Option<GovernanceDagRuntimeProviderQualificationV1> {
+        self.head_authenticator_qualification
+    }
+
     /// Stable handle for the sealed monotonic checkpoint store.
     #[must_use]
     pub fn checkpoint_store_handle(&self) -> &str {
         &self.checkpoint_store_handle
+    }
+
+    /// Exact configured sealed-checkpoint store qualification.
+    #[must_use]
+    pub const fn checkpoint_store_qualification(
+        &self,
+    ) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.checkpoint_store_qualification
     }
 }
 
@@ -280,10 +307,16 @@ impl fmt::Debug for OpaqueAuthenticator {
 impl OpaqueAuthenticator {
     fn try_new(
         expected_handle: &str,
+        expected_qualification: GovernanceDagRuntimeProviderQualificationV1,
         provider: Arc<dyn GovernanceDagRequestAuthenticator>,
         label: &'static str,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, label)?;
+        if !expected_qualification.is_valid() {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} configured policy qualification is invalid"
+            )));
+        }
         let provider_handle = validate_runtime_handle(provider.handle(), label)?;
         if provider_handle != handle {
             return Err(GovernanceDagServiceError::Config(format!(
@@ -295,19 +328,24 @@ impl OpaqueAuthenticator {
                 "{label} provider is unavailable, stale, or unqualified"
             ))
         })?;
-        if !qualification.is_valid() {
+        if !qualification.is_valid() || qualification != expected_qualification {
             return Err(GovernanceDagServiceError::Config(format!(
-                "{label} provider returned an invalid policy qualification"
+                "{label} provider qualification does not match configuration"
             )));
         }
-        if provider.handle() != handle {
+        let rechecked_qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(format!(
+                "{label} provider is unavailable, stale, or unqualified"
+            ))
+        })?;
+        if provider.handle() != handle || rechecked_qualification != expected_qualification {
             return Err(GovernanceDagServiceError::Config(format!(
-                "{label} provider identity changed during startup qualification"
+                "{label} provider identity or policy changed during startup qualification"
             )));
         }
         Ok(Self {
             handle,
-            qualification,
+            qualification: expected_qualification,
             provider,
         })
     }
@@ -362,9 +400,15 @@ impl fmt::Debug for OpaqueCheckpointStore {
 impl OpaqueCheckpointStore {
     fn try_new(
         expected_handle: &str,
+        expected_qualification: GovernanceDagRuntimeProviderQualificationV1,
         provider: Arc<dyn GovernanceDagSealedCheckpointStore>,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, "sealed checkpoint store")?;
+        if !expected_qualification.is_valid() {
+            return Err(GovernanceDagServiceError::Config(
+                "sealed checkpoint store configured policy qualification is invalid".to_owned(),
+            ));
+        }
         let provider_handle =
             validate_runtime_handle(provider.handle(), "sealed checkpoint store")?;
         if provider_handle != handle {
@@ -378,19 +422,25 @@ impl OpaqueCheckpointStore {
                 "sealed checkpoint store is unavailable, stale, or unqualified".to_owned(),
             )
         })?;
-        if !qualification.is_valid() {
+        if !qualification.is_valid() || qualification != expected_qualification {
             return Err(GovernanceDagServiceError::Config(
-                "sealed checkpoint store returned an invalid policy qualification".to_owned(),
+                "sealed checkpoint store qualification does not match configuration".to_owned(),
             ));
         }
-        if provider.handle() != handle {
+        let rechecked_qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(
+                "sealed checkpoint store is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if provider.handle() != handle || rechecked_qualification != expected_qualification {
             return Err(GovernanceDagServiceError::Config(
-                "sealed checkpoint store identity changed during startup qualification".to_owned(),
+                "sealed checkpoint store identity or policy changed during startup qualification"
+                    .to_owned(),
             ));
         }
         Ok(Self {
             handle,
-            qualification,
+            qualification: expected_qualification,
             provider,
         })
     }
@@ -630,36 +680,88 @@ fn runtime_provider_bindings(
             })?,
         "IPFS authenticator",
     )?;
+    let ipfs_authenticator_qualification = configured_provider_qualification(
+        service.ipfs_authenticator_revision,
+        service.ipfs_authenticator_policy_digest,
+        "IPFS authenticator",
+    )?;
     let checkpoint_store_handle = validate_runtime_handle(
         service.checkpoint_store_handle.as_deref().ok_or_else(|| {
             GovernanceDagServiceError::Config("checkpoint store handle is missing".to_owned())
         })?,
         "sealed checkpoint store",
     )?;
-    let head_authenticator_handle = match service.head_mode.as_str() {
-        "signed_http" => Some(validate_runtime_handle(
-            service
-                .head_authenticator_handle
-                .as_deref()
-                .ok_or_else(|| {
-                    GovernanceDagServiceError::Config(
-                        "signed-head authenticator handle is missing".to_owned(),
-                    )
-                })?,
-            "signed-head authenticator",
-        )?),
-        "ipns" => None,
-        _ => {
-            return Err(GovernanceDagServiceError::Config(
-                "head_mode must be signed_http or ipns".to_owned(),
-            ));
-        }
-    };
+    let checkpoint_store_qualification = configured_provider_qualification(
+        service.checkpoint_store_revision,
+        service.checkpoint_store_policy_digest,
+        "sealed checkpoint store",
+    )?;
+    let (head_authenticator_handle, head_authenticator_qualification) =
+        match service.head_mode.as_str() {
+            "signed_http" => (
+                Some(validate_runtime_handle(
+                    service
+                        .head_authenticator_handle
+                        .as_deref()
+                        .ok_or_else(|| {
+                            GovernanceDagServiceError::Config(
+                                "signed-head authenticator handle is missing".to_owned(),
+                            )
+                        })?,
+                    "signed-head authenticator",
+                )?),
+                Some(configured_provider_qualification(
+                    service.head_authenticator_revision,
+                    service.head_authenticator_policy_digest,
+                    "signed-head authenticator",
+                )?),
+            ),
+            "ipns" => {
+                if service.head_authenticator_handle.is_some()
+                    || service.head_authenticator_revision.is_some()
+                    || service.head_authenticator_policy_digest.is_some()
+                {
+                    return Err(GovernanceDagServiceError::Config(
+                        "signed-head authenticator binding must be absent in IPNS mode".to_owned(),
+                    ));
+                }
+                (None, None)
+            }
+            _ => {
+                return Err(GovernanceDagServiceError::Config(
+                    "head_mode must be signed_http or ipns".to_owned(),
+                ));
+            }
+        };
     Ok(GovernanceDagServiceRuntimeProviderBindingsV1 {
         ipfs_authenticator_handle,
+        ipfs_authenticator_qualification,
         head_authenticator_handle,
+        head_authenticator_qualification,
         checkpoint_store_handle,
+        checkpoint_store_qualification,
     })
+}
+
+fn configured_provider_qualification(
+    revision: Option<u64>,
+    policy_digest: Option<[u8; 32]>,
+    label: &'static str,
+) -> Result<GovernanceDagRuntimeProviderQualificationV1, GovernanceDagServiceError> {
+    let qualification = GovernanceDagRuntimeProviderQualificationV1::new(
+        revision.ok_or_else(|| {
+            GovernanceDagServiceError::Config(format!("{label} revision is missing"))
+        })?,
+        policy_digest.ok_or_else(|| {
+            GovernanceDagServiceError::Config(format!("{label} policy digest is missing"))
+        })?,
+    );
+    if !qualification.is_valid() {
+        return Err(GovernanceDagServiceError::Config(format!(
+            "{label} configured policy qualification is invalid"
+        )));
+    }
+    Ok(qualification)
 }
 
 async fn run_governance_dag_service_from_view(
@@ -781,8 +883,14 @@ impl Service {
             service.checkpoint_store_handle.as_deref().ok_or_else(|| {
                 GovernanceDagServiceError::Config("checkpoint store handle is missing".to_owned())
             })?;
+        let checkpoint_store_qualification = configured_provider_qualification(
+            service.checkpoint_store_revision,
+            service.checkpoint_store_policy_digest,
+            "sealed checkpoint store",
+        )?;
         let checkpoint_store = OpaqueCheckpointStore::try_new(
             checkpoint_store_handle,
+            checkpoint_store_qualification,
             checkpoint_store.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "sealed checkpoint store is enabled but no runtime provider was injected"
@@ -800,8 +908,14 @@ impl Service {
                         "IPFS authenticator handle is missing".to_owned(),
                     )
                 })?;
+        let ipfs_authenticator_qualification = configured_provider_qualification(
+            service.ipfs_authenticator_revision,
+            service.ipfs_authenticator_policy_digest,
+            "IPFS authenticator",
+        )?;
         let ipfs_authenticator = OpaqueAuthenticator::try_new(
             ipfs_authenticator_handle,
+            ipfs_authenticator_qualification,
             ipfs_authenticator.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "IPFS authentication is enabled but no runtime provider was injected"
@@ -830,8 +944,14 @@ impl Service {
                             "signed-head authenticator handle is missing".to_owned(),
                         )
                     })?;
+                let qualification = configured_provider_qualification(
+                    service.head_authenticator_revision,
+                    service.head_authenticator_policy_digest,
+                    "signed-head authenticator",
+                )?;
                 let authenticator = OpaqueAuthenticator::try_new(
                     handle,
+                    qualification,
                     head_authenticator.ok_or_else(|| {
                         GovernanceDagServiceError::Config(
                             "signed-head authentication is enabled but no runtime provider was injected"
@@ -845,20 +965,31 @@ impl Service {
                 })?;
                 QualifiedHeadMode::SignedHttp { url, authenticator }
             }
-            "ipns" => QualifiedHeadMode::Ipns {
-                name: validate_public_token(
-                    service.ipns_name.as_deref().ok_or_else(|| {
-                        GovernanceDagServiceError::Config("IPNS name is missing".to_owned())
-                    })?,
-                    "IPNS name",
-                )?,
-                key_name: validate_public_token(
-                    service.ipns_key_name.as_deref().ok_or_else(|| {
-                        GovernanceDagServiceError::Config("IPNS key name is missing".to_owned())
-                    })?,
-                    "IPNS key name",
-                )?,
-            },
+            "ipns" => {
+                if service.head_authenticator_handle.is_some()
+                    || service.head_authenticator_revision.is_some()
+                    || service.head_authenticator_policy_digest.is_some()
+                    || head_authenticator.is_some()
+                {
+                    return Err(GovernanceDagServiceError::Config(
+                        "signed-head authenticator binding must be absent in IPNS mode".to_owned(),
+                    ));
+                }
+                QualifiedHeadMode::Ipns {
+                    name: validate_public_token(
+                        service.ipns_name.as_deref().ok_or_else(|| {
+                            GovernanceDagServiceError::Config("IPNS name is missing".to_owned())
+                        })?,
+                        "IPNS name",
+                    )?,
+                    key_name: validate_public_token(
+                        service.ipns_key_name.as_deref().ok_or_else(|| {
+                            GovernanceDagServiceError::Config("IPNS key name is missing".to_owned())
+                        })?,
+                        "IPNS key name",
+                    )?,
+                }
+            }
             _ => {
                 return Err(GovernanceDagServiceError::Config(
                     "head_mode must be signed_http or ipns".to_owned(),
@@ -4153,7 +4284,10 @@ mod tests {
         },
     };
 
-    use crate::{FilesystemGovernancePublisher, GovernanceDagRuntimeSigner, GovernancePublisher};
+    use crate::{
+        FilesystemGovernancePublisher, GovernanceDagRuntimeSigner, GovernancePublisher,
+        governance::qualify_governance_dag_runtime_signer_provider,
+    };
     use axum::{
         body::Bytes,
         extract::{RawQuery, State},
@@ -4193,6 +4327,10 @@ mod tests {
     const TEST_IPFS_AUTH_HANDLE: &str = "vault:governance/ipfs:primary";
     const TEST_HEAD_AUTH_HANDLE: &str = "vault:governance/head:primary";
     const TEST_CHECKPOINT_STORE_HANDLE: &str = "kms:governance/checkpoint:primary";
+    const TEST_AUTH_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
+        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x81; 32]);
+    const TEST_STORE_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
+        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x82; 32]);
 
     struct TestAuthenticator {
         handle: String,
@@ -4436,6 +4574,7 @@ mod tests {
     fn test_authenticator(handle: &str) -> OpaqueAuthenticator {
         OpaqueAuthenticator::try_new(
             handle,
+            TEST_AUTH_QUALIFICATION,
             Arc::new(TestAuthenticator::new(handle, "test-only-bearer")),
             "test authenticator",
         )
@@ -4502,8 +4641,12 @@ mod tests {
     }
 
     fn test_checkpoint_store(provider: Arc<TestSealedStore>) -> OpaqueCheckpointStore {
-        OpaqueCheckpointStore::try_new(TEST_CHECKPOINT_STORE_HANDLE, provider)
-            .expect("bind test sealed checkpoint store")
+        OpaqueCheckpointStore::try_new(
+            TEST_CHECKPOINT_STORE_HANDLE,
+            TEST_STORE_QUALIFICATION,
+            provider,
+        )
+        .expect("bind test sealed checkpoint store")
     }
 
     fn runtime_boundary_view(root: &Path) -> SorafsGovernanceDagServiceView {
@@ -4518,8 +4661,14 @@ mod tests {
                 ipfs_api_url: Some("http://127.0.0.1:5001".to_owned()),
                 signed_head_url: Some("http://127.0.0.1:9099/head".to_owned()),
                 ipfs_authenticator_handle: Some(TEST_IPFS_AUTH_HANDLE.to_owned()),
+                ipfs_authenticator_revision: Some(TEST_AUTH_QUALIFICATION.revision),
+                ipfs_authenticator_policy_digest: Some(TEST_AUTH_QUALIFICATION.policy_digest),
                 head_authenticator_handle: Some(TEST_HEAD_AUTH_HANDLE.to_owned()),
+                head_authenticator_revision: Some(TEST_AUTH_QUALIFICATION.revision),
+                head_authenticator_policy_digest: Some(TEST_AUTH_QUALIFICATION.policy_digest),
                 checkpoint_store_handle: Some(TEST_CHECKPOINT_STORE_HANDLE.to_owned()),
+                checkpoint_store_revision: Some(TEST_STORE_QUALIFICATION.revision),
+                checkpoint_store_policy_digest: Some(TEST_STORE_QUALIFICATION.policy_digest),
                 publisher_public_key_hex: Some("11".repeat(32)),
                 allow_insecure_http: true,
                 allow_private_ipfs_endpoint: true,
@@ -5441,7 +5590,11 @@ head_mode = "ipns"
 ipns_name = "{}"
 ipns_key_name = "{}"
 ipfs_authenticator_handle = "{TEST_IPFS_AUTH_HANDLE}"
+ipfs_authenticator_revision = 1
+ipfs_authenticator_policy_digest_hex = "{}"
 checkpoint_store_handle = "{TEST_CHECKPOINT_STORE_HANDLE}"
+checkpoint_store_revision = 1
+checkpoint_store_policy_digest_hex = "{}"
 publisher_public_key_hex = "{}"
 poll_interval_secs = 1
 connect_timeout_ms = 5000
@@ -5459,6 +5612,8 @@ listen_addr = "127.0.0.1:0"
             api_url,
             ipns_name,
             KUBO_IPNS_KEY_ALIAS,
+            "81".repeat(32),
+            "82".repeat(32),
             hex::encode(&source.head.head_signature.public_key),
         );
         let config_path = state_dir
@@ -5816,15 +5971,16 @@ listen_addr = "127.0.0.1:0"
             peer_id: publisher_peer_id.clone(),
             signer: TestSigner::new(0x76),
         });
-        let signer_handle = signer.handle().to_owned();
+        let signer = qualify_governance_dag_runtime_signer_provider(
+            signer.handle().to_owned(),
+            publisher_peer_id,
+            signer.public_key(),
+            signer,
+        )
+        .expect("qualify real runtime DAG signer");
         let publisher = FilesystemGovernancePublisher::try_new(source_dir.clone())
             .expect("create real filesystem governance publisher")
-            .with_runtime_dag_signer_provider(
-                signer_handle,
-                publisher_peer_id,
-                signer.public_key(),
-                signer,
-            )
+            .with_qualified_runtime_dag_signer_provider(signer)
             .expect("configure real runtime DAG signer");
         let timestamp = current_unix_timestamp_seconds();
         for sequence in 0..=GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u64 {
@@ -6103,9 +6259,12 @@ enabled = false
             (Some(checkpoint.clone()), Some(revision))
         );
 
-        let mismatch =
-            OpaqueCheckpointStore::try_new("kms:governance/checkpoint:other", provider.clone())
-                .expect_err("mismatched checkpoint provider handle must fail");
+        let mismatch = OpaqueCheckpointStore::try_new(
+            "kms:governance/checkpoint:other",
+            TEST_STORE_QUALIFICATION,
+            provider.clone(),
+        )
+        .expect_err("mismatched checkpoint provider handle must fail");
         assert!(mismatch.to_string().contains("does not match"));
 
         provider
@@ -6364,6 +6523,7 @@ enabled = false
     fn ipfs_urls_cids_and_secret_debug_output_are_canonical() {
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
+            TEST_AUTH_QUALIFICATION,
             Arc::new(TestAuthenticator::new(
                 TEST_IPFS_AUTH_HANDLE,
                 "never-log-this-token",
@@ -6431,6 +6591,7 @@ enabled = false
         ));
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
+            TEST_AUTH_QUALIFICATION,
             provider.clone(),
             "IPFS authenticator",
         )
@@ -6488,6 +6649,7 @@ enabled = false
         ));
         let drifting_authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
+            TEST_AUTH_QUALIFICATION,
             drifting_provider.clone(),
             "IPFS authenticator",
         )
@@ -6516,6 +6678,7 @@ enabled = false
 
         let mismatch = OpaqueAuthenticator::try_new(
             "vault:governance/ipfs:other",
+            TEST_AUTH_QUALIFICATION,
             provider,
             "IPFS authenticator",
         )
@@ -6551,14 +6714,55 @@ enabled = false
             .expect("registry was called");
         assert_eq!(observed.ipfs_authenticator_handle(), TEST_IPFS_AUTH_HANDLE);
         assert_eq!(
+            observed.ipfs_authenticator_qualification(),
+            TEST_AUTH_QUALIFICATION
+        );
+        assert_eq!(
             observed.head_authenticator_handle(),
             Some(TEST_HEAD_AUTH_HANDLE)
+        );
+        assert_eq!(
+            observed.head_authenticator_qualification(),
+            Some(TEST_AUTH_QUALIFICATION)
         );
         assert_eq!(
             observed.checkpoint_store_handle(),
             TEST_CHECKPOINT_STORE_HANDLE
         );
+        assert_eq!(
+            observed.checkpoint_store_qualification(),
+            TEST_STORE_QUALIFICATION
+        );
         assert!(state_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn service_rejects_configured_provider_qualification_substitution_before_state_access() {
+        let root = secure_temp_dir();
+        let mut view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        view.service.ipfs_authenticator_policy_digest = Some([0x99; 32]);
+
+        let error = Service::from_view(
+            view,
+            test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        )
+        .await
+        .err()
+        .expect("substituted configured provider qualification must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("qualification does not match configuration")
+        );
+        assert!(
+            !state_dir.exists(),
+            "qualification substitution must fail before mutable state is opened"
+        );
     }
 
     #[tokio::test]

@@ -4707,8 +4707,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        ModerationQuarantineKeyWrapper, ModerationQuarantineObjectInput, ModerationScreeningInput,
-        ModerationScreeningVerdict, config::StorageConfig,
+        ModerationQuarantineKeyProviderQualificationV1,
+        ModerationQuarantineKeyProviderReadinessErrorV1, ModerationQuarantineKeyWrapper,
+        ModerationQuarantineObjectInput, ModerationScreeningInput, ModerationScreeningVerdict,
+        config::StorageConfig,
     };
 
     const CASE_ID: &str = "case-1";
@@ -4719,6 +4721,19 @@ mod tests {
     const BASE_UNIX_MS: u64 = 1_800_000_100_000;
     const MOCK_PROVIDER_SECRET: &str = "MOCK-PROVIDER-SECRET-MUST-NOT-LEAK";
     const EVIDENCE_PAYLOAD: &[u8] = b"EVIDENCE-PAYLOAD-SECRET-MUST-NOT-LEAK";
+    const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
+    const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION:
+        ModerationQuarantineKeyProviderQualificationV1 =
+        ModerationQuarantineKeyProviderQualificationV1::new(1, [0x51; 32]);
+
+    fn test_quarantine_key_provider_config()
+    -> iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
+        iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
+            handle: TEST_QUARANTINE_KEY_PROVIDER_HANDLE.to_owned(),
+            revision: TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION.revision(),
+            policy_digest: TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION.policy_digest(),
+        }
+    }
 
     fn valid_config(public_key: [u8; 32]) -> EvidenceViewerConfigV1 {
         EvidenceViewerConfigV1 {
@@ -5359,6 +5374,19 @@ mod tests {
     }
 
     impl ModerationQuarantineKeyWrapper for TestQuarantineKeyWrapper {
+        fn provider_handle(&self) -> &str {
+            TEST_QUARANTINE_KEY_PROVIDER_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationQuarantineKeyProviderQualificationV1,
+            ModerationQuarantineKeyProviderReadinessErrorV1,
+        > {
+            Ok(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION)
+        }
+
         fn active_key_id(&self) -> &str {
             &self.key_id
         }
@@ -5424,6 +5452,7 @@ mod tests {
             let storage_config = StorageConfig::builder()
                 .enabled(true)
                 .data_dir(root.join("storage"))
+                .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config()))
                 .build();
             let key_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> =
                 Arc::new(TestQuarantineKeyWrapper {

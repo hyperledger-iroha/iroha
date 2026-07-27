@@ -52,7 +52,7 @@ public final class ToriiEventStreamClientTests {
     terminalStreamErrorIsStrictlyTyped();
     listenerProjectionPropagatesUnwrappedTypedTerminalFailure();
     malformedTerminalStreamErrorsFailClosed();
-    sseRejectsUnsupportedProductionBackendFiltersBeforeRequest();
+    sseRejectsLabelsOutsideVerifierRegistryBeforeRequest();
     sseRejectsMalformedVerifyingKeyEventNamesBeforeRequest();
     sseRejectsMalformedProofEventHashesBeforeRequest();
     sseRejectsPathQueryEventFiltersBeforeRequest();
@@ -479,7 +479,7 @@ public final class ToriiEventStreamClientTests {
     }
   }
 
-  private static void sseRejectsUnsupportedProductionBackendFiltersBeforeRequest() {
+  private static void sseRejectsLabelsOutsideVerifierRegistryBeforeRequest() {
     final AtomicBoolean requestSent = new AtomicBoolean(false);
     final TransportExecutor executor =
         request -> {
@@ -501,17 +501,13 @@ public final class ToriiEventStreamClientTests {
       try {
         client.openSseStream("/v1/events/sse", eventFilterOptions(filter), event -> {});
       } catch (final IllegalArgumentException expected) {
-        final String expectedMessage =
-            filter.contains("\"backend\":\" ")
-                ? "surrounding whitespace"
-                : "unsupported production verifier backend";
-        if (!expected.getMessage().contains(expectedMessage)) {
+        if (!expected.getMessage().contains("unsupported verifier-registry label")) {
           throw new AssertionError("unexpected backend rejection message: " + expected.getMessage());
         }
         assertEquals(false, requestSent.get(), "request must not be sent for rejected filters");
         continue;
       }
-      throw new AssertionError("Expected unsupported production backend filter rejection");
+      throw new AssertionError("Expected out-of-registry backend filter rejection");
     }
   }
 
@@ -614,7 +610,7 @@ public final class ToriiEventStreamClientTests {
     try {
       client.openSseStream(path, ToriiEventStreamOptions.defaultOptions(), event -> {});
     } catch (final IllegalArgumentException expected) {
-      if (!expected.getMessage().contains("unsupported production verifier backend")) {
+      if (!expected.getMessage().contains("unsupported verifier-registry label")) {
         throw new AssertionError("unexpected path-query rejection message: " + expected.getMessage());
       }
       assertEquals(false, requestSent.get(), "request must not be sent for rejected path filters");

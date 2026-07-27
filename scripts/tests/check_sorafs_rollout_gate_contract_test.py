@@ -6301,12 +6301,23 @@ def test_rollout_runner_generated_artifacts_are_under_verifier_evidence_dir() ->
         if not generated_artifacts:
             runner_failures.append("generated artifacts")
         for artifact in generated_artifacts:
-            if not isinstance(artifact, str):
-                runner_failures.append("artifact shape")
-                continue
-            artifact_path = Path(artifact)
-            if artifact_path.parent != args.out_dir:
-                runner_failures.append(f"artifact corridor:{artifact_path}")
+                if not isinstance(artifact, str):
+                    runner_failures.append("artifact shape")
+                    continue
+                artifact_path = Path(artifact)
+                try:
+                    relative_artifact = artifact_path.relative_to(args.out_dir)
+                except ValueError:
+                    runner_failures.append(f"artifact corridor:{artifact_path}")
+                    continue
+                if (
+                    not relative_artifact.parts
+                    or any(
+                        component in {"", ".", ".."}
+                        for component in relative_artifact.parts
+                    )
+                ):
+                    runner_failures.append(f"artifact corridor:{artifact_path}")
         if runner_failures:
             failures[path.name] = runner_failures
 
@@ -6576,9 +6587,21 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
 
     assert "--provider-proof must use PROVIDER_ID=PATH form" in reputation_runner
     assert "diagnostic_text_is_canonical" in reputation_runner
-    assert "not diagnostic_text_is_canonical(provider_id)" in reputation_runner
+    assert "not provider_id_is_canonical(provider_id)" in reputation_runner
     assert "not diagnostic_text_is_canonical(path)" in reputation_runner
     assert "--provider-id must be canonical" in reputation_runner
+    assert "REPUTATION_PROVIDER_ID_MAX_BYTES = 256" in reputation_runner
+    assert 'value not in {".", ".."}' in reputation_runner
+    assert 'provider_id.encode("ascii").hex()' in reputation_runner
+    assert "PROVIDER_ARTIFACT_HEX_CHUNK_CHARS = 64" in reputation_runner
+    assert '"provider-by-provider-id"' in reputation_runner
+    assert '"verify-by-provider-id"' in reputation_runner
+    assert 'PROVIDER_ARTIFACT_FILENAME = "artifact.json"' in reputation_runner
+    assert "prepare_reputation_artifact_parent" in reputation_runner
+    assert "prepare_step=lambda step:" in reputation_runner
+    assert "allow_abbrev=False" in reputation_runner
+    assert "validate_expanded_options(expanded_args)" in reputation_runner
+    assert 'REPEATABLE_OPTIONS = frozenset({"--provider-id", "--provider-proof"})' in reputation_runner
     assert "got `{spec}`" not in reputation_runner
     assert "provider_id.strip()" not in reputation_runner
     assert "path.strip()" not in reputation_runner
@@ -6595,9 +6618,20 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
         in reputation_test
     )
     assert (
-        "test_provider_id_rejects_padded_or_unicode_values_before_plan"
+        "test_provider_id_rejects_values_outside_exact_torii_grammar_before_plan"
         in reputation_test
     )
+    assert (
+        "test_provider_ids_preserve_exact_collision_free_sharded_artifact_paths"
+        in reputation_test
+    )
+    assert "test_prepare_provider_artifact_parent_rejects_tampered_layout" in reputation_test
+    assert (
+        "test_prepare_provider_artifact_parent_rejects_symlinked_namespace"
+        in reputation_test
+    )
+    assert "test_response_file_rejects_duplicate_auth_options_without_values" in reputation_test
+    assert "test_auth_option_prefix_abbreviations_fail_without_values" in reputation_test
     assert "--source-entry must use KIND=PATH form" in ai_runner
     assert "--source-entry must use KIND=PATH form" in transparency_runner
     assert "diagnostic_text_is_canonical" in ai_runner
@@ -15179,6 +15213,14 @@ def test_public_storage_ingest_surface_cannot_be_resurrected() -> None:
 
 
 def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> None:
+    pin_registry = read(
+        REPO_ROOT
+        / "crates"
+        / "iroha_data_model"
+        / "src"
+        / "sorafs"
+        / "pin_registry.rs"
+    )
     outbox = read(
         REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_outbox.rs"
     )
@@ -15197,7 +15239,11 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
     for field in (
         "pub policy_id: [u8; 32]",
         "pub revision: u64",
+        "pub predecessor_digest: Option<[u8; 32]>",
         "pub policy_digest: [u8; 32]",
+    ):
+        assert field in pin_registry
+    for field in (
         "pub signer_policy: ProviderIngestCompletionSignerPolicyV1",
         "signer_policy_floor: Option<ProviderIngestCompletionSignerPolicyV1>",
         "signer_policy_successor_required: bool",
@@ -15210,6 +15256,7 @@ def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> Non
         "finalized_signer_policy_change_invalidates_only_unexposed_bytes_after_restart",
         "signer_policy_floor_rejects_rollback_equivocation_and_identity_substitution",
         "ProviderIngestOutboxError::SignerPolicyRollback",
+        "candidate.predecessor_digest != Some(retained.policy_digest)",
     ):
         assert guard in outbox
     for guard in (
@@ -15398,7 +15445,7 @@ def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
         "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, but it is not yet deployable from the standard `irohad` binary.",
         "`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment, dual-control approval, HSM-backed issuance, durable registry outbox/dead-letter and finalized reconciliation, encrypted wallet custody, witness synchronization, local proof generation, and exactly-once nullifier consumption.",
         "`crates/iroha_torii/src/sorafs/pop_api.rs` exposes the exact 14-route V1 family for enrollment, approval, issuance, revocation, registry, wallet, proof generation, and verification.",
-        "The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard `irohad` entrypoint does not yet construct and inject the governed production provider bundle, and the repository has no deployable shared external-runtime or sidecar adapter for those providers.",
+        "The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard `irohad` entrypoint does not yet construct and inject a concrete governed production provider registry, and the repository has no deployable shared external-runtime or sidecar adapter implementing that registry.",
         "This checker is a rollout gate; it does not replace the missing standard-`irohad` external-runtime adapter, HSM/KMS integration, or deployed verifier evidence.",
         "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API and durable encrypted workflow are shipped; operator UI, WebAuthn enrollment ceremony, and the deployable external authenticator adapter remain open.",
         "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, and retry-safe outbox are shipped; standard-`irohad` HSM/KMS/provider wiring and deployment evidence remain open.",
@@ -17122,8 +17169,10 @@ def test_moderation_panel_parent_services_stay_open_in_docs() -> None:
         "similar portal commands as shipped until the corresponding service and CLI handlers exist.",
         "Moderation GETs now read only a fresh worker-owned finalized projection; reconciliation runs outside request threads under supervised deadlines, non-overlap fencing, monotonic cursor/freshness/liveness checks, and dead-letter readiness.",
         "The evidence viewer's signed receipt checkpoint and exact predecessor-bound projection are its sole audit authority",
-        "Construct the reference runtime's HSM/KMS/WebAuthn and authenticated downstream providers.",
-        "Deploy the existing appeal/panel transaction outbox, finalized-chain orchestrator, retry/reconciliation worker, and challenge/no-show maintenance with the remaining juror notification/portal and scheduled settlement delivery workers",
+        "The durable orchestrator now runs payload-free panel notifications through the same supervised maintenance owner.",
+        "`panel_notification_handle`, `panel_notification_revision`, and `panel_notification_policy_digest_hex`",
+        "Construct and inject the reference deployment's real messaging, settlement/publication, HSM/KMS/WebAuthn, and authenticated downstream providers through the shipped qualified boundaries.",
+        "Deploy the existing appeal/panel transaction outbox, finalized-chain orchestrator, retry/reconciliation worker, supervised panel-notification pass, and challenge/no-show maintenance with the remaining juror portal and scheduled settlement provider integrations",
         "Connect panel outcomes to gateway compliance caches, transparency publication, settlement reconciliation, and reputation scoring.",
         "Connect committed native moderation events to the durable Governance DAG and public IPFS/IPNS decision trail.",
         "Capture reviewed, payload-free deployed evidence for appeal intake, sortition roster, evidence viewer, operator workflow, juror notification, commit/reveal, decision publication, settlement integration, transparency/reputation handoff, panel metrics, end-to-end panel simulation, and governance approval that passes the SFM-4b rollout evidence gate.",
@@ -18023,7 +18072,7 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
         "Metrics ingest pipeline (`reputation_ingest`) | Deterministically consumes fixed-view proof, unified journal, repair, orderbook, reserve-event, and reserve-provider pages. | Exported projector persists only rebuildable projections, five physical finalized cursors, exact replay receipts, and a bounded unsigned-material outbox. Strict configuration, the queue-backed journal submitter, exact historical-query injection boundary, and supervised scheduling/reconciliation are wired; the production historical adapter, integrated validation, and reviewed deployment evidence remain open.",
         "Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection.",
         "Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open.",
-        "API gateway (`sorafs_reputation_api`) | Exposes read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist.",
+        "API gateway (`sorafs_reputation_api`) | Exposes authenticated read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Exact empty-body GETs require the signature quartet or exact witness. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist.",
         "Strict non-secret `iroha_config` policy construction and the supervised finalized-query/threshold-signing/publication worker are implemented.",
         "`IrohaRuntimeDeps` accepts an identity-pinned immutable historical `ReputationFinalizedQueryV1`; the unsound current-head state adapter and fallback were removed.",
         "`QueuedReputationJournalTransactionSubmitterV1` signs and submits typed PoR/token append transactions through the normal queue.",
@@ -18843,7 +18892,7 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
 
     required_scheduler_open = (
         "Torii now constructs a verified randomness provider from pinned chain public-key/genesis/period metadata, at least three canonical HTTPS endpoints, a strict-majority quorum, bounded DNS/body/timeouts, freshness limits, and a durable high-water state file.",
-        "`sorafs.por.enabled = true` fails startup when this configuration is missing or internally inconsistent; `randomness_seed_hex` is never accepted as authenticated drand.",
+        "`sorafs.por.enabled = true` fails startup when this configuration is missing or internally inconsistent. It also requires the complete non-secret `[sorafs.por.potr_runtime]` binding and injected `PotrRuntimeSignerRolesV1`; every configured signer, qualification, gateway key, reader/source/resolver identity, and baseline finalized admission field must match the injected roles exactly.",
         "The local SF-9 state/report integration and verified drand/provider-VRF feeds are implemented. Release promotion remains blocked on reviewed live deployment evidence and any production governance archive handoff required by the operator.",
         "Operators should keep SF-9 promotion fail-closed until the payload-free deployment evidence passes the checked-in gate:",
         "The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness, scheduler runtime, validator replay, reporting/archive handoff, observability, and governance approval.",
@@ -19468,7 +19517,7 @@ def test_potr_live_rollout_and_provider_key_work_stays_open_in_docs() -> None:
         "exact request-scope identity from the requested manifest, provider, and mandatory orchestrator job ID",
         "one terminal outcome from the finalized chain view with complete commit provenance.",
         "A captured receipt does not become queryable until an authorized transaction forwarder commits it.",
-        "Torii now builds `PotrFinalizedAdmissionReaderV1` from `PotrStateFinalizedPolicySourceV1` and its council-verified admission registry when the runtime signer roles are supplied.",
+        "Torii now builds `PotrFinalizedAdmissionReaderV1` from `PotrStateFinalizedPolicySourceV1` and its council-verified admission registry only after the enabled `[sorafs.por.potr_runtime]` public binding exactly matches the injected runtime signer roles.",
         "A process-local pending status or cached-receipt replay path is not a valid substitute.",
         "`BLAKE3(\"sorafs.potr.request-scope.v1\\0\" || manifest_digest || provider_id || request_id)`",
         "`proof_kind=potr` requires `orchestrator_job_id_hex` and performs one exact finalized lookup.",
@@ -19484,6 +19533,8 @@ def test_potr_live_rollout_and_provider_key_work_stays_open_in_docs() -> None:
     required_open = (
         "Remaining SF-14 work includes production forwarding/reconciliation across that boundary, genuine live multi-provider rollout evidence, deployment-owned HSM/KMS adapters for the shipped role-separated runtime signer interfaces, operator provisioning of the governed gateway/provider key roster and reputation-weight policy, focused/workspace Rust validation, and four-peer independent rotation/recovery/replay evidence.",
         "`PotrRuntimeSignerRolesV1` requires distinct gateway and provider runtime objects and stable non-zero administrative identities",
+        "Those injected values are not self-authorizing: enabled startup also requires the independent `[sorafs.por.potr_runtime]` configuration and compares every public handle, identity, revision, digest, gateway key, and finalized-anchor field exactly.",
+        "The provider signer revision/digest must equal the baseline admission sequence/digest.",
         "Torii binds `PotrStateFinalizedPolicySourceV1` to authoritative state and `PotrFinalizedAdmissionReaderV1` to the council-verified admission registry.",
         "The generic Torii launcher supplies no gateway/provider signer roles and fails closed until the deployment injects those two independently administered providers.",
         "Operators should keep SF-14 promotion fail-closed until payload-free deployment evidence passes the checked-in gate:",
@@ -22626,8 +22677,8 @@ def test_hedging_runtime_docs_distinguish_shipped_core_from_external_deployment(
         "interfaces ingest contiguous typed event pages and authenticated period closes.",
         "The durable projector deterministically derives open accruals, per-account governed statements, aggregate XOR exposure, and never-automatic hedge intents",
         "reconciles ambiguous publications and authoritative acknowledgements",
-        "`iroha_config` contains only the public policy path/digest, bounded work cadence, private state directory, and opaque adapter handles",
-        "missing, test-marked, unready, or identity-drifting dependencies fail startup.",
+        "`iroha_config` contains only the public policy path/digest, bounded work cadence, private state directory, and each adapter's opaque handle, non-zero revision, and public-policy digest",
+        "missing, test-marked, unready, substituted, stale, or identity-drifting dependencies fail before durable state opens",
         "No worker or timer accepts a hedge-execution adapter.",
         "Every generated intent sets `automatic_execution=false`",
         "private-key-free external signer/publisher interfaces",

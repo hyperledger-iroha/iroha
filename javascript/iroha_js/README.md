@@ -2732,6 +2732,50 @@ the Parliament registry and remains authoritative. An enabled first-release
 policy requires the typed enacted lifecycle and immutable payout binding, and
 charges exactly 10 minor units at scale 2 (`0.10`).
 
+Validation-fee proposal IDs are available only through the native canonical
+`ProposalKind` encoder. Both proposal kinds require the complete first-release
+PLAIN electorate contract, so a caller cannot fingerprint the same policy or
+payout binding against different ballot rules:
+
+```js
+import {
+  computeValidationFeePayoutLifecycleProposalFingerprintV1,
+  computeValidationFeePolicyProposalFingerprintV1,
+} from "@iroha/iroha-js";
+
+const plainElectorateRules = {
+  voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5",
+  ballot_amount: "150",
+  ballot_duration_blocks: "3600",
+  citizenship_amount: "10000",
+  max_members: "256",
+  conviction_step_blocks: "100",
+  max_conviction: "6",
+  min_turnout: "1",
+  approval_threshold_numerator: "1",
+  approval_threshold_denominator: "2",
+  eligibility_rule: {
+    rule: "proposal_operator_at_or_before_gate_others_after_gate",
+    value: null,
+  },
+};
+
+const lifecycleId =
+  computeValidationFeePayoutLifecycleProposalFingerprintV1(
+    payoutBinding,
+    plainElectorateRules,
+  );
+const policyId = computeValidationFeePolicyProposalFingerprintV1(
+  policy,
+  lifecycleId,
+  plainElectorateRules,
+);
+```
+
+The native bridge rejects missing, extra, legacy, and non-canonical JSON fields
+before fingerprinting; these helpers do not provide a JavaScript hashing
+fallback.
+
 `submitIvmProvedContractCall` quotes the exact unsigned `IvmProved` payload,
 rebuilds its signature-bound fee intent from the quote, reattaches the proof,
 and signs only the rebuilt transaction. The helper requires exactly one of
@@ -4107,6 +4151,20 @@ const complete = buildCompleteReplicationOrderInstruction({
   orderId,
   providerId,
   completionEpoch: 27,
+  expectedAuthority: {
+    providerOwner,
+    signerPolicy: {
+      policyId,
+      revision: 2,
+      predecessorDigest,
+      policyDigest,
+    },
+  },
+  expectedAssignmentRevision: 3,
+  finalizedAnchor: {
+    height: 41,
+    blockHash,
+  },
 });
 const expire = buildExpireReplicationOrderInstruction({
   orderId,
@@ -4114,9 +4172,11 @@ const expire = buildExpireReplicationOrderInstruction({
 });
 ```
 
-Completion is always provider-specific: the canonical shape is
-`order_id + provider_id + completion_epoch`. The retired two-field completion
-shape and unknown fields are rejected.
+Completion uses the exact six-field hard cut: `order_id`, `provider_id`,
+`completion_epoch`, `expected_authority`, `expected_assignment_revision`, and
+`finalized_anchor`. The authority retains the provider owner and four-part
+signer-policy chain. Missing, retired three-field, alias, and unknown shapes are
+rejected.
 
 ## Configuration
 

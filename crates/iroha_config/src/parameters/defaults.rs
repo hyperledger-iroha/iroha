@@ -1341,8 +1341,8 @@ pub mod sorafs {
         pub mod provider_ingest_runtime {
             use iroha_config_base::util::Bytes;
 
-            /// Provider ingest is opt-in until both runtime-only provider
-            /// handles are registered by the daemon.
+            /// Provider ingest is opt-in until its source, signer, and sealed
+            /// checkpoint providers are registered by the daemon.
             pub const ENABLED: bool = false;
             /// Delay between finalized assignment scans.
             pub const SCAN_INTERVAL_MS: u64 = 1_000;

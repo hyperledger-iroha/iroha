@@ -466,6 +466,20 @@ EXPECTED_OUTCOMES: dict[str, tuple[str, str, str, str, int]] = {
         "SFS-PDP-003",
         123,
     ),
+    "reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json": (
+        "appeal_finance",
+        "appeal_finance_cancel_asset_lock_positive",
+        "Ok",
+        "SFS-OK-000",
+        123,
+    ),
+    "reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json": (
+        "appeal_finance",
+        "appeal_finance_cancel_asset_lock_zero_expected_negative",
+        "Error",
+        "SFS-VAL-001",
+        123,
+    ),
     "reference_sdk/bundle_heterogeneous_positive_validation_outcome_v1.json": (
         "reference_sdk",
         "bundle_heterogeneous_positive",
@@ -555,6 +569,12 @@ _PDP_NEGATIVE_PREFIX = [
     ("pdp_commitment", "pdp/commitment_v1.to"),
 ]
 EXPECTED_OUTCOME_INPUTS: dict[str, list[tuple[str, str]]] = {
+    "reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json": [
+        ("cancel_asset_lock", "cancel_asset_lock_v1.to"),
+    ],
+    "reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json": [
+        ("cancel_asset_lock", "cancel_asset_lock_zero_expected_v1.to"),
+    ],
     "moderation/governance_node_validation_outcome_v1.json": [
         ("governance_log_node", "moderation/governance_node_v1.to"),
     ],
@@ -689,6 +709,7 @@ EXPECTED_CANCEL_ASSET_LOCK_NORITO: dict[str, bytes] = {
     ),
 }
 REQUIRED_OUTCOME_DOMAINS = {
+    "appeal_finance",
     "governance_dag",
     "moderation",
     "orderbook",

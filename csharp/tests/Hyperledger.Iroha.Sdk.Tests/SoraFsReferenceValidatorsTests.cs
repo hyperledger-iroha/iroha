@@ -968,6 +968,37 @@ public sealed class SoraFsReferenceValidatorsTests
                     .EnumerateArray()
                     .Select(tag => tag.GetString()));
         }
+
+        var referenceRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "sorafs_manifest",
+            "reference_sdk");
+        foreach (var profile in new[]
+        {
+            (
+                Path: "cancel_asset_lock_v1.to",
+                Expected:
+                    "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"),
+            (
+                Path: Path.Combine(
+                    "negative",
+                    "cancel_asset_lock_zero_expected_v1.to"),
+                Expected:
+                    "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json"),
+        })
+        {
+            var outcome =
+                SoraFsReferenceValidators.ValidateAppealFinanceCancelAssetLockJson(
+                    File.ReadAllBytes(Path.Combine(fixtureRoot, profile.Path)),
+                    Path.GetFileName(profile.Path),
+                    123);
+            Assert.Equal(
+                File.ReadAllText(
+                    Path.Combine(referenceRoot, profile.Expected),
+                    Encoding.UTF8),
+                outcome);
+        }
     }
 
     [Fact]

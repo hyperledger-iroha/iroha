@@ -65,16 +65,14 @@ _LIVE_STREAM_HELPERS = (
 
 def test_live_stream_signatures_expose_no_replay_controls() -> None:
     forbidden = {"last_event_id", "resume", "cursor"}
-    for name in _LIVE_STREAM_HELPERS:
+    for name in (*_LIVE_STREAM_HELPERS, "stream_sorafs_reputation_events"):
         parameters = inspect.signature(getattr(ToriiClient, name)).parameters
         assert forbidden.isdisjoint(parameters), name
 
-    for name in (
-        "stream_sorafs_orderbook_events",
-        "stream_sorafs_reputation_events",
-    ):
-        parameters = inspect.signature(getattr(ToriiClient, name)).parameters
-        assert forbidden.issubset(parameters), name
+    orderbook_parameters = inspect.signature(
+        ToriiClient.stream_sorafs_orderbook_events
+    ).parameters
+    assert forbidden.issubset(orderbook_parameters)
 
     client = ToriiClient(
         "http://torii.example",

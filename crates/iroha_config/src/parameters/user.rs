@@ -1101,6 +1101,13 @@ impl Root {
         let settlement = self.settlement.parse(&mut emitter);
         let hijiri = self.hijiri.parse(&mut emitter);
 
+        if !settlement.offline.enabled && torii.kagemusha_commands.is_some() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig)
+                    .attach("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
+            );
+        }
+
         if let Err(err) = concurrency.validate() {
             emitter.emit(err);
         }
@@ -7926,6 +7933,9 @@ pub struct Repo {
 /// User-level Kagemusha escrow and execution configuration.
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
+    /// Enable the mandatory Kagemusha offline-cash service for this node profile.
+    #[config(default = "true")]
+    pub enabled: bool,
     /// Require Kagemusha cash to be escrow-backed.
     #[config(default = "true")]
     pub escrow_required: bool,
@@ -7944,6 +7954,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
+            enabled: true,
             escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
@@ -8169,12 +8180,22 @@ impl Offline {
     /// Convert Kagemusha escrow policy into runtime parameters.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::Offline {
         let Offline {
+            enabled,
             escrow_required,
             escrow_accounts,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
             mut kagemusha_max_decoded_bytes,
         } = self;
+        if !enabled
+            && (!escrow_accounts.is_empty()
+                || kagemusha_release_policy_path.is_some()
+                || kagemusha_artifact_dir.is_some())
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.enabled=false requires empty escrow and release configuration",
+            ));
+        }
         if !escrow_required {
             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
                 "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
@@ -8247,6 +8268,7 @@ impl Offline {
             }
         }
         actual::Offline {
+            enabled,
             escrow_required,
             escrow_accounts: escrow_bindings,
             kagemusha_release_policy_path,
@@ -17663,7 +17685,7 @@ impl Sorafs {
             self.quota.parse(),
             self.alias_cache.parse(),
             self.gateway.parse(emitter),
-            self.por.parse(),
+            self.por.parse(emitter),
             self.appeal_finance_settlement.parse(emitter),
         )
     }
@@ -17679,12 +17701,30 @@ pub struct SorafsAppealFinanceSignerBinding {
     pub authority: AccountId,
     /// Canonical lowercase Ed25519 public key payload.
     pub public_key_hex: String,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero public-policy digest as lowercase hexadecimal.
+    pub policy_digest_hex: String,
     /// First finalized block height at which this binding is active.
     #[config(default = "default_sorafs_appeal_finance_signer_valid_from_block_height()")]
     #[norito(default = "default_sorafs_appeal_finance_signer_valid_from_block_height")]
     pub valid_from_block_height: u64,
     /// First finalized block height at which this binding is revoked.
     pub revoked_at_block_height: Option<u64>,
+}
+
+/// Independent non-secret identity binding for the checkpoint HSM/KMS provider.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsAppealFinanceCheckpointBinding {
+    /// Stable opaque HSM/KMS provider handle.
+    pub handle: String,
+    /// Canonical lowercase Ed25519 checkpoint verification key payload.
+    pub public_key_hex: String,
+    /// Exact non-zero deployment adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero public-policy digest as lowercase hexadecimal.
+    pub policy_digest_hex: String,
 }
 
 /// User-facing inline appeal pricing policy.
@@ -17900,6 +17940,8 @@ pub struct SorafsAppealFinanceSettlement {
     /// Non-secret identities of runtime-only HSM/KMS signer providers.
     #[config(default)]
     pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
+    /// Independent non-secret checkpoint HSM/KMS identity and policy binding.
+    pub checkpoint_provider: Option<SorafsAppealFinanceCheckpointBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS))"
@@ -17936,6 +17978,7 @@ impl Default for SorafsAppealFinanceSettlement {
             pricing: SorafsAppealPricingPolicy::default(),
             settlement: SorafsAppealSettlementPolicy::default(),
             submitter_signers: Vec::new(),
+            checkpoint_provider: None,
             worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
             )),
@@ -17978,6 +18021,31 @@ fn is_canonical_sorafs_appeal_policy_version(value: &str) -> bool {
             .first()
             .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
         && revision.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn parse_sorafs_appeal_runtime_policy_digest(
+    path: &str,
+    value: &str,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        emit_sorafs_appeal_finance_error(
+            emitter,
+            format!("{path} must be exactly 64 lowercase hexadecimal characters"),
+        );
+        return None;
+    }
+    let mut digest = [0_u8; 32];
+    hex::decode_to_slice(value, &mut digest).expect("validated lowercase 32-byte hexadecimal");
+    if digest == [0; 32] {
+        emit_sorafs_appeal_finance_error(emitter, format!("{path} must be nonzero"));
+        return None;
+    }
+    Some(digest)
 }
 
 impl SorafsAppealPricingPolicy {
@@ -18263,6 +18331,7 @@ impl SorafsAppealFinanceSettlement {
                 ),
             );
         }
+        let configured_submitters = !self.submitter_signers.is_empty();
         if self.submitter_signers.len() > MAX_SIGNERS {
             emit(
                 emitter,
@@ -18301,6 +18370,21 @@ impl SorafsAppealFinanceSettlement {
                     None
                 }
             };
+            if signer.revision == 0 {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.appeal_finance_settlement.submitter_signers[{index}].revision must be nonzero"
+                    ),
+                );
+            }
+            let policy_digest = parse_sorafs_appeal_runtime_policy_digest(
+                &format!(
+                    "sorafs.appeal_finance_settlement.submitter_signers[{index}].policy_digest_hex"
+                ),
+                &signer.policy_digest_hex,
+                emitter,
+            );
             if signer.valid_from_block_height == 0
                 || signer
                     .revoked_at_block_height
@@ -18313,7 +18397,7 @@ impl SorafsAppealFinanceSettlement {
                     ),
                 );
             }
-            if let Some(public_key) = public_key {
+            if let (Some(public_key), Some(policy_digest)) = (public_key, policy_digest) {
                 if AccountId::new(public_key.clone()) != signer.authority {
                     emit(
                         emitter,
@@ -18333,6 +18417,8 @@ impl SorafsAppealFinanceSettlement {
                     handle: signer.handle,
                     authority: signer.authority,
                     public_key,
+                    revision: signer.revision,
+                    policy_digest,
                     valid_from_block_height: signer.valid_from_block_height,
                     revoked_at_block_height: signer.revoked_at_block_height,
                 });
@@ -18361,6 +18447,90 @@ impl SorafsAppealFinanceSettlement {
                 })
                 .then_with(|| left.handle.cmp(&right.handle))
         });
+        let checkpoint_provider = match self.checkpoint_provider {
+            None => {
+                if configured_submitters {
+                    emit(
+                        emitter,
+                        "sorafs.appeal_finance_settlement.checkpoint_provider is required when submitter_signers are configured".to_owned(),
+                    );
+                }
+                None
+            }
+            Some(checkpoint) => {
+                if !configured_submitters {
+                    emit(
+                        emitter,
+                        "sorafs.appeal_finance_settlement.checkpoint_provider must be absent when submitter_signers are empty".to_owned(),
+                    );
+                }
+                if !is_production_runtime_handle(&checkpoint.handle) {
+                    emit(
+                        emitter,
+                        "sorafs.appeal_finance_settlement.checkpoint_provider.handle must be a production runtime handle".to_owned(),
+                    );
+                }
+                let public_key = match PublicKey::from_hex(
+                    Algorithm::Ed25519,
+                    &checkpoint.public_key_hex,
+                ) {
+                    Ok(public_key)
+                        if is_canonical_nonzero_ed25519_public_key_hex(
+                            &checkpoint.public_key_hex,
+                        ) =>
+                    {
+                        Some(public_key)
+                    }
+                    _ => {
+                        emit(
+                                emitter,
+                                "sorafs.appeal_finance_settlement.checkpoint_provider.public_key_hex must be a canonical lowercase Ed25519 public key".to_owned(),
+                            );
+                        None
+                    }
+                };
+                if checkpoint.revision == 0 {
+                    emit(
+                        emitter,
+                        "sorafs.appeal_finance_settlement.checkpoint_provider.revision must be nonzero".to_owned(),
+                    );
+                }
+                let policy_digest = parse_sorafs_appeal_runtime_policy_digest(
+                    "sorafs.appeal_finance_settlement.checkpoint_provider.policy_digest_hex",
+                    &checkpoint.policy_digest_hex,
+                    emitter,
+                );
+                if submitter_signers
+                    .iter()
+                    .any(|signer| signer.handle == checkpoint.handle)
+                {
+                    emit(
+                        emitter,
+                        "sorafs.appeal_finance_settlement checkpoint and transaction signer handles must be distinct".to_owned(),
+                    );
+                }
+                if public_key.as_ref().is_some_and(|checkpoint_key| {
+                    submitter_signers
+                        .iter()
+                        .any(|signer| &signer.public_key == checkpoint_key)
+                }) {
+                    emit(
+                        emitter,
+                        "sorafs.appeal_finance_settlement checkpoint and transaction signer public keys must be distinct".to_owned(),
+                    );
+                }
+                public_key
+                    .zip(policy_digest)
+                    .map(|(public_key, policy_digest)| {
+                        actual::SorafsAppealFinanceCheckpointBinding {
+                            handle: checkpoint.handle,
+                            public_key,
+                            revision: checkpoint.revision,
+                            policy_digest,
+                        }
+                    })
+            }
+        };
         for (field, value) in [
             ("worker_max_pending", self.worker_max_pending),
             ("worker_max_completed", self.worker_max_completed),
@@ -18411,6 +18581,7 @@ impl SorafsAppealFinanceSettlement {
             pricing,
             settlement,
             submitter_signers,
+            checkpoint_provider,
             worker_scan_interval,
             worker_max_retry_attempts: self.worker_max_retry_attempts,
             worker_max_pending: self.worker_max_pending,
@@ -18625,6 +18796,7 @@ impl SorafsPopCredentialService {
             "sorafs.storage.pop_credentials.runtime_provider_registry_policy_digest_hex",
             self.runtime_provider_registry_policy_digest_hex.as_deref(),
         );
+        let mut provider_handles_valid = true;
         for (path, value) in [
             (
                 "sorafs.storage.pop_credentials.issuer_hsm_key_id",
@@ -18645,10 +18817,13 @@ impl SorafsPopCredentialService {
         ] {
             match value {
                 Some(value) if is_production_runtime_handle(value) => {}
-                _ => emit(
-                    emitter,
-                    format!("{path} is required and must be a production runtime handle"),
-                ),
+                _ => {
+                    provider_handles_valid = false;
+                    emit(
+                        emitter,
+                        format!("{path} is required and must be a production runtime handle"),
+                    );
+                }
             }
         }
         match self.issuer_id.as_deref() {
@@ -18658,9 +18833,10 @@ impl SorafsPopCredentialService {
                 "sorafs.storage.pop_credentials.issuer_id is required and must be canonical bounded text",
             ),
         }
-        if self.runtime_provider_registry_revision == Some(0)
-            || self.runtime_provider_registry_revision.is_none()
-        {
+        let registry_revision_valid = self
+            .runtime_provider_registry_revision
+            .is_some_and(|revision| revision != 0);
+        if !registry_revision_valid {
             emit(
                 emitter,
                 "sorafs.storage.pop_credentials.runtime_provider_registry_revision must be nonzero",
@@ -18768,6 +18944,9 @@ impl SorafsPopCredentialService {
                 ),
             );
         }
+        if !provider_handles_valid || !registry_revision_valid {
+            return None;
+        }
 
         Some(actual::SorafsPopCredentialService {
             issuer_state_dir: self.issuer_state_dir,
@@ -18805,6 +18984,36 @@ pub struct SorafsModerationOrchestrator {
     pub checkpoint_path: PathBuf,
     /// Canonical governance account used for deadline maintenance.
     pub maintenance_authority: Option<String>,
+    /// Identity-pinned runtime-only moderation transaction signer handle.
+    pub transaction_signer_handle: Option<String>,
+    /// Exact non-zero moderation transaction signer revision.
+    pub transaction_signer_revision: Option<u64>,
+    /// Exact moderation transaction signer public-policy digest as lowercase hexadecimal.
+    pub transaction_signer_policy_digest_hex: Option<String>,
+    /// Identity-pinned strict transaction ingress handle.
+    pub strict_ingress_handle: Option<String>,
+    /// Exact non-zero strict transaction ingress revision.
+    pub strict_ingress_revision: Option<u64>,
+    /// Exact strict transaction ingress public-policy digest as lowercase hexadecimal.
+    pub strict_ingress_policy_digest_hex: Option<String>,
+    /// Identity-pinned settlement handoff handle.
+    pub settlement_handoff_handle: Option<String>,
+    /// Exact non-zero settlement handoff revision.
+    pub settlement_handoff_revision: Option<u64>,
+    /// Exact settlement handoff public-policy digest as lowercase hexadecimal.
+    pub settlement_handoff_policy_digest_hex: Option<String>,
+    /// Identity-pinned publication handoff handle.
+    pub publication_handoff_handle: Option<String>,
+    /// Exact non-zero publication handoff revision.
+    pub publication_handoff_revision: Option<u64>,
+    /// Exact publication handoff public-policy digest as lowercase hexadecimal.
+    pub publication_handoff_policy_digest_hex: Option<String>,
+    /// Identity-pinned durable panel-notification handle.
+    pub panel_notification_handle: Option<String>,
+    /// Exact non-zero panel-notification adapter revision.
+    pub panel_notification_revision: Option<u64>,
+    /// Exact panel-notification adapter public-policy digest as lowercase hexadecimal.
+    pub panel_notification_policy_digest_hex: Option<String>,
     /// Maximum appeals and activated cases in a complete finalized snapshot.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_CASES")]
     pub max_cases: u32,
@@ -18844,6 +19053,21 @@ impl Default for SorafsModerationOrchestrator {
             enabled: defaults::sorafs::storage::moderation_orchestrator::ENABLED,
             checkpoint_path: defaults::sorafs::storage::moderation_orchestrator::checkpoint_path(),
             maintenance_authority: None,
+            transaction_signer_handle: None,
+            transaction_signer_revision: None,
+            transaction_signer_policy_digest_hex: None,
+            strict_ingress_handle: None,
+            strict_ingress_revision: None,
+            strict_ingress_policy_digest_hex: None,
+            settlement_handoff_handle: None,
+            settlement_handoff_revision: None,
+            settlement_handoff_policy_digest_hex: None,
+            publication_handoff_handle: None,
+            publication_handoff_revision: None,
+            publication_handoff_policy_digest_hex: None,
+            panel_notification_handle: None,
+            panel_notification_revision: None,
+            panel_notification_policy_digest_hex: None,
             max_cases: defaults::sorafs::storage::moderation_orchestrator::MAX_CASES,
             max_events: defaults::sorafs::storage::moderation_orchestrator::MAX_EVENTS,
             max_outbox_entries:
@@ -18877,11 +19101,93 @@ impl SorafsModerationOrchestrator {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message.into()));
         }
 
+        fn runtime_qualification(
+            prefix: &str,
+            revision: Option<u64>,
+            policy_digest_hex: Option<String>,
+            emitter: &mut Emitter<ParseError>,
+        ) -> Option<(u64, [u8; 32])> {
+            let revision = match revision {
+                Some(revision) if revision != 0 => Some(revision),
+                _ => {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.moderation_orchestrator.{prefix}_revision must be nonzero"
+                        ),
+                    );
+                    None
+                }
+            };
+            let policy_digest = match policy_digest_hex {
+                None => {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.moderation_orchestrator.{prefix}_policy_digest_hex is required when enabled"
+                        ),
+                    );
+                    None
+                }
+                Some(value)
+                    if value.len() != 64
+                        || !value
+                            .bytes()
+                            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) =>
+                {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.moderation_orchestrator.{prefix}_policy_digest_hex must be exactly 64 lowercase hexadecimal characters"
+                        ),
+                    );
+                    None
+                }
+                Some(value) => {
+                    let mut digest = [0_u8; 32];
+                    hex::decode_to_slice(value, &mut digest)
+                        .expect("validated lowercase 32-byte hexadecimal");
+                    if digest == [0; 32] {
+                        emit(
+                            emitter,
+                            format!(
+                                "sorafs.storage.moderation_orchestrator.{prefix}_policy_digest_hex must be nonzero"
+                            ),
+                        );
+                        None
+                    } else {
+                        Some(digest)
+                    }
+                }
+            };
+            Some((revision?, policy_digest?))
+        }
+
         if !self.enabled {
-            if self.maintenance_authority.is_some() {
+            if [
+                self.maintenance_authority.is_some(),
+                self.transaction_signer_handle.is_some(),
+                self.transaction_signer_revision.is_some(),
+                self.transaction_signer_policy_digest_hex.is_some(),
+                self.strict_ingress_handle.is_some(),
+                self.strict_ingress_revision.is_some(),
+                self.strict_ingress_policy_digest_hex.is_some(),
+                self.settlement_handoff_handle.is_some(),
+                self.settlement_handoff_revision.is_some(),
+                self.settlement_handoff_policy_digest_hex.is_some(),
+                self.publication_handoff_handle.is_some(),
+                self.publication_handoff_revision.is_some(),
+                self.publication_handoff_policy_digest_hex.is_some(),
+                self.panel_notification_handle.is_some(),
+                self.panel_notification_revision.is_some(),
+                self.panel_notification_policy_digest_hex.is_some(),
+            ]
+            .into_iter()
+            .any(|present| present)
+            {
                 emit(
                     emitter,
-                    "sorafs.storage.moderation_orchestrator.maintenance_authority must be absent when disabled",
+                    "sorafs.storage.moderation_orchestrator runtime identities and maintenance_authority must be absent when disabled",
                 );
             }
             return None;
@@ -18969,9 +19275,97 @@ impl SorafsModerationOrchestrator {
         }
         let maintenance_authority = decoded_account.into_account_id();
 
+        let mut runtime_handle = |field: &str, value: Option<String>| {
+            let Some(value) = value else {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.moderation_orchestrator.{field} is required when enabled"
+                    ),
+                );
+                return None;
+            };
+            if !is_production_runtime_handle(&value) {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.moderation_orchestrator.{field} must be a canonical production runtime handle"
+                    ),
+                );
+                return None;
+            }
+            Some(value)
+        };
+        let transaction_signer_handle =
+            runtime_handle("transaction_signer_handle", self.transaction_signer_handle);
+        let strict_ingress_handle =
+            runtime_handle("strict_ingress_handle", self.strict_ingress_handle);
+        let settlement_handoff_handle =
+            runtime_handle("settlement_handoff_handle", self.settlement_handoff_handle);
+        let publication_handoff_handle = runtime_handle(
+            "publication_handoff_handle",
+            self.publication_handoff_handle,
+        );
+        let panel_notification_handle =
+            runtime_handle("panel_notification_handle", self.panel_notification_handle);
+        let transaction_signer_qualification = runtime_qualification(
+            "transaction_signer",
+            self.transaction_signer_revision,
+            self.transaction_signer_policy_digest_hex,
+            emitter,
+        );
+        let strict_ingress_qualification = runtime_qualification(
+            "strict_ingress",
+            self.strict_ingress_revision,
+            self.strict_ingress_policy_digest_hex,
+            emitter,
+        );
+        let settlement_handoff_qualification = runtime_qualification(
+            "settlement_handoff",
+            self.settlement_handoff_revision,
+            self.settlement_handoff_policy_digest_hex,
+            emitter,
+        );
+        let publication_handoff_qualification = runtime_qualification(
+            "publication_handoff",
+            self.publication_handoff_revision,
+            self.publication_handoff_policy_digest_hex,
+            emitter,
+        );
+        let panel_notification_qualification = runtime_qualification(
+            "panel_notification",
+            self.panel_notification_revision,
+            self.panel_notification_policy_digest_hex,
+            emitter,
+        );
+        let (transaction_signer_revision, transaction_signer_policy_digest) =
+            transaction_signer_qualification?;
+        let (strict_ingress_revision, strict_ingress_policy_digest) = strict_ingress_qualification?;
+        let (settlement_handoff_revision, settlement_handoff_policy_digest) =
+            settlement_handoff_qualification?;
+        let (publication_handoff_revision, publication_handoff_policy_digest) =
+            publication_handoff_qualification?;
+        let (panel_notification_revision, panel_notification_policy_digest) =
+            panel_notification_qualification?;
+
         Some(actual::SorafsModerationOrchestrator {
             checkpoint_path: self.checkpoint_path,
             maintenance_authority,
+            transaction_signer_handle: transaction_signer_handle?,
+            transaction_signer_revision,
+            transaction_signer_policy_digest,
+            strict_ingress_handle: strict_ingress_handle?,
+            strict_ingress_revision,
+            strict_ingress_policy_digest,
+            settlement_handoff_handle: settlement_handoff_handle?,
+            settlement_handoff_revision,
+            settlement_handoff_policy_digest,
+            publication_handoff_handle: publication_handoff_handle?,
+            publication_handoff_revision,
+            publication_handoff_policy_digest,
+            panel_notification_handle: panel_notification_handle?,
+            panel_notification_revision,
+            panel_notification_policy_digest,
             max_cases: usize::try_from(self.max_cases).unwrap_or(usize::MAX),
             max_events: usize::try_from(self.max_events).unwrap_or(usize::MAX),
             max_outbox_entries: usize::try_from(self.max_outbox_entries).unwrap_or(usize::MAX),
@@ -19270,14 +19664,14 @@ impl SorafsEvidenceViewerConfig {
         }
 
         let webauthn_rp_id = self.webauthn_rp_id.and_then(|rp_id| {
-            if !is_canonical_webauthn_rp_id(&rp_id) {
+            if is_canonical_webauthn_rp_id(&rp_id) {
+                Some(rp_id)
+            } else {
                 emit(
                     emitter,
                     "sorafs.storage.evidence_viewer.webauthn_rp_id must be one canonical DNS relying-party id",
                 );
                 None
-            } else {
-                Some(rp_id)
             }
         });
         if webauthn_rp_id.is_none() {
@@ -19503,6 +19897,12 @@ pub struct SorafsProviderIngestRuntimeConfig {
     pub authenticated_source_fetch_handle: Option<String>,
     /// Identity-pinned completion HSM/KMS signer-resolver handle.
     pub completion_signer_resolver_handle: Option<String>,
+    /// Identity-pinned sealed monotonic checkpoint-store handle.
+    pub checkpoint_store_handle: Option<String>,
+    /// Exact non-zero checkpoint-store adapter and public-policy revision.
+    pub checkpoint_store_revision: Option<u64>,
+    /// Exact lowercase non-zero digest of the checkpoint store's public policy.
+    pub checkpoint_store_policy_digest_hex: Option<String>,
     /// Delay between finalized assignment scans, in milliseconds.
     #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::SCAN_INTERVAL_MS")]
     pub scan_interval_ms: u64,
@@ -19565,6 +19965,9 @@ impl Default for SorafsProviderIngestRuntimeConfig {
             enabled: runtime::ENABLED,
             authenticated_source_fetch_handle: None,
             completion_signer_resolver_handle: None,
+            checkpoint_store_handle: None,
+            checkpoint_store_revision: None,
+            checkpoint_store_policy_digest_hex: None,
             scan_interval_ms: runtime::SCAN_INTERVAL_MS,
             max_page_rows: runtime::MAX_PAGE_ROWS,
             max_pages_per_tick: runtime::MAX_PAGES_PER_TICK,
@@ -19620,12 +20023,15 @@ impl SorafsProviderIngestRuntimeConfig {
         let authority_fields_present = [
             self.authenticated_source_fetch_handle.is_some(),
             self.completion_signer_resolver_handle.is_some(),
+            self.checkpoint_store_handle.is_some(),
+            self.checkpoint_store_revision.is_some(),
+            self.checkpoint_store_policy_digest_hex.is_some(),
         ];
         if !self.enabled {
             if authority_fields_present.iter().any(|present| *present) {
                 emit(
                     emitter,
-                    "sorafs.storage.provider_ingest_runtime runtime provider handles must be absent when disabled",
+                    "sorafs.storage.provider_ingest_runtime provider binding fields must be absent when disabled",
                 );
             }
             return None;
@@ -19680,6 +20086,56 @@ impl SorafsProviderIngestRuntimeConfig {
             self.completion_signer_resolver_handle,
             emitter,
         );
+        let checkpoint_store_handle = runtime_handle(
+            "checkpoint_store_handle",
+            self.checkpoint_store_handle,
+            emitter,
+        );
+        let checkpoint_store_revision = match self.checkpoint_store_revision {
+            Some(revision) if revision != 0 => Some(revision),
+            _ => {
+                emit(
+                    emitter,
+                    "sorafs.storage.provider_ingest_runtime.checkpoint_store_revision is required and must be nonzero",
+                );
+                None
+            }
+        };
+        let checkpoint_store_policy_digest = match self.checkpoint_store_policy_digest_hex {
+            Some(value)
+                if value.len() == 64
+                    && value
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) =>
+            {
+                let mut digest = [0_u8; 32];
+                hex::decode_to_slice(value, &mut digest)
+                    .expect("validated lowercase 32-byte hexadecimal");
+                if digest == [0; 32] {
+                    emit(
+                        emitter,
+                        "sorafs.storage.provider_ingest_runtime.checkpoint_store_policy_digest_hex must be nonzero",
+                    );
+                    None
+                } else {
+                    Some(digest)
+                }
+            }
+            Some(_) => {
+                emit(
+                    emitter,
+                    "sorafs.storage.provider_ingest_runtime.checkpoint_store_policy_digest_hex must be exactly 64 lowercase hexadecimal characters",
+                );
+                None
+            }
+            None => {
+                emit(
+                    emitter,
+                    "sorafs.storage.provider_ingest_runtime.checkpoint_store_policy_digest_hex is required when enabled",
+                );
+                None
+            }
+        };
 
         if !(MIN_SCAN_INTERVAL_MS..=MILLISECONDS_PER_DAY).contains(&self.scan_interval_ms) {
             emit(
@@ -19912,6 +20368,9 @@ impl SorafsProviderIngestRuntimeConfig {
         Some(actual::SorafsProviderIngestRuntime {
             authenticated_source_fetch_handle: authenticated_source_fetch_handle?,
             completion_signer_resolver_handle: completion_signer_resolver_handle?,
+            checkpoint_store_handle: checkpoint_store_handle?,
+            checkpoint_store_revision: checkpoint_store_revision?,
+            checkpoint_store_policy_digest: checkpoint_store_policy_digest?,
             scan_interval_ms: self.scan_interval_ms,
             max_page_rows: self.max_page_rows,
             max_pages_per_tick: self.max_pages_per_tick,
@@ -19962,16 +20421,40 @@ pub struct SorafsHedgingBillingRuntimeConfig {
     pub service_policy_digest_hex: Option<String>,
     /// Identity-pinned finalized billing query provider handle.
     pub finalized_query_handle: Option<String>,
+    /// Exact non-zero finalized-query provider revision.
+    pub finalized_query_revision: Option<u64>,
+    /// Exact finalized-query public-policy digest as lowercase non-zero hex.
+    pub finalized_query_policy_digest_hex: Option<String>,
     /// Identity-pinned consensus journal verifier handle.
     pub journal_verifier_handle: Option<String>,
+    /// Exact non-zero journal-verifier provider revision.
+    pub journal_verifier_revision: Option<u64>,
+    /// Exact journal-verifier public-policy digest as lowercase non-zero hex.
+    pub journal_verifier_policy_digest_hex: Option<String>,
     /// Identity-pinned statement HSM/KMS provider handle.
     pub statement_signer_handle: Option<String>,
+    /// Exact non-zero statement-signer provider revision.
+    pub statement_signer_revision: Option<u64>,
+    /// Exact statement-signer public-policy digest as lowercase non-zero hex.
+    pub statement_signer_policy_digest_hex: Option<String>,
     /// Identity-pinned immutable statement publisher handle.
     pub statement_publisher_handle: Option<String>,
+    /// Exact non-zero statement-publisher provider revision.
+    pub statement_publisher_revision: Option<u64>,
+    /// Exact statement-publisher public-policy digest as lowercase non-zero hex.
+    pub statement_publisher_policy_digest_hex: Option<String>,
     /// Identity-pinned acknowledgement authority handle.
     pub acknowledgement_authority_handle: Option<String>,
+    /// Exact non-zero acknowledgement-authority provider revision.
+    pub acknowledgement_authority_revision: Option<u64>,
+    /// Exact acknowledgement-authority public-policy digest as lowercase non-zero hex.
+    pub acknowledgement_authority_policy_digest_hex: Option<String>,
     /// Identity-pinned sealed monotonic epoch-witness store handle.
     pub epoch_witness_store_handle: Option<String>,
+    /// Exact non-zero epoch-witness-store provider revision.
+    pub epoch_witness_store_revision: Option<u64>,
+    /// Exact epoch-witness-store public-policy digest as lowercase non-zero hex.
+    pub epoch_witness_store_policy_digest_hex: Option<String>,
     /// Finalized reconciliation and delivery cadence.
     #[config(default = "defaults::sorafs::storage::hedging_billing_runtime::POLL_INTERVAL_MS")]
     pub poll_interval_ms: u64,
@@ -20005,11 +20488,23 @@ impl Default for SorafsHedgingBillingRuntimeConfig {
             service_policy_path: None,
             service_policy_digest_hex: None,
             finalized_query_handle: None,
+            finalized_query_revision: None,
+            finalized_query_policy_digest_hex: None,
             journal_verifier_handle: None,
+            journal_verifier_revision: None,
+            journal_verifier_policy_digest_hex: None,
             statement_signer_handle: None,
+            statement_signer_revision: None,
+            statement_signer_policy_digest_hex: None,
             statement_publisher_handle: None,
+            statement_publisher_revision: None,
+            statement_publisher_policy_digest_hex: None,
             acknowledgement_authority_handle: None,
+            acknowledgement_authority_revision: None,
+            acknowledgement_authority_policy_digest_hex: None,
             epoch_witness_store_handle: None,
+            epoch_witness_store_revision: None,
+            epoch_witness_store_policy_digest_hex: None,
             poll_interval_ms: runtime::POLL_INTERVAL_MS,
             max_pages_per_tick: runtime::MAX_PAGES_PER_TICK,
             max_period_closes_per_tick: runtime::MAX_PERIOD_CLOSES_PER_TICK,
@@ -20049,11 +20544,23 @@ impl SorafsHedgingBillingRuntimeConfig {
             self.service_policy_path.is_some(),
             self.service_policy_digest_hex.is_some(),
             self.finalized_query_handle.is_some(),
+            self.finalized_query_revision.is_some(),
+            self.finalized_query_policy_digest_hex.is_some(),
             self.journal_verifier_handle.is_some(),
+            self.journal_verifier_revision.is_some(),
+            self.journal_verifier_policy_digest_hex.is_some(),
             self.statement_signer_handle.is_some(),
+            self.statement_signer_revision.is_some(),
+            self.statement_signer_policy_digest_hex.is_some(),
             self.statement_publisher_handle.is_some(),
+            self.statement_publisher_revision.is_some(),
+            self.statement_publisher_policy_digest_hex.is_some(),
             self.acknowledgement_authority_handle.is_some(),
+            self.acknowledgement_authority_revision.is_some(),
+            self.acknowledgement_authority_policy_digest_hex.is_some(),
             self.epoch_witness_store_handle.is_some(),
+            self.epoch_witness_store_revision.is_some(),
+            self.epoch_witness_store_policy_digest_hex.is_some(),
         ];
         if !self.enabled {
             if authority_fields_present.iter().any(|present| *present) {
@@ -20160,9 +20667,74 @@ impl SorafsHedgingBillingRuntimeConfig {
                     None
                 })
         };
+        let runtime_revision = |field: &'static str,
+                                value: Option<u64>,
+                                emitter: &mut Emitter<ParseError>| {
+            value.filter(|revision| *revision != 0).or_else(|| {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.hedging_billing_runtime.{field} must be non-zero when enabled"
+                    ),
+                );
+                None
+            })
+        };
+        let runtime_policy_digest =
+            |field: &'static str, value: Option<String>, emitter: &mut Emitter<ParseError>| {
+                value
+                .and_then(|value| {
+                    if value.len() != 64
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    {
+                        emit(
+                            emitter,
+                            format!(
+                                "sorafs.storage.hedging_billing_runtime.{field} must be canonical lowercase non-zero 32-byte hex"
+                            ),
+                        );
+                        return None;
+                    }
+                    let decoded = hex::decode(value).expect("validated lowercase digest hex");
+                    let mut digest = [0_u8; 32];
+                    digest.copy_from_slice(&decoded);
+                    if digest == [0; 32] {
+                        emit(
+                            emitter,
+                            format!(
+                                "sorafs.storage.hedging_billing_runtime.{field} must be non-zero"
+                            ),
+                        );
+                        None
+                    } else {
+                        Some(digest)
+                    }
+                })
+                .or_else(|| {
+                    emit(
+                        emitter,
+                        format!(
+                            "sorafs.storage.hedging_billing_runtime.{field} is required when enabled"
+                        ),
+                    );
+                    None
+                })
+            };
         let finalized_query_handle = runtime_handle(
             "finalized_query_handle",
             self.finalized_query_handle,
+            emitter,
+        );
+        let finalized_query_revision = runtime_revision(
+            "finalized_query_revision",
+            self.finalized_query_revision,
+            emitter,
+        );
+        let finalized_query_policy_digest = runtime_policy_digest(
+            "finalized_query_policy_digest_hex",
+            self.finalized_query_policy_digest_hex,
             emitter,
         );
         let journal_verifier_handle = runtime_handle(
@@ -20170,9 +20742,29 @@ impl SorafsHedgingBillingRuntimeConfig {
             self.journal_verifier_handle,
             emitter,
         );
+        let journal_verifier_revision = runtime_revision(
+            "journal_verifier_revision",
+            self.journal_verifier_revision,
+            emitter,
+        );
+        let journal_verifier_policy_digest = runtime_policy_digest(
+            "journal_verifier_policy_digest_hex",
+            self.journal_verifier_policy_digest_hex,
+            emitter,
+        );
         let statement_signer_handle = runtime_handle(
             "statement_signer_handle",
             self.statement_signer_handle,
+            emitter,
+        );
+        let statement_signer_revision = runtime_revision(
+            "statement_signer_revision",
+            self.statement_signer_revision,
+            emitter,
+        );
+        let statement_signer_policy_digest = runtime_policy_digest(
+            "statement_signer_policy_digest_hex",
+            self.statement_signer_policy_digest_hex,
             emitter,
         );
         let statement_publisher_handle = runtime_handle(
@@ -20180,14 +20772,44 @@ impl SorafsHedgingBillingRuntimeConfig {
             self.statement_publisher_handle,
             emitter,
         );
+        let statement_publisher_revision = runtime_revision(
+            "statement_publisher_revision",
+            self.statement_publisher_revision,
+            emitter,
+        );
+        let statement_publisher_policy_digest = runtime_policy_digest(
+            "statement_publisher_policy_digest_hex",
+            self.statement_publisher_policy_digest_hex,
+            emitter,
+        );
         let acknowledgement_authority_handle = runtime_handle(
             "acknowledgement_authority_handle",
             self.acknowledgement_authority_handle,
             emitter,
         );
+        let acknowledgement_authority_revision = runtime_revision(
+            "acknowledgement_authority_revision",
+            self.acknowledgement_authority_revision,
+            emitter,
+        );
+        let acknowledgement_authority_policy_digest = runtime_policy_digest(
+            "acknowledgement_authority_policy_digest_hex",
+            self.acknowledgement_authority_policy_digest_hex,
+            emitter,
+        );
         let epoch_witness_store_handle = runtime_handle(
             "epoch_witness_store_handle",
             self.epoch_witness_store_handle,
+            emitter,
+        );
+        let epoch_witness_store_revision = runtime_revision(
+            "epoch_witness_store_revision",
+            self.epoch_witness_store_revision,
+            emitter,
+        );
+        let epoch_witness_store_policy_digest = runtime_policy_digest(
+            "epoch_witness_store_policy_digest_hex",
+            self.epoch_witness_store_policy_digest_hex,
             emitter,
         );
 
@@ -20231,11 +20853,23 @@ impl SorafsHedgingBillingRuntimeConfig {
             service_policy_path: service_policy_path?,
             service_policy_digest: service_policy_digest?,
             finalized_query_handle: finalized_query_handle?,
+            finalized_query_revision: finalized_query_revision?,
+            finalized_query_policy_digest: finalized_query_policy_digest?,
             journal_verifier_handle: journal_verifier_handle?,
+            journal_verifier_revision: journal_verifier_revision?,
+            journal_verifier_policy_digest: journal_verifier_policy_digest?,
             statement_signer_handle: statement_signer_handle?,
+            statement_signer_revision: statement_signer_revision?,
+            statement_signer_policy_digest: statement_signer_policy_digest?,
             statement_publisher_handle: statement_publisher_handle?,
+            statement_publisher_revision: statement_publisher_revision?,
+            statement_publisher_policy_digest: statement_publisher_policy_digest?,
             acknowledgement_authority_handle: acknowledgement_authority_handle?,
+            acknowledgement_authority_revision: acknowledgement_authority_revision?,
+            acknowledgement_authority_policy_digest: acknowledgement_authority_policy_digest?,
             epoch_witness_store_handle: epoch_witness_store_handle?,
+            epoch_witness_store_revision: epoch_witness_store_revision?,
+            epoch_witness_store_policy_digest: epoch_witness_store_policy_digest?,
             poll_interval: Duration::from_millis(self.poll_interval_ms),
             max_pages_per_tick: self.max_pages_per_tick,
             max_period_closes_per_tick: self.max_period_closes_per_tick,
@@ -20470,7 +21104,9 @@ impl SorafsReputationRuntimeConfig {
                               value: Option<String>,
                               emitter: &mut Emitter<ParseError>| {
             value.and_then(|value| {
-                if !is_production_runtime_handle(&value) {
+                if is_production_runtime_handle(&value) {
+                    Some(value)
+                } else {
                     emit(
                         emitter,
                         format!(
@@ -20478,8 +21114,6 @@ impl SorafsReputationRuntimeConfig {
                         ),
                     );
                     None
-                } else {
-                    Some(value)
                 }
             }).or_else(|| {
                 emit(
@@ -20697,6 +21331,27 @@ mod sorafs_moderation_orchestrator_tests {
             enabled: true,
             checkpoint_path: PathBuf::from("/var/lib/iroha/sorafs/moderation/orchestrator.norito"),
             maintenance_authority: Some(maintenance_authority()),
+            transaction_signer_handle: Some("hsm.sorafs.moderation-transaction.primary".to_owned()),
+            transaction_signer_revision: Some(11),
+            transaction_signer_policy_digest_hex: Some("a1".repeat(32)),
+            strict_ingress_handle: Some(
+                "torii.sorafs.moderation-strict-ingress.primary".to_owned(),
+            ),
+            strict_ingress_revision: Some(12),
+            strict_ingress_policy_digest_hex: Some("a2".repeat(32)),
+            settlement_handoff_handle: Some("settlement.sorafs.moderation.primary".to_owned()),
+            settlement_handoff_revision: Some(13),
+            settlement_handoff_policy_digest_hex: Some("a3".repeat(32)),
+            publication_handoff_handle: Some(
+                "governance-dag.sorafs.moderation-publication.primary".to_owned(),
+            ),
+            publication_handoff_revision: Some(14),
+            publication_handoff_policy_digest_hex: Some("a4".repeat(32)),
+            panel_notification_handle: Some(
+                "messaging.sorafs.moderation-notification.primary".to_owned(),
+            ),
+            panel_notification_revision: Some(15),
+            panel_notification_policy_digest_hex: Some("a5".repeat(32)),
             ..SorafsModerationOrchestrator::default()
         }
     }
@@ -20724,6 +21379,20 @@ mod sorafs_moderation_orchestrator_tests {
             parsed.maintenance_authority.to_string(),
             maintenance_authority()
         );
+        assert_eq!(
+            parsed.transaction_signer_handle,
+            "hsm.sorafs.moderation-transaction.primary"
+        );
+        assert_eq!(parsed.transaction_signer_revision, 11);
+        assert_eq!(parsed.transaction_signer_policy_digest, [0xa1; 32]);
+        assert_eq!(parsed.strict_ingress_revision, 12);
+        assert_eq!(parsed.strict_ingress_policy_digest, [0xa2; 32]);
+        assert_eq!(parsed.settlement_handoff_revision, 13);
+        assert_eq!(parsed.settlement_handoff_policy_digest, [0xa3; 32]);
+        assert_eq!(parsed.publication_handoff_revision, 14);
+        assert_eq!(parsed.publication_handoff_policy_digest, [0xa4; 32]);
+        assert_eq!(parsed.panel_notification_revision, 15);
+        assert_eq!(parsed.panel_notification_policy_digest, [0xa5; 32]);
         assert_eq!(
             parsed.max_cases,
             usize::try_from(defaults::sorafs::storage::moderation_orchestrator::MAX_CASES)
@@ -20765,6 +21434,19 @@ mod sorafs_moderation_orchestrator_tests {
     }
 
     #[test]
+    fn enabled_policy_rejects_invalid_runtime_qualifications() {
+        let mut config = valid_config();
+        config.transaction_signer_handle = Some("mock.moderation-signer".to_owned());
+        config.strict_ingress_revision = Some(0);
+        config.settlement_handoff_policy_digest_hex = Some("00".repeat(32));
+        config.publication_handoff_policy_digest_hex = Some("A4".repeat(32));
+        config.panel_notification_revision = None;
+        let mut emitter = Emitter::new();
+        assert!(config.parse(true, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
     fn enabled_policy_requires_canonical_authority() {
         let mut config = valid_config();
         config.maintenance_authority = Some("not-an-account".to_owned());
@@ -20791,6 +21473,9 @@ mod sorafs_provider_ingest_runtime_config_tests {
             completion_signer_resolver_handle: Some(
                 "hsm.sorafs.provider-completion.primary".to_owned(),
             ),
+            checkpoint_store_handle: Some("sealed.sorafs.provider-ingest.primary".to_owned()),
+            checkpoint_store_revision: Some(7),
+            checkpoint_store_policy_digest_hex: Some("a7".repeat(32)),
             ..SorafsProviderIngestRuntimeConfig::default()
         }
     }
@@ -20821,6 +21506,8 @@ mod sorafs_provider_ingest_runtime_config_tests {
         assert_eq!(parsed.max_snapshot_rows, 256);
         assert_eq!(parsed.max_snapshot_bytes.0, 128 * 1024 * 1024);
         assert_eq!(parsed.max_finalized_lag_blocks, 2);
+        assert_eq!(parsed.checkpoint_store_revision, 7);
+        assert_eq!(parsed.checkpoint_store_policy_digest, [0xA7; 32]);
         assert_eq!(parsed.outbox.max_status_page_size, 256);
         assert_eq!(parsed.outbox.max_active_entries, 128);
         assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 64 * 1024 * 1024);
@@ -20831,6 +21518,9 @@ mod sorafs_provider_ingest_runtime_config_tests {
         let mut config = valid_config();
         config.authenticated_source_fetch_handle = Some("mock-source.test".to_owned());
         config.completion_signer_resolver_handle = None;
+        config.checkpoint_store_handle = Some("sealed.sorafs.test".to_owned());
+        config.checkpoint_store_revision = Some(0);
+        config.checkpoint_store_policy_digest_hex = Some("A7".repeat(32));
 
         let mut emitter = Emitter::new();
         assert!(config.parse(false, None, &mut emitter).is_none());
@@ -20929,6 +21619,7 @@ mod sorafs_provider_ingest_runtime_config_tests {
         let mut config = SorafsProviderIngestRuntimeConfig::default();
         config.authenticated_source_fetch_handle =
             Some("network.sorafs.authenticated-source.primary".to_owned());
+        config.checkpoint_store_revision = Some(1);
         let mut emitter = Emitter::new();
         assert!(config.parse(false, None, &mut emitter).is_none());
         assert!(emitter.into_result().is_err());
@@ -21053,11 +21744,23 @@ mod sorafs_hedging_billing_runtime_config_tests {
             service_policy_path: Some(absolute_service_policy_path()),
             service_policy_digest_hex: Some("41".repeat(32)),
             finalized_query_handle: Some("ledger.billing.finalized".to_owned()),
+            finalized_query_revision: Some(11),
+            finalized_query_policy_digest_hex: Some("51".repeat(32)),
             journal_verifier_handle: Some("consensus.billing.verifier".to_owned()),
+            journal_verifier_revision: Some(12),
+            journal_verifier_policy_digest_hex: Some("52".repeat(32)),
             statement_signer_handle: Some("hsm.billing.statement".to_owned()),
+            statement_signer_revision: Some(13),
+            statement_signer_policy_digest_hex: Some("53".repeat(32)),
             statement_publisher_handle: Some("publisher.billing.immutable".to_owned()),
+            statement_publisher_revision: Some(14),
+            statement_publisher_policy_digest_hex: Some("54".repeat(32)),
             acknowledgement_authority_handle: Some("authority.billing.ack".to_owned()),
+            acknowledgement_authority_revision: Some(15),
+            acknowledgement_authority_policy_digest_hex: Some("55".repeat(32)),
             epoch_witness_store_handle: Some("sealed.billing.epoch".to_owned()),
+            epoch_witness_store_revision: Some(16),
+            epoch_witness_store_policy_digest_hex: Some("56".repeat(32)),
             ..SorafsHedgingBillingRuntimeConfig::default()
         }
     }
@@ -21074,6 +21777,17 @@ mod sorafs_hedging_billing_runtime_config_tests {
     }
 
     #[test]
+    fn disabled_policy_rejects_stale_provider_qualification_fields() {
+        let mut config = SorafsHedgingBillingRuntimeConfig::default();
+        config.finalized_query_revision = Some(1);
+        config.finalized_query_policy_digest_hex = Some("51".repeat(32));
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
     fn enabled_policy_parses_without_credentials_or_execution_adapter() {
         let mut emitter = Emitter::new();
         let feed_path = absolute_feed_policy_path();
@@ -21087,6 +21801,18 @@ mod sorafs_hedging_billing_runtime_config_tests {
         assert_eq!(parsed.max_period_closes_per_tick, 32);
         assert_eq!(parsed.max_delivery_operations_per_tick, 256);
         assert_eq!(parsed.max_finalized_lag_blocks, 2);
+        assert_eq!(parsed.finalized_query_revision, 11);
+        assert_eq!(parsed.finalized_query_policy_digest, [0x51; 32]);
+        assert_eq!(parsed.journal_verifier_revision, 12);
+        assert_eq!(parsed.journal_verifier_policy_digest, [0x52; 32]);
+        assert_eq!(parsed.statement_signer_revision, 13);
+        assert_eq!(parsed.statement_signer_policy_digest, [0x53; 32]);
+        assert_eq!(parsed.statement_publisher_revision, 14);
+        assert_eq!(parsed.statement_publisher_policy_digest, [0x54; 32]);
+        assert_eq!(parsed.acknowledgement_authority_revision, 15);
+        assert_eq!(parsed.acknowledgement_authority_policy_digest, [0x55; 32]);
+        assert_eq!(parsed.epoch_witness_store_revision, 16);
+        assert_eq!(parsed.epoch_witness_store_policy_digest, [0x56; 32]);
     }
 
     #[test]
@@ -21095,7 +21821,10 @@ mod sorafs_hedging_billing_runtime_config_tests {
         config.state_dir = PathBuf::from("relative/state");
         config.service_policy_digest_hex = Some("AA".repeat(32));
         config.finalized_query_handle = Some("mock-query.test".to_owned());
+        config.finalized_query_revision = Some(0);
+        config.finalized_query_policy_digest_hex = Some("00".repeat(32));
         config.journal_verifier_handle = None;
+        config.journal_verifier_policy_digest_hex = Some("AA".repeat(32));
         config.poll_interval_ms = 0;
         config.max_period_closes_per_tick = 0;
         config.max_finalized_lag_blocks = 0;
@@ -21436,6 +22165,12 @@ pub struct SorafsStorage {
     pub moderation_screening_authority_bundle_path: Option<PathBuf>,
     /// Reviewed BLAKE3 digest of the exact canonical authority bundle bytes.
     pub moderation_screening_authority_bundle_digest_hex: Option<String>,
+    /// Stable opaque PKCS#11/HSM/KMS quarantine-key provider handle.
+    pub moderation_quarantine_key_provider_handle: Option<String>,
+    /// Exact non-zero quarantine-key provider revision.
+    pub moderation_quarantine_key_provider_revision: Option<u64>,
+    /// Exact quarantine-key provider public-policy digest as lowercase non-zero hex.
+    pub moderation_quarantine_key_provider_policy_digest_hex: Option<String>,
     /// Governed non-secret PoP credential-service policy.
     #[config(nested)]
     pub pop_credentials: SorafsPopCredentialService,
@@ -21519,6 +22254,9 @@ impl Default for SorafsStorage {
             moderation_screening_enabled: defaults::sorafs::storage::MODERATION_SCREENING_ENABLED,
             moderation_screening_authority_bundle_path: None,
             moderation_screening_authority_bundle_digest_hex: None,
+            moderation_quarantine_key_provider_handle: None,
+            moderation_quarantine_key_provider_revision: None,
+            moderation_quarantine_key_provider_policy_digest_hex: None,
             pop_credentials: SorafsPopCredentialService::default(),
             moderation_orchestrator: SorafsModerationOrchestrator::default(),
             evidence_viewer: SorafsEvidenceViewerConfig::default(),
@@ -21566,9 +22304,245 @@ fn is_production_runtime_handle(value: &str) -> bool {
         .any(|component| {
             matches!(
                 component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+                "null" | "mock" | "test" | "dev" | "fake" | "dummy" | "placeholder"
             )
         })
+}
+
+fn parse_sorafs_gateway_runtime_provider_binding(
+    emitter: &mut Emitter<ParseError>,
+    parent_path: &str,
+    field_prefix: &str,
+    enabled: bool,
+    provider_handle: Option<&str>,
+    revision: Option<u64>,
+    policy_digest_hex: Option<&str>,
+) -> Option<actual::SorafsGatewayRuntimeProviderBinding> {
+    let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+        emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
+    };
+    let field_path = |suffix: &str| format!("{parent_path}.{field_prefix}_{suffix}");
+    let any_configured =
+        provider_handle.is_some() || revision.is_some() || policy_digest_hex.is_some();
+    if !enabled {
+        if any_configured {
+            emit(
+                emitter,
+                format!("{parent_path}.{field_prefix} binding fields must be absent when disabled"),
+            );
+        }
+        return None;
+    }
+
+    let provider_handle = match provider_handle {
+        Some(value) if is_production_runtime_handle(value) => Some(value.to_owned()),
+        Some(_) => {
+            emit(
+                emitter,
+                format!(
+                    "{} must be one canonical production provider handle",
+                    field_path("handle")
+                ),
+            );
+            None
+        }
+        None => {
+            emit(
+                emitter,
+                format!("{} is required when enabled", field_path("handle")),
+            );
+            None
+        }
+    };
+    let revision = match revision {
+        Some(value) if value != 0 => Some(value),
+        Some(_) => {
+            emit(
+                emitter,
+                format!("{} must be nonzero", field_path("revision")),
+            );
+            None
+        }
+        None => {
+            emit(
+                emitter,
+                format!("{} is required when enabled", field_path("revision")),
+            );
+            None
+        }
+    };
+    let policy_digest = match policy_digest_hex {
+        Some(value)
+            if value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')) =>
+        {
+            let mut digest = [0_u8; 32];
+            hex::decode_to_slice(value, &mut digest)
+                .expect("validated lowercase 32-byte hexadecimal");
+            if digest == [0; 32] {
+                emit(
+                    emitter,
+                    format!("{} must be nonzero", field_path("policy_digest_hex")),
+                );
+                None
+            } else {
+                Some(digest)
+            }
+        }
+        Some(_) => {
+            emit(
+                emitter,
+                format!(
+                    "{} must be exactly 64 lowercase hexadecimal characters",
+                    field_path("policy_digest_hex")
+                ),
+            );
+            None
+        }
+        None => {
+            emit(
+                emitter,
+                format!(
+                    "{} is required when enabled",
+                    field_path("policy_digest_hex")
+                ),
+            );
+            None
+        }
+    };
+
+    Some(actual::SorafsGatewayRuntimeProviderBinding {
+        provider_handle: provider_handle?,
+        revision: revision?,
+        policy_digest: policy_digest?,
+    })
+}
+
+#[cfg(test)]
+mod sorafs_gateway_runtime_provider_binding_tests {
+    use super::*;
+
+    #[test]
+    fn exact_production_binding_parses() {
+        let mut emitter = Emitter::new();
+        let binding = parse_sorafs_gateway_runtime_provider_binding(
+            &mut emitter,
+            "sorafs.gateway.acme",
+            "provider",
+            true,
+            Some("hsm://gateway/acme/primary"),
+            Some(9),
+            Some(&"a7".repeat(32)),
+        )
+        .expect("valid production binding");
+
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(binding.provider_handle, "hsm://gateway/acme/primary");
+        assert_eq!(binding.revision, 9);
+        assert_eq!(binding.policy_digest, [0xa7; 32]);
+    }
+
+    #[test]
+    fn incomplete_and_non_production_bindings_fail_without_echoing_values() {
+        let valid_digest = "a7".repeat(32);
+        let uppercase_digest = "A7".repeat(32);
+        let zero_digest = "00".repeat(32);
+        for (label, handle, revision, digest, expected) in [
+            (
+                "partial",
+                Some("hsm://gateway/acme/primary"),
+                Some(9),
+                None,
+                "provider_policy_digest_hex is required",
+            ),
+            (
+                "test-marked handle",
+                Some("hsm://gateway/acme/test-client-secret"),
+                Some(9),
+                Some(valid_digest.as_str()),
+                "must be one canonical production provider handle",
+            ),
+            (
+                "zero revision",
+                Some("hsm://gateway/acme/primary"),
+                Some(0),
+                Some(valid_digest.as_str()),
+                "provider_revision must be nonzero",
+            ),
+            (
+                "uppercase digest",
+                Some("hsm://gateway/acme/primary"),
+                Some(9),
+                Some(uppercase_digest.as_str()),
+                "exactly 64 lowercase hexadecimal characters",
+            ),
+            (
+                "zero digest",
+                Some("hsm://gateway/acme/primary"),
+                Some(9),
+                Some(zero_digest.as_str()),
+                "provider_policy_digest_hex must be nonzero",
+            ),
+        ] {
+            let mut emitter = Emitter::new();
+            assert!(
+                parse_sorafs_gateway_runtime_provider_binding(
+                    &mut emitter,
+                    "sorafs.gateway.acme",
+                    "provider",
+                    true,
+                    handle,
+                    revision,
+                    digest,
+                )
+                .is_none(),
+                "{label}"
+            );
+            let diagnostic = format!(
+                "{:?}",
+                emitter
+                    .into_result()
+                    .expect_err("invalid binding must emit a diagnostic")
+            );
+            assert!(
+                diagnostic.contains(expected),
+                "{label} produced unexpected diagnostic: {diagnostic}"
+            );
+            if label == "test-marked handle" {
+                assert!(
+                    !diagnostic.contains("test-client-secret"),
+                    "provider values must not be echoed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_provider_rejects_dormant_binding() {
+        let mut emitter = Emitter::new();
+        assert!(
+            parse_sorafs_gateway_runtime_provider_binding(
+                &mut emitter,
+                "sorafs.gateway.compliance",
+                "feed_transport_provider",
+                false,
+                Some("https://gateway-feed/primary"),
+                Some(1),
+                Some(&"51".repeat(32)),
+            )
+            .is_none()
+        );
+        let diagnostic = format!(
+            "{:?}",
+            emitter
+                .into_result()
+                .expect_err("disabled provider binding must fail")
+        );
+        assert!(diagnostic.contains("binding fields must be absent when disabled"));
+        assert!(!diagnostic.contains("gateway-feed/primary"));
+    }
 }
 
 fn is_canonical_nonzero_ed25519_public_key_hex(value: &str) -> bool {
@@ -21692,6 +22666,90 @@ impl SorafsStorage {
                     }
                     Some(digest)
                 });
+        let moderation_quarantine_key_provider_fields = [
+            self.moderation_quarantine_key_provider_handle.is_some(),
+            self.moderation_quarantine_key_provider_revision.is_some(),
+            self.moderation_quarantine_key_provider_policy_digest_hex
+                .is_some(),
+        ];
+        let moderation_quarantine_key_provider = if moderation_quarantine_key_provider_fields
+            .iter()
+            .any(|present| *present)
+        {
+            if moderation_quarantine_key_provider_fields
+                .iter()
+                .all(|present| *present)
+            {
+                let handle = self
+                    .moderation_quarantine_key_provider_handle
+                    .as_deref()
+                    .expect("all moderation quarantine-key fields checked above");
+                let revision = self
+                    .moderation_quarantine_key_provider_revision
+                    .expect("all moderation quarantine-key fields checked above");
+                let digest_hex = self
+                    .moderation_quarantine_key_provider_policy_digest_hex
+                    .as_deref()
+                    .expect("all moderation quarantine-key fields checked above");
+                let handle_valid = is_production_runtime_handle(handle);
+                if !handle_valid {
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                            "sorafs.storage.moderation_quarantine_key_provider_handle must be a production opaque handle",
+                        ));
+                }
+                if revision == 0 {
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                            "sorafs.storage.moderation_quarantine_key_provider_revision must be nonzero",
+                        ));
+                }
+                let policy_digest = if digest_hex.len() == 64
+                    && digest_hex
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    let decoded =
+                        hex::decode(digest_hex).expect("validated lowercase policy digest hex");
+                    let mut digest = [0_u8; 32];
+                    digest.copy_from_slice(&decoded);
+                    if digest == [0; 32] {
+                        emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                                "sorafs.storage.moderation_quarantine_key_provider_policy_digest_hex must be nonzero",
+                            ));
+                        None
+                    } else {
+                        Some(digest)
+                    }
+                } else {
+                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                            "sorafs.storage.moderation_quarantine_key_provider_policy_digest_hex must be canonical lowercase non-zero 32-byte hex",
+                        ));
+                    None
+                };
+                if handle_valid && revision != 0 {
+                    policy_digest.map(|policy_digest| {
+                        actual::SorafsModerationQuarantineKeyProviderBinding {
+                            handle: handle.to_owned(),
+                            revision,
+                            policy_digest,
+                        }
+                    })
+                } else {
+                    None
+                }
+            } else {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                        "sorafs.storage moderation quarantine-key provider handle, revision, and policy digest must be configured together",
+                    ));
+                None
+            }
+        } else {
+            None
+        };
+        if moderation_quarantine_key_provider.is_some() && !self.enabled {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage moderation quarantine-key provider binding requires storage.enabled",
+            ));
+        }
         if self.moderation_screening_enabled {
             if !self.enabled {
                 emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
@@ -21714,6 +22772,11 @@ impl SorafsStorage {
             if moderation_screening_authority_bundle_digest.is_none() {
                 emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
                     "sorafs.storage.moderation_screening_authority_bundle_digest_hex is required when moderation screening is enabled",
+                ));
+            }
+            if moderation_quarantine_key_provider.is_none() {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.storage moderation screening requires an exact production quarantine-key provider handle, revision, and policy digest",
                 ));
             }
         }
@@ -21773,6 +22836,7 @@ impl SorafsStorage {
             moderation_screening_authority_bundle_path: self
                 .moderation_screening_authority_bundle_path,
             moderation_screening_authority_bundle_digest,
+            moderation_quarantine_key_provider,
             pop_credentials,
             moderation_orchestrator,
             evidence_viewer,
@@ -21821,10 +22885,22 @@ pub struct SorafsGovernanceDagService {
     pub ipns_key_name: Option<String>,
     /// Opaque runtime authenticator handle for the IPFS/Kubo API.
     pub ipfs_authenticator_handle: Option<String>,
+    /// Exact non-zero IPFS authenticator provider revision.
+    pub ipfs_authenticator_revision: Option<u64>,
+    /// Exact IPFS authenticator public-policy digest as lowercase non-zero hex.
+    pub ipfs_authenticator_policy_digest_hex: Option<String>,
     /// Opaque runtime authenticator handle for the signed-head endpoint.
     pub head_authenticator_handle: Option<String>,
+    /// Exact non-zero signed-head authenticator provider revision.
+    pub head_authenticator_revision: Option<u64>,
+    /// Exact signed-head authenticator public-policy digest as lowercase non-zero hex.
+    pub head_authenticator_policy_digest_hex: Option<String>,
     /// Opaque runtime sealed-checkpoint store handle.
     pub checkpoint_store_handle: Option<String>,
+    /// Exact non-zero sealed-checkpoint store provider revision.
+    pub checkpoint_store_revision: Option<u64>,
+    /// Exact sealed-checkpoint store public-policy digest as lowercase non-zero hex.
+    pub checkpoint_store_policy_digest_hex: Option<String>,
     /// Canonical lowercase Ed25519 public key expected on every signed object.
     pub publisher_public_key_hex: Option<String>,
     /// Filesystem reconciliation interval in seconds.
@@ -21893,8 +22969,14 @@ impl Default for SorafsGovernanceDagService {
             ipns_name: None,
             ipns_key_name: None,
             ipfs_authenticator_handle: None,
+            ipfs_authenticator_revision: None,
+            ipfs_authenticator_policy_digest_hex: None,
             head_authenticator_handle: None,
+            head_authenticator_revision: None,
+            head_authenticator_policy_digest_hex: None,
             checkpoint_store_handle: None,
+            checkpoint_store_revision: None,
+            checkpoint_store_policy_digest_hex: None,
             publisher_public_key_hex: None,
             poll_interval_secs: service::POLL_INTERVAL_SECS,
             connect_timeout_ms: service::CONNECT_TIMEOUT_MS,
@@ -21917,9 +22999,115 @@ impl Default for SorafsGovernanceDagService {
 
 impl SorafsGovernanceDagService {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsGovernanceDagService {
+        fn parse_provider_policy_digest(
+            emitter: &mut Emitter<ParseError>,
+            field: &'static str,
+            value: Option<&str>,
+        ) -> Option<[u8; 32]> {
+            let value = value?;
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                        "sorafs.storage.governance_dag_service.{field} must be canonical lowercase non-zero 32-byte hex"
+                    )),
+                );
+                return None;
+            }
+            let decoded = hex::decode(value).expect("validated lowercase digest hex");
+            let mut digest = [0_u8; 32];
+            digest.copy_from_slice(&decoded);
+            if digest == [0; 32] {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+                    "sorafs.storage.governance_dag_service.{field} must be non-zero"
+                )));
+                None
+            } else {
+                Some(digest)
+            }
+        }
         let emit = |emitter: &mut Emitter<ParseError>, message: String| {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
         };
+
+        let ipfs_provider_fields = [
+            self.ipfs_authenticator_handle.is_some(),
+            self.ipfs_authenticator_revision.is_some(),
+            self.ipfs_authenticator_policy_digest_hex.is_some(),
+        ];
+        let head_provider_fields = [
+            self.head_authenticator_handle.is_some(),
+            self.head_authenticator_revision.is_some(),
+            self.head_authenticator_policy_digest_hex.is_some(),
+        ];
+        let checkpoint_provider_fields = [
+            self.checkpoint_store_handle.is_some(),
+            self.checkpoint_store_revision.is_some(),
+            self.checkpoint_store_policy_digest_hex.is_some(),
+        ];
+        for (label, fields) in [
+            ("ipfs_authenticator", ipfs_provider_fields),
+            ("head_authenticator", head_provider_fields),
+            ("checkpoint_store", checkpoint_provider_fields),
+        ] {
+            if fields.iter().any(|present| *present) && !fields.iter().all(|present| *present) {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.governance_dag_service.{label} handle, revision, and policy digest must be configured together"
+                    ),
+                );
+            }
+        }
+        if !self.enabled
+            && (ipfs_provider_fields
+                .into_iter()
+                .chain(head_provider_fields)
+                .chain(checkpoint_provider_fields)
+                .any(|present| present))
+        {
+            emit(
+                emitter,
+                "sorafs.storage.governance_dag_service runtime provider bindings must be absent when disabled"
+                    .to_owned(),
+            );
+        }
+        for (field, revision) in [
+            (
+                "ipfs_authenticator_revision",
+                self.ipfs_authenticator_revision,
+            ),
+            (
+                "head_authenticator_revision",
+                self.head_authenticator_revision,
+            ),
+            ("checkpoint_store_revision", self.checkpoint_store_revision),
+        ] {
+            if revision == Some(0) {
+                emit(
+                    emitter,
+                    format!("sorafs.storage.governance_dag_service.{field} must be non-zero"),
+                );
+            }
+        }
+        let ipfs_authenticator_policy_digest = parse_provider_policy_digest(
+            emitter,
+            "ipfs_authenticator_policy_digest_hex",
+            self.ipfs_authenticator_policy_digest_hex.as_deref(),
+        );
+        let head_authenticator_policy_digest = parse_provider_policy_digest(
+            emitter,
+            "head_authenticator_policy_digest_hex",
+            self.head_authenticator_policy_digest_hex.as_deref(),
+        );
+        let checkpoint_store_policy_digest = parse_provider_policy_digest(
+            emitter,
+            "checkpoint_store_policy_digest_hex",
+            self.checkpoint_store_policy_digest_hex.as_deref(),
+        );
         for (field, value) in [
             ("poll_interval_secs", self.poll_interval_secs),
             ("connect_timeout_ms", self.connect_timeout_ms),
@@ -22029,8 +23217,24 @@ impl SorafsGovernanceDagService {
                     self.ipfs_authenticator_handle.is_some(),
                 ),
                 (
+                    "ipfs_authenticator_revision",
+                    self.ipfs_authenticator_revision.is_some(),
+                ),
+                (
+                    "ipfs_authenticator_policy_digest_hex",
+                    self.ipfs_authenticator_policy_digest_hex.is_some(),
+                ),
+                (
                     "checkpoint_store_handle",
                     self.checkpoint_store_handle.is_some(),
+                ),
+                (
+                    "checkpoint_store_revision",
+                    self.checkpoint_store_revision.is_some(),
+                ),
+                (
+                    "checkpoint_store_policy_digest_hex",
+                    self.checkpoint_store_policy_digest_hex.is_some(),
                 ),
                 (
                     "publisher_public_key_hex",
@@ -22049,19 +23253,30 @@ impl SorafsGovernanceDagService {
             match self.head_mode.as_str() {
                 "signed_http"
                     if self.signed_head_url.is_none()
-                        || self.head_authenticator_handle.is_none() =>
+                        || !head_provider_fields.iter().all(|present| *present) =>
                 {
                     emit(
                         emitter,
-                        "sorafs.storage.governance_dag_service.signed_head_url and head_authenticator_handle are required in signed_http mode"
+                        "sorafs.storage.governance_dag_service.signed_head_url and the complete head authenticator binding are required in signed_http mode"
                             .to_owned(),
                     );
                 }
-                "ipns" if self.ipns_name.is_none() || self.ipns_key_name.is_none() => emit(
-                    emitter,
-                    "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name are required in ipns mode"
-                        .to_owned(),
-                ),
+                "ipns" => {
+                    if self.ipns_name.is_none() || self.ipns_key_name.is_none() {
+                        emit(
+                            emitter,
+                            "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name are required in ipns mode"
+                                .to_owned(),
+                        );
+                    }
+                    if head_provider_fields.iter().any(|present| *present) {
+                        emit(
+                            emitter,
+                            "sorafs.storage.governance_dag_service head authenticator binding must be absent in ipns mode"
+                                .to_owned(),
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -22074,8 +23289,14 @@ impl SorafsGovernanceDagService {
             ipns_name: self.ipns_name,
             ipns_key_name: self.ipns_key_name,
             ipfs_authenticator_handle: self.ipfs_authenticator_handle,
+            ipfs_authenticator_revision: self.ipfs_authenticator_revision,
+            ipfs_authenticator_policy_digest,
             head_authenticator_handle: self.head_authenticator_handle,
+            head_authenticator_revision: self.head_authenticator_revision,
+            head_authenticator_policy_digest,
             checkpoint_store_handle: self.checkpoint_store_handle,
+            checkpoint_store_revision: self.checkpoint_store_revision,
+            checkpoint_store_policy_digest,
             publisher_public_key_hex: self.publisher_public_key_hex,
             poll_interval: std::time::Duration::from_secs(self.poll_interval_secs.max(1)),
             connect_timeout: std::time::Duration::from_millis(self.connect_timeout_ms.max(1)),
@@ -22206,7 +23427,15 @@ mod sorafs_governance_dag_service_tests {
 
     #[test]
     fn governance_runtime_bindings_reject_test_marked_handles() {
-        for marker in ["null", "mock", "test", "dev", "fake", "placeholder"] {
+        for marker in [
+            "null",
+            "mock",
+            "test",
+            "dev",
+            "fake",
+            "dummy",
+            "placeholder",
+        ] {
             let mut service = SorafsGovernanceDagService::default();
             service.ipfs_authenticator_handle = Some(format!("vault:governance:{marker}:ipfs"));
             let mut emitter = Emitter::new();
@@ -22228,6 +23457,60 @@ mod sorafs_governance_dag_service_tests {
         }
     }
 
+    fn valid_governance_dag_service() -> SorafsGovernanceDagService {
+        SorafsGovernanceDagService {
+            enabled: true,
+            ipfs_api_url: Some("https://ipfs-api.example".to_owned()),
+            signed_head_url: Some("https://governance-head.example/v1/head".to_owned()),
+            ipfs_authenticator_handle: Some("vault:governance/ipfs".to_owned()),
+            ipfs_authenticator_revision: Some(11),
+            ipfs_authenticator_policy_digest_hex: Some("81".repeat(32)),
+            head_authenticator_handle: Some("vault:governance/head".to_owned()),
+            head_authenticator_revision: Some(12),
+            head_authenticator_policy_digest_hex: Some("83".repeat(32)),
+            checkpoint_store_handle: Some("kms:governance/checkpoint".to_owned()),
+            checkpoint_store_revision: Some(13),
+            checkpoint_store_policy_digest_hex: Some("82".repeat(32)),
+            publisher_public_key_hex: Some("11".repeat(32)),
+            ..SorafsGovernanceDagService::default()
+        }
+    }
+
+    #[test]
+    fn governance_runtime_bindings_require_complete_canonical_exact_qualifications() {
+        let mut valid_emitter = Emitter::new();
+        let _ = valid_governance_dag_service().parse(&mut valid_emitter);
+        valid_emitter
+            .into_result()
+            .expect("complete exact provider qualifications must parse");
+
+        let mut cases = Vec::new();
+        let mut missing_digest = valid_governance_dag_service();
+        missing_digest.ipfs_authenticator_policy_digest_hex = None;
+        cases.push(missing_digest);
+
+        let mut zero_revision = valid_governance_dag_service();
+        zero_revision.checkpoint_store_revision = Some(0);
+        cases.push(zero_revision);
+
+        let mut uppercase_digest = valid_governance_dag_service();
+        uppercase_digest.head_authenticator_policy_digest_hex = Some("AB".repeat(32));
+        cases.push(uppercase_digest);
+
+        let mut disabled_with_binding = valid_governance_dag_service();
+        disabled_with_binding.enabled = false;
+        cases.push(disabled_with_binding);
+
+        for service in cases {
+            let mut emitter = Emitter::new();
+            let _ = service.parse(&mut emitter);
+            assert!(
+                emitter.into_result().is_err(),
+                "partial, zero, non-canonical, or disabled provider binding must fail closed"
+            );
+        }
+    }
+
     #[test]
     fn dedicated_view_reads_only_service_fields_without_node_identity() {
         let table: toml::Table = toml::from_str(
@@ -22242,8 +23525,14 @@ enabled = true
 ipfs_api_url = "https://ipfs-api.example"
 signed_head_url = "https://governance-head.example/v1/head"
 ipfs_authenticator_handle = "vault:governance/ipfs"
+ipfs_authenticator_revision = 11
+ipfs_authenticator_policy_digest_hex = "8181818181818181818181818181818181818181818181818181818181818181"
 head_authenticator_handle = "vault:governance/head"
+head_authenticator_revision = 12
+head_authenticator_policy_digest_hex = "8383838383838383838383838383838383838383838383838383838383838383"
 checkpoint_store_handle = "kms:governance/checkpoint"
+checkpoint_store_revision = 13
+checkpoint_store_policy_digest_hex = "8282828282828282828282828282828282828282828282828282828282828282"
 publisher_public_key_hex = "1111111111111111111111111111111111111111111111111111111111111111"
 allow_private_ipfs_endpoint = true
 allow_private_head_endpoint = false
@@ -22265,6 +23554,12 @@ allow_private_head_endpoint = false
             view.service.checkpoint_store_handle.as_deref(),
             Some("kms:governance/checkpoint")
         );
+        assert_eq!(view.service.ipfs_authenticator_revision, Some(11));
+        assert_eq!(
+            view.service.head_authenticator_policy_digest,
+            Some([0x83; 32])
+        );
+        assert_eq!(view.service.checkpoint_store_revision, Some(13));
         assert!(view.service.allow_private_ipfs_endpoint);
         assert!(!view.service.allow_private_head_endpoint);
     }
@@ -22802,6 +24097,18 @@ pub struct SorafsPrivacyAggregateScheduleConfig {
     pub suppression_threshold: u64,
     /// Reviewed governed privacy-policy digest as 64 lowercase hex characters.
     pub policy_digest_hex: Option<String>,
+    /// Stable opaque deployment handle for the threshold-PRF provider.
+    pub cycle_prf_provider_handle: Option<String>,
+    /// Exact non-zero threshold-PRF adapter and public-policy revision.
+    pub cycle_prf_provider_revision: Option<u64>,
+    /// Exact threshold-PRF public-policy digest as lowercase non-zero hex.
+    pub cycle_prf_provider_policy_digest_hex: Option<String>,
+    /// Stable opaque deployment handle for the finalized release anchor.
+    pub release_anchor_provider_handle: Option<String>,
+    /// Exact non-zero release-anchor adapter and public-policy revision.
+    pub release_anchor_provider_revision: Option<u64>,
+    /// Exact release-anchor public-policy digest as lowercase non-zero hex.
+    pub release_anchor_provider_policy_digest_hex: Option<String>,
     /// Reduced composed-epsilon budget numerator.
     #[config(
         default = "defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_NUMERATOR"
@@ -22845,6 +24152,12 @@ impl Default for SorafsPrivacyAggregateScheduleConfig {
                 defaults::sorafs::storage::privacy_aggregates::SUPPRESSION_THRESHOLD,
             policy_digest_hex:
                 defaults::sorafs::storage::privacy_aggregates::policy_digest_hex(),
+            cycle_prf_provider_handle: None,
+            cycle_prf_provider_revision: None,
+            cycle_prf_provider_policy_digest_hex: None,
+            release_anchor_provider_handle: None,
+            release_anchor_provider_revision: None,
+            release_anchor_provider_policy_digest_hex: None,
             composition_budget_epsilon_numerator:
                 defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_NUMERATOR,
             composition_budget_epsilon_denominator:
@@ -22894,6 +24207,66 @@ impl SorafsPrivacyAggregateScheduleConfig {
             }
             Some(digest)
         };
+        let parse_provider_binding =
+            |field_prefix: &str,
+             required: bool,
+             handle: Option<&str>,
+             revision: Option<u64>,
+             policy_digest_hex: Option<&str>,
+             emitter: &mut Emitter<ParseError>| {
+                let any_configured =
+                    handle.is_some() || revision.is_some() || policy_digest_hex.is_some();
+                if !required {
+                    if any_configured {
+                        invalid(
+                            format!(
+                                "sorafs.storage.privacy_aggregates.{field_prefix} binding fields must be absent when the provider is not required"
+                            ),
+                            emitter,
+                        );
+                    }
+                    return None;
+                }
+                if handle.is_none() || revision.is_none() || policy_digest_hex.is_none() {
+                    invalid(
+                        format!(
+                            "sorafs.storage.privacy_aggregates.{field_prefix} handle, revision, and policy digest are required together"
+                        ),
+                        emitter,
+                    );
+                    return None;
+                }
+                let handle = handle.expect("required provider handle checked above");
+                if !is_production_runtime_handle(handle) {
+                    invalid(
+                        format!(
+                            "sorafs.storage.privacy_aggregates.{field_prefix}_handle must be a canonical non-test production handle"
+                        ),
+                        emitter,
+                    );
+                    return None;
+                }
+                let revision = revision.expect("required provider revision checked above");
+                if revision == 0 {
+                    invalid(
+                        format!(
+                            "sorafs.storage.privacy_aggregates.{field_prefix}_revision must be nonzero"
+                        ),
+                        emitter,
+                    );
+                    return None;
+                }
+                let policy_digest = parse_digest(
+                    policy_digest_hex.expect("required provider policy digest checked above"),
+                    &format!("{field_prefix}_policy_digest_hex"),
+                    emitter,
+                )?;
+                Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                    handle: handle.to_owned(),
+                    revision,
+                    policy_digest,
+                })
+            };
         if self.aggregate_id_prefix.trim() != self.aggregate_id_prefix
             || self.aggregate_id_prefix.is_empty()
             || self.aggregate_id_prefix.len() > 128
@@ -22970,6 +24343,22 @@ impl SorafsPrivacyAggregateScheduleConfig {
             .policy_digest_hex
             .as_deref()
             .and_then(|raw| parse_digest(raw, "policy_digest_hex", emitter));
+        let cycle_prf_provider = parse_provider_binding(
+            "cycle_prf_provider",
+            self.enabled && self.privacy_mode != "suppression",
+            self.cycle_prf_provider_handle.as_deref(),
+            self.cycle_prf_provider_revision,
+            self.cycle_prf_provider_policy_digest_hex.as_deref(),
+            emitter,
+        );
+        let release_anchor_provider = parse_provider_binding(
+            "release_anchor_provider",
+            self.enabled,
+            self.release_anchor_provider_handle.as_deref(),
+            self.release_anchor_provider_revision,
+            self.release_anchor_provider_policy_digest_hex.as_deref(),
+            emitter,
+        );
         let mut population_inventory = Vec::with_capacity(self.population_inventory.len());
         let mut previous_population: Option<(String, [u8; 32])> = None;
         let mut population_labels = BTreeSet::new();
@@ -23100,6 +24489,8 @@ impl SorafsPrivacyAggregateScheduleConfig {
             per_subject_metric_cap: self.per_subject_metric_cap,
             suppression_threshold: self.suppression_threshold,
             policy_digest,
+            cycle_prf_provider,
+            release_anchor_provider,
             composition_budget_epsilon_numerator: self.composition_budget_epsilon_numerator,
             composition_budget_epsilon_denominator: self.composition_budget_epsilon_denominator,
             composition_budget_max_publications: self.composition_budget_max_publications,
@@ -23345,15 +24736,25 @@ mod sorafs_repair_gc_tests {
     fn sorafs_appeal_finance_settlement_parse_binds_only_public_runtime_identity() {
         let key_pair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
             .expect("derive settlement submitter keypair");
+        let checkpoint_key = KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519)
+            .expect("derive checkpoint provider keypair");
         let authority = AccountId::new(key_pair.public_key().clone());
         let config = SorafsAppealFinanceSettlement {
             submitter_signers: vec![SorafsAppealFinanceSignerBinding {
                 handle: "pkcs11:appeal-finance-a".to_owned(),
                 authority: authority.clone(),
                 public_key_hex: hex::encode(key_pair.public_key().to_bytes().1),
+                revision: 7,
+                policy_digest_hex: "a7".repeat(32),
                 valid_from_block_height: 7,
                 revoked_at_block_height: Some(11),
             }],
+            checkpoint_provider: Some(SorafsAppealFinanceCheckpointBinding {
+                handle: "kms:appeal-finance-checkpoint-a".to_owned(),
+                public_key_hex: hex::encode(checkpoint_key.public_key().to_bytes().1),
+                revision: 3,
+                policy_digest_hex: "a6".repeat(32),
+            }),
             worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(30_000)),
             worker_max_retry_attempts: 3,
             worker_max_pending: 128,
@@ -23378,10 +24779,18 @@ mod sorafs_repair_gc_tests {
             "pkcs11:appeal-finance-a"
         );
         assert_eq!(actual.submitter_signers[0].valid_from_block_height, 7);
+        assert_eq!(actual.submitter_signers[0].revision, 7);
+        assert_eq!(actual.submitter_signers[0].policy_digest, [0xA7; 32]);
         assert_eq!(
             actual.submitter_signers[0].revoked_at_block_height,
             Some(11)
         );
+        let checkpoint = actual
+            .checkpoint_provider
+            .expect("checkpoint provider binding");
+        assert_eq!(checkpoint.handle, "kms:appeal-finance-checkpoint-a");
+        assert_eq!(checkpoint.revision, 3);
+        assert_eq!(checkpoint.policy_digest, [0xA6; 32]);
         assert_eq!(
             actual.worker_scan_interval,
             std::time::Duration::from_millis(30_000)
@@ -23395,16 +24804,34 @@ mod sorafs_repair_gc_tests {
             .expect("derive settlement submitter keypair");
         let authority = AccountId::new(key_pair.public_key().clone());
         let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
+        let checkpoint_key = KeyPair::try_from_seed(vec![0xA9; 32], Algorithm::Ed25519)
+            .expect("derive checkpoint provider keypair");
 
-        for marker in ["null", "mock", "test", "dev", "fake", "placeholder"] {
+        for marker in [
+            "null",
+            "mock",
+            "test",
+            "dev",
+            "fake",
+            "dummy",
+            "placeholder",
+        ] {
             let config = SorafsAppealFinanceSettlement {
                 submitter_signers: vec![SorafsAppealFinanceSignerBinding {
                     handle: format!("pkcs11:{marker}:appeal-finance"),
                     authority: authority.clone(),
                     public_key_hex: public_key_hex.clone(),
+                    revision: 1,
+                    policy_digest_hex: "a8".repeat(32),
                     valid_from_block_height: 1,
                     revoked_at_block_height: None,
                 }],
+                checkpoint_provider: Some(SorafsAppealFinanceCheckpointBinding {
+                    handle: "kms:appeal-finance-checkpoint".to_owned(),
+                    public_key_hex: hex::encode(checkpoint_key.public_key().to_bytes().1),
+                    revision: 1,
+                    policy_digest_hex: "a9".repeat(32),
+                }),
                 ..SorafsAppealFinanceSettlement::default()
             };
 
@@ -23418,12 +24845,77 @@ mod sorafs_repair_gc_tests {
     }
 
     #[test]
+    fn sorafs_appeal_finance_requires_distinct_qualified_checkpoint_provider() {
+        let signer_key = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::Ed25519)
+            .expect("derive settlement signer keypair");
+        let checkpoint_key = KeyPair::try_from_seed(vec![0xAC; 32], Algorithm::Ed25519)
+            .expect("derive checkpoint provider keypair");
+        let signer_handle = "pkcs11:appeal-finance-primary";
+        let mut valid = SorafsAppealFinanceSettlement {
+            submitter_signers: vec![SorafsAppealFinanceSignerBinding {
+                handle: signer_handle.to_owned(),
+                authority: AccountId::new(signer_key.public_key().clone()),
+                public_key_hex: hex::encode(signer_key.public_key().to_bytes().1),
+                revision: 1,
+                policy_digest_hex: "ab".repeat(32),
+                valid_from_block_height: 1,
+                revoked_at_block_height: None,
+            }],
+            checkpoint_provider: Some(SorafsAppealFinanceCheckpointBinding {
+                handle: "kms:appeal-finance-checkpoint-primary".to_owned(),
+                public_key_hex: hex::encode(checkpoint_key.public_key().to_bytes().1),
+                revision: 1,
+                policy_digest_hex: "ac".repeat(32),
+            }),
+            ..SorafsAppealFinanceSettlement::default()
+        };
+        let assert_invalid = |config: SorafsAppealFinanceSettlement| {
+            let mut emitter = Emitter::new();
+            let _ = config.parse(&mut emitter);
+            assert!(emitter.into_result().is_err());
+        };
+
+        let mut missing_checkpoint = valid.clone();
+        missing_checkpoint.checkpoint_provider = None;
+        assert_invalid(missing_checkpoint);
+
+        let mut shared_handle = valid.clone();
+        shared_handle
+            .checkpoint_provider
+            .as_mut()
+            .expect("checkpoint binding")
+            .handle = signer_handle.to_owned();
+        assert_invalid(shared_handle);
+
+        let mut shared_key = valid.clone();
+        shared_key
+            .checkpoint_provider
+            .as_mut()
+            .expect("checkpoint binding")
+            .public_key_hex = hex::encode(signer_key.public_key().to_bytes().1);
+        assert_invalid(shared_key);
+
+        valid.submitter_signers[0].revision = 0;
+        valid.submitter_signers[0].policy_digest_hex = "00".repeat(32);
+        let checkpoint = valid
+            .checkpoint_provider
+            .as_mut()
+            .expect("checkpoint binding");
+        checkpoint.revision = 0;
+        checkpoint.policy_digest_hex = "00".repeat(32);
+        assert_invalid(valid);
+    }
+
+    #[test]
     fn sorafs_appeal_finance_defaults_bind_exact_baseline_asset_and_policies() {
         let mut emitter = Emitter::new();
         let actual = SorafsAppealFinanceSettlement::default().parse(&mut emitter);
         assert!(emitter.into_result().is_ok());
 
-        assert_eq!(actual.asset_definition_id.to_string(), "xor#sora.universal");
+        assert_eq!(
+            actual.asset_definition_id.to_string(),
+            "5PgFjEiWr1iqE2a7Wp1R2gB4eVEB"
+        );
         assert_eq!(actual.asset_scale, 9);
         assert_eq!(actual.pricing.version, "baseline-v1");
         assert_eq!(actual.pricing.quote_ttl_secs, 900);
@@ -23581,15 +25073,25 @@ mod sorafs_repair_gc_tests {
                 handle: handle.to_owned(),
                 authority: authority.clone(),
                 public_key_hex: hex::encode(wrong.public_key().to_bytes().1),
+                revision: 1,
+                policy_digest_hex: "a8".repeat(32),
                 valid_from_block_height,
                 revoked_at_block_height,
             }
         };
+        let checkpoint_key = KeyPair::try_from_seed(vec![0xAA; 32], Algorithm::Ed25519)
+            .expect("derive checkpoint provider keypair");
         let config = SorafsAppealFinanceSettlement {
             submitter_signers: vec![
                 binding("pkcs11:appeal-finance-old", 1, Some(10)),
                 binding("pkcs11:appeal-finance-new", 9, None),
             ],
+            checkpoint_provider: Some(SorafsAppealFinanceCheckpointBinding {
+                handle: "kms:appeal-finance-checkpoint".to_owned(),
+                public_key_hex: hex::encode(checkpoint_key.public_key().to_bytes().1),
+                revision: 1,
+                policy_digest_hex: "aa".repeat(32),
+            }),
             ..SorafsAppealFinanceSettlement::default()
         };
 
@@ -23626,8 +25128,11 @@ submitter_signers = [{{
     handle = "pkcs11://appeal-settlement"
     authority = "{authority}"
     public_key_hex = "{public_key_hex}"
+    revision = 1
+    policy_digest_hex = "{}"
 }}]
 "#,
+            "aa".repeat(32),
         ))
         .expect("parse signer with default activation height");
         let decoded = ConfigReader::new()
@@ -23642,11 +25147,14 @@ submitter_signers = [{{
     handle = "pkcs11://appeal-settlement"
     authority = "{authority}"
     public_key_hex = "{}"
+    revision = 1
+    policy_digest_hex = "{}"
     valid_from_block_height = 1
     retired_private_key_hex = "{}"
 }}]
 "#,
             public_key_hex,
+            "aa".repeat(32),
             "11".repeat(32),
         ))
         .expect("parse retired signer field");
@@ -23686,6 +25194,8 @@ pub struct SorafsPor {
     ///
     #[config(default = "defaults::sorafs::por::ENABLED")]
     pub enabled: bool,
+    /// Exact non-secret production PoTR signer and finalized-reader pins.
+    pub potr_runtime: Option<SorafsPotrRuntimeBinding>,
     /// Epoch interval (seconds) controlling challenge generation cadence.
     #[config(default = "defaults::sorafs::por::EPOCH_INTERVAL_SECS")]
     pub epoch_interval_secs: u64,
@@ -23715,10 +25225,318 @@ pub struct SorafsPor {
     pub auditor_signature_threshold: u16,
 }
 
+/// User-level exact production boundary for PoTR signing and finalized policy reads.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsPotrRuntimeBinding {
+    /// Stable opaque gateway HSM/KMS provider handle.
+    pub gateway_handle: String,
+    /// Canonical lowercase gateway signer administration identity.
+    pub gateway_signer_id_hex: String,
+    /// Exact non-zero gateway adapter and public-policy revision.
+    pub gateway_revision: u64,
+    /// Exact non-zero gateway public-policy digest.
+    pub gateway_policy_digest_hex: String,
+    /// Canonical lowercase Ed25519 gateway verification key.
+    pub gateway_public_key_hex: String,
+    /// Stable opaque provider HSM/KMS provider handle.
+    pub provider_handle: String,
+    /// Canonical lowercase provider signer administration identity.
+    pub provider_signer_id_hex: String,
+    /// Exact non-zero provider adapter and public-policy revision.
+    pub provider_revision: u64,
+    /// Exact non-zero provider public-policy digest.
+    pub provider_policy_digest_hex: String,
+    /// Stable admission-reader facade identity.
+    pub reader_id_hex: String,
+    /// Stable immutable finalized-state source identity.
+    pub source_id_hex: String,
+    /// Stable admission-material resolver identity.
+    pub resolver_id_hex: String,
+    /// Provider governed by the baseline admission revision.
+    pub baseline_provider_id_hex: String,
+    /// Stable identity of the baseline admission-policy series.
+    pub baseline_policy_identity_hex: String,
+    /// Digest of the exact baseline admission-policy revision.
+    pub baseline_policy_digest_hex: String,
+    /// Monotonic baseline admission-policy revision.
+    pub baseline_policy_sequence: u64,
+    /// Finalized block height containing the baseline revision.
+    pub baseline_finalized_height: u64,
+    /// Exact finalized block hash paired with the baseline height.
+    pub baseline_finalized_block_hash_hex: String,
+    /// Digest of the exact council-verified admission envelope.
+    pub baseline_admission_envelope_digest_hex: String,
+}
+
+fn parse_sorafs_potr_hex32(
+    path: &str,
+    value: &str,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
+            "{path} must be exactly 64 lowercase hexadecimal characters"
+        )));
+        return None;
+    }
+    let mut decoded = [0_u8; 32];
+    hex::decode_to_slice(value, &mut decoded).expect("validated lowercase fixed-width hexadecimal");
+    if decoded == [0; 32] {
+        emitter.emit(
+            Report::new(ParseError::InvalidSorafsConfig).attach(format!("{path} must be nonzero")),
+        );
+        return None;
+    }
+    Some(decoded)
+}
+
+impl SorafsPotrRuntimeBinding {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SorafsPotrRuntimeBinding> {
+        let gateway_handle_valid = is_production_runtime_handle(&self.gateway_handle);
+        if !gateway_handle_valid {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.por.potr_runtime.gateway_handle must be a production opaque handle",
+            ));
+        }
+        let provider_handle_valid = is_production_runtime_handle(&self.provider_handle);
+        if !provider_handle_valid {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.por.potr_runtime.provider_handle must be a production opaque handle",
+            ));
+        }
+        let handles_distinct = self.gateway_handle != self.provider_handle;
+        if !handles_distinct {
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.por.potr_runtime gateway and provider handles must be distinct",
+                ),
+            );
+        }
+
+        let gateway_revision_valid = self.gateway_revision != 0;
+        if !gateway_revision_valid {
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig)
+                    .attach("sorafs.por.potr_runtime.gateway_revision must be nonzero"),
+            );
+        }
+        let provider_revision_valid = self.provider_revision != 0;
+        if !provider_revision_valid {
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig)
+                    .attach("sorafs.por.potr_runtime.provider_revision must be nonzero"),
+            );
+        }
+        let baseline_sequence_valid = self.baseline_policy_sequence != 0;
+        if !baseline_sequence_valid {
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig)
+                    .attach("sorafs.por.potr_runtime.baseline_policy_sequence must be nonzero"),
+            );
+        }
+        let finalized_height_valid = self.baseline_finalized_height != 0;
+        if !finalized_height_valid {
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig)
+                    .attach("sorafs.por.potr_runtime.baseline_finalized_height must be nonzero"),
+            );
+        }
+
+        let gateway_signer_id = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.gateway_signer_id_hex",
+            &self.gateway_signer_id_hex,
+            emitter,
+        );
+        let gateway_policy_digest = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.gateway_policy_digest_hex",
+            &self.gateway_policy_digest_hex,
+            emitter,
+        );
+        let gateway_public_key = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.gateway_public_key_hex",
+            &self.gateway_public_key_hex,
+            emitter,
+        );
+        let gateway_public_key_valid = gateway_public_key.is_some_and(|key| {
+            if PublicKey::from_bytes(Algorithm::Ed25519, &key).is_ok() {
+                true
+            } else {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                    "sorafs.por.potr_runtime.gateway_public_key_hex is not a valid Ed25519 public key",
+                ));
+                false
+            }
+        });
+        let provider_signer_id = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.provider_signer_id_hex",
+            &self.provider_signer_id_hex,
+            emitter,
+        );
+        let provider_policy_digest = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.provider_policy_digest_hex",
+            &self.provider_policy_digest_hex,
+            emitter,
+        );
+        let reader_id = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.reader_id_hex",
+            &self.reader_id_hex,
+            emitter,
+        );
+        let source_id = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.source_id_hex",
+            &self.source_id_hex,
+            emitter,
+        );
+        let resolver_id = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.resolver_id_hex",
+            &self.resolver_id_hex,
+            emitter,
+        );
+        let baseline_provider_id = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.baseline_provider_id_hex",
+            &self.baseline_provider_id_hex,
+            emitter,
+        );
+        let baseline_policy_identity = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.baseline_policy_identity_hex",
+            &self.baseline_policy_identity_hex,
+            emitter,
+        );
+        let baseline_policy_digest = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.baseline_policy_digest_hex",
+            &self.baseline_policy_digest_hex,
+            emitter,
+        );
+        let baseline_finalized_block_hash = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.baseline_finalized_block_hash_hex",
+            &self.baseline_finalized_block_hash_hex,
+            emitter,
+        );
+        let baseline_admission_envelope_digest = parse_sorafs_potr_hex32(
+            "sorafs.por.potr_runtime.baseline_admission_envelope_digest_hex",
+            &self.baseline_admission_envelope_digest_hex,
+            emitter,
+        );
+
+        let mut administrative_identities = BTreeSet::new();
+        let identities_distinct = [
+            gateway_signer_id,
+            provider_signer_id,
+            reader_id,
+            source_id,
+            resolver_id,
+        ]
+        .into_iter()
+        .flatten()
+        .all(|identity| administrative_identities.insert(identity));
+        if !identities_distinct {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.por.potr_runtime signer, reader, source, and resolver identities must all be distinct",
+            ));
+        }
+
+        let provider_revision_matches_policy =
+            self.provider_revision == self.baseline_policy_sequence;
+        if !provider_revision_matches_policy {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.por.potr_runtime.provider_revision must equal baseline_policy_sequence",
+            ));
+        }
+        let provider_digest_matches_policy =
+            provider_policy_digest.is_some() && provider_policy_digest == baseline_policy_digest;
+        if !provider_digest_matches_policy {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.por.potr_runtime.provider_policy_digest_hex must equal baseline_policy_digest_hex",
+            ));
+        }
+
+        let (
+            Some(gateway_signer_id),
+            Some(gateway_policy_digest),
+            Some(gateway_public_key),
+            Some(provider_signer_id),
+            Some(provider_policy_digest),
+            Some(reader_id),
+            Some(source_id),
+            Some(resolver_id),
+            Some(baseline_provider_id),
+            Some(baseline_policy_identity),
+            Some(baseline_policy_digest),
+            Some(baseline_finalized_block_hash),
+            Some(baseline_admission_envelope_digest),
+        ) = (
+            gateway_signer_id,
+            gateway_policy_digest,
+            gateway_public_key,
+            provider_signer_id,
+            provider_policy_digest,
+            reader_id,
+            source_id,
+            resolver_id,
+            baseline_provider_id,
+            baseline_policy_identity,
+            baseline_policy_digest,
+            baseline_finalized_block_hash,
+            baseline_admission_envelope_digest,
+        )
+        else {
+            return None;
+        };
+        if !gateway_handle_valid
+            || !provider_handle_valid
+            || !handles_distinct
+            || !gateway_revision_valid
+            || !provider_revision_valid
+            || !baseline_sequence_valid
+            || !finalized_height_valid
+            || !gateway_public_key_valid
+            || !identities_distinct
+            || !provider_revision_matches_policy
+            || !provider_digest_matches_policy
+        {
+            return None;
+        }
+
+        Some(actual::SorafsPotrRuntimeBinding {
+            gateway_signer: actual::SorafsPotrRuntimeSignerBinding {
+                handle: self.gateway_handle,
+                signer_id: gateway_signer_id,
+                revision: self.gateway_revision,
+                policy_digest: gateway_policy_digest,
+            },
+            provider_signer: actual::SorafsPotrRuntimeSignerBinding {
+                handle: self.provider_handle,
+                signer_id: provider_signer_id,
+                revision: self.provider_revision,
+                policy_digest: provider_policy_digest,
+            },
+            gateway_public_key,
+            reader_id,
+            source_id,
+            resolver_id,
+            baseline_admission_policy: actual::SorafsPotrAdmissionPolicyBinding {
+                provider_id: baseline_provider_id,
+                policy_identity: baseline_policy_identity,
+                policy_digest: baseline_policy_digest,
+                policy_sequence: self.baseline_policy_sequence,
+                finalized_height: self.baseline_finalized_height,
+                finalized_block_hash: baseline_finalized_block_hash,
+                admission_envelope_digest: baseline_admission_envelope_digest,
+            },
+        })
+    }
+}
+
 impl Default for SorafsPor {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::por::ENABLED,
+            potr_runtime: None,
             epoch_interval_secs: defaults::sorafs::por::EPOCH_INTERVAL_SECS,
             response_window_secs: defaults::sorafs::por::RESPONSE_WINDOW_SECS,
             state_dir: defaults::sorafs::por::state_dir(),
@@ -23733,12 +25551,23 @@ impl Default for SorafsPor {
 }
 
 impl SorafsPor {
-    fn parse(self) -> actual::SorafsPor {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsPor {
         let state_dir = self.state_dir;
         let drand_state_path = state_dir.join(defaults::sorafs::por::DRAND_STATE_FILE);
         let vrf_state_path = state_dir.join(defaults::sorafs::por::VRF_STATE_FILE);
+        let runtime_configured = self.potr_runtime.is_some();
+        let potr_runtime = self.potr_runtime.and_then(|binding| binding.parse(emitter));
+        if self.enabled != runtime_configured {
+            let requirement = if self.enabled {
+                "sorafs.por.potr_runtime is required when sorafs.por.enabled is true"
+            } else {
+                "sorafs.por.potr_runtime must be absent when sorafs.por.enabled is false"
+            };
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(requirement));
+        }
         actual::SorafsPor {
             enabled: self.enabled,
+            potr_runtime,
             epoch_interval_secs: self.epoch_interval_secs,
             response_window_secs: self.response_window_secs,
             state_dir,
@@ -23860,12 +25689,53 @@ impl SorafsPorDrand {
 }
 
 #[cfg(test)]
+fn sorafs_potr_runtime_binding_fixture() -> SorafsPotrRuntimeBinding {
+    let gateway_key = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+        .expect("derive checked PoTR gateway key");
+    SorafsPotrRuntimeBinding {
+        gateway_handle: "pkcs11://hsm/potr-gateway-primary".to_owned(),
+        gateway_signer_id_hex: "11".repeat(32),
+        gateway_revision: 3,
+        gateway_policy_digest_hex: "22".repeat(32),
+        gateway_public_key_hex: hex::encode(gateway_key.public_key().to_bytes().1),
+        provider_handle: "kms://cluster/potr-provider-primary".to_owned(),
+        provider_signer_id_hex: "33".repeat(32),
+        provider_revision: 7,
+        provider_policy_digest_hex: "44".repeat(32),
+        reader_id_hex: "55".repeat(32),
+        source_id_hex: "66".repeat(32),
+        resolver_id_hex: "77".repeat(32),
+        baseline_provider_id_hex: "88".repeat(32),
+        baseline_policy_identity_hex: "99".repeat(32),
+        baseline_policy_digest_hex: "44".repeat(32),
+        baseline_policy_sequence: 7,
+        baseline_finalized_height: 41,
+        baseline_finalized_block_hash_hex: "aa".repeat(32),
+        baseline_admission_envelope_digest_hex: "bb".repeat(32),
+    }
+}
+
+#[cfg(test)]
+fn assert_sorafs_por_config_invalid(config: SorafsPor) {
+    let mut emitter = Emitter::new();
+    let _ = config.parse(&mut emitter);
+    assert!(
+        emitter.into_result().is_err(),
+        "invalid PoTR runtime configuration must fail closed"
+    );
+}
+
+#[cfg(test)]
 #[test]
 fn sorafs_por_rejects_zero_auditor_signature_threshold() {
     let mut config = SorafsPor::default();
     config.auditor_signature_threshold = 0;
     assert!(
-        std::panic::catch_unwind(|| config.parse()).is_err(),
+        std::panic::catch_unwind(|| {
+            let mut emitter = Emitter::new();
+            config.parse(&mut emitter)
+        })
+        .is_err(),
         "zero auditor threshold must fail closed during config parsing"
     );
 }
@@ -23873,12 +25743,15 @@ fn sorafs_por_rejects_zero_auditor_signature_threshold() {
 #[cfg(test)]
 #[test]
 fn sorafs_por_parses_file_configured_verified_feed_fields_without_env_fallbacks() {
-    let disabled = SorafsPor::default().parse();
+    let mut emitter = Emitter::new();
+    let disabled = SorafsPor::default().parse(&mut emitter);
+    assert!(emitter.into_result().is_ok());
     assert!(!disabled.enabled);
     assert!(disabled.drand.endpoints.is_empty());
 
     let mut config = SorafsPor {
         enabled: true,
+        potr_runtime: Some(sorafs_potr_runtime_binding_fixture()),
         ..Default::default()
     };
     config.state_dir = PathBuf::from("/var/lib/iroha/sorafs/por");
@@ -23892,8 +25765,23 @@ fn sorafs_por_parses_file_configured_verified_feed_fields_without_env_fallbacks(
         "https://two.example/v2/chains/11".to_owned(),
         "https://three.example/v2/chains/11".to_owned(),
     ];
-    let parsed = config.parse();
+    let mut emitter = Emitter::new();
+    let parsed = config.parse(&mut emitter);
+    assert!(emitter.into_result().is_ok());
     assert!(parsed.enabled);
+    let runtime = parsed
+        .potr_runtime
+        .as_ref()
+        .expect("enabled PoTR retains the exact public runtime binding");
+    assert_eq!(runtime.gateway_signer.signer_id, [0x11; 32]);
+    assert_eq!(runtime.provider_signer.revision, 7);
+    assert_eq!(
+        runtime.provider_signer.policy_digest,
+        runtime.baseline_admission_policy.policy_digest
+    );
+    assert_eq!(runtime.reader_id, [0x55; 32]);
+    assert_eq!(runtime.source_id, [0x66; 32]);
+    assert_eq!(runtime.resolver_id, [0x77; 32]);
     assert_eq!(parsed.drand.scheme, "bls-unchained-g1-rfc9380");
     assert_eq!(parsed.drand.chain_hash, [0x11; 32]);
     assert_eq!(parsed.drand.public_key, [0x22; 96]);
@@ -23908,6 +25796,79 @@ fn sorafs_por_parses_file_configured_verified_feed_fields_without_env_fallbacks(
         parsed.vrf_state_path,
         parsed.state_dir.join(defaults::sorafs::por::VRF_STATE_FILE)
     );
+}
+
+#[cfg(test)]
+#[test]
+fn sorafs_potr_runtime_binding_is_complete_and_tracks_service_enablement() {
+    use iroha_config_base::toml::TomlSource;
+
+    assert_sorafs_por_config_invalid(SorafsPor {
+        enabled: true,
+        ..SorafsPor::default()
+    });
+    assert_sorafs_por_config_invalid(SorafsPor {
+        potr_runtime: Some(sorafs_potr_runtime_binding_fixture()),
+        ..SorafsPor::default()
+    });
+
+    let partial: toml::Table = toml::from_str(
+        r#"
+enabled = true
+potr_runtime = { gateway_handle = "pkcs11://hsm/potr-gateway-primary" }
+"#,
+    )
+    .expect("parse partial PoTR runtime table");
+    let _error = ConfigReader::new()
+        .with_toml_source(TomlSource::inline(partial))
+        .read_and_complete::<SorafsPor>()
+        .expect_err("partial PoTR runtime binding must fail configuration loading");
+}
+
+#[cfg(test)]
+#[test]
+fn sorafs_potr_runtime_binding_rejects_aliases_and_stale_qualification() {
+    let invalid = |binding| SorafsPor {
+        enabled: true,
+        potr_runtime: Some(binding),
+        ..SorafsPor::default()
+    };
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.gateway_handle = "pkcs11://test/potr-gateway".to_owned();
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.provider_handle = binding.gateway_handle.clone();
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.gateway_signer_id_hex = "00".repeat(32);
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.gateway_signer_id_hex = "AA".repeat(32);
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.gateway_policy_digest_hex = "AA".repeat(32);
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.gateway_policy_digest_hex = "00".repeat(32);
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.source_id_hex = binding.reader_id_hex.clone();
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.provider_revision += 1;
+    assert_sorafs_por_config_invalid(invalid(binding));
+
+    let mut binding = sorafs_potr_runtime_binding_fixture();
+    binding.provider_policy_digest_hex = "cc".repeat(32);
+    assert_sorafs_por_config_invalid(invalid(binding));
 }
 
 #[cfg(test)]
@@ -24279,7 +26240,7 @@ impl SorafsGateway {
             cdn_policy_path: None,
             rate_limit: rate_limit.parse(),
             untrusted_hosting: untrusted_hosting.parse(),
-            acme: acme.parse(),
+            acme: acme.parse(emitter),
             compliance: compliance.parse(emitter),
             rollout_phase,
             anonymity_policy: Some(
@@ -24461,6 +26422,12 @@ pub struct SorafsGatewayAcme {
     /// Enable ACME automation.
     #[config(default = "defaults::sorafs::gateway::acme::ENABLED")]
     pub enabled: bool,
+    /// Stable production handle reported by the injected ACME client.
+    pub provider_handle: Option<String>,
+    /// Non-zero deployed ACME adapter and public-policy revision.
+    pub provider_revision: Option<u64>,
+    /// Non-zero digest of the exact public ACME provider policy.
+    pub provider_policy_digest_hex: Option<String>,
     /// Account email used for ACME registration.
     pub account_email: Option<String>,
     /// ACME directory URL.
@@ -24492,6 +26459,9 @@ impl Default for SorafsGatewayAcme {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::gateway::acme::ENABLED,
+            provider_handle: None,
+            provider_revision: None,
+            provider_policy_digest_hex: None,
             account_email: defaults::sorafs::gateway::acme::account_email(),
             directory_url: defaults::sorafs::gateway::acme::directory_url(),
             hostnames: defaults::sorafs::gateway::acme::hostnames(),
@@ -24506,9 +26476,19 @@ impl Default for SorafsGatewayAcme {
 }
 
 impl SorafsGatewayAcme {
-    fn parse(self) -> actual::SorafsGatewayAcme {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsGatewayAcme {
+        let provider = parse_sorafs_gateway_runtime_provider_binding(
+            emitter,
+            "sorafs.gateway.acme",
+            "provider",
+            self.enabled,
+            self.provider_handle.as_deref(),
+            self.provider_revision,
+            self.provider_policy_digest_hex.as_deref(),
+        );
         actual::SorafsGatewayAcme {
             enabled: self.enabled,
+            provider,
             account_email: self.account_email,
             directory_url: self.directory_url,
             hostnames: self.hostnames,
@@ -24562,6 +26542,12 @@ pub struct SorafsGatewayCompliance {
     /// Enable the signed durable controller.
     #[config(default = "defaults::sorafs::gateway::compliance::ENABLED")]
     pub enabled: bool,
+    /// Stable production handle reported by the authenticated feed transport.
+    pub feed_transport_provider_handle: Option<String>,
+    /// Non-zero deployed feed-transport adapter and public-policy revision.
+    pub feed_transport_provider_revision: Option<u64>,
+    /// Non-zero digest of the exact configured hostname/SPKI policy.
+    pub feed_transport_provider_policy_digest_hex: Option<String>,
     /// Absolute durable checkpoint file path.
     pub checkpoint_path: Option<PathBuf>,
     /// Non-zero governance policy identity as lowercase hexadecimal.
@@ -24627,6 +26613,9 @@ impl Default for SorafsGatewayCompliance {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::gateway::compliance::ENABLED,
+            feed_transport_provider_handle: None,
+            feed_transport_provider_revision: None,
+            feed_transport_provider_policy_digest_hex: None,
             checkpoint_path: None,
             policy_id_hex: None,
             region_id: None,
@@ -24762,6 +26751,16 @@ impl SorafsGatewayCompliance {
                 previous = Some(signer_id);
             }
         }
+
+        let feed_transport_provider = parse_sorafs_gateway_runtime_provider_binding(
+            emitter,
+            "sorafs.gateway.compliance",
+            "feed_transport_provider",
+            self.enabled,
+            self.feed_transport_provider_handle.as_deref(),
+            self.feed_transport_provider_revision,
+            self.feed_transport_provider_policy_digest_hex.as_deref(),
+        );
 
         if !self.enabled {
             if self.checkpoint_path.is_some()
@@ -25013,6 +27012,7 @@ impl SorafsGatewayCompliance {
 
         Some(actual::SorafsGatewayCompliance {
             checkpoint_path: checkpoint_path?,
+            feed_transport_provider: feed_transport_provider?,
             policy_id: policy_id?,
             region_id: region_id?,
             gateway_id: gateway_id?,
@@ -25034,6 +27034,71 @@ impl SorafsGatewayCompliance {
             max_catalog_validity: self.max_catalog_validity,
             max_history_entries: self.max_history_entries,
         })
+    }
+}
+
+#[cfg(test)]
+mod sorafs_gateway_provider_config_tests {
+    use super::*;
+
+    #[test]
+    fn enabled_acme_parses_one_exact_provider_binding() {
+        let mut emitter = Emitter::new();
+        let parsed = SorafsGatewayAcme {
+            enabled: true,
+            provider_handle: Some("hsm://gateway/acme/primary".to_owned()),
+            provider_revision: Some(11),
+            provider_policy_digest_hex: Some("71".repeat(32)),
+            ..SorafsGatewayAcme::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        let provider = parsed.provider.expect("enabled ACME provider binding");
+        assert_eq!(provider.provider_handle, "hsm://gateway/acme/primary");
+        assert_eq!(provider.revision, 11);
+        assert_eq!(provider.policy_digest, [0x71; 32]);
+    }
+
+    #[test]
+    fn enabled_acme_rejects_partial_provider_binding() {
+        let mut emitter = Emitter::new();
+        let parsed = SorafsGatewayAcme {
+            enabled: true,
+            provider_handle: Some("hsm://gateway/acme/primary".to_owned()),
+            ..SorafsGatewayAcme::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(parsed.provider.is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn disabled_acme_and_compliance_reject_dormant_provider_bindings() {
+        let mut acme_emitter = Emitter::new();
+        let parsed = SorafsGatewayAcme {
+            provider_handle: Some("hsm://gateway/acme/primary".to_owned()),
+            provider_revision: Some(1),
+            provider_policy_digest_hex: Some("71".repeat(32)),
+            ..SorafsGatewayAcme::default()
+        }
+        .parse(&mut acme_emitter);
+        assert!(parsed.provider.is_none());
+        assert!(acme_emitter.into_result().is_err());
+
+        let mut compliance_emitter = Emitter::new();
+        let parsed = SorafsGatewayCompliance {
+            feed_transport_provider_handle: Some(
+                "sorafs.gateway.compliance.feed-https.v1".to_owned(),
+            ),
+            feed_transport_provider_revision: Some(1),
+            feed_transport_provider_policy_digest_hex: Some("72".repeat(32)),
+            ..SorafsGatewayCompliance::default()
+        }
+        .parse(&mut compliance_emitter);
+        assert!(parsed.is_none());
+        assert!(compliance_emitter.into_result().is_err());
     }
 }
 
@@ -26342,7 +28407,7 @@ mod duration_clamp_tests {
             ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
         },
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::Quantity;
     use toml::{Table, Value};
 
     use crate::parameters::{actual, defaults, user::SoracloudRuntime};
@@ -26383,6 +28448,59 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .with_toml_source(TomlSource::inline(table))
             .read_and_complete::<super::Root>()
             .expect("load minimal user config")
+    }
+
+    #[test]
+    fn disabled_offline_profile_rejects_kagemusha_commands_during_root_parse() {
+        let mut table = base_table();
+        let settlement = table
+            .entry("settlement")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("settlement table");
+        settlement.insert(
+            "offline".into(),
+            Value::Table(Table::from_iter([(
+                "enabled".into(),
+                Value::Boolean(false),
+            )])),
+        );
+
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        torii.insert(
+            "kagemusha_commands".into(),
+            Value::Table(Table::from_iter([
+                ("enabled".into(), Value::Boolean(true)),
+                (
+                    "private_key".into(),
+                    Value::String(
+                        "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+                            .into(),
+                    ),
+                ),
+                ("minimum_xor_balance".into(), Value::String("1".into())),
+                ("max_tx_value".into(), Value::String("1".into())),
+                (
+                    "operation_registry_max_entries".into(),
+                    Value::Integer(4_096),
+                ),
+                (
+                    "operation_registry_max_bytes".into(),
+                    Value::Integer(512 * 1_024),
+                ),
+            ])),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("disabled offline profile must reject Kagemusha commands");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("settlement.offline.enabled=false forbids torii.kagemusha_commands"),
+            "{report}"
+        );
     }
 
     fn sorafs_table_mut(table: &mut Table) -> &mut Table {
@@ -27585,8 +29703,12 @@ enabled = true
 moderation_screening_enabled = true
 moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
 moderation_screening_authority_bundle_digest_hex = "{}"
+moderation_quarantine_key_provider_handle = "kms://moderation/quarantine/primary"
+moderation_quarantine_key_provider_revision = 7
+moderation_quarantine_key_provider_policy_digest_hex = "{}"
 "#,
-            "11".repeat(32)
+            "11".repeat(32),
+            "51".repeat(32)
         ))
         .expect("parse moderation screening authority config");
         table.insert("sorafs".into(), Value::Table(sorafs));
@@ -27599,6 +29721,27 @@ moderation_screening_authority_bundle_digest_hex = "{}"
         assert_eq!(
             storage.moderation_screening_authority_bundle_digest,
             Some([0x11; 32])
+        );
+        assert_eq!(
+            storage
+                .moderation_quarantine_key_provider
+                .as_ref()
+                .map(|binding| binding.handle.as_str()),
+            Some("kms://moderation/quarantine/primary")
+        );
+        assert_eq!(
+            storage
+                .moderation_quarantine_key_provider
+                .as_ref()
+                .map(|binding| binding.revision),
+            Some(7)
+        );
+        assert_eq!(
+            storage
+                .moderation_quarantine_key_provider
+                .as_ref()
+                .map(|binding| binding.policy_digest),
+            Some([0x51; 32])
         );
 
         for invalid_storage in [
@@ -27638,6 +29781,26 @@ moderation_screening_authority_bundle_digest_hex = "{}"
 "#,
                 "11".repeat(32)
             ),
+            format!(
+                r#"
+[storage]
+enabled = true
+moderation_screening_enabled = true
+moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
+moderation_screening_authority_bundle_digest_hex = "{}"
+moderation_quarantine_key_provider_handle = "kms://moderation/quarantine/test"
+moderation_quarantine_key_provider_revision = 0
+moderation_quarantine_key_provider_policy_digest_hex = "{}"
+"#,
+                "11".repeat(32),
+                "AA".repeat(32)
+            ),
+            r#"
+[storage]
+enabled = true
+moderation_quarantine_key_provider_handle = "kms://moderation/quarantine/primary"
+"#
+            .to_owned(),
         ] {
             let mut table = base_table();
             let sorafs: Table =
@@ -27774,6 +29937,12 @@ epsilon_denominator = 5
 per_subject_metric_cap = 2
 suppression_threshold = 3
 policy_digest_hex = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+cycle_prf_provider_handle = "threshold-prf:transparency:primary"
+cycle_prf_provider_revision = 7
+cycle_prf_provider_policy_digest_hex = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+release_anchor_provider_handle = "governance-dag:transparency:primary"
+release_anchor_provider_revision = 9
+release_anchor_provider_policy_digest_hex = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
 composition_budget_epsilon_numerator = 12
 composition_budget_epsilon_denominator = 1
 composition_budget_max_publications = 52
@@ -27813,6 +29982,22 @@ unit = "count"
         assert_eq!(schedule.per_subject_metric_cap, 2);
         assert_eq!(schedule.suppression_threshold, 3);
         assert_eq!(schedule.policy_digest, Some([0xC0; 32]));
+        assert_eq!(
+            schedule.cycle_prf_provider,
+            Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: "threshold-prf:transparency:primary".to_owned(),
+                revision: 7,
+                policy_digest: [0xD1; 32],
+            })
+        );
+        assert_eq!(
+            schedule.release_anchor_provider,
+            Some(actual::SorafsTransparencyRuntimeProviderBinding {
+                handle: "governance-dag:transparency:primary".to_owned(),
+                revision: 9,
+                policy_digest: [0xE1; 32],
+            })
+        );
         assert_eq!(schedule.composition_budget_epsilon_numerator, 12);
         assert_eq!(schedule.composition_budget_epsilon_denominator, 1);
         assert_eq!(schedule.composition_budget_max_publications, 52);
@@ -27848,6 +30033,117 @@ unit = "count"
             let error = load_user_root(table)
                 .parse()
                 .expect_err("invalid privacy aggregate policy must fail config parsing");
+            let report = format!("{error:?}");
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+
+    #[test]
+    fn sorafs_storage_privacy_runtime_provider_bindings_fail_closed() {
+        let cases = [
+            (
+                true,
+                "differential_privacy",
+                r#"
+cycle_prf_provider_handle = "threshold-prf:transparency:primary"
+release_anchor_provider_handle = "governance-dag:transparency:primary"
+release_anchor_provider_revision = 9
+release_anchor_provider_policy_digest_hex = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+"#,
+                "cycle_prf_provider handle, revision, and policy digest are required together",
+            ),
+            (
+                true,
+                "differential_privacy",
+                r#"
+cycle_prf_provider_handle = "mock:threshold-prf:primary"
+cycle_prf_provider_revision = 7
+cycle_prf_provider_policy_digest_hex = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+release_anchor_provider_handle = "governance-dag:transparency:primary"
+release_anchor_provider_revision = 9
+release_anchor_provider_policy_digest_hex = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+"#,
+                "cycle_prf_provider_handle must be a canonical non-test production handle",
+            ),
+            (
+                true,
+                "differential_privacy",
+                r#"
+cycle_prf_provider_handle = "threshold-prf:transparency:primary"
+cycle_prf_provider_revision = 0
+cycle_prf_provider_policy_digest_hex = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+release_anchor_provider_handle = "governance-dag:transparency:primary"
+release_anchor_provider_revision = 9
+release_anchor_provider_policy_digest_hex = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+"#,
+                "cycle_prf_provider_revision must be nonzero",
+            ),
+            (
+                true,
+                "differential_privacy",
+                r#"
+cycle_prf_provider_handle = "threshold-prf:transparency:primary"
+cycle_prf_provider_revision = 7
+cycle_prf_provider_policy_digest_hex = "D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1D1"
+release_anchor_provider_handle = "governance-dag:transparency:primary"
+release_anchor_provider_revision = 9
+release_anchor_provider_policy_digest_hex = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+"#,
+                "cycle_prf_provider_policy_digest_hex must be 64 lowercase hex characters",
+            ),
+            (
+                true,
+                "suppression",
+                r#"
+cycle_prf_provider_handle = "threshold-prf:transparency:primary"
+cycle_prf_provider_revision = 7
+cycle_prf_provider_policy_digest_hex = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+release_anchor_provider_handle = "governance-dag:transparency:primary"
+release_anchor_provider_revision = 9
+release_anchor_provider_policy_digest_hex = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+"#,
+                "cycle_prf_provider binding fields must be absent when the provider is not required",
+            ),
+            (
+                false,
+                "differential_privacy",
+                r#"
+release_anchor_provider_handle = "governance-dag:transparency:primary"
+release_anchor_provider_revision = 9
+release_anchor_provider_policy_digest_hex = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+"#,
+                "release_anchor_provider binding fields must be absent when the provider is not required",
+            ),
+        ];
+
+        for (enabled, privacy_mode, bindings, expected) in cases {
+            let mut table = base_table();
+            let sorafs: Table = toml::from_str(&format!(
+                r#"
+[storage.privacy_aggregates]
+enabled = {enabled}
+cycle_seconds = 60
+first_cycle_start_unix = 120
+query_id_hex = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
+privacy_mode = "{privacy_mode}"
+policy_digest_hex = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+{bindings}
+
+[[storage.privacy_aggregates.population_inventory]]
+label = "jurisdiction-a"
+digest_hex = "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+
+[[storage.privacy_aggregates.metric_schema]]
+key = "moderation_actions"
+unit = "count"
+"#
+            ))
+            .expect("parse invalid transparency provider binding fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+
+            let error = load_user_root(table)
+                .parse()
+                .expect_err("invalid transparency provider binding must fail config parsing");
             let report = format!("{error:?}");
             assert!(report.contains(expected), "{report}");
         }
@@ -29398,11 +31694,12 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_defaults_to_mandatory_escrow() {
+    fn offline_parse_defaults_to_enabled_mandatory_escrow() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
+        assert!(actual.enabled);
         assert!(actual.escrow_required);
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
@@ -29410,6 +31707,37 @@ mod settlement_offline_tests {
             actual.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
+    }
+
+    #[test]
+    fn offline_parse_accepts_explicit_disabled_empty_profile() {
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            enabled: false,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert!(!actual.enabled);
+        assert!(actual.escrow_required);
+        assert!(actual.escrow_accounts.is_empty());
+        assert!(actual.kagemusha_release_policy_path.is_none());
+        assert!(actual.kagemusha_artifact_dir.is_none());
+    }
+
+    #[test]
+    fn offline_parse_rejects_disabled_profile_with_dormant_release_configuration() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            enabled: false,
+            kagemusha_release_policy_path: Some("release-policy.norito".into()),
+            kagemusha_artifact_dir: Some("artifacts".into()),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]

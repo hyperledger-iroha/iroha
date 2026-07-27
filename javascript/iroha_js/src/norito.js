@@ -4,6 +4,7 @@ import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 } from "@noble/hashes/sha2";
 import {
   AccountAddress,
+  canonicalizeDomainLabel,
   curveIdFromAlgorithm,
   curveIdToAlgorithm,
   ensureCurveIdEnabled,
@@ -223,7 +224,6 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze(
   ),
 );
 const INNER_HEADER_PADDING_BY_WIRE_ID = Object.freeze({
-  "iroha_data_model::isi::governance::CastPlainBallot": 8,
   "iroha_data_model::isi::zk::Shield": 8,
   "iroha_data_model::isi::zk::Unshield": 8,
 });
@@ -1632,7 +1632,9 @@ function toBuffer(value) {
 }
 
 function encodePureJsInstruction(instruction) {
-  return encodePureJsInstructionPayload(instruction);
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () =>
+    encodePureJsInstructionPayload(instruction),
+  );
 }
 
 function encodePureJsInstructionPayload(instruction) {
@@ -1679,7 +1681,6 @@ function encodePureJsInstructionPayload(instruction) {
         encodeAccountIdValue,
         encodeDomainIdValue,
         encodeAccountIdValue,
-        true,
       ),
     );
   }
@@ -2015,8 +2016,15 @@ function encodeInstructionBoxPayload(
 }
 
 function encodeInstructionEnvelope(wireId, innerPayload) {
-  const outerPayload = encodeInstructionBoxPayload(wireId, innerPayload, 0);
-  return frameNoritoPayload(outerPayload, INSTRUCTION_BOX_SCHEMA_HASH, 0);
+  const flags = noritoLengthFlags & COMPACT_LEN_FLAG;
+  const outerPayload = encodeInstructionBoxPayload(
+    wireId,
+    innerPayload,
+    flags,
+    "instruction",
+    flags,
+  );
+  return frameNoritoPayload(outerPayload, INSTRUCTION_BOX_SCHEMA_HASH, flags);
 }
 
 function encodeEnumInstruction(wireId, variantIndex, bodyPayload) {
@@ -2351,7 +2359,6 @@ function decodeTransferPayload(payload) {
           decodeAccountIdValue,
           decodeDomainIdValue,
           decodeAccountIdValue,
-          true,
         ),
       };
     case 1:
@@ -3762,15 +3769,10 @@ function encodeTransferObjectBody(
   encodeSource,
   encodeObject,
   encodeDestination,
-  wrapObject = false,
 ) {
   return encodeStructValue([
     [encodeSource(value.source, `${context}.source`)],
-    [
-      wrapObject
-        ? encodeNoritoField(encodeObject(value.object, `${context}.object`))
-        : encodeObject(value.object, `${context}.object`),
-    ],
+    [encodeObject(value.object, `${context}.object`)],
     [encodeDestination(value.destination, `${context}.destination`)],
   ]);
 }
@@ -3781,14 +3783,11 @@ function decodeTransferObjectBody(
   decodeSource,
   decodeObject,
   decodeDestination,
-  wrapObject = false,
 ) {
   const fields = decodeStructFields(payload, context, ["source", "object", "destination"]);
   return {
     source: decodeSource(fields.source, `${context}.source`),
-    object: wrapObject
-      ? decodeNestedValue(fields.object, decodeObject, `${context}.object`)
-      : decodeObject(fields.object, `${context}.object`),
+    object: decodeObject(fields.object, `${context}.object`),
     destination: decodeDestination(fields.destination, `${context}.destination`),
   };
 }
@@ -3986,46 +3985,80 @@ function normalizeU128Input(value, context) {
 }
 
 function encodeDomainIdValue(value, context) {
-  return encodeNoritoStringValue(assertNonEmptyString(value, context));
+  const literal = assertExactNonEmptyString(value, context);
+  if (literal.trim() !== literal) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
+  const segments = literal.split(".");
+  if (segments.length !== 2 || segments.some((segment) => segment.length === 0)) {
+    throw new TypeError(`${context} must use the exact domain.dataspace form`);
+  }
+  const [name, dataspace] = segments.map((segment) =>
+    canonicalizeDomainLabel(segment),
+  );
+  return encodeStructValue([
+    [encodeNameValue(name, `${context}.name`)],
+    [encodeNameValue(dataspace, `${context}.dataspace`)],
+  ]);
 }
 
 function decodeDomainIdValue(payload, context) {
-  return decodeStringValue(payload, context);
+  const fields = decodeStructFields(payload, context, ["name", "dataspace"]);
+  return `${decodeNameValue(fields.name, `${context}.name`)}.${decodeNameValue(
+    fields.dataspace,
+    `${context}.dataspace`,
+  )}`;
 }
 
 function encodeArchivedDomainIdValue(value, context) {
-  return encodeNoritoField(encodeDomainIdValue(value, context));
+  return encodeDomainIdValue(value, context);
 }
 
 function decodeArchivedDomainIdValue(payload, context) {
-  return decodeNestedValue(payload, decodeDomainIdValue, context);
+  return decodeDomainIdValue(payload, context);
 }
 
 function encodeNameValue(value, context) {
-  return encodeNoritoStringValue(assertNonEmptyString(value, context));
+  const literal = assertExactNonEmptyString(value, context);
+  if (/\p{White_Space}/u.test(literal)) {
+    throw new TypeError(`${context} must not contain whitespace`);
+  }
+  if (/[@#$]/u.test(literal)) {
+    throw new TypeError(`${context} contains a reserved Name character`);
+  }
+  return encodeNoritoStringValue(literal.normalize("NFC"));
 }
 
 function decodeNameValue(payload, context) {
-  return decodeStringValue(payload, context);
+  const literal = decodeStringValue(payload, context);
+  if (literal.length === 0 || /\p{White_Space}/u.test(literal)) {
+    throw new TypeError(`${context} must be a non-empty Name without whitespace`);
+  }
+  if (/[@#$]/u.test(literal)) {
+    throw new TypeError(`${context} contains a reserved Name character`);
+  }
+  return literal.normalize("NFC");
 }
 
 function encodeRoleIdValue(value, context) {
-  return encodeNoritoStringValue(assertNonEmptyString(value, context));
+  return encodeNoritoField(encodeNameValue(value, `${context}.name`));
 }
 
 function decodeRoleIdValue(payload, context) {
-  return decodeStringValue(payload, context);
+  return decodeNestedValue(payload, decodeNameValue, `${context}.name`);
 }
 
 function encodeNftIdValue(value, context) {
-  const literal = assertNonEmptyString(value, context);
+  const literal = assertExactNonEmptyString(value, context);
   const separator = literal.indexOf("$");
   if (separator <= 0 || separator === literal.length - 1) {
     throw new Error(`${context} must use name$domain`);
   }
+  const domain = literal.slice(separator + 1);
   return encodeTupleValue([
-    encodeNoritoField(
-      encodeDomainIdValue(literal.slice(separator + 1), `${context}.domain`),
+    encodeDomainIdValue(
+      domain.includes(".") ? domain : `${domain}.universal`,
+      `${context}.domain`,
     ),
     encodeNameValue(literal.slice(0, separator), `${context}.name`),
   ]);
@@ -4033,11 +4066,14 @@ function encodeNftIdValue(value, context) {
 
 function decodeNftIdValue(payload, context) {
   const fields = decodeTupleFields(payload, context, ["domain", "name"]);
-  return `${decodeNameValue(fields.name, `${context}.name`)}$${decodeNestedValue(fields.domain, decodeDomainIdValue, `${context}.domain`)}`;
+  return `${decodeNameValue(fields.name, `${context}.name`)}$${decodeDomainIdValue(
+    fields.domain,
+    `${context}.domain`,
+  )}`;
 }
 
 function encodeRwaIdValue(value, context) {
-  const literal = assertNonEmptyString(value, context);
+  const literal = assertExactNonEmptyString(value, context);
   const separator = literal.indexOf("$");
   if (separator <= 0 || separator === literal.length - 1) {
     throw new Error(`${context} must use hash$domain`);
@@ -4069,7 +4105,7 @@ function decodeCustomInstructionPayload(payload) {
 
 function encodeNewDomainValue(value, context) {
   return encodeStructValue([
-    [encodeNoritoField(encodeDomainIdValue(value.id, `${context}.id`))],
+    [encodeDomainIdValue(value.id, `${context}.id`)],
     [encodeOptionValue(value.logo, encodeSorafsUriValue, `${context}.logo`)],
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
   ]);
@@ -4078,7 +4114,7 @@ function encodeNewDomainValue(value, context) {
 function decodeNewDomainValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["id", "logo", "metadata"]);
   return {
-    id: decodeNestedValue(fields.id, decodeDomainIdValue, `${context}.id`),
+    id: decodeDomainIdValue(fields.id, `${context}.id`),
     logo: decodeOptionValue(fields.logo, decodeSorafsUriValue, `${context}.logo`),
     metadata: decodeMetadataValue(fields.metadata, `${context}.metadata`),
   };
@@ -4252,12 +4288,216 @@ function decodeCanonicalReplicationId(value, context) {
   return Buffer.from(value, "hex");
 }
 
+function encodeReplicationIdValue(value, context) {
+  return encodeNoritoField(decodeCanonicalReplicationId(value, context));
+}
+
 function decodeReplicationIdValue(payload, context) {
-  const bytes = decodeFixedBytesValue(payload, 32, context);
+  const bytes = decodeNestedValue(
+    payload,
+    (inner, innerContext) => decodeFixedBytesValue(inner, 32, innerContext),
+    `${context}.value`,
+  );
   if (bytes.every((byte) => byte === 0)) {
     throw new TypeError(`${context} must not be the zero identifier`);
   }
   return bytes.toString("hex");
+}
+
+function assertExactObjectKeys(value, expectedKeys, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be an object`);
+  }
+  assertOnlyObjectKeys(value, expectedKeys, context);
+  const missing = expectedKeys.find(
+    (key) => !Object.prototype.hasOwnProperty.call(value, key),
+  );
+  if (missing !== undefined) {
+    throw new TypeError(`${context} is missing field ${missing}`);
+  }
+}
+
+function decodeNonzeroFixedBytesHex(payload, context) {
+  const bytes = decodeFixedBytesValue(payload, 32, context);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${context} must not be zero`);
+  }
+  return bytes.toString("hex");
+}
+
+function encodeExactAccountIdValue(value, context) {
+  if (typeof value !== "string" || value.trim() !== value) {
+    throw new TypeError(`${context} must be an exact canonical I105 account id`);
+  }
+  const canonical = normalizeAccountId(value, context);
+  if (canonical !== value) {
+    throw new TypeError(`${context} must be an exact canonical I105 account id`);
+  }
+  return encodeAccountIdValue(canonical, context);
+}
+
+function encodeProviderIngestCompletionSignerPolicyValue(value, context) {
+  assertExactObjectKeys(
+    value,
+    ["policy_id", "revision", "predecessor_digest", "policy_digest"],
+    context,
+  );
+  const revision = normalizeU64Input(value.revision, `${context}.revision`);
+  if (revision === 0n) {
+    throw new TypeError(`${context}.revision must be greater than zero`);
+  }
+  if (revision === 1n && value.predecessor_digest !== null) {
+    throw new TypeError(
+      `${context}.predecessor_digest must be null at revision 1`,
+    );
+  }
+  if (revision > 1n && value.predecessor_digest === null) {
+    throw new TypeError(
+      `${context}.predecessor_digest is required after revision 1`,
+    );
+  }
+  const policyId = decodeCanonicalReplicationId(
+    value.policy_id,
+    `${context}.policy_id`,
+  );
+  const policyDigest = decodeCanonicalReplicationId(
+    value.policy_digest,
+    `${context}.policy_digest`,
+  );
+  return encodeStructValue([
+    [policyId],
+    [encodeU64Value(revision, `${context}.revision`)],
+    [
+      encodeOptionValue(
+        value.predecessor_digest,
+        (entry, innerContext) =>
+          encodeFixedByteArrayArchiveValue(
+            decodeCanonicalReplicationId(entry, innerContext),
+            32,
+            innerContext,
+          ),
+        `${context}.predecessor_digest`,
+      ),
+    ],
+    [policyDigest],
+  ]);
+}
+
+function decodeProviderIngestCompletionSignerPolicyValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "policy_id",
+    "revision",
+    "predecessor_digest",
+    "policy_digest",
+  ]);
+  const revision = decodeU64NumberValue(fields.revision, `${context}.revision`);
+  if (revision === 0) {
+    throw new TypeError(`${context}.revision must be greater than zero`);
+  }
+  const predecessorDigest = decodeOptionValue(
+    fields.predecessor_digest,
+    (entry, innerContext) => {
+      const bytes = decodeFixedByteArrayArchiveValue(entry, 32, innerContext);
+      if (bytes.every((byte) => byte === 0)) {
+        throw new TypeError(`${innerContext} must not be zero`);
+      }
+      return bytes.toString("hex");
+    },
+    `${context}.predecessor_digest`,
+  );
+  if (revision === 1 && predecessorDigest !== null) {
+    throw new TypeError(
+      `${context}.predecessor_digest must be null at revision 1`,
+    );
+  }
+  if (revision > 1 && predecessorDigest === null) {
+    throw new TypeError(
+      `${context}.predecessor_digest is required after revision 1`,
+    );
+  }
+  return {
+    policy_id: decodeNonzeroFixedBytesHex(
+      fields.policy_id,
+      `${context}.policy_id`,
+    ),
+    revision,
+    predecessor_digest: predecessorDigest,
+    policy_digest: decodeNonzeroFixedBytesHex(
+      fields.policy_digest,
+      `${context}.policy_digest`,
+    ),
+  };
+}
+
+function encodeProviderIngestCompletionAuthorityValue(value, context) {
+  assertExactObjectKeys(
+    value,
+    ["provider_owner", "signer_policy"],
+    context,
+  );
+  return encodeStructValue([
+    [
+      encodeExactAccountIdValue(
+        value.provider_owner,
+        `${context}.provider_owner`,
+      ),
+    ],
+    [
+      encodeProviderIngestCompletionSignerPolicyValue(
+        value.signer_policy,
+        `${context}.signer_policy`,
+      ),
+    ],
+  ]);
+}
+
+function decodeProviderIngestCompletionAuthorityValue(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "provider_owner",
+    "signer_policy",
+  ]);
+  return {
+    provider_owner: decodeAccountIdValue(
+      fields.provider_owner,
+      `${context}.provider_owner`,
+    ),
+    signer_policy: decodeProviderIngestCompletionSignerPolicyValue(
+      fields.signer_policy,
+      `${context}.signer_policy`,
+    ),
+  };
+}
+
+function encodeProviderIngestFinalizedAnchorValue(value, context) {
+  assertExactObjectKeys(value, ["height", "block_hash"], context);
+  const height = normalizeU64Input(value.height, `${context}.height`);
+  if (height === 0n) {
+    throw new TypeError(`${context}.height must be greater than zero`);
+  }
+  return encodeStructValue([
+    [encodeU64Value(height, `${context}.height`)],
+    [
+      decodeCanonicalReplicationId(
+        value.block_hash,
+        `${context}.block_hash`,
+      ),
+    ],
+  ]);
+}
+
+function decodeProviderIngestFinalizedAnchorValue(payload, context) {
+  const fields = decodeStructFields(payload, context, ["height", "block_hash"]);
+  const height = decodeU64NumberValue(fields.height, `${context}.height`);
+  if (height === 0) {
+    throw new TypeError(`${context}.height must be greater than zero`);
+  }
+  return {
+    height,
+    block_hash: decodeNonzeroFixedBytesHex(
+      fields.block_hash,
+      `${context}.block_hash`,
+    ),
+  };
 }
 
 function decodeReplicationAssignmentProvider(payload, context) {
@@ -4425,10 +4665,6 @@ function encodeReplicationOrderInstruction(instruction) {
       ["order_id", "order_payload", "issued_epoch", "deadline_epoch"],
       "IssueReplicationOrder",
     );
-    const orderId = decodeCanonicalReplicationId(
-      value.order_id,
-      "IssueReplicationOrder.order_id",
-    );
     const orderPayload = decodeExactStandardBase64(
       value.order_payload,
       "IssueReplicationOrder.order_payload",
@@ -4450,7 +4686,12 @@ function encodeReplicationOrderInstruction(instruction) {
     return encodeInstructionEnvelope(
       ISSUE_REPLICATION_ORDER_WIRE_ID,
       encodeStructValue([
-        [orderId],
+        [
+          encodeReplicationIdValue(
+            value.order_id,
+            "IssueReplicationOrder.order_id",
+          ),
+        ],
         [encodeByteVecValue(orderPayload, "IssueReplicationOrder.order_payload")],
         [encodeU64Value(issuedEpoch, "IssueReplicationOrder.issued_epoch")],
         [encodeU64Value(deadlineEpoch, "IssueReplicationOrder.deadline_epoch")],
@@ -4458,28 +4699,70 @@ function encodeReplicationOrderInstruction(instruction) {
     );
   }
   if (isPlainObject(instruction.CompleteReplicationOrder)) {
-    assertOnlyObjectKeys(instruction, ["CompleteReplicationOrder"], "instruction");
+    assertExactObjectKeys(
+      instruction,
+      ["CompleteReplicationOrder"],
+      "instruction",
+    );
     const value = instruction.CompleteReplicationOrder;
-    assertOnlyObjectKeys(
+    assertExactObjectKeys(
       value,
-      ["order_id", "provider_id", "completion_epoch"],
+      [
+        "order_id",
+        "provider_id",
+        "completion_epoch",
+        "expected_authority",
+        "expected_assignment_revision",
+        "finalized_anchor",
+      ],
       "CompleteReplicationOrder",
     );
+    const expectedAssignmentRevision = normalizeU64Input(
+      value.expected_assignment_revision,
+      "CompleteReplicationOrder.expected_assignment_revision",
+    );
+    if (expectedAssignmentRevision === 0n) {
+      throw new TypeError(
+        "CompleteReplicationOrder.expected_assignment_revision must be greater than zero",
+      );
+    }
     return encodeInstructionEnvelope(
       COMPLETE_REPLICATION_ORDER_WIRE_ID,
       encodeStructValue([
-        [decodeCanonicalReplicationId(
-          value.order_id,
-          "CompleteReplicationOrder.order_id",
-        )],
-        [decodeCanonicalReplicationId(
-          value.provider_id,
-          "CompleteReplicationOrder.provider_id",
-        )],
+        [
+          encodeReplicationIdValue(
+            value.order_id,
+            "CompleteReplicationOrder.order_id",
+          ),
+        ],
+        [
+          encodeReplicationIdValue(
+            value.provider_id,
+            "CompleteReplicationOrder.provider_id",
+          ),
+        ],
         [encodeU64Value(
           value.completion_epoch,
           "CompleteReplicationOrder.completion_epoch",
         )],
+        [
+          encodeProviderIngestCompletionAuthorityValue(
+            value.expected_authority,
+            "CompleteReplicationOrder.expected_authority",
+          ),
+        ],
+        [
+          encodeU64Value(
+            expectedAssignmentRevision,
+            "CompleteReplicationOrder.expected_assignment_revision",
+          ),
+        ],
+        [
+          encodeProviderIngestFinalizedAnchorValue(
+            value.finalized_anchor,
+            "CompleteReplicationOrder.finalized_anchor",
+          ),
+        ],
       ]),
     );
   }
@@ -4494,10 +4777,12 @@ function encodeReplicationOrderInstruction(instruction) {
     return encodeInstructionEnvelope(
       EXPIRE_REPLICATION_ORDER_WIRE_ID,
       encodeStructValue([
-        [decodeCanonicalReplicationId(
-          value.order_id,
-          "ExpireReplicationOrder.order_id",
-        )],
+        [
+          encodeReplicationIdValue(
+            value.order_id,
+            "ExpireReplicationOrder.order_id",
+          ),
+        ],
         [encodeU64Value(
           value.expiration_epoch,
           "ExpireReplicationOrder.expiration_epoch",
@@ -4552,7 +4837,19 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
       "order_id",
       "provider_id",
       "completion_epoch",
+      "expected_authority",
+      "expected_assignment_revision",
+      "finalized_anchor",
     ]);
+    const expectedAssignmentRevision = decodeU64NumberValue(
+      fields.expected_assignment_revision,
+      "CompleteReplicationOrder.expected_assignment_revision",
+    );
+    if (expectedAssignmentRevision === 0) {
+      throw new TypeError(
+        "CompleteReplicationOrder.expected_assignment_revision must be greater than zero",
+      );
+    }
     return {
       CompleteReplicationOrder: {
         order_id: decodeReplicationIdValue(
@@ -4566,6 +4863,15 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
         completion_epoch: decodeU64NumberValue(
           fields.completion_epoch,
           "CompleteReplicationOrder.completion_epoch",
+        ),
+        expected_authority: decodeProviderIngestCompletionAuthorityValue(
+          fields.expected_authority,
+          "CompleteReplicationOrder.expected_authority",
+        ),
+        expected_assignment_revision: expectedAssignmentRevision,
+        finalized_anchor: decodeProviderIngestFinalizedAnchorValue(
+          fields.finalized_anchor,
+          "CompleteReplicationOrder.finalized_anchor",
         ),
       },
     };
@@ -5337,7 +5643,7 @@ function encodeRwaInstruction(instruction) {
 }
 
 function encodeKaigiIdValue(value, context) {
-  const literal = assertNonEmptyString(
+  const literal = assertExactNonEmptyString(
     typeof value === "string" ? value : `${value.domain_id}:${value.call_name}`,
     context,
   );
@@ -5346,7 +5652,7 @@ function encodeKaigiIdValue(value, context) {
     throw new Error(`${context} must use domain:call format`);
   }
   return encodeStructValue([
-    [encodeNoritoField(encodeDomainIdValue(literal.slice(0, separator), `${context}.domain_id`))],
+    [encodeDomainIdValue(literal.slice(0, separator), `${context}.domain_id`)],
     [encodeNameValue(literal.slice(separator + 1), `${context}.call_name`)],
   ]);
 }
@@ -5354,7 +5660,7 @@ function encodeKaigiIdValue(value, context) {
 function decodeKaigiIdValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["domain_id", "call_name"]);
   return {
-    domain_id: decodeNestedValue(fields.domain_id, decodeDomainIdValue, `${context}.domain_id`),
+    domain_id: decodeDomainIdValue(fields.domain_id, `${context}.domain_id`),
     call_name: decodeNameValue(fields.call_name, `${context}.call_name`),
   };
 }
@@ -6140,6 +6446,19 @@ function decodeHashValue(payload, context) {
 }
 
 function encodeEscrowIdValue(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical checksummed hash literal`);
+  }
+  const match = HASH_LITERAL_RE.exec(value);
+  if (
+    match === null ||
+    match[1] !== match[1].toUpperCase() ||
+    match[2] !== match[2].toUpperCase()
+  ) {
+    throw new TypeError(
+      `${context} must use canonical uppercase hash:<hex>#<checksum> syntax`,
+    );
+  }
   const bytes = encodeHashValue(value, context);
   if ((bytes[bytes.length - 1] & 1) === 0) {
     throw new TypeError(`${context} must use a native hash with its marker bit set`);
@@ -6162,28 +6481,37 @@ function encodeStringValue(value, context) {
 }
 
 function encodeHashLiteralBytes(value, context) {
+  let bytes;
   if (Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value)) {
-    return encodeFixedBytesValue(value, 32, context);
-  }
-  const literal = assertNonEmptyString(value, context);
-  const match = HASH_LITERAL_RE.exec(literal);
-  if (match) {
-    const [, body, checksum] = match;
-    const upper = body.toUpperCase();
-    const expected = computeHashLiteralCrc("hash", upper);
-    if (checksum.toUpperCase() !== expected) {
-      throw new Error(`${context} has invalid checksum; expected ${expected}`);
+    bytes = encodeFixedBytesValue(value, 32, context);
+  } else {
+    const literal = assertExactNonEmptyString(value, context);
+    const match = HASH_LITERAL_RE.exec(literal);
+    if (match) {
+      const [, body, checksum] = match;
+      const upper = body.toUpperCase();
+      const expected = computeHashLiteralCrc("hash", upper);
+      if (checksum.toUpperCase() !== expected) {
+        throw new Error(`${context} has invalid checksum; expected ${expected}`);
+      }
+      bytes = Buffer.from(upper, "hex");
+    } else if (/^[0-9A-Fa-f]{64}$/.test(literal)) {
+      bytes = Buffer.from(literal, "hex");
+    } else {
+      throw new Error(`${context} must be a 32-byte hash literal or hex string`);
     }
-    return Buffer.from(upper, "hex");
   }
-  if (/^[0-9A-Fa-f]{64}$/.test(literal)) {
-    return Buffer.from(literal, "hex");
+  if ((bytes[bytes.length - 1] & 1) === 0) {
+    throw new TypeError(`${context} must use a native hash with its marker bit set`);
   }
-  throw new Error(`${context} must be a 32-byte hash literal or hex string`);
+  return bytes;
 }
 
 function decodeHashLiteral(payload, context) {
   const bytes = decodeFixedBytesValue(payload, 32, context);
+  if ((bytes[bytes.length - 1] & 1) === 0) {
+    throw new TypeError(`${context} must use a native hash with its marker bit set`);
+  }
   const body = bytes.toString("hex").toUpperCase();
   return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
 }
@@ -9019,6 +9347,13 @@ function assertNonEmptyString(value, context) {
     throw new TypeError(`${context} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function assertExactNonEmptyString(value, context) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${context} must be a non-empty string`);
+  }
+  return value;
 }
 
 function describeInstructionShape(instruction) {

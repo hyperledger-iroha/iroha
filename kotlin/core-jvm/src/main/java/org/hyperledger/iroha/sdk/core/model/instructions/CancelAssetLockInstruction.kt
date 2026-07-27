@@ -30,7 +30,12 @@ class CancelAssetLockInstruction private constructor(
     @JvmField val expectedRemainingAmount: KotodamaQuantity,
 ) : InstructionTemplate {
 
-    /** Construct a compare-and-cancel instruction from an exact application lock identifier. */
+    /**
+     * Construct a compare-and-cancel instruction from an exact application lock identifier.
+     *
+     * The identifier must be well-formed UTF-16 so its UTF-8 hash preimage cannot depend on
+     * replacement-character behavior.
+     */
     constructor(
         lockId: String,
         expectedRemainingAmount: String,
@@ -317,6 +322,7 @@ private fun deriveEscrowId(lockId: String): EscrowId {
     ) {
         "lockId must not contain surrounding whitespace"
     }
+    requireWellFormedUtf16(lockId)
     val lockIdBytes = lockId.toByteArray(StandardCharsets.UTF_8)
     require(lockIdBytes.size <= CancelAssetLockInstruction.MAX_LOCK_ID_UTF8_BYTES_V1) {
         "lockId must be at most " +
@@ -382,3 +388,29 @@ private val CANONICAL_HASH_LITERAL =
 
 private fun isAssetLockWhitespace(value: Char): Boolean =
     value.isWhitespace() || value == '\uFEFF'
+
+private fun requireWellFormedUtf16(value: String) {
+    var index = 0
+    while (index < value.length) {
+        val current = value[index]
+        when {
+            Character.isHighSurrogate(current) -> {
+                require(
+                    index + 1 < value.length &&
+                        Character.isLowSurrogate(value[index + 1]),
+                ) {
+                    "lockId must not contain unpaired UTF-16 surrogates"
+                }
+                index += 2
+            }
+
+            Character.isLowSurrogate(current) -> {
+                throw IllegalArgumentException(
+                    "lockId must not contain unpaired UTF-16 surrogates",
+                )
+            }
+
+            else -> index++
+        }
+    }
+}

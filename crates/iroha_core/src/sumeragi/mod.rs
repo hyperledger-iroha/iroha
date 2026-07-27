@@ -846,8 +846,17 @@ impl InboundBlockMessage {
         self.sender.as_ref()
     }
 
+    /// Borrow the exact authenticated return-route set before fair removal.
+    ///
+    /// The serialized v2 runner uses this only to validate and reserve an
+    /// exact certified-body Serve lifecycle while this ingress owner is still
+    /// locked in its source lane.
+    pub(crate) fn reply_routes(&self) -> Option<&NetworkReplyRoutes> {
+        self.reply_routes.as_ref()
+    }
+
     /// Borrow the authenticated transport hop used for resource isolation.
-    fn via(&self) -> Option<&PeerId> {
+    pub(crate) fn via(&self) -> Option<&PeerId> {
         self.via.as_ref()
     }
 }

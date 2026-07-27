@@ -23,15 +23,11 @@ public sealed class PrivacyNativeTests
                 "sis-hints anonymous credential proof",
                 bytes => PrivacyNative.buildSisHintsAnonymousCredentialProofV0(bytes)),
             (
-                "silent-threshold credential showing proof",
-                bytes => PrivacyNative.buildSilentThresholdCredentialShowingProofV0(bytes)),
-            (
                 "vega credential predicate proof",
                 bytes => PrivacyNative.buildVegaCredentialPredicateProofV0(bytes)),
             (
                 "zk-ams admission batch proof",
                 bytes => PrivacyNative.buildZkAmsAdmissionBatchProofV0(bytes)),
-            ("zkat policy proof", bytes => PrivacyNative.buildZkAtPolicyProofV1(bytes)),
             (
                 "jindo polynomial commitment verify",
                 bytes => PrivacyNative.verifyJindoPolynomialCommitmentV0(bytes)),
@@ -39,15 +35,11 @@ public sealed class PrivacyNativeTests
                 "sis-hints anonymous credential verify",
                 bytes => PrivacyNative.verifySisHintsAnonymousCredentialProofV0(bytes)),
             (
-                "silent-threshold credential showing verify",
-                bytes => PrivacyNative.verifySilentThresholdCredentialShowingProofV0(bytes)),
-            (
                 "vega credential predicate verify",
                 bytes => PrivacyNative.verifyVegaCredentialPredicateProofV0(bytes)),
             (
                 "zk-ams admission batch verify",
                 bytes => PrivacyNative.verifyZkAmsAdmissionBatchProofV0(bytes)),
-            ("zkat policy verify", bytes => PrivacyNative.verifyZkAtPolicyProofV1(bytes)),
             ("verange verify", bytes => PrivacyNative.verifyVeRangeProofV1(bytes)),
             ("VeRange verify", bytes => PrivacyNative.VerifyVeRangeProofV1(bytes)),
             ("verify", bytes => PrivacyNative.VerifyProofV1(bytes)),

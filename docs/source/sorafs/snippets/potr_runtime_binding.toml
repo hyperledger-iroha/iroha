@@ -1,0 +1,31 @@
+# Merge this fragment into a deployment that already supplies the pinned
+# [sorafs.por.drand] trust and transport fields documented by the PoR plan.
+# Every value below is public. HSM/KMS credentials and private keys belong only
+# in the runtime provider implementation selected by these opaque handles.
+
+[sorafs.por]
+enabled = true
+
+[sorafs.por.potr_runtime]
+gateway_handle = "pkcs11:token=sorafs-prod-a;object=potr-gateway"
+gateway_signer_id_hex = "1111111111111111111111111111111111111111111111111111111111111111"
+gateway_revision = 3
+gateway_policy_digest_hex = "2222222222222222222222222222222222222222222222222222222222222222"
+gateway_public_key_hex = "e2fe2a39b7326642827d6d82d497622cd6c297fe78270eaa436b01f086b6f3cb"
+
+provider_handle = "kms:region-a:key/potr-provider"
+provider_signer_id_hex = "3333333333333333333333333333333333333333333333333333333333333333"
+provider_revision = 7
+provider_policy_digest_hex = "4444444444444444444444444444444444444444444444444444444444444444"
+
+reader_id_hex = "5555555555555555555555555555555555555555555555555555555555555555"
+source_id_hex = "6666666666666666666666666666666666666666666666666666666666666666"
+resolver_id_hex = "7777777777777777777777777777777777777777777777777777777777777777"
+
+baseline_provider_id_hex = "8888888888888888888888888888888888888888888888888888888888888888"
+baseline_policy_identity_hex = "9999999999999999999999999999999999999999999999999999999999999999"
+baseline_policy_digest_hex = "4444444444444444444444444444444444444444444444444444444444444444"
+baseline_policy_sequence = 7
+baseline_finalized_height = 41
+baseline_finalized_block_hash_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+baseline_admission_envelope_digest_hex = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
