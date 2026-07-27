@@ -38,7 +38,7 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError},
     },
     asset::{
-        AssetBalanceScope,
+        AssetBalanceScope, AssetTransferControlWindow, AssetTransferLimit,
         alias::AssetDefinitionAlias,
         definition::{AssetBalancePolicy, AssetConfidentialPolicy},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
@@ -56,7 +56,8 @@ use iroha_data_model::{
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
         Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue, Revoke,
-        SetKeyValue, SetParameter, Transfer, Unregister,
+        SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
+        SetAssetTransferFreeze, SetKeyValue, SetParameter, Transfer, Unregister,
         escrow::{CancelAssetLock, DrawdownAssetLock, ExpireAssetLock, OpenAssetLock},
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
@@ -12640,6 +12641,48 @@ mod tests {
                 &destination,
             )
             .expect("canonical transfer quantity");
+            Instruction::set_asset_transfer_freeze(
+                &instruction_type,
+                &owner,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                true,
+                Some("operator close".to_owned()),
+            )
+            .expect("asset transfer freeze");
+            Instruction::set_asset_transfer_blacklist(
+                &instruction_type,
+                &owner,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                true,
+            )
+            .expect("asset transfer blacklist");
+            let day_limit = PyDict::new(py);
+            day_limit.set_item("window", "DAY").expect("set window");
+            day_limit
+                .set_item("cap_amount", "50")
+                .expect("set cap amount");
+            let limits = PyList::new(py, [&day_limit]).expect("asset transfer limit list");
+            Instruction::set_asset_transfer_control(
+                &instruction_type,
+                &owner,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                limits.as_any(),
+            )
+            .expect("asset transfer caps");
+            Instruction::set_asset_holding_limit(
+                &instruction_type,
+                &owner,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                Some("0"),
+            )
+            .expect("zero asset holding limit");
+            Instruction::set_asset_holding_limit(
+                &instruction_type,
+                &owner,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                None,
+            )
+            .expect("clear asset holding limit");
 
             for literal in ["+1", "01", "1.0", "1.2500", "-1", " 1"] {
                 let result =
@@ -13889,6 +13932,63 @@ fn parse_asset_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
 
 fn parse_typed_quantity(quantity: &str, context: &str) -> PyResult<Quantity> {
     parse_asset_quantity(quantity, context)
+}
+
+fn parse_asset_transfer_limits(value: &Bound<'_, PyAny>) -> PyResult<Vec<AssetTransferLimit>> {
+    let items = if let Ok(items) = value.cast::<PyList>() {
+        items.iter().collect::<Vec<_>>()
+    } else if let Ok(items) = value.cast::<PyTuple>() {
+        items.iter().collect::<Vec<_>>()
+    } else {
+        return Err(PyTypeError::new_err(
+            "limits must be a list or tuple of window/cap_amount mappings",
+        ));
+    };
+    if items.len() > 3 {
+        return Err(PyValueError::new_err(
+            "limits may contain at most DAY, WEEK, and MONTH",
+        ));
+    }
+
+    let mut parsed = Vec::with_capacity(items.len());
+    let mut windows = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let context = format!("limits[{index}]");
+        let mapping = item.cast::<PyDict>().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "{context} must be a mapping with window/cap_amount fields"
+            ))
+        })?;
+        ensure_allowed_kwargs(mapping, &["window", "cap_amount"], &context)?;
+        let window_literal = dict_require(mapping, "window", || {
+            PyValueError::new_err(format!("{context}.window is required"))
+        })?
+        .extract::<String>()
+        .map_err(|_| PyTypeError::new_err(format!("{context}.window must be a string")))?;
+        let window = AssetTransferControlWindow::from_str(&window_literal).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid {context}.window `{window_literal}`: {error}"
+            ))
+        })?;
+        if windows.contains(&window) {
+            return Err(PyValueError::new_err(format!(
+                "{context}.window duplicates an earlier window"
+            )));
+        }
+        windows.push(window);
+
+        let cap_amount = match mapping.get_item("cap_amount")? {
+            None => {
+                return Err(PyValueError::new_err(format!(
+                    "{context}.cap_amount is required"
+                )));
+            }
+            Some(value) if value.is_none() => None,
+            Some(value) => Some(quantity_from_py(&value, &format!("{context}.cap_amount"))?),
+        };
+        parsed.push(AssetTransferLimit { window, cap_amount });
+    }
+    Ok(parsed)
 }
 
 fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
@@ -15215,6 +15315,100 @@ impl Instruction {
         let quantity = parse_asset_quantity(quantity, "asset quantity")?;
         let instruction = Transfer::asset_quantity(asset_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (account_id, asset_definition_id, outgoing_frozen, *, reason=None))]
+    fn set_asset_transfer_freeze(
+        _cls: &Bound<'_, PyType>,
+        account_id: &str,
+        asset_definition_id: &str,
+        outgoing_frozen: bool,
+        reason: Option<String>,
+    ) -> PyResult<Self> {
+        let account_id = parse_account_id(account_id)?;
+        ensure_ed25519_account(&account_id)?;
+        let asset_definition_id: AssetDefinitionId =
+            asset_definition_id.parse().map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid asset definition id `{asset_definition_id}`: {error}"
+                ))
+            })?;
+        if let Some(value) = reason.as_deref() {
+            require_non_blank_unpadded(value, "asset transfer freeze reason")?;
+        }
+        Ok(Instruction::new(
+            SetAssetTransferFreeze::new(account_id, asset_definition_id, outgoing_frozen, reason)
+                .into(),
+        ))
+    }
+
+    #[classmethod]
+    fn set_asset_transfer_blacklist(
+        _cls: &Bound<'_, PyType>,
+        account_id: &str,
+        asset_definition_id: &str,
+        blacklisted: bool,
+    ) -> PyResult<Self> {
+        let account_id = parse_account_id(account_id)?;
+        ensure_ed25519_account(&account_id)?;
+        let asset_definition_id: AssetDefinitionId =
+            asset_definition_id.parse().map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid asset definition id `{asset_definition_id}`: {error}"
+                ))
+            })?;
+        Ok(Instruction::new(
+            SetAssetTransferBlacklist::new(account_id, asset_definition_id, blacklisted).into(),
+        ))
+    }
+
+    #[classmethod]
+    fn set_asset_transfer_control(
+        _cls: &Bound<'_, PyType>,
+        account_id: &str,
+        asset_definition_id: &str,
+        limits: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let account_id = parse_account_id(account_id)?;
+        ensure_ed25519_account(&account_id)?;
+        let asset_definition_id: AssetDefinitionId =
+            asset_definition_id.parse().map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid asset definition id `{asset_definition_id}`: {error}"
+                ))
+            })?;
+        Ok(Instruction::new(
+            SetAssetTransferControl::new(
+                account_id,
+                asset_definition_id,
+                parse_asset_transfer_limits(limits)?,
+            )
+            .into(),
+        ))
+    }
+
+    #[classmethod]
+    fn set_asset_holding_limit(
+        _cls: &Bound<'_, PyType>,
+        account_id: &str,
+        asset_definition_id: &str,
+        holding_limit: Option<&str>,
+    ) -> PyResult<Self> {
+        let account_id = parse_account_id(account_id)?;
+        ensure_ed25519_account(&account_id)?;
+        let asset_definition_id: AssetDefinitionId =
+            asset_definition_id.parse().map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid asset definition id `{asset_definition_id}`: {error}"
+                ))
+            })?;
+        let holding_limit = holding_limit
+            .map(|value| parse_typed_quantity(value, "asset holding limit"))
+            .transpose()?;
+        Ok(Instruction::new(
+            SetAssetHoldingLimit::new(account_id, asset_definition_id, holding_limit).into(),
+        ))
     }
 
     #[classmethod]

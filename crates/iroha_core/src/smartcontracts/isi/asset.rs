@@ -31,7 +31,7 @@ pub mod isi {
         },
         events::data::prelude::{AccountEvent, AssetEvent, MetadataChanged},
         isi::{
-            RemoveAssetKeyValue, SetAssetKeyValue, SetAssetTransferBlacklist,
+            RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue, SetAssetTransferBlacklist,
             SetAssetTransferControl, SetAssetTransferFreeze, error::MintabilityError,
         },
         nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
@@ -125,6 +125,7 @@ pub mod isi {
                 .checked_add(amount)
                 .map_err(|_| MathError::Overflow)?;
             assert_numeric_spec_with(to_balance_after.as_numeric(), source_spec)?;
+            self.ensure_numeric_asset_holding_limit(destination_id, &to_balance_after)?;
 
             Ok(TransferDeltaTranscript {
                 from_account: source_id.account().clone(),
@@ -200,6 +201,15 @@ pub mod isi {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
+            let current = self
+                .assets
+                .get(&resolved_id)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            let candidate = current
+                .checked_add(amount)
+                .map_err(|_| MathError::Overflow)?;
+            self.ensure_numeric_asset_holding_limit(&resolved_id, &candidate)?;
             let is_nonzero = {
                 let dst = self.asset_or_insert(&resolved_id, Quantity::zero())?;
                 let q: &mut Quantity = &mut *dst;
@@ -210,6 +220,35 @@ pub mod isi {
             };
             if is_nonzero {
                 self.track_nonzero_asset_holder(&resolved_id);
+            }
+            Ok(())
+        }
+
+        fn ensure_numeric_asset_holding_limit(
+            &self,
+            asset_id: &AssetId,
+            candidate: &Quantity,
+        ) -> Result<(), Error> {
+            let account = self.account(asset_id.account())?;
+            let store =
+                load_asset_transfer_control_store_from_account(account.id(), account.metadata())?;
+            let Some(limit) = store
+                .find(asset_id.definition())
+                .and_then(|record| record.holding_limit.as_ref())
+            else {
+                return Ok(());
+            };
+            if candidate > limit {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "HoldingLimitExceeded: account {} balance for {} would be {}, above {}",
+                        asset_id.account(),
+                        asset_id.definition(),
+                        candidate,
+                        limit
+                    )
+                    .into(),
+                ));
             }
             Ok(())
         }
@@ -462,7 +501,11 @@ pub mod isi {
     ) -> Result<Vec<AssetTransferLimit>, Error> {
         let mut by_window = BTreeMap::<AssetTransferControlWindow, Option<Quantity>>::new();
         for limit in limits {
-            by_window.insert(limit.window, limit.cap_amount);
+            if by_window.insert(limit.window, limit.cap_amount).is_some() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("duplicate asset transfer limit window {}", limit.window).into(),
+                ));
+            }
         }
         Ok(by_window
             .into_iter()
@@ -2155,6 +2198,7 @@ pub mod isi {
                 asset_definition_id: self.asset_definition_id.clone(),
                 outgoing_frozen: false,
                 blacklisted: false,
+                holding_limit: None,
                 limits: Vec::new(),
                 usages: Vec::new(),
                 updated_at_ms: None,
@@ -2190,6 +2234,7 @@ pub mod isi {
                 asset_definition_id: self.asset_definition_id.clone(),
                 outgoing_frozen: false,
                 blacklisted: false,
+                holding_limit: None,
                 limits: Vec::new(),
                 usages: Vec::new(),
                 updated_at_ms: None,
@@ -2238,6 +2283,7 @@ pub mod isi {
                 asset_definition_id: self.asset_definition_id.clone(),
                 outgoing_frozen: false,
                 blacklisted: false,
+                holding_limit: None,
                 limits: Vec::new(),
                 usages: Vec::new(),
                 updated_at_ms: None,
@@ -2252,6 +2298,48 @@ pub mod isi {
             record
                 .usages
                 .retain(|usage| active_windows.contains(&usage.window));
+            record.updated_at_ms = Some(now_ms);
+            update_control_record(state_transaction, &self.account_id, record)
+        }
+    }
+
+    impl Execute for SetAssetHoldingLimit {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_asset_transfer_control_authority(
+                state_transaction,
+                authority,
+                &self.account_id,
+                &self.asset_definition_id,
+                TransferControlCapability::OwnerOnly,
+            )?;
+            state_transaction.world.account(&self.account_id)?;
+            let spec = state_transaction
+                .numeric_spec_for(&self.asset_definition_id)
+                .map_err(Error::from)?;
+            if let Some(limit) = self.holding_limit.as_ref() {
+                assert_numeric_spec_with(limit.as_numeric(), spec)?;
+            }
+
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            let mut record = active_control_record(
+                state_transaction,
+                &self.account_id,
+                &self.asset_definition_id,
+            )?
+            .unwrap_or(AssetTransferControlRecord {
+                asset_definition_id: self.asset_definition_id.clone(),
+                outgoing_frozen: false,
+                blacklisted: false,
+                holding_limit: None,
+                limits: Vec::new(),
+                usages: Vec::new(),
+                updated_at_ms: None,
+            });
+            record.holding_limit = self.holding_limit;
             record.updated_at_ms = Some(now_ms);
             update_control_record(state_transaction, &self.account_id, record)
         }
@@ -4560,6 +4648,123 @@ pub mod query {
             assert!(record.blacklisted);
             assert!(!record.outgoing_frozen);
             assert!(record.usages.is_empty());
+        }
+
+        #[test]
+        fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xCA);
+
+            SetAssetHoldingLimit::new(
+                BOB_ID.clone(),
+                asset_definition_id.clone(),
+                Some(Quantity::from(5_u32)),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("asset owner sets destination holding limit");
+
+            Transfer::asset_quantity(source_asset_id.clone(), 5_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("credit exactly at holding limit");
+            let transfer_error =
+                Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("transfer above holding limit must fail");
+            assert!(
+                transfer_error.to_string().contains("HoldingLimitExceeded"),
+                "unexpected error: {transfer_error}"
+            );
+
+            let mint_error = Mint::asset_quantity(1_u32, destination_asset_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("mint above holding limit must fail");
+            assert!(
+                mint_error.to_string().contains("HoldingLimitExceeded"),
+                "unexpected error: {mint_error}"
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Quantity::from(5_u32)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::from(5_u32)
+            );
+            let store = load_asset_transfer_control_store(&stx, &BOB_ID);
+            assert_eq!(
+                store
+                    .find(&asset_definition_id)
+                    .and_then(|record| record.holding_limit.as_ref()),
+                Some(&Quantity::from(5_u32))
+            );
+
+            SetAssetHoldingLimit::new(
+                BOB_ID.clone(),
+                asset_definition_id.clone(),
+                Some(Quantity::zero()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("asset owner can close inbound credit while a balance remains");
+            let closed_error =
+                Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("zero holding limit must reject further inbound credit");
+            assert!(
+                closed_error.to_string().contains("HoldingLimitExceeded"),
+                "unexpected error: {closed_error}"
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::from(5_u32)
+            );
+        }
+
+        #[test]
+        fn duplicate_transfer_limit_windows_are_rejected() {
+            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let error = SetAssetTransferControl::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                vec![
+                    AssetTransferLimit {
+                        window: AssetTransferControlWindow::Day,
+                        cap_amount: Some(Quantity::from(5_u32)),
+                    },
+                    AssetTransferLimit {
+                        window: AssetTransferControlWindow::Day,
+                        cap_amount: Some(Quantity::from(10_u32)),
+                    },
+                ],
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("duplicate windows must not be order-dependent");
+            assert!(
+                error
+                    .to_string()
+                    .contains("duplicate asset transfer limit window DAY"),
+                "unexpected error: {error}"
+            );
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("metadata key");
+            assert!(
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("controlled account exists")
+                    .metadata()
+                    .get(&metadata_key)
+                    .is_none(),
+                "rejected duplicate windows must not create control metadata",
+            );
         }
 
         #[test]

@@ -2121,8 +2121,7 @@ fn drain_v2_ingress(
             if message.validate_version().is_err() {
                 return true;
             }
-            let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
-                &message.payload
+            let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload
             else {
                 return true;
             };
@@ -2159,8 +2158,7 @@ fn drain_v2_ingress(
                 match executor.authenticate_certified_body_request(request.clone(), sender) {
                     Ok(authenticated) => authenticated,
                     Err(error) => {
-                        prepared_serve =
-                            Some(PreparedCertifiedServe::Rejected(error.to_string()));
+                        prepared_serve = Some(PreparedCertifiedServe::Rejected(error.to_string()));
                         return true;
                     }
                 };

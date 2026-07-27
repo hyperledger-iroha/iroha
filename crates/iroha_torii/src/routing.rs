@@ -26193,6 +26193,7 @@ mod multisig_selector_tests {
             asset_definition_id: asset_definition_id.clone(),
             outgoing_frozen: true,
             blacklisted: false,
+            holding_limit: Some(1_000_u32.into()),
             limits: vec![
                 dm::AssetTransferLimit {
                     window: dm::AssetTransferControlWindow::Day,
@@ -28698,6 +28699,7 @@ pub async fn handle_post_asset_transfer_control_get(
             asset_definition_id: req.asset_definition_id.clone(),
             outgoing_frozen: false,
             blacklisted: false,
+            holding_limit: None,
             limits: Vec::new(),
             usages: Vec::new(),
             updated_at_ms: None,
@@ -28743,6 +28745,7 @@ pub async fn handle_post_asset_transfer_control_get(
             asset_definition_id: req.asset_definition_id,
             outgoing_frozen: record.outgoing_frozen,
             blacklisted: record.blacklisted,
+            holding_limit: record.holding_limit,
             limits,
             updated_at: record
                 .updated_at_ms
@@ -31367,6 +31370,8 @@ pub struct AssetTransferControlDto {
     pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
     pub outgoing_frozen: bool,
     pub blacklisted: bool,
+    #[norito(default)]
+    pub holding_limit: Option<Quantity>,
     pub limits: Vec<AssetTransferControlLimitDto>,
     #[norito(default)]
     pub updated_at: Option<String>,

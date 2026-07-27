@@ -10,7 +10,6 @@ import iroha_python.crypto as crypto_module
 import iroha_python.tx as tx_module
 from iroha_python import ContractCall, TransactionConfig, TransactionDraft
 
-
 VALID_HASH = "00" * 31 + "01"
 VALID_ADDRESS = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
 
@@ -89,6 +88,104 @@ def test_instruction_only_draft_stays_legacy_unless_batch_is_explicit(
     assert calls[0]["entries"] is None
     assert calls[1]["instructions"] is None
     assert calls[1]["entries"] == [instruction]
+
+
+def test_wallet_transfer_controls_chain_into_one_atomic_draft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Any, ...]] = []
+
+    class FakeInstruction:
+        @staticmethod
+        def set_asset_transfer_freeze(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
+            instruction = ("freeze", *args, kwargs)
+            calls.append(instruction)
+            return instruction
+
+        @staticmethod
+        def set_asset_transfer_blacklist(*args: Any) -> tuple[Any, ...]:
+            instruction = ("blacklist", *args)
+            calls.append(instruction)
+            return instruction
+
+        @staticmethod
+        def set_asset_transfer_control(*args: Any) -> tuple[Any, ...]:
+            instruction = ("transfer_control", *args)
+            calls.append(instruction)
+            return instruction
+
+        @staticmethod
+        def set_asset_holding_limit(*args: Any) -> tuple[Any, ...]:
+            instruction = ("holding_limit", *args)
+            calls.append(instruction)
+            return instruction
+
+    monkeypatch.setattr(tx_module, "Instruction", FakeInstruction)
+    draft = TransactionDraft(config())
+
+    returned = (
+        draft.set_asset_transfer_freeze(
+            "wallet",
+            "digital_shekel",
+            True,
+            reason="operator close",
+        )
+        .set_asset_transfer_blacklist(
+            "wallet",
+            "digital_shekel",
+            False,
+        )
+        .set_asset_transfer_control(
+            "wallet",
+            "digital_shekel",
+            [{"window": "day", "cap_amount": 50}],
+        )
+        .set_asset_holding_limit("wallet", "digital_shekel", 0)
+    )
+
+    assert returned is draft
+    assert tuple(draft.entries) == tuple(calls)
+    assert calls == [
+        (
+            "freeze",
+            "wallet",
+            "digital_shekel",
+            True,
+            {"reason": "operator close"},
+        ),
+        ("blacklist", "wallet", "digital_shekel", False),
+        (
+            "transfer_control",
+            "wallet",
+            "digital_shekel",
+            [{"window": "DAY", "cap_amount": "50"}],
+        ),
+        ("holding_limit", "wallet", "digital_shekel", "0"),
+    ]
+
+
+def test_asset_transfer_caps_reject_duplicate_windows_before_native_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeInstruction:
+        @staticmethod
+        def set_asset_transfer_control(*args: Any) -> tuple[Any, ...]:
+            raise AssertionError(f"native constructor must not be called: {args!r}")
+
+    monkeypatch.setattr(tx_module, "Instruction", FakeInstruction)
+    draft = TransactionDraft(config())
+
+    with pytest.raises(ValueError, match="duplicates"):
+        draft.set_asset_transfer_control(
+            "wallet",
+            "digital_shekel",
+            [
+                {"window": "DAY", "cap_amount": 50},
+                {"window": "day", "cap_amount": 25},
+            ],
+        )
+
+    assert tuple(draft.entries) == ()
 
 
 class RecordingBuilder:

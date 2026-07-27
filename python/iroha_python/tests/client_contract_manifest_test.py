@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 from copy import deepcopy
@@ -13,6 +14,7 @@ from iroha_python import (
     ContractEntrypointKind,
     ContractManifest,
     ContractManifestRecord,
+    ContractTriggerRepeatKind,
     EntrypointValueKindV1,
     EntrypointValueTypeNodeKindV1,
     EntrypointValueTypeV1,
@@ -62,9 +64,7 @@ def _leaf_node(kind: str) -> Dict[str, Any]:
 
 def _query_view_nodes(name: str) -> list[Dict[str, Any]]:
     fields, children = _QUERY_VIEW_LAYOUTS[name]
-    nodes: list[Dict[str, Any]] = [
-        {"kind": "Struct", "value": {"name": name, "fields": fields}}
-    ]
+    nodes: list[Dict[str, Any]] = [{"kind": "Struct", "value": {"name": name, "fields": fields}}]
     for child in children:
         if isinstance(child, tuple):
             wrapper, leaf = child
@@ -199,9 +199,7 @@ def _full_manifest_payload() -> Dict[str, Any]:
             }
         ],
         "states": [{"name": "Balances", "type_name": "StateMap<AccountId, quantity>"}],
-        "error_codes": [
-            {"namespace": "TransferError", "name": "InsufficientFunds", "code": 1001}
-        ],
+        "error_codes": [{"namespace": "TransferError", "name": "InsufficientFunds", "code": 1001}],
         "kotoba": [
             {
                 "msg_id": "transfer.denied",
@@ -217,13 +215,9 @@ def _full_manifest_payload() -> Dict[str, Any]:
 
 def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
     root = Path(__file__).resolve().parents[3]
-    grammar = (root / "crates" / "kotodama_lang" / "grammar" / "v1.lex").read_text(
-        encoding="utf-8"
-    )
+    grammar = (root / "crates" / "kotodama_lang" / "grammar" / "v1.lex").read_text(encoding="utf-8")
     expected = {
-        line.split("\t")[1]
-        for line in grammar.splitlines()
-        if line.startswith("keyword\t")
+        line.split("\t")[1] for line in grammar.splitlines() if line.startswith("keyword\t")
     }
     assert client_module._KOTODAMA_RESERVED_IDENTIFIERS == expected
     assert expected.isdisjoint({"contract", "entry", "init", "upgrade"})
@@ -244,14 +238,19 @@ def test_contract_manifest_keywords_match_normative_kotodama_grammar() -> None:
             semantic,
         )
     )
-    assert client_module._KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS == type_names | {
-        "AxtDescriptor",
-        "AssetHandle",
-        "ProofBlob",
-        "SoracloudRequest",
-        "SoracloudResponse",
-        "state_map_get",
-    } | intrinsic_names
+    assert (
+        client_module._KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS
+        == type_names
+        | {
+            "AxtDescriptor",
+            "AssetHandle",
+            "ProofBlob",
+            "SoracloudRequest",
+            "SoracloudResponse",
+            "state_map_get",
+        }
+        | intrinsic_names
+    )
 
 
 def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
@@ -276,8 +275,15 @@ def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
     assert entrypoint.return_schema is not None
     assert entrypoint.return_schema.word_count == 1
     assert entrypoint.return_schema.nodes[2].value is EntrypointValueKindV1.BOOL
-    assert entrypoint.triggers[0]["callback"]["entrypoint"] == "transfer"
-    assert entrypoint.triggers[0]["metadata"]["round"] == 7
+    trigger = entrypoint.triggers[0]
+    assert trigger.id == "settle"
+    assert trigger.repeats.kind is ContractTriggerRepeatKind.EXACTLY
+    assert trigger.repeats.count == 2
+    assert trigger.callback.namespace is None
+    assert trigger.callback.entrypoint == "transfer"
+    assert trigger.filter_bytes == base64.b64decode(trigger.filter_b64, validate=True)
+    assert trigger.metadata["round"] == 7
+    assert manifest.declared_triggers == (trigger,)
     assert manifest.states is not None
     assert manifest.states[0].type_name == "StateMap<AccountId, quantity>"
     assert manifest.error_codes is not None
@@ -289,7 +295,7 @@ def test_contract_manifest_preserves_exact_v1_interface_shape() -> None:
 
     payload["entrypoints"][0]["triggers"][0]["metadata"]["round"] = 99
     payload["provenance"]["signer"] = "mutated"
-    assert entrypoint.triggers[0]["metadata"]["round"] == 7
+    assert trigger.metadata["round"] == 7
     assert manifest.provenance["signer"] == "ed25519:fixture"
 
 
@@ -393,10 +399,7 @@ def test_manifest_rejects_retired_numeric_type_spellings(retired: str) -> None:
 def test_entrypoint_flat_list_schema_enforces_the_exact_depth_boundary() -> None:
     at_limit = {
         "nodes": [
-            *(
-                {"kind": "List", "value": {"capacity": 1}}
-                for _ in range(255)
-            ),
+            *({"kind": "List", "value": {"capacity": 1}} for _ in range(255)),
             {"kind": "Leaf", "value": {"kind": "Int", "value": None}},
         ]
     }
@@ -433,10 +436,7 @@ def test_entrypoint_flat_list_schema_enforces_the_exact_depth_boundary() -> None
         },
         {
             "nodes": [
-                *(
-                    {"kind": "List", "value": {"capacity": 1}}
-                    for _ in range(256)
-                ),
+                *({"kind": "List", "value": {"capacity": 1}} for _ in range(256)),
                 {"kind": "Leaf", "value": {"kind": "Int", "value": None}},
             ]
         },
@@ -539,7 +539,7 @@ def test_contract_manifest_record_cross_checks_hash_conveniences() -> None:
     ],
 )
 def test_contract_manifest_record_rejects_mismatched_or_noncanonical_hashes(
-    mutation: Dict[str, Any]
+    mutation: Dict[str, Any],
 ) -> None:
     payload: Dict[str, Any] = {"manifest": _full_manifest_payload()}
     payload.update(mutation)
@@ -666,28 +666,24 @@ def test_contract_manifest_rejects_non_null_enum_payloads() -> None:
     ("mutate", "message"),
     [
         (
-            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1][
-                "ty"
-            ]["nodes"][0]["value"].__setitem__("capacity", 65),
+            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1]["ty"][
+                "nodes"
+            ][0]["value"].__setitem__("capacity", 65),
             "capacity",
         ),
         (
-            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1][
-                "ty"
-            ]["nodes"][0]["value"].__setitem__(
+            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1]["ty"][
+                "nodes"
+            ][0]["value"].__setitem__(
                 "element",
-                {
-                    "nodes": [
-                        {"kind": "Leaf", "value": {"kind": "Name", "value": None}}
-                    ]
-                },
+                {"nodes": [{"kind": "Leaf", "value": {"kind": "Name", "value": None}}]},
             ),
             "only `capacity`",
         ),
         (
-            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1][
-                "ty"
-            ]["nodes"].pop(),
+            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][1]["ty"][
+                "nodes"
+            ].pop(),
             "canonical V1 schema",
         ),
         (
@@ -697,9 +693,9 @@ def test_contract_manifest_rejects_non_null_enum_payloads() -> None:
             "canonical V1 schema",
         ),
         (
-            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][0][
-                "ty"
-            ]["nodes"][0]["value"].__setitem__("fields", ["memo", "memo"]),
+            lambda payload: payload["entrypoints"][0]["argument_schema"]["fields"][0]["ty"][
+                "nodes"
+            ][0]["value"].__setitem__("fields", ["memo", "memo"]),
             "canonical V1 schema",
         ),
         (
@@ -707,9 +703,7 @@ def test_contract_manifest_rejects_non_null_enum_payloads() -> None:
             "non-zero u32",
         ),
         (
-            lambda payload: payload["entrypoints"][0]["params"][0].__setitem__(
-                "name", "different"
-            ),
+            lambda payload: payload["entrypoints"][0]["params"][0].__setitem__("name", "different"),
             "canonical exact V1 interface",
         ),
         (
@@ -731,11 +725,7 @@ def test_contract_manifest_rejects_overwide_argument_record() -> None:
     payload["entrypoints"][0]["argument_schema"]["fields"] = [
         {
             "name": f"field_{index}",
-            "ty": {
-                "nodes": [
-                    {"kind": "Leaf", "value": {"kind": "Bool", "value": None}}
-                ]
-            },
+            "ty": {"nodes": [{"kind": "Leaf", "value": {"kind": "Bool", "value": None}}]},
         }
         for index in range(14)
     ]
@@ -750,10 +740,7 @@ def test_contract_manifest_rejects_overwide_return_record() -> None:
     payload["entrypoints"][0]["return_schema"] = {
         "nodes": [
             {"kind": "Tuple", "value": 14},
-            *[
-                {"kind": "Leaf", "value": {"kind": "Bool", "value": None}}
-                for _ in range(14)
-            ],
+            *[{"kind": "Leaf", "value": {"kind": "Bool", "value": None}} for _ in range(14)],
         ]
     }
 

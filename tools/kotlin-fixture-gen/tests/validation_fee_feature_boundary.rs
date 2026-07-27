@@ -25,8 +25,7 @@ const PARITY_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const REFERENDUM_START_HEIGHT: u64 = 1;
 const REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
-const REFERENDUM_END_HEIGHT: u64 =
-    REFERENDUM_START_HEIGHT + REFERENDUM_DURATION_BLOCKS - 1;
+const REFERENDUM_END_HEIGHT: u64 = REFERENDUM_START_HEIGHT + REFERENDUM_DURATION_BLOCKS - 1;
 const POLICY_ENACTMENT_HEIGHT: u64 = REFERENDUM_END_HEIGHT + 1;
 const POLICY_EFFECTIVE_HEIGHT: u64 =
     POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
@@ -122,13 +121,15 @@ fn typed_validation_fee_registry_fails_closed_without_governance() {
     };
     assert_eq!(authorization.invariant_error(), None);
     let registry = ValidationFeePolicyRegistryV1 {
-        registered_policies: vec![ValidationFeePolicyRegistryEntryV1::from_enactment(
-            policy,
-            plain_electorate_rules,
-            authorization,
-            None,
-        )
-        .expect("policy hash")],
+        registered_policies: vec![
+            ValidationFeePolicyRegistryEntryV1::from_enactment(
+                policy,
+                plain_electorate_rules,
+                authorization,
+                None,
+            )
+            .expect("policy hash"),
+        ],
     };
     let encoded = norito::to_bytes(&registry).expect("encode typed registry");
     let decoded: ValidationFeePolicyRegistryV1 =
