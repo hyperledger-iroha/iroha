@@ -79445,6 +79445,7 @@ pub async fn handle_status(
     tail: Option<&str>,
     nexus_enabled: bool,
     nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
+    authoritative_block_height: Option<u64>,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
@@ -79460,7 +79461,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
-    normalize_status_block_visibility(&mut status);
+    normalize_status_block_visibility(&mut status, authoritative_block_height);
     if !nexus_enabled {
         status.strip_nexus();
     } else if let Some(policy) = nexus_routing_policy {
@@ -79525,15 +79526,19 @@ pub async fn handle_status(
 }
 
 #[cfg(feature = "telemetry")]
-fn normalize_status_block_visibility(status: &mut Status) {
-    let Some(sumeragi) = status.sumeragi.as_ref() else {
-        return;
-    };
-    let finality_height = sumeragi.commit_qc_height;
-    if finality_height <= status.blocks {
-        return;
-    }
-    status.blocks = finality_height;
+/// Keep the public chain-height field monotonic and anchored to applied state.
+///
+/// The Prometheus block counter is populated by a lazy Kura scan and can trail
+/// while a peer applies a catch-up batch. The state block-hash journal publishes
+/// query-visible committed height on the apply path, so `/status.blocks` must
+/// not wait for that telemetry scan.
+fn normalize_status_block_visibility(status: &mut Status, authoritative_block_height: Option<u64>) {
+    let telemetry_commit_height = status
+        .sumeragi
+        .as_ref()
+        .map_or(0, |sumeragi| sumeragi.commit_qc_height);
+    let visible_height = authoritative_block_height.unwrap_or(telemetry_commit_height);
+    status.blocks = status.blocks.max(visible_height);
 }
 
 #[cfg(feature = "telemetry")]
@@ -79726,7 +79731,10 @@ fn is_nexus_status_segment(tail: &str) -> bool {
 
 #[cfg(all(test, feature = "telemetry"))]
 mod tests {
-    use std::{io::Cursor, sync::Mutex};
+    use std::{
+        io::Cursor,
+        sync::{Arc, Mutex},
+    };
 
     use http::StatusCode;
     use http_body_util::BodyExt;
@@ -79912,14 +79920,71 @@ mod tests {
         sumeragi.highest_qc_height = 4_275;
         sumeragi.locked_qc_height = 4_273;
 
-        super::normalize_status_block_visibility(&mut status);
+        super::normalize_status_block_visibility(&mut status, None);
 
         assert_eq!(status.blocks, 4_274);
         assert_eq!(status.blocks_non_empty, 0);
 
         status.blocks = 4_273;
-        super::normalize_status_block_visibility(&mut status);
+        super::normalize_status_block_visibility(&mut status, None);
         assert_eq!(status.blocks, 4_274);
+    }
+
+    #[test]
+    fn status_block_visibility_uses_authoritative_applied_height() {
+        let metrics = Metrics::default();
+        metrics.block_height.inc_by(4_193);
+        let mut status = Status::from(&metrics);
+        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
+        sumeragi.commit_qc_height = 4_275;
+
+        super::normalize_status_block_visibility(&mut status, Some(4_274));
+
+        assert_eq!(
+            status.blocks, 4_274,
+            "a CommitQC pending apply must not lead query-visible state"
+        );
+
+        super::normalize_status_block_visibility(&mut status, Some(4_200));
+        assert_eq!(
+            status.blocks, 4_274,
+            "an older reducer snapshot must not regress visible height"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_response_does_not_wait_for_lazy_block_counter_sync() {
+        let metrics = Arc::new(Metrics::default());
+        metrics.block_height.inc_by(4_193);
+        let telemetry = MaybeTelemetry::from_profile(
+            Some(Telemetry::new(metrics, true)),
+            TelemetryProfile::Full,
+        );
+
+        let response = super::handle_status(
+            &telemetry,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            None,
+            true,
+            None,
+            Some(4_274),
+            None,
+        )
+        .await
+        .expect("status succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status body")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status payload");
+
+        assert_eq!(
+            payload.get("blocks").and_then(norito::json::Value::as_u64),
+            Some(4_274)
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -79948,7 +80013,7 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None)
+        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None, None)
             .await
             .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -80008,6 +80073,7 @@ mod tests {
             None,
             true,
             Some(&policy),
+            None,
             None,
         )
         .await
@@ -80094,6 +80160,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             Some(offline.clone()),
         )
         .await
@@ -80126,6 +80193,7 @@ mod tests {
             Some("offline/assets/0/asset_definition_id"),
             true,
             None,
+            None,
             Some(offline),
         )
         .await
@@ -80145,10 +80213,17 @@ mod tests {
     #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
         let telemetry = MaybeTelemetry::for_tests();
-        let err =
-            super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None, None)
-                .await
-                .expect_err("lane-specific tails must be rejected when nexus is disabled");
+        let err = super::handle_status(
+            &telemetry,
+            None,
+            Some("teu_lane_commit"),
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
     }
 
@@ -80417,6 +80492,7 @@ mod tests {
             )),
             None,
             true,
+            None,
             None,
             None,
         )

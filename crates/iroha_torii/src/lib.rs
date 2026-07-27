@@ -20043,6 +20043,8 @@ async fn handler_status_tail(
     let nexus = app.state.nexus_snapshot();
     let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
+    let authoritative_block_height =
+        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let offline = status_offline_snapshot(&app);
     // Allowlist bypass
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
@@ -20052,6 +20054,7 @@ async fn handler_status_tail(
             Some(&tail),
             nexus_enabled,
             Some(&nexus_routing_policy),
+            Some(authoritative_block_height),
             offline,
         )
         .await;
@@ -20091,6 +20094,7 @@ async fn handler_status_tail(
         Some(&tail),
         nexus_enabled,
         Some(&nexus_routing_policy),
+        Some(authoritative_block_height),
         offline,
     )
     .await
@@ -20106,6 +20110,8 @@ async fn handler_status_root(
     let nexus = app.state.nexus_snapshot();
     let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
+    let authoritative_block_height =
+        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let offline = status_offline_snapshot(&app);
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
         return routing::handle_status(
@@ -20114,6 +20120,7 @@ async fn handler_status_root(
             None,
             nexus_enabled,
             Some(&nexus_routing_policy),
+            Some(authoritative_block_height),
             offline,
         )
         .await;
@@ -20151,6 +20158,7 @@ async fn handler_status_root(
         None,
         nexus_enabled,
         Some(&nexus_routing_policy),
+        Some(authoritative_block_height),
         offline,
     )
     .await

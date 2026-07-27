@@ -2136,9 +2136,13 @@ excluded from the first release.
   EpAffine/Pallas recursive state wrapper, fixed-key terminal IPA verification,
   authenticated artifacts, adversarial lifecycle tests, independent review, and
   physical-device performance evidence.
-- Snapshot-backed node restarts now target hash-journal validation for
-  historical blocks, keeping full Kura block-body loads only for suffix replay
-  and the existing latest-tip rollback repair path.
+- After the next signed Taira rollout, capture a four-validator restart
+  benchmark proving that the single bounded-parallel Kura finality audit is
+  reused by retained-record validation, replay planning, and active-height
+  recovery. The benchmark must record audit/init time, time to Torii readiness,
+  and time to consensus alignment; it must also confirm that the startup-only
+  identity inventory is cleared before runtime while the fixed-size runtime
+  finality cache remains bounded.
 - Offline Note V2 device attestation now supports both the centralized
   middleware certificate flow and a receiptless on-chain registration flow. The
   middleware path preserves signed receipt admission while rejecting

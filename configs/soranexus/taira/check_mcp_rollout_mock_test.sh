@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_SCRIPT="${SCRIPT_DIR}/check_mcp_rollout.sh"
+SOURCE_CONFIG="${SCRIPT_DIR}/config.toml"
 export OFFLINE_ASSET_DEFINITION_ID="6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 
 cleanup_paths=()
@@ -25,6 +26,7 @@ make_fake_repo() {
     "${root}/mockbin" \
     "${root}/state"
   cp "$SOURCE_SCRIPT" "${root}/configs/soranexus/taira/check_mcp_rollout.real.sh"
+  cp "$SOURCE_CONFIG" "${root}/configs/soranexus/taira/config.toml"
   cat >"${root}/configs/soranexus/taira/check_mcp_rollout.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -168,18 +170,20 @@ PY
 import sys
 
 output_path = None
+chain_id = "fc56984b-2be7-431d-840e-21514d1883f0"
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
         output_path = args[index + 1]
-        break
+    elif value == "--chain-id" and index + 1 < len(args):
+        chain_id = args[index + 1]
 
 if output_path is None:
     raise SystemExit("missing --output-config")
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
-        'chain = "fc56984b-2be7-431d-840e-21514d1883f0"\n'
+        f'chain = "{chain_id}"\n'
         '\n'
         '[account]\n'
         'domain = "universal"\n'
@@ -766,10 +770,56 @@ run_case fleet_release_changes_between_samples 'live release identity does not m
 run_case fleet_stale_offline_progress 'validator fleet offline readiness did not advance a common evaluated block'
 run_invalid_canary_identity_case \
   archived-chain \
-  'write canary config must target the public Sumeragi-v2 Taira chain'
+  'write canary config must target the expected Taira chain'
 run_invalid_canary_identity_case \
   wrong-discriminant \
   'write canary config must use Taira chain discriminant 369'
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+archived_chain_id="809574f5-fee7-5e69-bfcf-52451e42d50f"
+"${root}/scripts/taira_bootstrap_canary.py" \
+  --chain-id "$archived_chain_id" \
+  --output-config "${root}/archived-canary.toml"
+if ! PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="failed_asset_then_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
+    POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --expected-chain-id "$archived_chain_id" \
+      --write-config "${root}/archived-canary.toml" \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/archived-chain-override-output.log" 2>&1; then
+  echo "explicit archived-chain override case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/archived-chain-override-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'Taira MCP rollout checks passed.' \
+  "${root}/archived-chain-override-output.log"
+test -f "${root}/state/faucet_seen"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="cargo_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --expected-chain-id not-a-uuid \
+      --skip-write-canary \
+      >"${root}/invalid-chain-id-output.log" 2>&1; then
+  echo "invalid expected chain ID case unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/invalid-chain-id-output.log" >&2 || true
+  exit 1
+fi
+grep -q -- '--expected-chain-id must be one canonical UUID' \
+  "${root}/invalid-chain-id-output.log"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")
