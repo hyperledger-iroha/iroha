@@ -89,8 +89,24 @@ jobs:
       - name: Check out comparison base
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          ref: a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab
           path: baseline
+
+      - name: Require regular revision lockfiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          for lock in candidate/Cargo.lock baseline/Cargo.lock; do
+            if [[ ! -f "$lock" || -L "$lock" ]]; then
+              echo "::error file=$lock::required revision Cargo.lock is missing, non-regular, or a symlink" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4

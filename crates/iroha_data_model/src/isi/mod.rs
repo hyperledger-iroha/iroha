@@ -295,6 +295,21 @@ impl From<crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1> for Instr
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::RegisterPrivacyZkX509CrlV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509CrlV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkX509CrlV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkX509CrlV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkX509CrlV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkX509CrlV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::SubmitPrivacyProofV1> for InstructionBox {
     fn from(i: crate::isi::privacy::SubmitPrivacyProofV1) -> Self {
         InstructionBox(Box::new(i))
@@ -4217,12 +4232,14 @@ pub mod prelude {
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
             RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
-            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509TrustAnchorV1,
-            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
+            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyZkAcePolicyV1,
+            RevokePrivacyZkX509CertificatePolicyV1, RevokePrivacyZkX509CrlV1,
             RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyZkAcePolicyV1,
-            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509TrustAnchorV1,
-            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
-            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
+            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
+            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
+            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
+            TransitionPrivacyProtocolLifecycleV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,

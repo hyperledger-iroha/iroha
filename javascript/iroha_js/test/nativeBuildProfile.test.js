@@ -14,6 +14,8 @@ import {
   runNativeBuild,
 } from "../scripts/build-native.mjs";
 
+const SOURCE_DIGEST = "b".repeat(64);
+
 test("native build profile defaults to Cargo debug", () => {
   assert.equal(resolveNativeBuildProfile({}), "debug");
   assert.deepEqual(cargoBuildArgsForNativeProfile("debug"), []);
@@ -59,15 +61,27 @@ test("successful Cargo execution records provenance for the exact profile output
       platform: "linux",
     });
     const states = [
-      { sourceGitRevision: "a".repeat(40), sourceTreeClean: true },
-      { sourceGitRevision: "a".repeat(40), sourceTreeClean: true },
+      {
+        sourceGitRevision: "a".repeat(40),
+        sourceTreeClean: true,
+        sourceTreeSha256: SOURCE_DIGEST,
+      },
+      {
+        sourceGitRevision: "a".repeat(40),
+        sourceTreeClean: true,
+        sourceTreeSha256: SOURCE_DIGEST,
+      },
     ];
     let written;
     const status = runNativeBuild({
       repoRoot,
       env,
       platform: "linux",
-      readSourceState: () => states.shift(),
+      readSourceState(root, options) {
+        assert.equal(root, repoRoot);
+        assert.equal(options.env, env);
+        return states.shift();
+      },
       runCargo(args) {
         assert.deepEqual(args.slice(0, 3), [
           "build",
@@ -87,6 +101,7 @@ test("successful Cargo execution records provenance for the exact profile output
     assert.equal(written.path, nativePath);
     assert.equal(written.provenance.cargo_profile, "deploy");
     assert.equal(written.provenance.source_tree_clean, true);
+    assert.equal(written.provenance.source_tree_sha256, SOURCE_DIGEST);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -100,6 +115,7 @@ test("failed Cargo execution does not claim build provenance", () => {
     readSourceState: () => ({
       sourceGitRevision: "a".repeat(40),
       sourceTreeClean: true,
+      sourceTreeSha256: SOURCE_DIGEST,
     }),
     runCargo: () => ({ status: 7 }),
     writeProvenance: () => {
@@ -108,4 +124,50 @@ test("failed Cargo execution does not claim build provenance", () => {
   });
   assert.equal(status, 7);
   assert.equal(writes, 0);
+});
+
+test("a source-seal mismatch after successful Cargo writes no provenance", () => {
+  const repoRoot = mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-race-"));
+  try {
+    const nativePath = nativeBuildOutputPath({
+      repoRoot,
+      cargoProfile: "debug",
+      env: {},
+      platform: "linux",
+    });
+    const states = [
+      {
+        sourceGitRevision: "a".repeat(40),
+        sourceTreeClean: false,
+        sourceTreeSha256: "1".repeat(64),
+      },
+      {
+        sourceGitRevision: "a".repeat(40),
+        sourceTreeClean: false,
+        sourceTreeSha256: "2".repeat(64),
+      },
+    ];
+    let writes = 0;
+    assert.throws(
+      () =>
+        runNativeBuild({
+          repoRoot,
+          env: {},
+          platform: "linux",
+          readSourceState: () => states.shift(),
+          runCargo() {
+            mkdirSync(path.dirname(nativePath), { recursive: true });
+            writeFileSync(nativePath, "raced-native-output");
+            return { status: 0 };
+          },
+          writeProvenance() {
+            writes += 1;
+          },
+        }),
+      /source tree changed/u,
+    );
+    assert.equal(writes, 0);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });

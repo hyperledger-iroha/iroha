@@ -103,6 +103,32 @@ pub const INTERNAL_CRT_PRIMES_V1: [u64; 3] = [
     1_125_899_906_839_937,
     1_125_899_906_837_633,
 ];
+/// Primitive order-128 roots used to twist 64-point cyclic NTTs into
+/// negacyclic NTTs under the three internal CRT primes.
+pub const INTERNAL_CRT_NEGACYCLIC_ROOTS_V1: [u64; 3] = [
+    900_675_728_376_939,
+    739_582_794_740_178,
+    939_297_152_150_952,
+];
+/// Multiplicative inverses of [`INTERNAL_CRT_NEGACYCLIC_ROOTS_V1`].
+pub const INTERNAL_CRT_NEGACYCLIC_ROOT_INVERSES_V1: [u64; 3] = [
+    477_721_967_291_069,
+    373_074_842_565_665,
+    612_960_912_415_571,
+];
+/// Multiplicative inverses of 64 under the three internal CRT primes.
+pub const INTERNAL_CRT_RING_DEGREE_INVERSES_V1: [u64; 3] = [
+    1_108_307_720_796_445,
+    1_108_307_720_795_563,
+    1_108_307_720_793_295,
+];
+/// Garner inverses `p0^-1 mod p1` and `(p0 * p1)^-1 mod p2`.
+pub const INTERNAL_CRT_GARNER_INVERSES_V1: [u64; 2] = [963_800_478_288_205, 296_975_494_591_860];
+/// `(p0 * p1) mod q`, pinned to avoid any multi-limb arithmetic at runtime.
+pub const INTERNAL_CRT_FIRST_TWO_PRODUCT_MOD_PROOF_MODULUS_V1: u64 = 7_842_192;
+/// `(p0 * p1 * p2) mod q`, used when the centered CRT representative is
+/// negative.
+pub const INTERNAL_CRT_PRODUCT_MOD_PROOF_MODULUS_V1: u64 = 1_125_856_084_674_325;
 
 /// Maximum number of whole-proof rejection attempts.
 pub const MAX_PROOF_SAMPLING_ATTEMPTS_V1: u32 = 4_096;

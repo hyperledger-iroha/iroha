@@ -571,6 +571,57 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "  representative-regression:\n", 1
         )[1]
         self.assertIn('      RUSTUP_TOOLCHAIN: "1.93.1"', representative_job)
+
+        comparison_marker = "      - name: Check out comparison base\n"
+        self.assertEqual(representative_job.count(comparison_marker), 1)
+        comparison_step = representative_job.split(
+            comparison_marker, 1
+        )[1].split("\n      - name:", 1)[0]
+        self.assertIn(
+            f"          ref: {PERF.PREDECESSOR_SHA}", comparison_step
+        )
+        self.assertNotIn("github.event.pull_request.base.sha", comparison_step)
+        self.assertNotIn(
+            "github.event.repository.default_branch", comparison_step
+        )
+
+        lock_marker = "      - name: Require regular revision lockfiles\n"
+        self.assertEqual(representative_job.count(lock_marker), 1)
+        lock_step = representative_job.split(lock_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            "for lock in candidate/Cargo.lock baseline/Cargo.lock; do",
+            lock_step,
+        )
+        self.assertIn(
+            'if [[ ! -f "$lock" || -L "$lock" ]]; then', lock_step
+        )
+        self.assertIn("exit 1", lock_step)
+        self.assertNotIn("|| true", lock_step)
+        self.assertNotIn("continue", lock_step)
+        self.assertNotRegex(
+            lock_step,
+            r"(?m)^\s*(?:cargo|cp|curl|install|ln|mv|python|rsync|touch|wget)\b",
+        )
+
+        python_marker = "      - name: Install Python 3.12\n"
+        self.assertEqual(representative_job.count(python_marker), 1)
+        python_step = representative_job.split(python_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            "uses: actions/setup-python@"
+            "a26af69be951a213d495a4c3e4e4022e16d87065",
+            python_step,
+        )
+        self.assertIn('          python-version: "3.12"', python_step)
+        regression_test_marker = "      - name: Test regression checker\n"
+        self.assertLess(
+            representative_job.index(python_marker),
+            representative_job.index(regression_test_marker),
+        )
+
         toolchain_marker = "      - name: Install Rust toolchain\n"
         self.assertEqual(representative_job.count(toolchain_marker), 1)
         toolchain_step = representative_job.split(toolchain_marker, 1)[1].split(
@@ -606,6 +657,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertLess(
             workflow.index(inventory_marker), workflow.index(base_marker)
         )
+        self.assertLess(workflow.index(lock_marker), workflow.index(base_marker))
         base_step = workflow.split(base_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
@@ -623,6 +675,9 @@ class KotodamaPerfGateTests(unittest.TestCase):
 
         candidate_marker = "      - name: Measure candidate revision\n"
         self.assertEqual(workflow.count(candidate_marker), 1)
+        self.assertLess(
+            workflow.index(lock_marker), workflow.index(candidate_marker)
+        )
         candidate_step = workflow.split(candidate_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]

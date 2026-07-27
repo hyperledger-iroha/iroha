@@ -16,3 +16,4 @@ pub mod zk_ace;
 #[cfg(feature = "zk-stark")]
 pub(crate) mod zk_ace_stark;
 pub mod zk_ams;
+pub(crate) mod zk_x509;

@@ -51,6 +51,16 @@ pub const ZK_X509_TRUST_ANCHOR_RECORD_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain separator for canonical X.509 certificate-policy revision self-digests.
 pub const ZK_X509_CERTIFICATE_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:certificate-policy-record:v1";
+/// Domain separator for canonical signed-CRL revision self-digests.
+pub const ZK_X509_CRL_RECORD_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-x509:crl-record:v1";
+/// Domain for canonical SHA-256 field framing in the X.509 relation.
+pub const ZK_X509_HASH_FRAME_DOMAIN_V1: &[u8] = b"iroha.zk-x509.sha256.frame.v1";
+/// Domain for the exact signed DER CRL digest.
+pub const ZK_X509_CRL_DER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.der.v1";
+/// Domain for the exact CRL issuer-SPKI digest.
+pub const ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.crl.issuer-spki.v1";
+/// Implicit version committed by every signed-CRL record digest.
+pub const ZK_X509_CRL_RECORD_VERSION_V1: u16 = 1;
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -569,6 +579,41 @@ define_privacy_digest!(
     PrivacyZkX509CertificatePolicyRecordDigestV1
 );
 define_privacy_digest!(
+    /// Domain-framed SHA-256 digest of one exact signed DER certificate-revocation list.
+    PrivacyX509CrlDerDigestV1
+);
+define_privacy_digest!(
+    /// Domain-framed SHA-256 digest of the exact SPKI that signs one governed CRL lineage.
+    PrivacyX509CrlIssuerSpkiDigestV1
+);
+define_privacy_digest!(
+    /// Self-digest of one immutable authoritative signed-CRL revision.
+    PrivacyZkX509CrlRecordDigestV1
+);
+
+impl PrivacyX509CrlDerDigestV1 {
+    /// Hash the complete exact signed DER CRL with the canonical X.509 frame.
+    #[must_use]
+    pub fn digest_exact_der(der: &[u8]) -> Self {
+        Self::new(privacy_zk_x509_sha256_frame_v1(
+            ZK_X509_CRL_DER_DIGEST_DOMAIN_V1,
+            &[der],
+        ))
+    }
+}
+
+impl PrivacyX509CrlIssuerSpkiDigestV1 {
+    /// Hash the complete exact issuer SPKI DER with the canonical X.509 frame.
+    #[must_use]
+    pub fn digest_exact_der(spki_der: &[u8]) -> Self {
+        Self::new(privacy_zk_x509_sha256_frame_v1(
+            ZK_X509_CRL_ISSUER_SPKI_DIGEST_DOMAIN_V1,
+            &[spki_der],
+        ))
+    }
+}
+
+define_privacy_digest!(
     /// Canonical commitment-tree or accumulator root.
     PrivacyRootV1
 );
@@ -778,7 +823,24 @@ pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
     pub policy_id: PrivacyPolicyIdV1,
 }
 
+/// Trust-anchor-wide namespace payload.
+///
+/// This scope owns the single CA-membership root derived from a complete
+/// trust store. It deliberately excludes certificate-policy identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyTrustAnchorNamespaceV1 {
+    /// Exact trust-anchor issuer.
+    pub trust_anchor_id: PrivacyIssuerIdV1,
+}
+
 /// Trust-anchor and certificate-policy namespace payload.
+///
+/// This scope owns policy-specific statement state and the corresponding
+/// issuer CRL root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -842,6 +904,8 @@ pub enum PrivacyNamespaceScopeV1 {
     Pool(PrivacyPoolNamespaceV1),
     /// Credential issuer, admitted-identity registry, and admission policy.
     IssuerRegistryPolicy(PrivacyIssuerRegistryPolicyNamespaceV1),
+    /// Certificate trust anchor, independent of certificate policy.
+    TrustAnchor(PrivacyTrustAnchorNamespaceV1),
     /// Certificate trust anchor and certificate policy.
     TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1),
     /// Governed polynomial-commitment parameter set.
@@ -1009,7 +1073,8 @@ impl PrivacyNamespaceV1 {
                 PrivacyNamespaceScopeV1::IssuerRegistryPolicy(_)
             ) | (
                 PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
-                PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
+                PrivacyNamespaceScopeV1::TrustAnchor(_)
+                    | PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
             ) | (
                 PrivacyProtocolIdV1::VegaExistingCredentialZkV0
                     | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
@@ -1050,6 +1115,10 @@ impl PrivacyNamespaceV1 {
                     PrivacyNamespaceComponentV1::Policy,
                 )
             }
+            PrivacyNamespaceScopeV1::TrustAnchor(scope) => validate_namespace_component(
+                !scope.trust_anchor_id.is_zero(),
+                PrivacyNamespaceComponentV1::Issuer,
+            ),
             PrivacyNamespaceScopeV1::TrustAnchorPolicy(scope) => {
                 validate_namespace_component(
                     !scope.trust_anchor_id.is_zero(),
@@ -1201,6 +1270,33 @@ impl PrivacyRootRoleV1 {
                 )
         )
     }
+
+    /// Return whether this role is meaningful for the exact namespace scope.
+    ///
+    /// X.509 has two deliberately distinct governance scopes: one
+    /// trust-anchor-wide CA-membership root and one policy-specific CRL root.
+    /// Other protocols have only one root-bearing scope per compatible role.
+    #[must_use]
+    pub const fn is_compatible_with_namespace(self, namespace: PrivacyNamespaceV1) -> bool {
+        if !self.is_compatible_with(namespace.protocol_id()) {
+            return false;
+        }
+        match self {
+            Self::CertificateAuthorityMembership => {
+                matches!(namespace.scope(), PrivacyNamespaceScopeV1::TrustAnchor(_))
+            }
+            Self::CertificateRevocationNonmembership => matches!(
+                namespace.scope(),
+                PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
+            ),
+            Self::PgcAccountState
+            | Self::AccountRegistry
+            | Self::Revocation
+            | Self::NoteCommitmentAnchor
+            | Self::OutputSet
+            | Self::ProgramState => true,
+        }
+    }
 }
 
 /// Governance payload publishing one canonical privacy root.
@@ -1259,6 +1355,14 @@ impl PrivacyRootPublicationV1 {
                 role: self.role,
             });
         }
+        if !self.role.is_compatible_with_namespace(self.namespace) {
+            return Err(
+                PrivacyRootPublicationValidationError::IncompatibleNamespaceScope {
+                    scope: self.namespace.scope(),
+                    role: self.role,
+                },
+            );
+        }
         if self.epoch == 0 {
             return Err(PrivacyRootPublicationValidationError::ZeroEpoch);
         }
@@ -1301,6 +1405,14 @@ pub enum PrivacyRootPublicationValidationError {
         /// Namespace protocol.
         protocol_id: PrivacyProtocolIdV1,
         /// Incompatible role.
+        role: PrivacyRootRoleV1,
+    },
+    /// Root role is incompatible with the namespace's exact scope.
+    #[error("privacy root role {role:?} is incompatible with namespace scope {scope:?}")]
+    IncompatibleNamespaceScope {
+        /// Rejected namespace scope.
+        scope: PrivacyNamespaceScopeV1,
+        /// Rejected root role.
         role: PrivacyRootRoleV1,
     },
     /// Root epoch is zero.
@@ -4064,6 +4176,10 @@ pub const VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1: u8 = 1;
 pub const VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1: u8 = 150;
 /// Maximum admitted X.509 chain depth, including the leaf certificate.
 pub const ZK_X509_MAX_CHAIN_DEPTH_V1: u8 = 3;
+/// Minimum admitted X.509 chain depth, including leaf and terminal root.
+pub const ZK_X509_MIN_CHAIN_DEPTH_V1: u8 = 2;
+/// Maximum accepted lag from signed CRL `thisUpdate` at proof validation.
+pub const ZK_X509_MAX_CRL_AGE_SECONDS_V1: u64 = 300;
 /// Maximum DER bytes for one X.509 certificate.
 pub const ZK_X509_MAX_CERTIFICATE_BYTES_V1: u32 = 16 * 1024;
 /// Maximum combined DER bytes for an admitted X.509 chain.
@@ -4076,6 +4192,12 @@ pub const ZK_X509_MAX_EXTENDED_KEY_USAGES_V1: usize = 3;
 pub const ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1: usize = 4_096;
 /// Maximum immutable certificate-policy revisions retained across all lineages.
 pub const ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1: usize = 4_096;
+/// Maximum current issuer-scoped signed-CRL lineages in world state.
+///
+/// Unlike rare trust-anchor and policy governance, CRLs rotate frequently.
+/// Consensus therefore stores one self-chained current record per policy
+/// lineage instead of retaining an eventually terminal fixed revision count.
+pub const ZK_X509_MAX_CRL_LINEAGES_V1: usize = 4_096;
 /// Maximum immutable revisions retained for one trust-anchor or policy lineage.
 pub const ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1: usize = 64;
 /// Canonical origin epoch for an X.509 trust-anchor or certificate-policy lineage.
@@ -5266,6 +5388,8 @@ struct PrivacyZkX509TrustAnchorDigestMaterialV1 {
     trust_anchor_id: PrivacyIssuerIdV1,
     record_epoch: u64,
     trust_store_digest: PrivacyX509TrustStoreDigestV1,
+    ca_membership_root: PrivacyRootV1,
+    ca_membership_root_epoch: u64,
     previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
     lifecycle: PrivacyZkX509RecordLifecycleV1,
 }
@@ -5288,6 +5412,14 @@ pub struct PrivacyZkX509TrustAnchorRecordV1 {
     pub record_epoch: u64,
     /// Digest of the exact ordered P-256/SHA-256 trust-store artifact.
     pub trust_store_digest: PrivacyX509TrustStoreDigestV1,
+    /// Exact CA-membership root derived from that complete trust store.
+    pub ca_membership_root: PrivacyRootV1,
+    /// Canonical epoch of `ca_membership_root`.
+    ///
+    /// An active record requires this to equal `record_epoch`. A terminal
+    /// revocation preserves the preceding active root epoch and does not
+    /// manufacture a new CA-membership root.
+    pub ca_membership_root_epoch: u64,
     /// Exact predecessor revision digest, absent only at epoch one.
     pub previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
     /// Active or irreversibly revoked lifecycle.
@@ -5301,12 +5433,14 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
     ///
     /// # Errors
     ///
-    /// Rejects zero fields, a non-canonical predecessor shape, or canonical
-    /// encoding failure.
+    /// Rejects zero fields, a root epoch inconsistent with the lifecycle, a
+    /// non-canonical predecessor shape, or canonical encoding failure.
     pub fn new(
         trust_anchor_id: PrivacyIssuerIdV1,
         record_epoch: u64,
         trust_store_digest: PrivacyX509TrustStoreDigestV1,
+        ca_membership_root: PrivacyRootV1,
+        ca_membership_root_epoch: u64,
         previous_record_digest: Option<PrivacyZkX509TrustAnchorRecordDigestV1>,
         lifecycle: PrivacyZkX509RecordLifecycleV1,
     ) -> Result<Self, PrivacyZkX509RecordValidationErrorV1> {
@@ -5314,6 +5448,8 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
             trust_anchor_id,
             record_epoch,
             trust_store_digest,
+            ca_membership_root,
+            ca_membership_root_epoch,
             previous_record_digest,
             lifecycle,
             record_digest: PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32]),
@@ -5369,6 +5505,8 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
             trust_anchor_id: self.trust_anchor_id,
             record_epoch: self.record_epoch,
             trust_store_digest: self.trust_store_digest,
+            ca_membership_root: self.ca_membership_root,
+            ca_membership_root_epoch: self.ca_membership_root_epoch,
             previous_record_digest: self.previous_record_digest,
             lifecycle: self.lifecycle,
         };
@@ -5383,6 +5521,35 @@ impl PrivacyZkX509TrustAnchorRecordV1 {
         }
         if self.trust_store_digest.is_zero() {
             return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustStoreDigest);
+        }
+        if self.ca_membership_root.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRoot);
+        }
+        if self.ca_membership_root_epoch == 0 {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRootEpoch);
+        }
+        match self.lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active
+                if self.ca_membership_root_epoch != self.record_epoch =>
+            {
+                return Err(
+                    PrivacyZkX509RecordValidationErrorV1::CaMembershipRootEpochMismatch {
+                        record_epoch: self.record_epoch,
+                        root_epoch: self.ca_membership_root_epoch,
+                    },
+                );
+            }
+            PrivacyZkX509RecordLifecycleV1::Revoked
+                if self.ca_membership_root_epoch >= self.record_epoch =>
+            {
+                return Err(
+                    PrivacyZkX509RecordValidationErrorV1::RevokedCaMembershipRootEpochNotHistorical {
+                        record_epoch: self.record_epoch,
+                        root_epoch: self.ca_membership_root_epoch,
+                    },
+                );
+            }
+            PrivacyZkX509RecordLifecycleV1::Active | PrivacyZkX509RecordLifecycleV1::Revoked => {}
         }
         validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
     }
@@ -5550,6 +5717,238 @@ impl PrivacyZkX509CertificatePolicyRecordV1 {
     }
 }
 
+/// One immutable authoritative revision of an issuer-scoped signed CRL.
+///
+/// The exact DER digest, signing-key digest, validity window, sparse
+/// revocation root, and root epoch are one self-digested governance object.
+/// A proof therefore cannot combine a valid CRL signature with a root from a
+/// different CRL or revision. The first release assigns exactly one leaf
+/// certificate issuer and its complete, non-partitioned CRL to each
+/// certificate-policy lineage; revocation checks the leaf certificate only.
+/// Multiple intermediates require distinct policy lineages. Consensus keeps
+/// only the current self-chained record while historical transitions remain
+/// committed by blocks. Revocation is terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyZkX509CrlRecordV1 {
+    /// Exact trust-store lineage whose certificate chain selects this CRL.
+    pub trust_anchor_id: PrivacyIssuerIdV1,
+    /// Exact certificate-policy lineage whose leaf revocation is represented.
+    pub certificate_policy_id: PrivacyPolicyIdV1,
+    /// Strictly increasing immutable revision epoch.
+    pub record_epoch: u64,
+    /// Required RFC 5280 CRLNumber, monotonically increasing in this lineage.
+    pub crl_number: u64,
+    /// SHA-256 digest of the complete exact signed DER CRL.
+    pub crl_der_digest: PrivacyX509CrlDerDigestV1,
+    /// SHA-256 digest of the exact issuer SPKI that signs the CRL.
+    pub issuer_spki_digest: PrivacyX509CrlIssuerSpkiDigestV1,
+    /// Signed CRL `thisUpdate` as Unix seconds, inclusive.
+    pub this_update_unix_seconds: u64,
+    /// Signed CRL `nextUpdate` as Unix seconds, exclusive.
+    pub next_update_unix_seconds: u64,
+    /// Complete issuer-scoped sparse root reconstructed from revoked serials.
+    pub revoked_serials_root: PrivacyRootV1,
+    /// Canonical epoch of `revoked_serials_root`.
+    ///
+    /// An active record requires this to equal `record_epoch`, so one signed
+    /// CRL update has exactly one root identity. A terminal revocation keeps
+    /// the preceding active root epoch and does not manufacture a new root.
+    pub root_epoch: u64,
+    /// Exact predecessor revision digest, absent only at epoch one.
+    pub previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+    /// Active or irreversibly revoked lifecycle.
+    pub lifecycle: PrivacyZkX509RecordLifecycleV1,
+    /// Self-digest of every authoritative field above.
+    pub record_digest: PrivacyZkX509CrlRecordDigestV1,
+}
+
+impl PrivacyZkX509CrlRecordV1 {
+    /// Construct one canonical self-digested signed-CRL revision.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero identities or digests, an invalid signed validity window,
+    /// a root epoch not equal to the record epoch, a non-canonical predecessor
+    /// shape, or canonical encoding failure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        trust_anchor_id: PrivacyIssuerIdV1,
+        certificate_policy_id: PrivacyPolicyIdV1,
+        record_epoch: u64,
+        crl_number: u64,
+        crl_der_digest: PrivacyX509CrlDerDigestV1,
+        issuer_spki_digest: PrivacyX509CrlIssuerSpkiDigestV1,
+        this_update_unix_seconds: u64,
+        next_update_unix_seconds: u64,
+        revoked_serials_root: PrivacyRootV1,
+        root_epoch: u64,
+        previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> Result<Self, PrivacyZkX509RecordValidationErrorV1> {
+        let mut record = Self {
+            trust_anchor_id,
+            certificate_policy_id,
+            record_epoch,
+            crl_number,
+            crl_der_digest,
+            issuer_spki_digest,
+            this_update_unix_seconds,
+            next_update_unix_seconds,
+            revoked_serials_root,
+            root_epoch,
+            previous_record_digest,
+            lifecycle,
+            record_digest: PrivacyZkX509CrlRecordDigestV1::new([0; 32]),
+        };
+        record.validate_contents()?;
+        record.record_digest = record.compute_record_digest()?;
+        if record.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        Ok(record)
+    }
+
+    /// Validate a canonical active epoch-one registration.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed self-digest, non-origin epoch, predecessor, or
+    /// revoked origin.
+    pub fn validate_initial(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate()?;
+        validate_zk_x509_initial_revision(
+            self.record_epoch,
+            self.previous_record_digest.is_some(),
+            self.lifecycle,
+        )
+    }
+
+    /// Validate all fields and the complete canonical self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any malformed or tampered revision.
+    pub fn validate(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        self.validate_contents()?;
+        if self.record_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest);
+        }
+        if self.compute_record_digest()? != self.record_digest {
+            return Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch);
+        }
+        Ok(())
+    }
+
+    /// Recompute the domain-separated self-digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding error if canonical Norito serialization fails.
+    pub fn compute_record_digest(
+        &self,
+    ) -> Result<PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509RecordValidationErrorV1> {
+        let version = ZK_X509_CRL_RECORD_VERSION_V1.to_be_bytes();
+        let record_epoch = self.record_epoch.to_be_bytes();
+        let crl_number = self.crl_number.to_be_bytes();
+        let this_update = self.this_update_unix_seconds.to_be_bytes();
+        let next_update = self.next_update_unix_seconds.to_be_bytes();
+        let root_epoch = self.root_epoch.to_be_bytes();
+        let mut predecessor = [0_u8; 33];
+        if let Some(digest) = self.previous_record_digest {
+            predecessor[0] = 1;
+            predecessor[1..].copy_from_slice(digest.as_bytes());
+        }
+        let lifecycle = [match self.lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active => 0,
+            PrivacyZkX509RecordLifecycleV1::Revoked => 1,
+        }];
+        Ok(PrivacyZkX509CrlRecordDigestV1::new(
+            privacy_zk_x509_sha256_frame_v1(
+                ZK_X509_CRL_RECORD_DIGEST_DOMAIN_V1,
+                &[
+                    &version,
+                    self.trust_anchor_id.as_bytes(),
+                    self.certificate_policy_id.as_bytes(),
+                    &record_epoch,
+                    &crl_number,
+                    self.crl_der_digest.as_bytes(),
+                    self.issuer_spki_digest.as_bytes(),
+                    &this_update,
+                    &next_update,
+                    self.revoked_serials_root.as_bytes(),
+                    &root_epoch,
+                    &predecessor,
+                    &lifecycle,
+                ],
+            ),
+        ))
+    }
+
+    fn validate_contents(&self) -> Result<(), PrivacyZkX509RecordValidationErrorV1> {
+        if self.trust_anchor_id.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroTrustAnchorId);
+        }
+        if self.certificate_policy_id.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroPolicyId);
+        }
+        if self.crl_der_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlDerDigest);
+        }
+        if self.issuer_spki_digest.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlIssuerSpkiDigest);
+        }
+        if self.next_update_unix_seconds <= self.this_update_unix_seconds {
+            return Err(PrivacyZkX509RecordValidationErrorV1::InvalidCrlValidityWindow);
+        }
+        if self.revoked_serials_root.is_zero() {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlRevokedSerialsRoot);
+        }
+        if self.root_epoch == 0 {
+            return Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlRootEpoch);
+        }
+        match self.lifecycle {
+            PrivacyZkX509RecordLifecycleV1::Active if self.root_epoch != self.record_epoch => {
+                return Err(PrivacyZkX509RecordValidationErrorV1::CrlRootEpochMismatch {
+                    record_epoch: self.record_epoch,
+                    root_epoch: self.root_epoch,
+                });
+            }
+            PrivacyZkX509RecordLifecycleV1::Revoked if self.root_epoch >= self.record_epoch => {
+                return Err(
+                    PrivacyZkX509RecordValidationErrorV1::RevokedCrlRootEpochNotHistorical {
+                        record_epoch: self.record_epoch,
+                        root_epoch: self.root_epoch,
+                    },
+                );
+            }
+            PrivacyZkX509RecordLifecycleV1::Active | PrivacyZkX509RecordLifecycleV1::Revoked => {}
+        }
+        validate_zk_x509_revision_shape(self.record_epoch, self.previous_record_digest)
+    }
+}
+
+fn privacy_zk_x509_sha256_frame_v1(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+    let domain_len = u16::try_from(domain.len()).expect("fixed X.509 digest domain fits u16");
+    let field_count = u16::try_from(fields.len()).expect("fixed X.509 digest field count fits u16");
+    let mut hash = Sha256::new();
+    hash.update(ZK_X509_HASH_FRAME_DOMAIN_V1);
+    hash.update(domain_len.to_be_bytes());
+    hash.update(domain);
+    hash.update(field_count.to_be_bytes());
+    for field in fields {
+        let field_len =
+            u64::try_from(field.len()).expect("slice length fits u64 on supported targets");
+        hash.update(field_len.to_be_bytes());
+        hash.update(field);
+    }
+    hash.finalize().into()
+}
+
 fn privacy_zk_x509_record_digest<T: Encode>(
     domain: &[u8],
     material: &T,
@@ -5600,6 +5999,12 @@ impl PrivacyDigestValueV1 for PrivacyZkX509TrustAnchorRecordDigestV1 {
 impl PrivacyDigestValueV1 for PrivacyZkX509CertificatePolicyRecordDigestV1 {
     fn is_zero(self) -> bool {
         PrivacyZkX509CertificatePolicyRecordDigestV1::is_zero(&self)
+    }
+}
+
+impl PrivacyDigestValueV1 for PrivacyZkX509CrlRecordDigestV1 {
+    fn is_zero(self) -> bool {
+        PrivacyZkX509CrlRecordDigestV1::is_zero(&self)
     }
 }
 
@@ -5691,9 +6096,66 @@ pub enum PrivacyZkX509RecordValidationErrorV1 {
     /// The canonical trust-store digest is all zero.
     #[error("X.509 trust-store digest must be non-zero")]
     ZeroTrustStoreDigest,
+    /// The CA-membership root derived from the trust store is all zero.
+    #[error("X.509 CA-membership root must be non-zero")]
+    ZeroCaMembershipRoot,
+    /// A CA-membership root epoch is zero.
+    #[error("X.509 CA-membership root epoch must be non-zero")]
+    ZeroCaMembershipRootEpoch,
+    /// The first-release trust-anchor record and CA-root epochs differ.
+    #[error(
+        "X.509 CA-membership root epoch {root_epoch} must equal trust-anchor record epoch {record_epoch}"
+    )]
+    CaMembershipRootEpochMismatch {
+        /// Immutable trust-anchor record epoch.
+        record_epoch: u64,
+        /// Rejected CA-membership root epoch.
+        root_epoch: u64,
+    },
+    /// A terminal trust-anchor record did not preserve a historical active root.
+    #[error(
+        "revoked X.509 CA-membership root epoch {root_epoch} must precede record epoch {record_epoch}"
+    )]
+    RevokedCaMembershipRootEpochNotHistorical {
+        /// Terminal trust-anchor record epoch.
+        record_epoch: u64,
+        /// Rejected retained active-root epoch.
+        root_epoch: u64,
+    },
     /// The canonical certificate-policy digest is all zero.
     #[error("X.509 certificate-policy digest must be non-zero")]
     ZeroPolicyDigest,
+    /// The SHA-256 digest of the exact signed DER CRL is all zero.
+    #[error("X.509 signed DER CRL digest must be non-zero")]
+    ZeroCrlDerDigest,
+    /// The SHA-256 digest of the CRL issuer SPKI is all zero.
+    #[error("X.509 CRL issuer SPKI digest must be non-zero")]
+    ZeroCrlIssuerSpkiDigest,
+    /// The signed CRL validity window is zero, empty, or reversed.
+    #[error("X.509 CRL validity window must satisfy thisUpdate < nextUpdate")]
+    InvalidCrlValidityWindow,
+    /// The complete sparse revoked-serial root is all zero.
+    #[error("X.509 CRL revoked-serial root must be non-zero")]
+    ZeroCrlRevokedSerialsRoot,
+    /// A signed-CRL root epoch is zero.
+    #[error("X.509 CRL root epoch must be non-zero")]
+    ZeroCrlRootEpoch,
+    /// The first-release CRL record and root epochs are not identical.
+    #[error("X.509 CRL root epoch {root_epoch} must equal record epoch {record_epoch}")]
+    CrlRootEpochMismatch {
+        /// Immutable signed-CRL record epoch.
+        record_epoch: u64,
+        /// Rejected sparse-root epoch.
+        root_epoch: u64,
+    },
+    /// A terminal CRL record did not preserve a historical active root.
+    #[error("revoked X.509 CRL root epoch {root_epoch} must precede record epoch {record_epoch}")]
+    RevokedCrlRootEpochNotHistorical {
+        /// Terminal signed-CRL record epoch.
+        record_epoch: u64,
+        /// Rejected retained active-root epoch.
+        root_epoch: u64,
+    },
     /// Epoch zero is never authoritative.
     #[error("X.509 governance-record epoch must be non-zero")]
     ZeroRecordEpoch,
@@ -5777,9 +6239,18 @@ pub enum PrivacyZkX509TransitionValidationErrorV1 {
     /// A trust-anchor transition changed its stable identity.
     #[error("X.509 trust-anchor transition changed trust-anchor id")]
     TrustAnchorIdMismatch,
+    /// A trust-store digest rotated without its derived CA-membership root.
+    #[error("X.509 trust-store digest changed without changing its CA-membership root")]
+    TrustStoreDigestChangedWithoutCaMembershipRoot,
+    /// A CA-membership root rotated without its source trust-store digest.
+    #[error("X.509 CA-membership root changed without changing its trust-store digest")]
+    CaMembershipRootChangedWithoutTrustStoreDigest,
     /// A policy transition changed its stable identity.
     #[error("X.509 certificate-policy transition changed policy id")]
     PolicyIdMismatch,
+    /// A signed-CRL lineage changed the issuer public key.
+    #[error("X.509 CRL transition changed issuer SPKI digest")]
+    CrlIssuerSpkiDigestMismatch,
     /// An epoch cannot advance past `u64::MAX`.
     #[error("X.509 governance-record epoch overflow")]
     EpochOverflow,
@@ -5800,6 +6271,12 @@ pub enum PrivacyZkX509TransitionValidationErrorV1 {
     /// A rotation must alter at least one governed substantive field.
     #[error("X.509 rotation must change governed contents")]
     RotationContentsUnchanged,
+    /// A signed-CRL successor did not advance `thisUpdate`.
+    #[error("X.509 CRL successor thisUpdate must strictly increase")]
+    CrlThisUpdateNotIncreasing,
+    /// A signed-CRL successor did not advance CRLNumber.
+    #[error("X.509 CRL successor CRLNumber must strictly increase")]
+    CrlNumberNotIncreasing,
     /// A revocation successor must be terminal.
     #[error("X.509 revocation successor must be revoked")]
     RevocationSuccessorNotRevoked,
@@ -5840,7 +6317,8 @@ fn validate_zk_x509_transition_common<D: Copy + PartialEq>(
 /// # Errors
 ///
 /// Rejects malformed records, identity changes, stale/skipped epochs,
-/// predecessor substitution, terminal successors, and no-op rotations.
+/// predecessor substitution, terminal successors, no-op rotations, and a
+/// trust-store digest or CA-membership root changed without the other.
 pub fn validate_zk_x509_trust_anchor_rotation_v1(
     current: &PrivacyZkX509TrustAnchorRecordV1,
     successor: &PrivacyZkX509TrustAnchorRecordV1,
@@ -5864,8 +6342,23 @@ pub fn validate_zk_x509_trust_anchor_rotation_v1(
     if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
         return Err(PrivacyZkX509TransitionValidationErrorV1::RotationSuccessorNotActive);
     }
-    if successor.trust_store_digest == current.trust_store_digest {
-        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+    let trust_store_changed = successor.trust_store_digest != current.trust_store_digest;
+    let ca_membership_root_changed = successor.ca_membership_root != current.ca_membership_root;
+    match (trust_store_changed, ca_membership_root_changed) {
+        (false, false) => {
+            return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+        }
+        (true, false) => {
+            return Err(
+                PrivacyZkX509TransitionValidationErrorV1::TrustStoreDigestChangedWithoutCaMembershipRoot,
+            );
+        }
+        (false, true) => {
+            return Err(
+                PrivacyZkX509TransitionValidationErrorV1::CaMembershipRootChangedWithoutTrustStoreDigest,
+            );
+        }
+        (true, true) => {}
     }
     Ok(())
 }
@@ -5875,7 +6368,8 @@ pub fn validate_zk_x509_trust_anchor_rotation_v1(
 /// # Errors
 ///
 /// Rejects malformed records, identity changes, stale/skipped epochs,
-/// predecessor substitution, nonterminal successors, or trust-store changes.
+/// predecessor substitution, nonterminal successors, or trust-store/root
+/// changes.
 pub fn validate_zk_x509_trust_anchor_revocation_v1(
     current: &PrivacyZkX509TrustAnchorRecordV1,
     successor: &PrivacyZkX509TrustAnchorRecordV1,
@@ -5899,7 +6393,10 @@ pub fn validate_zk_x509_trust_anchor_revocation_v1(
     if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Revoked {
         return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationSuccessorNotRevoked);
     }
-    if successor.trust_store_digest != current.trust_store_digest {
+    if successor.trust_store_digest != current.trust_store_digest
+        || successor.ca_membership_root != current.ca_membership_root
+        || successor.ca_membership_root_epoch != current.ca_membership_root_epoch
+    {
         return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged);
     }
     Ok(())
@@ -5991,6 +6488,102 @@ pub fn validate_zk_x509_certificate_policy_revocation_v1(
     Ok(())
 }
 
+/// Validate an active-to-active signed-CRL rotation.
+///
+/// # Errors
+///
+/// Rejects malformed records, namespace or issuer-key changes,
+/// stale/skipped epochs, predecessor substitution, non-increasing
+/// `thisUpdate`, terminal successors, and no-op rotations.
+pub fn validate_zk_x509_crl_rotation_v1(
+    current: &PrivacyZkX509CrlRecordV1,
+    successor: &PrivacyZkX509CrlRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    if successor.certificate_policy_id != current.certificate_policy_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    if successor.issuer_spki_digest != current.issuer_spki_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlIssuerSpkiDigestMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Active {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationSuccessorNotActive);
+    }
+    if successor.this_update_unix_seconds <= current.this_update_unix_seconds {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlThisUpdateNotIncreasing);
+    }
+    if successor.crl_number <= current.crl_number {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlNumberNotIncreasing);
+    }
+    if successor.crl_der_digest == current.crl_der_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged);
+    }
+    Ok(())
+}
+
+/// Validate an irreversible signed-CRL lineage revocation.
+///
+/// # Errors
+///
+/// Rejects malformed records, namespace or issuer-key changes,
+/// stale/skipped epochs, predecessor substitution, nonterminal successors,
+/// or any change to the signed CRL, validity window, or sparse root.
+pub fn validate_zk_x509_crl_revocation_v1(
+    current: &PrivacyZkX509CrlRecordV1,
+    successor: &PrivacyZkX509CrlRecordV1,
+) -> Result<(), PrivacyZkX509TransitionValidationErrorV1> {
+    current
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidCurrent)?;
+    successor
+        .validate()
+        .map_err(PrivacyZkX509TransitionValidationErrorV1::InvalidSuccessor)?;
+    if successor.trust_anchor_id != current.trust_anchor_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::TrustAnchorIdMismatch);
+    }
+    if successor.certificate_policy_id != current.certificate_policy_id {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::PolicyIdMismatch);
+    }
+    if successor.issuer_spki_digest != current.issuer_spki_digest {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::CrlIssuerSpkiDigestMismatch);
+    }
+    validate_zk_x509_transition_common(
+        current.record_epoch,
+        current.record_digest,
+        current.lifecycle,
+        successor.record_epoch,
+        successor.previous_record_digest,
+    )?;
+    if successor.lifecycle != PrivacyZkX509RecordLifecycleV1::Revoked {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationSuccessorNotRevoked);
+    }
+    if successor.crl_number != current.crl_number
+        || successor.crl_der_digest != current.crl_der_digest
+        || successor.this_update_unix_seconds != current.this_update_unix_seconds
+        || successor.next_update_unix_seconds != current.next_update_unix_seconds
+        || successor.revoked_serials_root != current.revoked_serials_root
+        || successor.root_epoch != current.root_epoch
+    {
+        return Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged);
+    }
+    Ok(())
+}
+
 /// One public selectively disclosed X.509 subject attribute.
 ///
 /// Indices use the paper's closed order: `0=C`, `1=O`, `2=OU`, `3=CN`.
@@ -6028,6 +6621,10 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     pub certificate_policy_record_digest: PrivacyZkX509CertificatePolicyRecordDigestV1,
     /// Exact certificate-policy revision epoch selected by the statement.
     pub certificate_policy_record_epoch: u64,
+    /// Exact immutable signed-CRL revision selected by the statement.
+    pub crl_record_digest: PrivacyZkX509CrlRecordDigestV1,
+    /// Exact signed-CRL revision epoch selected by the statement.
+    pub crl_record_epoch: u64,
     /// Digest of the certificate subject public key.
     pub subject_public_key_digest: PrivacyCertificateKeyDigestV1,
     /// CA membership accumulator root for the complete chain.
@@ -6046,7 +6643,7 @@ pub struct IrohaZkX509StarkP256StatementV1 {
     pub disclosed_attributes: Vec<PrivacyZkX509DisclosedAttributeV1>,
     /// Certificate validity start as Unix seconds, inclusive.
     pub not_before_unix_seconds: u64,
-    /// Certificate validity end as Unix seconds, exclusive.
+    /// Certificate validity end as Unix seconds, inclusive per RFC 5280.
     pub not_after_unix_seconds: u64,
     /// Validation time as Unix seconds.
     pub validation_unix_seconds: u64,
@@ -7391,6 +7988,14 @@ fn validate_zk_x509(
         PrivacyEpochFieldV1::X509CertificatePolicyRecord,
     )?;
     require_nonzero_id(
+        statement.crl_record_digest.is_zero(),
+        PrivacyTypedFieldV1::X509CrlRecordDigest,
+    )?;
+    require_epoch(
+        statement.crl_record_epoch,
+        PrivacyEpochFieldV1::X509CrlRecord,
+    )?;
+    require_nonzero_id(
         statement.subject_public_key_digest.is_zero(),
         PrivacyTypedFieldV1::CertificateKeyDigest,
     )?;
@@ -7460,14 +8065,17 @@ fn validate_zk_x509(
             );
         }
     }
-    validate_validity_epochs(
+    validate_zk_x509_validity_epochs(
         statement.not_before_unix_seconds,
         statement.not_after_unix_seconds,
         statement.validation_unix_seconds,
     )?;
-    if statement.chain_depth == 0 || statement.chain_depth > ZK_X509_MAX_CHAIN_DEPTH_V1 {
+    if statement.chain_depth < ZK_X509_MIN_CHAIN_DEPTH_V1
+        || statement.chain_depth > ZK_X509_MAX_CHAIN_DEPTH_V1
+    {
         return Err(PrivacyStatementValidationError::InvalidX509ChainDepth {
             depth: statement.chain_depth,
+            min: ZK_X509_MIN_CHAIN_DEPTH_V1,
             max: ZK_X509_MAX_CHAIN_DEPTH_V1,
         });
     }
@@ -7495,6 +8103,21 @@ fn validate_zk_x509(
         PrivacyTypedFieldV1::ReaderChallenge,
     )?;
     require_nullifier(statement.certificate_nullifier, 0)
+}
+
+fn validate_zk_x509_validity_epochs(
+    start: u64,
+    end: u64,
+    current: u64,
+) -> Result<(), PrivacyStatementValidationError> {
+    if end < start || current < start || current > end {
+        return Err(PrivacyStatementValidationError::InvalidValidityWindow {
+            start,
+            end,
+            current,
+        });
+    }
+    Ok(())
 }
 
 fn validate_jindo(
@@ -7827,24 +8450,6 @@ fn validate_pq_masp(
         true,
         limits,
     )
-}
-
-fn validate_validity_epochs(
-    start: u64,
-    end: u64,
-    current: u64,
-) -> Result<(), PrivacyStatementValidationError> {
-    require_epoch(start, PrivacyEpochFieldV1::ValidityStart)?;
-    require_epoch(end, PrivacyEpochFieldV1::ValidityEnd)?;
-    require_epoch(current, PrivacyEpochFieldV1::Presentation)?;
-    if end <= start || current < start || current >= end {
-        return Err(PrivacyStatementValidationError::InvalidValidityWindow {
-            start,
-            end,
-            current,
-        });
-    }
-    Ok(())
 }
 
 fn validate_nullifiers_with_max(
@@ -8444,6 +9049,8 @@ pub enum PrivacyTypedFieldV1 {
     X509TrustAnchorRecordDigest,
     /// Exact immutable X.509 certificate-policy record digest.
     X509CertificatePolicyRecordDigest,
+    /// Exact immutable X.509 signed-CRL record digest.
+    X509CrlRecordDigest,
     /// Public Vega Figure 9 device-authentication digest `H_dev`.
     VegaDeviceAuthenticationDigest,
     /// ISO 18013-5 reader challenge.
@@ -8473,6 +9080,8 @@ pub enum PrivacyEpochFieldV1 {
     X509TrustAnchorRecord,
     /// Immutable X.509 certificate-policy revision epoch.
     X509CertificatePolicyRecord,
+    /// Immutable X.509 signed-CRL revision epoch.
+    X509CrlRecord,
     /// Revocation-state epoch.
     Revocation,
     /// Committed issuer-policy record epoch.
@@ -8886,10 +9495,12 @@ pub enum PrivacyStatementValidationError {
     #[error("X.509 disclosed attributes must be strictly increasing by index")]
     X509DisclosedAttributesNotStrictlyIncreasing,
     /// X.509 certificate chain depth is outside the approved profile.
-    #[error("X.509 chain depth {depth} is outside 1..={max}")]
+    #[error("X.509 chain depth {depth} is outside {min}..={max}")]
     InvalidX509ChainDepth {
         /// Observed chain depth.
         depth: u8,
+        /// Approved minimum.
+        min: u8,
         /// Approved maximum.
         max: u8,
     },
@@ -9491,6 +10102,7 @@ pub enum PrivacyProofEnvelopeValidationError {
 mod tests {
     use std::str::FromStr as _;
 
+    use hex_literal::hex;
     use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
@@ -9583,6 +10195,12 @@ mod tests {
             PrivacyIssuerIdV1::new(raw(61)),
             epoch,
             PrivacyX509TrustStoreDigestV1::new(raw(trust_store_seed)),
+            PrivacyRootV1::new(raw(trust_store_seed.wrapping_add(1))),
+            if lifecycle == PrivacyZkX509RecordLifecycleV1::Revoked {
+                epoch.saturating_sub(1)
+            } else {
+                epoch
+            },
             previous_record_digest,
             lifecycle,
         )
@@ -9616,6 +10234,35 @@ mod tests {
             lifecycle,
         )
         .expect("canonical X.509 certificate-policy fixture")
+    }
+
+    fn zk_x509_crl(
+        epoch: u64,
+        crl_der_seed: u8,
+        this_update_unix_seconds: u64,
+        revoked_root_seed: u8,
+        previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
+        lifecycle: PrivacyZkX509RecordLifecycleV1,
+    ) -> PrivacyZkX509CrlRecordV1 {
+        PrivacyZkX509CrlRecordV1::new(
+            PrivacyIssuerIdV1::new(raw(61)),
+            PrivacyPolicyIdV1::new(raw(62)),
+            epoch,
+            epoch,
+            PrivacyX509CrlDerDigestV1::new(raw(crl_der_seed)),
+            PrivacyX509CrlIssuerSpkiDigestV1::new(raw(74)),
+            this_update_unix_seconds,
+            this_update_unix_seconds + 300,
+            PrivacyRootV1::new(raw(revoked_root_seed)),
+            if lifecycle == PrivacyZkX509RecordLifecycleV1::Revoked {
+                epoch.saturating_sub(1)
+            } else {
+                epoch
+            },
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical X.509 signed-CRL fixture")
     }
 
     fn nullifier(seed: u8) -> PrivacyNullifierV1 {
@@ -9813,6 +10460,8 @@ mod tests {
                     raw(70),
                 ),
                 certificate_policy_record_epoch: 4,
+                crl_record_digest: PrivacyZkX509CrlRecordDigestV1::new(raw(73)),
+                crl_record_epoch: 5,
                 subject_public_key_digest: PrivacyCertificateKeyDigestV1::new(raw(63)),
                 ca_membership_root: PrivacyRootV1::new(raw(64)),
                 ca_membership_root_epoch: 10,
@@ -11318,6 +11967,105 @@ mod tests {
             Err(PrivacyNamespaceValidationError::ZeroComponent { .. })
         ));
 
+        let x509_trust_anchor_namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+            PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
+                trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
+            }),
+        );
+        x509_trust_anchor_namespace
+            .validate()
+            .expect("X.509 trust-anchor namespace");
+        let encoded =
+            norito::to_bytes(&x509_trust_anchor_namespace).expect("encode trust-anchor namespace");
+        let decoded: PrivacyNamespaceV1 =
+            norito::decode_from_bytes(&encoded).expect("decode trust-anchor namespace");
+        assert_eq!(decoded, x509_trust_anchor_namespace);
+        let json = norito::json::to_json(&x509_trust_anchor_namespace)
+            .expect("encode trust-anchor namespace JSON");
+        let decoded_json: PrivacyNamespaceV1 =
+            norito::json::from_json(&json).expect("decode trust-anchor namespace JSON");
+        assert_eq!(decoded_json, x509_trust_anchor_namespace);
+
+        let x509_statement = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
+        let x509_policy_namespace = PrivacyNamespaceV1::from_statement(&x509_statement);
+        assert!(matches!(
+            x509_policy_namespace.scope(),
+            PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
+        ));
+        let ca_publication = PrivacyRootPublicationV1::new(
+            x509_trust_anchor_namespace,
+            PrivacyRootRoleV1::CertificateAuthorityMembership,
+            1,
+            PrivacyRootV1::new(raw(170)),
+        )
+        .expect("CA root uses the trust-anchor-wide namespace");
+        ca_publication
+            .validate()
+            .expect("canonical CA root publication");
+        let crl_publication = PrivacyRootPublicationV1::new(
+            x509_policy_namespace,
+            PrivacyRootRoleV1::CertificateRevocationNonmembership,
+            1,
+            PrivacyRootV1::new(raw(171)),
+        )
+        .expect("CRL root uses the policy-specific namespace");
+        crl_publication
+            .validate()
+            .expect("canonical CRL root publication");
+        assert!(matches!(
+            PrivacyRootPublicationV1::new(
+                x509_policy_namespace,
+                PrivacyRootRoleV1::CertificateAuthorityMembership,
+                1,
+                PrivacyRootV1::new(raw(172)),
+            ),
+            Err(
+                PrivacyRootPublicationValidationError::IncompatibleNamespaceScope {
+                    role: PrivacyRootRoleV1::CertificateAuthorityMembership,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            PrivacyRootPublicationV1::new(
+                x509_trust_anchor_namespace,
+                PrivacyRootRoleV1::CertificateRevocationNonmembership,
+                1,
+                PrivacyRootV1::new(raw(173)),
+            ),
+            Err(
+                PrivacyRootPublicationValidationError::IncompatibleNamespaceScope {
+                    role: PrivacyRootRoleV1::CertificateRevocationNonmembership,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+                PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
+                    trust_anchor_id: PrivacyIssuerIdV1::new(raw(61)),
+                }),
+            )
+            .validate(),
+            Err(PrivacyNamespaceValidationError::IncompatibleScope {
+                protocol_id: PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            })
+        ));
+        assert_eq!(
+            PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
+                    trust_anchor_id: PrivacyIssuerIdV1::new([0; 32]),
+                }),
+            )
+            .validate(),
+            Err(PrivacyNamespaceValidationError::ZeroComponent {
+                component: PrivacyNamespaceComponentV1::Issuer,
+            })
+        );
+
         for role in [
             PrivacyRootRoleV1::PgcAccountState,
             PrivacyRootRoleV1::AccountRegistry,
@@ -12205,6 +12953,20 @@ mod tests {
             })
         ));
         assert!(matches!(
+            mutate_x509(|statement| statement.crl_record_epoch = 0),
+            Err(PrivacyStatementValidationError::ZeroEpoch {
+                field: PrivacyEpochFieldV1::X509CrlRecord
+            })
+        ));
+        assert!(matches!(
+            mutate_x509(|statement| {
+                statement.crl_record_digest = PrivacyZkX509CrlRecordDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::X509CrlRecordDigest
+            })
+        ));
+        assert!(matches!(
             mutate_x509(|statement| statement.key_usage.digital_signature = false),
             Err(PrivacyStatementValidationError::InvalidX509KeyUsage)
         ));
@@ -12279,6 +13041,14 @@ mod tests {
             Err(PrivacyStatementValidationError::InvalidX509ChainDepth { .. })
         ));
         assert!(matches!(
+            mutate_x509(|statement| statement.chain_depth = ZK_X509_MIN_CHAIN_DEPTH_V1 - 1),
+            Err(PrivacyStatementValidationError::InvalidX509ChainDepth { .. })
+        ));
+        mutate_x509(|statement| {
+            statement.validation_unix_seconds = statement.not_after_unix_seconds
+        })
+        .expect("RFC 5280 notAfter is inclusive");
+        assert!(matches!(
             mutate_x509(|statement| {
                 statement.leaf_certificate_bytes = ZK_X509_MAX_CERTIFICATE_BYTES_V1 + 1
             }),
@@ -12290,6 +13060,59 @@ mod tests {
             }),
             Err(PrivacyStatementValidationError::InvalidX509ChainSize { .. })
         ));
+    }
+
+    #[test]
+    fn zk_x509_crl_sha256_frames_match_known_answers() {
+        // A small, canonical DER SEQUENCE containing INTEGER 42 and NULL.
+        let exact_crl_der = hex!("300502012a0500");
+        // RFC 5480 id-ecPublicKey/P-256 SPKI for the SEC 2 generator.
+        let exact_issuer_spki_der = hex!(
+            "3059301306072a8648ce3d020106082a8648ce3d03010703420004\
+             6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296\
+             4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"
+        );
+        let crl_der_digest = PrivacyX509CrlDerDigestV1::digest_exact_der(&exact_crl_der);
+        let issuer_spki_digest =
+            PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(&exact_issuer_spki_der);
+        assert_eq!(
+            crl_der_digest.as_bytes(),
+            &hex!("bfa3e6225fbdc178b8595c06d8fb7ac8c48bcbf22370733501284b73fbba7e98")
+        );
+        assert_eq!(
+            issuer_spki_digest.as_bytes(),
+            &hex!("f7e1ecd75dd0aee92a81c2e8cfbb22cdee73ba8700b64349f6331d989d2b4400")
+        );
+        assert_ne!(
+            crl_der_digest.as_bytes(),
+            PrivacyX509CrlDerDigestV1::digest_exact_der(&exact_issuer_spki_der).as_bytes(),
+            "the exact byte sequence must remain bound to its digest input"
+        );
+        assert_ne!(
+            crl_der_digest.as_bytes(),
+            PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(&exact_crl_der).as_bytes(),
+            "identical bytes under distinct digest domains must not collide"
+        );
+
+        let record = PrivacyZkX509CrlRecordV1::new(
+            PrivacyIssuerIdV1::new([0x11; 32]),
+            PrivacyPolicyIdV1::new([0x22; 32]),
+            1,
+            42,
+            crl_der_digest,
+            issuer_spki_digest,
+            1_700_000_000,
+            1_700_000_300,
+            PrivacyRootV1::new([0xa5; 32]),
+            1,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("known-answer CRL record is canonical");
+        assert_eq!(
+            record.record_digest.as_bytes(),
+            &hex!("26326253d689f6a0a7f3543d311abe32b50438ba6a1517a55ebb05d52e15b6f3")
+        );
     }
 
     #[test]
@@ -12376,16 +13199,99 @@ mod tests {
         tampered.trust_store_digest = PrivacyX509TrustStoreDigestV1::new(raw(83));
         anchor_tamperings.push(tampered);
         let mut tampered = trust_anchor;
-        tampered.lifecycle = PrivacyZkX509RecordLifecycleV1::Revoked;
+        tampered.ca_membership_root = PrivacyRootV1::new(raw(84));
         anchor_tamperings.push(tampered);
         for tampered in anchor_tamperings {
-            assert!(tampered.validate().is_err());
+            assert_eq!(
+                tampered.validate(),
+                Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
+            );
         }
+        let mut terminal_origin = trust_anchor;
+        terminal_origin.lifecycle = PrivacyZkX509RecordLifecycleV1::Revoked;
+        assert_eq!(
+            terminal_origin.validate(),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::RevokedCaMembershipRootEpochNotHistorical {
+                    record_epoch: 1,
+                    root_epoch: 1,
+                }
+            )
+        );
+        let mut mismatched_root_epoch = trust_anchor;
+        mismatched_root_epoch.ca_membership_root_epoch = trust_anchor.record_epoch + 1;
+        assert_eq!(
+            mismatched_root_epoch.validate(),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::CaMembershipRootEpochMismatch {
+                    record_epoch: trust_anchor.record_epoch,
+                    root_epoch: trust_anchor.record_epoch + 1,
+                }
+            )
+        );
         let mut zero_digest = trust_anchor;
         zero_digest.record_digest = PrivacyZkX509TrustAnchorRecordDigestV1::new([0; 32]);
         assert_eq!(
             zero_digest.validate(),
             Err(PrivacyZkX509RecordValidationErrorV1::ZeroRecordDigest)
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                1,
+                trust_anchor.trust_store_digest,
+                PrivacyRootV1::new([0; 32]),
+                1,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRoot)
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                1,
+                trust_anchor.trust_store_digest,
+                trust_anchor.ca_membership_root,
+                0,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCaMembershipRootEpoch)
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                1,
+                trust_anchor.trust_store_digest,
+                trust_anchor.ca_membership_root,
+                2,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::CaMembershipRootEpochMismatch {
+                    record_epoch: 1,
+                    root_epoch: 2,
+                }
+            )
+        );
+        assert_eq!(
+            PrivacyZkX509TrustAnchorRecordV1::new(
+                trust_anchor.trust_anchor_id,
+                2,
+                trust_anchor.trust_store_digest,
+                trust_anchor.ca_membership_root,
+                2,
+                Some(trust_anchor.record_digest),
+                PrivacyZkX509RecordLifecycleV1::Revoked,
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::RevokedCaMembershipRootEpochNotHistorical {
+                    record_epoch: 2,
+                    root_epoch: 2,
+                }
+            )
         );
 
         let mut policy_tamperings = Vec::new();
@@ -12407,6 +13313,352 @@ mod tests {
                 Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
             );
         }
+    }
+
+    #[test]
+    fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
+        let origin = zk_x509_crl(
+            ZK_X509_INITIAL_RECORD_EPOCH_V1,
+            100,
+            1_000,
+            101,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        origin
+            .validate_initial()
+            .expect("canonical signed-CRL origin");
+        assert_eq!(
+            origin
+                .compute_record_digest()
+                .expect("recompute signed-CRL digest"),
+            origin.record_digest
+        );
+
+        let encoded = norito::to_bytes(&origin).expect("encode signed-CRL record");
+        let decoded: PrivacyZkX509CrlRecordV1 =
+            norito::decode_from_bytes(&encoded).expect("decode signed-CRL record");
+        assert_eq!(decoded, origin);
+        decoded
+            .validate_initial()
+            .expect("decoded signed-CRL record validates");
+        let json = norito::json::to_json(&origin).expect("encode signed-CRL JSON");
+        let decoded_json: PrivacyZkX509CrlRecordV1 =
+            norito::json::from_json(&json).expect("decode signed-CRL JSON");
+        assert_eq!(decoded_json, origin);
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("signed-CRL JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyZkX509CrlRecordV1>(&format!(
+                "{object_prefix},\"legacy_crl\":true}}"
+            ))
+            .is_err()
+        );
+
+        let construct = |trust_anchor_id,
+                         certificate_policy_id,
+                         record_epoch,
+                         crl_number,
+                         crl_der_digest,
+                         issuer_spki_digest,
+                         this_update,
+                         next_update,
+                         revoked_serials_root,
+                         root_epoch,
+                         previous_record_digest,
+                         lifecycle| {
+            PrivacyZkX509CrlRecordV1::new(
+                trust_anchor_id,
+                certificate_policy_id,
+                record_epoch,
+                crl_number,
+                crl_der_digest,
+                issuer_spki_digest,
+                this_update,
+                next_update,
+                revoked_serials_root,
+                root_epoch,
+                previous_record_digest,
+                lifecycle,
+            )
+        };
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                1,
+                1,
+                PrivacyX509CrlDerDigestV1::new([0; 32]),
+                origin.issuer_spki_digest,
+                1_000,
+                1_300,
+                origin.revoked_serials_root,
+                1,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlDerDigest)
+        );
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                1,
+                1,
+                origin.crl_der_digest,
+                PrivacyX509CrlIssuerSpkiDigestV1::new([0; 32]),
+                1_000,
+                1_300,
+                origin.revoked_serials_root,
+                1,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlIssuerSpkiDigest)
+        );
+        for (this_update, next_update) in [(1_000, 1_000), (1_001, 1_000)] {
+            assert_eq!(
+                construct(
+                    origin.trust_anchor_id,
+                    origin.certificate_policy_id,
+                    1,
+                    1,
+                    origin.crl_der_digest,
+                    origin.issuer_spki_digest,
+                    this_update,
+                    next_update,
+                    origin.revoked_serials_root,
+                    1,
+                    None,
+                    PrivacyZkX509RecordLifecycleV1::Active,
+                ),
+                Err(PrivacyZkX509RecordValidationErrorV1::InvalidCrlValidityWindow)
+            );
+        }
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                1,
+                1,
+                origin.crl_der_digest,
+                origin.issuer_spki_digest,
+                1_000,
+                1_300,
+                PrivacyRootV1::new([0; 32]),
+                1,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlRevokedSerialsRoot)
+        );
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                1,
+                1,
+                origin.crl_der_digest,
+                origin.issuer_spki_digest,
+                1_000,
+                1_300,
+                origin.revoked_serials_root,
+                2,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::CrlRootEpochMismatch {
+                record_epoch: 1,
+                root_epoch: 2,
+            })
+        );
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                1,
+                1,
+                origin.crl_der_digest,
+                origin.issuer_spki_digest,
+                1_000,
+                1_300,
+                origin.revoked_serials_root,
+                0,
+                None,
+                PrivacyZkX509RecordLifecycleV1::Active,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlRootEpoch)
+        );
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                2,
+                origin.crl_number,
+                origin.crl_der_digest,
+                origin.issuer_spki_digest,
+                origin.this_update_unix_seconds,
+                origin.next_update_unix_seconds,
+                origin.revoked_serials_root,
+                2,
+                Some(origin.record_digest),
+                PrivacyZkX509RecordLifecycleV1::Revoked,
+            ),
+            Err(
+                PrivacyZkX509RecordValidationErrorV1::RevokedCrlRootEpochNotHistorical {
+                    record_epoch: 2,
+                    root_epoch: 2,
+                }
+            )
+        );
+        assert_eq!(
+            construct(
+                origin.trust_anchor_id,
+                origin.certificate_policy_id,
+                2,
+                origin.crl_number,
+                origin.crl_der_digest,
+                origin.issuer_spki_digest,
+                origin.this_update_unix_seconds,
+                origin.next_update_unix_seconds,
+                origin.revoked_serials_root,
+                0,
+                Some(origin.record_digest),
+                PrivacyZkX509RecordLifecycleV1::Revoked,
+            ),
+            Err(PrivacyZkX509RecordValidationErrorV1::ZeroCrlRootEpoch)
+        );
+
+        let mut tampered = origin;
+        tampered.next_update_unix_seconds += 1;
+        assert_eq!(
+            tampered.validate(),
+            Err(PrivacyZkX509RecordValidationErrorV1::RecordDigestMismatch)
+        );
+
+        let rotation = zk_x509_crl(
+            2,
+            102,
+            1_200,
+            103,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        validate_zk_x509_crl_rotation_v1(&origin, &rotation)
+            .expect("canonical signed-CRL rotation");
+        let mut rotation_revocation = zk_x509_crl(
+            3,
+            102,
+            1_200,
+            103,
+            Some(rotation.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        rotation_revocation.crl_number = rotation.crl_number;
+        rotation_revocation.record_digest = rotation_revocation
+            .compute_record_digest()
+            .expect("canonical post-rotation CRL revocation digest");
+        validate_zk_x509_crl_revocation_v1(&rotation, &rotation_revocation)
+            .expect("revocation preserves the most recent active CRL root epoch");
+        let mut substituted_historical_root_epoch = rotation_revocation;
+        substituted_historical_root_epoch.root_epoch = origin.root_epoch;
+        substituted_historical_root_epoch.record_digest = substituted_historical_root_epoch
+            .compute_record_digest()
+            .expect("historical-root substitution digest");
+        assert_eq!(
+            validate_zk_x509_crl_revocation_v1(&rotation, &substituted_historical_root_epoch),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
+        );
+
+        let stale_update = zk_x509_crl(
+            2,
+            102,
+            1_000,
+            103,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &stale_update),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CrlThisUpdateNotIncreasing)
+        );
+        let mut stale_number = rotation;
+        stale_number.crl_number = origin.crl_number;
+        stale_number.record_digest = stale_number
+            .compute_record_digest()
+            .expect("stale CRLNumber digest");
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &stale_number),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CrlNumberNotIncreasing)
+        );
+        let same_der = zk_x509_crl(
+            2,
+            100,
+            1_200,
+            103,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &same_der),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RotationContentsUnchanged)
+        );
+
+        let mut issuer_substitution = rotation;
+        issuer_substitution.issuer_spki_digest = PrivacyX509CrlIssuerSpkiDigestV1::new(raw(104));
+        issuer_substitution.record_digest = issuer_substitution
+            .compute_record_digest()
+            .expect("issuer-substitution digest");
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&origin, &issuer_substitution),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CrlIssuerSpkiDigestMismatch)
+        );
+
+        let mut revoked = zk_x509_crl(
+            2,
+            100,
+            1_000,
+            101,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        revoked.crl_number = origin.crl_number;
+        revoked.root_epoch = origin.root_epoch;
+        revoked.record_digest = revoked
+            .compute_record_digest()
+            .expect("canonical signed-CRL revocation digest");
+        validate_zk_x509_crl_revocation_v1(&origin, &revoked)
+            .expect("canonical signed-CRL lineage revocation");
+        let after_terminal = zk_x509_crl(
+            3,
+            105,
+            1_400,
+            106,
+            Some(revoked.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Active,
+        );
+        assert_eq!(
+            validate_zk_x509_crl_rotation_v1(&revoked, &after_terminal),
+            Err(PrivacyZkX509TransitionValidationErrorV1::CurrentNotActive)
+        );
+        let mut mutated_revocation = zk_x509_crl(
+            2,
+            100,
+            1_000,
+            107,
+            Some(origin.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        mutated_revocation.crl_number = origin.crl_number;
+        mutated_revocation.root_epoch = origin.root_epoch;
+        mutated_revocation.record_digest = mutated_revocation
+            .compute_record_digest()
+            .expect("mutated signed-CRL revocation digest");
+        assert_eq!(
+            validate_zk_x509_crl_revocation_v1(&origin, &mutated_revocation),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
+        );
     }
 
     #[test]
@@ -12498,6 +13750,49 @@ mod tests {
         );
         validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &anchor_rotation)
             .expect("canonical trust-anchor rotation");
+        let mut digest_only_rotation = anchor_rotation;
+        digest_only_rotation.ca_membership_root = anchor_origin.ca_membership_root;
+        digest_only_rotation.record_digest = digest_only_rotation
+            .compute_record_digest()
+            .expect("digest-only trust-anchor rotation digest");
+        assert_eq!(
+            validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &digest_only_rotation),
+            Err(
+                PrivacyZkX509TransitionValidationErrorV1::TrustStoreDigestChangedWithoutCaMembershipRoot
+            )
+        );
+        let mut root_only_rotation = anchor_rotation;
+        root_only_rotation.trust_store_digest = anchor_origin.trust_store_digest;
+        root_only_rotation.record_digest = root_only_rotation
+            .compute_record_digest()
+            .expect("root-only trust-anchor rotation digest");
+        assert_eq!(
+            validate_zk_x509_trust_anchor_rotation_v1(&anchor_origin, &root_only_rotation),
+            Err(
+                PrivacyZkX509TransitionValidationErrorV1::CaMembershipRootChangedWithoutTrustStoreDigest
+            )
+        );
+        let rotation_revocation = zk_x509_trust_anchor(
+            3,
+            92,
+            Some(anchor_rotation.record_digest),
+            PrivacyZkX509RecordLifecycleV1::Revoked,
+        );
+        validate_zk_x509_trust_anchor_revocation_v1(&anchor_rotation, &rotation_revocation)
+            .expect("trust-anchor revocation preserves the latest active CA-root epoch");
+        let mut substituted_historical_root_epoch = rotation_revocation;
+        substituted_historical_root_epoch.ca_membership_root_epoch =
+            anchor_origin.ca_membership_root_epoch;
+        substituted_historical_root_epoch.record_digest = substituted_historical_root_epoch
+            .compute_record_digest()
+            .expect("historical CA-root epoch substitution digest");
+        assert_eq!(
+            validate_zk_x509_trust_anchor_revocation_v1(
+                &anchor_rotation,
+                &substituted_historical_root_epoch,
+            ),
+            Err(PrivacyZkX509TransitionValidationErrorV1::RevocationContentsChanged)
+        );
         let anchor_noop = zk_x509_trust_anchor(
             2,
             91,

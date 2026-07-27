@@ -3887,6 +3887,10 @@ mod tests {
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
         permission::Permission,
         prelude::Domain,
+        privacy::{
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+        },
         role::{Role, RoleId},
         smart_contract::ContractAddress,
         sns::{NameControllerV1, NameRecordV1},
@@ -3943,6 +3947,37 @@ mod tests {
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("domain ISI fixture key generation for requested algorithm should succeed")
+    }
+
+    fn install_orchard_pool_dependency_guard(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        asset_definition_id: AssetDefinitionId,
+        reserve_account: AccountId,
+    ) -> crate::privacy_state::PrivacyCommitmentKeyV1 {
+        let namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
+            }),
+        );
+        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
+            PrivacyOrchardPoolBootstrapDigestV1::new([0xD2; 32]),
+            asset_definition_id,
+            reserve_account,
+        )
+        .expect("canonical Orchard dependency-guard state");
+        let key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
+            .expect("canonical Orchard dependency-guard key");
+        let record = crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
+            .expect("canonical Orchard dependency-guard record");
+        assert!(
+            state_transaction
+                .world
+                .privacy_commitments
+                .insert(key, record)
+                .is_none()
+        );
+        key
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -4360,6 +4395,155 @@ mod tests {
         seed_domain(&mut state, &domain_id, authority);
         seed_account(&mut state, authority, &domain_id);
         state
+    }
+
+    #[test]
+    fn unregister_account_rejects_governed_orchard_reserve_dependency_atomically() {
+        let authority = (*ALICE_ID).clone();
+        let mut state = test_state_with_authority(&authority);
+        let domain_id =
+            DomainId::try_new("orchard_account", "guard").expect("Orchard guard domain");
+        seed_domain(&mut state, &domain_id, &authority);
+        let reserve_account = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(NewAccount::new(reserve_account.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register Orchard reserve account");
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("register Orchard backing definition");
+        let state_key = install_orchard_pool_dependency_guard(
+            &mut transaction,
+            asset_definition_id,
+            reserve_account.clone(),
+        );
+
+        let error = Unregister::account(reserve_account.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("governed Orchard reserve account must remain registered");
+        assert!(
+            error
+                .to_string()
+                .contains("reserve account for governed Orchard pool"),
+            "{error}"
+        );
+        assert!(transaction.world.accounts.get(&reserve_account).is_some());
+        assert!(
+            transaction
+                .world
+                .privacy_commitments
+                .get(&state_key)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn unregister_asset_definition_rejects_governed_orchard_dependency_atomically() {
+        let authority = (*ALICE_ID).clone();
+        let mut state = test_state_with_authority(&authority);
+        let domain_id = DomainId::try_new("orchard_asset", "guard").expect("Orchard guard domain");
+        seed_domain(&mut state, &domain_id, &authority);
+        let reserve_account = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(NewAccount::new(reserve_account.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register Orchard reserve account");
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("register Orchard backing definition");
+        let state_key = install_orchard_pool_dependency_guard(
+            &mut transaction,
+            asset_definition_id.clone(),
+            reserve_account,
+        );
+
+        let error = Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("governed Orchard backing definition must remain registered");
+        assert!(
+            error.to_string().contains("backs governed Orchard pool"),
+            "{error}"
+        );
+        assert!(
+            transaction
+                .world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some()
+        );
+        assert!(
+            transaction
+                .world
+                .privacy_commitments
+                .get(&state_key)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn unregister_domain_rejects_governed_orchard_asset_cascade_before_mutation() {
+        let authority = (*ALICE_ID).clone();
+        let mut state = test_state_with_authority(&authority);
+        let domain_id = DomainId::try_new("orchard_domain", "guard").expect("Orchard guard domain");
+        seed_domain(&mut state, &domain_id, &authority);
+        let reserve_account = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "coin".parse().expect("asset name"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::account(NewAccount::new(reserve_account.clone()))
+            .execute(&authority, &mut transaction)
+            .expect("register Orchard reserve account");
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&authority, &mut transaction)
+        .expect("register Orchard backing definition");
+        let state_key = install_orchard_pool_dependency_guard(
+            &mut transaction,
+            asset_definition_id.clone(),
+            reserve_account.clone(),
+        );
+
+        let error = Unregister::domain(domain_id.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("domain cascade must retain governed Orchard backing definition");
+        assert!(
+            error.to_string().contains("backs governed Orchard pool"),
+            "{error}"
+        );
+        assert!(transaction.world.domains.get(&domain_id).is_some());
+        assert!(
+            transaction
+                .world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_some()
+        );
+        assert!(transaction.world.accounts.get(&reserve_account).is_some());
+        assert!(
+            transaction
+                .world
+                .privacy_commitments
+                .get(&state_key)
+                .is_some()
+        );
     }
 
     #[test]

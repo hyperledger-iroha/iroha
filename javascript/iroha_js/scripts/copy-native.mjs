@@ -1011,6 +1011,7 @@ export async function publishNativeBinding({
       cargo_profile: cargoProfile,
       source_git_revision: buildProvenance.source_git_revision,
       source_tree_clean: buildProvenance.source_tree_clean,
+      source_tree_sha256: buildProvenance.source_tree_sha256,
       ...(machOSigningIndependentSha256 === null
         ? {}
         : { mach_o_signing_independent_sha256: machOSigningIndependentSha256 }),
