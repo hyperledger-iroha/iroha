@@ -21546,6 +21546,9 @@ mod kagemusha_bridge_tests {
             kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4(),
         );
         let readiness = OfflineReadiness {
+            peer_id:
+                "ea01308683839424703437C5C8701F3A92D76E228337D2327602B8C0CED667A6ED7F8AD6360948B24FC21849E77411A0975B6D"
+                    .to_owned(),
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
@@ -21590,6 +21593,11 @@ mod kagemusha_bridge_tests {
             .expect("production SBD readiness must satisfy the exact mobile projection");
         assert_eq!(
             projected.first().map(Vec::as_slice),
+            Some(readiness.peer_id.as_bytes()),
+            "mobile readiness must carry the validator identity instead of synthesizing it in an SDK",
+        );
+        assert_eq!(
+            projected.get(1).map(Vec::as_slice),
             Some(iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.as_bytes()),
             "mobile readiness must carry the authenticated cash-handoff capability instead of synthesizing it in an SDK",
         );
@@ -39542,6 +39550,13 @@ fn java_kagemusha_validate_exact_readiness_verifier_role(
 fn java_kagemusha_project_readiness_v4_fields(
     readiness: iroha_torii_shared::offline_api::OfflineReadiness,
 ) -> Result<Vec<Vec<u8>>, String> {
+    let parsed_peer_id = readiness
+        .peer_id
+        .parse::<iroha_data_model::peer::PeerId>()
+        .map_err(|_| "peer id is not a canonical validator identity".to_owned())?;
+    if parsed_peer_id.to_string() != readiness.peer_id {
+        return Err("peer id is not a canonical validator identity".to_owned());
+    }
     if readiness.cash_handoff_capability
         != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
     {
@@ -39789,6 +39804,7 @@ fn java_kagemusha_project_readiness_v4_fields(
     }
 
     let mut fields = vec![
+        readiness.peer_id.into_bytes(),
         readiness.cash_handoff_capability.into_bytes(),
         readiness
             .required_bridge_abi_version

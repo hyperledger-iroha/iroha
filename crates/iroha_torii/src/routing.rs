@@ -79446,6 +79446,7 @@ pub async fn handle_status(
     nexus_enabled: bool,
     nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
+    peer_id: Option<String>,
 ) -> Result<Response> {
     iroha_logger::debug!(
         tail = tail.unwrap_or(""),
@@ -79460,6 +79461,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
+    status.peer_id = peer_id.unwrap_or_default();
     normalize_status_block_visibility(&mut status);
     if !nexus_enabled {
         status.strip_nexus();
@@ -79948,7 +79950,7 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None)
+        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None, None)
             .await
             .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -80009,6 +80011,7 @@ mod tests {
             true,
             Some(&policy),
             None,
+            None,
         )
         .await
         .expect("status succeeds");
@@ -80057,6 +80060,7 @@ mod tests {
 
         let telemetry = MaybeTelemetry::for_tests();
         let asset = OfflineReadiness {
+            peer_id: "ed0120AABB".to_owned(),
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
             required_bridge_abi_version: 21,
             max_hops: 8,
@@ -80095,6 +80099,7 @@ mod tests {
             true,
             None,
             Some(offline.clone()),
+            Some("ed0120AABB".to_owned()),
         )
         .await
         .expect("status succeeds");
@@ -80106,6 +80111,10 @@ mod tests {
             .to_bytes();
         let payload: norito::json::Value =
             norito::json::from_slice(&body).expect("decode status payload");
+        assert_eq!(
+            payload.get("peer_id").and_then(norito::json::Value::as_str),
+            Some("ed0120AABB")
+        );
         let projected = payload.get("offline").expect("offline projection");
         assert_eq!(
             projected
@@ -80127,6 +80136,7 @@ mod tests {
             true,
             None,
             Some(offline),
+            Some("ed0120AABB".to_owned()),
         )
         .await
         .expect("offline status tail succeeds");
@@ -80145,10 +80155,17 @@ mod tests {
     #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
         let telemetry = MaybeTelemetry::for_tests();
-        let err =
-            super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None, None)
-                .await
-                .expect_err("lane-specific tails must be rejected when nexus is disabled");
+        let err = super::handle_status(
+            &telemetry,
+            None,
+            Some("teu_lane_commit"),
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
     }
 
@@ -80417,6 +80434,7 @@ mod tests {
             )),
             None,
             true,
+            None,
             None,
             None,
         )

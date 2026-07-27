@@ -218,6 +218,8 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     Debug, Clone, PartialEq, Eq, IntoSchema, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 pub struct OfflineReadiness {
+    /// Canonical identity of the validator that evaluated this snapshot.
+    pub peer_id: String,
     /// Exact peer-cash handoff/finality contract required by this chain build.
     pub cash_handoff_capability: String,
     /// Minimum native bridge ABI required by this chain build.
@@ -296,6 +298,7 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         use norito::json::{Error, MapVisitor};
 
         let mut visitor = MapVisitor::new(parser)?;
+        let mut peer_id = None;
         let mut cash_handoff_capability = None;
         let mut required_bridge_abi_version = None;
         let mut max_hops = None;
@@ -317,6 +320,12 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         while let Some(key) = visitor.next_key()? {
             let field = key.as_str();
             match field {
+                "peer_id" => {
+                    if peer_id.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    peer_id = Some(visitor.parse_value::<String>()?);
+                }
                 "cash_handoff_capability" => {
                     if cash_handoff_capability.is_some() {
                         return Err(Error::duplicate_field(field));
@@ -433,6 +442,7 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         visitor.finish()?;
 
         Ok(Self {
+            peer_id: peer_id.ok_or_else(|| Error::missing_field("peer_id"))?,
             cash_handoff_capability: cash_handoff_capability
                 .ok_or_else(|| Error::missing_field("cash_handoff_capability"))?,
             required_bridge_abi_version: required_bridge_abi_version
@@ -488,6 +498,7 @@ mod tests {
 
     fn sample_readiness() -> OfflineReadiness {
         OfflineReadiness {
+            peer_id: "ed0120AABB".to_owned(),
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
             required_bridge_abi_version: 21,
             max_hops: 8,

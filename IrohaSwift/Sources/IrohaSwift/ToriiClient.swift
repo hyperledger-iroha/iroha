@@ -10533,6 +10533,7 @@ public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equat
 }
 
 public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
+    public let peerId: String
     public let cashHandoffCapability: String
     public let requiredBridgeAbiVersion: UInt32
     public let maxHops: UInt32
@@ -10558,6 +10559,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     public let blockers: [ToriiKagemushaReadinessBlocker]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
+        case peerId = "peer_id"
         case cashHandoffCapability = "cash_handoff_capability"
         case requiredBridgeAbiVersion = "required_bridge_abi_version"
         case maxHops = "max_hops"
@@ -10584,6 +10586,15 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             context: "Kagemusha readiness"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedPeerId = try container.decode(String.self, forKey: .peerId)
+        guard ToriiKagemushaReadinessValidation.isCanonicalValidatorPeerId(decodedPeerId) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .peerId,
+                in: container,
+                debugDescription:
+                    "peer_id must be a canonical BLS-Normal validator identity"
+            )
+        }
         let decodedCashHandoffCapability = try container.decode(
             String.self,
             forKey: .cashHandoffCapability
@@ -10910,6 +10921,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 debugDescription: "ready must equal the complete ABI-21 runtime conjunction"
             )
         }
+        peerId = decodedPeerId
         cashHandoffCapability = decodedCashHandoffCapability
         requiredBridgeAbiVersion = decodedBridgeABI
         maxHops = decodedMaxHops
@@ -11193,6 +11205,18 @@ private enum ToriiKagemushaReadinessValidation {
         return bytes.count == 64 && bytes.allSatisfy {
             ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
                 || ($0 >= UInt8(ascii: "a") && $0 <= UInt8(ascii: "f"))
+        }
+    }
+
+    static func isCanonicalValidatorPeerId(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 102,
+              bytes.prefix(6).elementsEqual("ea0130".utf8) else {
+            return false
+        }
+        return bytes.dropFirst(6).allSatisfy {
+            ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
+                || ($0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "F"))
         }
     }
 

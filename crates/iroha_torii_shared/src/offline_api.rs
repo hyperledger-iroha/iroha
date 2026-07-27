@@ -619,6 +619,7 @@ mod tests {
             );
         }
         OfflineReadiness {
+            peer_id: "ed0120AABB".to_owned(),
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
@@ -676,6 +677,7 @@ mod tests {
 
     fn available_readiness() -> OfflineReadiness {
         OfflineReadiness {
+            peer_id: "ed0120AABB".to_owned(),
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version: 21,

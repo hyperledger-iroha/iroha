@@ -342,6 +342,10 @@ export async function acquireDistLock({
   }
 }
 
+async function acquireBuildLock() {
+  return acquireDistLock({ root: ROOT });
+}
+
 export function releaseDistLock(lock) {
   if (!lock) return;
   const observed = assertDistLockOwnership(lock);
@@ -498,40 +502,40 @@ function triggerTestFailpoint(failpoint, point) {
   }
 }
 
-function publishStagingTree({ root, dist, staging, stagingDigest, failpoint, lock }) {
+function publishStagingTree({ root, dist: DIST, staging, stagingDigest, failpoint, lock }) {
   const backup = join(root, `${BACKUP_PREFIX}${process.pid}-${randomUUID()}`);
   const failed = join(root, `${FAILED_PREFIX}${process.pid}-${randomUUID()}`);
   let previousMoved = false;
   let stagingPublished = false;
   try {
-    if (existsSync(dist)) {
+    if (existsSync(DIST)) {
       assertDistLockOwnership(lock);
-      renameSync(dist, backup);
+      renameSync(DIST, backup);
       syncDirectory(root);
       previousMoved = true;
     }
     triggerTestFailpoint(failpoint, "after-backup");
 
     assertDistLockOwnership(lock);
-    renameSync(staging, dist);
+    renameSync(staging, DIST);
     syncDirectory(root);
     stagingPublished = true;
     triggerTestFailpoint(failpoint, "after-publish");
-    validateDistOutputs(dist);
-    const publishedDigest = directoryDigest(dist);
+    validateDistOutputs(DIST);
+    const publishedDigest = directoryDigest(DIST);
     if (publishedDigest !== stagingDigest) {
       throw new Error("build:dist published tree changed after staged verification");
     }
   } catch (error) {
     let rollbackError;
     try {
-      if (stagingPublished && existsSync(dist)) {
+      if (stagingPublished && existsSync(DIST)) {
         assertDistLockOwnership(lock);
-        renameSync(dist, failed);
+        renameSync(DIST, failed);
       }
       if (previousMoved && existsSync(backup)) {
         assertDistLockOwnership(lock);
-        renameSync(backup, dist);
+        renameSync(backup, DIST);
       }
       syncDirectory(root);
       if (existsSync(failed)) {
@@ -566,7 +570,10 @@ export async function buildDistribution({ root = ROOT } = {}) {
   let lock;
   let resultError;
   try {
-    lock = await acquireDistLock({ root: resolvedRoot });
+    lock =
+      resolvedRoot === ROOT
+        ? await acquireBuildLock()
+        : await acquireDistLock({ root: resolvedRoot });
     recoverInterruptedPublication(resolvedRoot, lock);
     cpSync(src, staging, { recursive: true, errorOnExist: true });
     validateDistOutputs(staging);

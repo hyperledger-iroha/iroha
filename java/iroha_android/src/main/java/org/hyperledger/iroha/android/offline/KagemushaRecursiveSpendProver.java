@@ -713,7 +713,7 @@ public final class KagemushaRecursiveSpendProver {
     requireArtifactBridge();
     final byte[][] fields =
         nativeProjectReadinessV4(Objects.requireNonNull(readiness, "readiness").noritoEncoded());
-    if (fields == null || fields.length < 17) {
+    if (fields == null || fields.length < 18) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid fields");
     }
@@ -723,8 +723,8 @@ public final class KagemushaRecursiveSpendProver {
             "native Kagemusha readiness projection returned a null field");
       }
     }
-    final int blockerCount = integer(fields[16], "blockerCount");
-    if (blockerCount < 0 || fields.length != 17 + blockerCount * 2) {
+    final int blockerCount = integer(fields[17], "blockerCount");
+    if (blockerCount < 0 || fields.length != 18 + blockerCount * 2) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid blockers");
     }
@@ -733,26 +733,27 @@ public final class KagemushaRecursiveSpendProver {
     for (int index = 0; index < blockerCount; index++) {
       blockers.add(
           new ReadinessBlocker(
-              canonicalText(fields[17 + index * 2], "blockerCode"),
-              canonicalText(fields[18 + index * 2], "blockerMessage")));
+              canonicalText(fields[18 + index * 2], "blockerCode"),
+              canonicalText(fields[19 + index * 2], "blockerMessage")));
     }
     return new ReadinessProjection(
-        canonicalText(fields[0], "cashHandoffCapability"),
-        integer(fields[1], "requiredBridgeAbiVersion"),
-        integer(fields[2], "maximumHops"),
-        canonicalText(fields[3], "assetDefinitionId"),
-        fields[4].length == 0 ? null : integer(fields[4], "assetScale"),
-        longInteger(fields[5], "evaluatedBlockHeight"),
-        requireDigest(fields[6], "evaluatedBlockHash"),
-        bool(fields[7], "proofBackendAvailable"),
-        bool(fields[8], "recursiveLineageSupported"),
-        bool(fields[9], "ready"),
-        activeVerifier(fields[10]),
+        canonicalText(fields[0], "peerId"),
+        canonicalText(fields[1], "cashHandoffCapability"),
+        integer(fields[2], "requiredBridgeAbiVersion"),
+        integer(fields[3], "maximumHops"),
+        canonicalText(fields[4], "assetDefinitionId"),
+        fields[5].length == 0 ? null : integer(fields[5], "assetScale"),
+        longInteger(fields[6], "evaluatedBlockHeight"),
+        requireDigest(fields[7], "evaluatedBlockHash"),
+        bool(fields[8], "proofBackendAvailable"),
+        bool(fields[9], "recursiveLineageSupported"),
+        bool(fields[10], "ready"),
         activeVerifier(fields[11]),
         activeVerifier(fields[12]),
         activeVerifier(fields[13]),
         activeVerifier(fields[14]),
-        authenticatedArtifactSet(fields[15]),
+        activeVerifier(fields[15]),
+        authenticatedArtifactSet(fields[16]),
         blockers);
   }
 
@@ -4259,6 +4260,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static final class ReadinessProjection {
+    private final String peerId;
     private final String cashHandoffCapability;
     private final int requiredBridgeAbiVersion;
     private final int maximumHops;
@@ -4278,6 +4280,7 @@ public final class KagemushaRecursiveSpendProver {
     private final List<ReadinessBlocker> blockers;
 
     ReadinessProjection(
+        final String peerId,
         final String cashHandoffCapability,
         final int requiredBridgeAbiVersion,
         final int maximumHops,
@@ -4299,6 +4302,7 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalArgumentException(
             "cashHandoffCapability must be the exact cash_handoff_v1 contract");
       }
+      this.peerId = peerId;
       this.cashHandoffCapability = cashHandoffCapability;
       this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
       this.maximumHops = maximumHops;
@@ -4318,6 +4322,7 @@ public final class KagemushaRecursiveSpendProver {
       this.blockers = Collections.unmodifiableList(new java.util.ArrayList<>(blockers));
     }
 
+    public String peerId() { return peerId; }
     public String cashHandoffCapability() { return cashHandoffCapability; }
     public int requiredBridgeAbiVersion() { return requiredBridgeAbiVersion; }
     public int maximumHops() { return maximumHops; }

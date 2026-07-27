@@ -12557,6 +12557,40 @@ export interface ValidationFeePolicyProofCatchUpV1
   readonly pagesVerified: number;
 }
 
+export interface ValidationFeeChargingModeV1 {
+  readonly charging_mode:
+    | "DISABLED"
+    | "PER_QUALIFYING_TRANSFER_INSTRUCTION";
+  readonly value: null;
+}
+
+export interface ValidationFeePolicyV1 {
+  readonly schema_version: 1;
+  readonly chain_id: string;
+  readonly genesis_hash: string;
+  readonly policy_version: number | string | bigint;
+  readonly previous_policy_hash: string | null;
+  readonly ds_asset_id: string;
+  readonly ds_scale: number;
+  readonly fee: string;
+  readonly treasury_account_id: string;
+  readonly charging_mode: Readonly<ValidationFeeChargingModeV1>;
+  readonly effective_from_height: number | string | bigint;
+  readonly expires_after_height: number | string | bigint | null;
+  readonly exemption_classes: readonly string[];
+  readonly treasury_payout_binding: Readonly<Record<string, JsonValue>> | null;
+}
+
+export interface NormalizedValidationFeePolicyV1
+  extends Omit<
+    ValidationFeePolicyV1,
+    "policy_version" | "effective_from_height" | "expires_after_height"
+  > {
+  readonly policy_version: string;
+  readonly effective_from_height: string;
+  readonly expires_after_height: string | null;
+}
+
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
   getKagemushaReadinessV4(
@@ -14396,11 +14430,16 @@ export function signQuotedIvmProvedTransactionPayload(
 ): SignedTransactionResult;
 
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
+export const VALIDATION_FEE_DS_SCALE: 2;
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "cbsi.mobile-validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
+export const VALIDATION_FEE_POLICY_SCHEMA_VERSION: 1;
 export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 21;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
+export function normalizeValidationFeePolicyV1(
+  policy: ValidationFeePolicyV1,
+): NormalizedValidationFeePolicyV1;
 export function normalizeValidationFeeCheckpointV1(
   checkpoint: ValidationFeeCheckpointV1,
 ): NormalizedValidationFeeCheckpointV1;

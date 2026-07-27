@@ -12993,6 +12993,11 @@ fn offline_kagemusha_readiness_snapshot(
     app: &AppState,
     asset_definition_selector: &str,
 ) -> Result<iroha_torii_shared::offline_api::OfflineReadiness, Error> {
+    let peer_id = app
+        .local_peer_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
     let offline_command_readiness = app
         .offline_commands
         .as_deref()
@@ -13074,6 +13079,12 @@ fn offline_kagemusha_readiness_snapshot(
         ("recursive_step_ep", recursive_step_ep.as_ref()),
     ])?;
     let mut blockers = recursive_v4.blockers;
+    if peer_id.is_empty() {
+        blockers.push(offline_readiness_blocker(
+            "peer_identity_unavailable",
+            "The validator peer identity is unavailable.",
+        ));
+    }
     match offline_command_readiness {
         None => blockers.push(offline_readiness_blocker(
             "issuer_unavailable",
@@ -13136,6 +13147,7 @@ fn offline_kagemusha_readiness_snapshot(
             &blockers,
         );
     Ok(iroha_torii_shared::offline_api::OfflineReadiness {
+        peer_id,
         cash_handoff_capability: iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
             .to_owned(),
         required_bridge_abi_version:
@@ -13448,25 +13460,18 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn mandatory_health_and_readyz_status_fail_closed_with_http_503() {
         assert_eq!(
-            mandatory_offline_probe_status(true, false),
+            mandatory_offline_probe_status(false),
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "both mandatory offline readiness probes must reject an offline-incomplete node",
         );
         assert_eq!(
-            mandatory_offline_probe_status(true, true),
+            mandatory_offline_probe_status(true),
             axum::http::StatusCode::OK,
-        );
-        assert_eq!(
-            mandatory_offline_probe_status(false, false),
-            axum::http::StatusCode::OK,
-            "an explicitly disabled optional service cannot fail node readiness",
         );
         let public_taira = ChainId::from(PUBLIC_TAIRA_CHAIN_ID);
+        assert!(offline_service_is_mandatory(&public_taira, false));
         assert_eq!(
-            mandatory_offline_probe_status(
-                offline_service_is_mandatory(&public_taira, false),
-                false,
-            ),
+            mandatory_offline_probe_status(false),
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "public Taira must remain fail-closed when local config disables offline cash",
         );
@@ -13500,6 +13505,14 @@ mod offline_kagemusha_readiness_tests {
         assert_eq!(
             payload.get("ready").and_then(norito::json::Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            payload.get("peer_id").and_then(norito::json::Value::as_str),
+            Some("")
+        );
+        assert!(
+            payload.get("mandatory").is_none(),
+            "probe payload must expose the canonical deployment-gate field set",
         );
 
         let liveness = axum::response::IntoResponse::into_response(super::handler_livez().await);
@@ -13893,6 +13906,7 @@ mod offline_kagemusha_readiness_tests {
         assert_eq!(artifact_set.asset_scale, 9);
 
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
+            peer_id: "ed0120AABB".to_owned(),
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
@@ -14055,6 +14069,7 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
+            peer_id: "ed0120AABB".to_owned(),
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version: 21,
@@ -17477,8 +17492,8 @@ fn mandatory_offline_status_snapshot(
 }
 
 #[cfg(feature = "app_api")]
-fn mandatory_offline_probe_status(mandatory: bool, ready: bool) -> StatusCode {
-    if !mandatory || ready {
+fn mandatory_offline_probe_status(ready: bool) -> StatusCode {
+    if ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
@@ -17489,6 +17504,11 @@ fn mandatory_offline_probe_status(mandatory: bool, ready: bool) -> StatusCode {
 fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
     let offline_config = app.state.view().settlement.offline.clone();
     let mandatory = offline_service_is_mandatory(app.chain_id.as_ref(), offline_config.enabled);
+    let peer_id = app
+        .local_peer_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
     let command_config = app
         .offline_commands
         .as_deref()
@@ -17501,17 +17521,19 @@ fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
         command_config.as_ref(),
         &fee_asset_selector,
     );
-    let ready = mandatory && result.is_ok();
-    let blockers = if mandatory {
-        result.err().into_iter().collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    let mut blockers = result.err().into_iter().collect::<Vec<_>>();
+    if !mandatory {
+        blockers.push("offline cash is not mandatory for this node profile".to_owned());
+    }
+    if peer_id.is_empty() {
+        blockers.push("validator peer identity is unavailable".to_owned());
+    }
+    let ready = mandatory && blockers.is_empty();
     crate::utils::respond_json_value_with_status(
-        mandatory_offline_probe_status(mandatory, ready),
+        mandatory_offline_probe_status(ready),
         json_object([
+            json_entry("peer_id", peer_id),
             json_entry("live", true),
-            json_entry("mandatory", mandatory),
             json_entry("ready", ready),
             json_entry(
                 "cash_handoff_capability",
@@ -20033,6 +20055,19 @@ fn status_offline_snapshot(
 }
 
 #[cfg(feature = "telemetry")]
+fn status_peer_id(app: &AppState) -> Option<String> {
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    {
+        return app.local_peer_id.as_ref().map(ToString::to_string);
+    }
+    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
+    {
+        let _ = app;
+        None
+    }
+}
+
+#[cfg(feature = "telemetry")]
 async fn handler_status_tail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -20053,6 +20088,7 @@ async fn handler_status_tail(
             nexus_enabled,
             Some(&nexus_routing_policy),
             offline,
+            status_peer_id(&app),
         )
         .await;
     }
@@ -20092,6 +20128,7 @@ async fn handler_status_tail(
         nexus_enabled,
         Some(&nexus_routing_policy),
         offline,
+        status_peer_id(&app),
     )
     .await
 }
@@ -20115,6 +20152,7 @@ async fn handler_status_root(
             nexus_enabled,
             Some(&nexus_routing_policy),
             offline,
+            status_peer_id(&app),
         )
         .await;
     }
@@ -20152,6 +20190,7 @@ async fn handler_status_root(
         nexus_enabled,
         Some(&nexus_routing_policy),
         offline,
+        status_peer_id(&app),
     )
     .await
 }

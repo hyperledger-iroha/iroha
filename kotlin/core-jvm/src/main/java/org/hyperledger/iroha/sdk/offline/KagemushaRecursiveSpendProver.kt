@@ -606,37 +606,38 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun projectReadiness(readiness: Readiness): ReadinessProjection {
             requireArtifactBridge()
             val fields = nativeProjectReadinessV4(readiness.noritoEncoded())
-            check(fields.size >= 17) { "native Kagemusha readiness projection returned invalid fields" }
-            val blockerCount = integer(fields[16], "blockerCount")
-            check(blockerCount >= 0 && fields.size == 17 + blockerCount * 2) {
+            check(fields.size >= 18) { "native Kagemusha readiness projection returned invalid fields" }
+            val blockerCount = integer(fields[17], "blockerCount")
+            check(blockerCount >= 0 && fields.size == 18 + blockerCount * 2) {
                 "native Kagemusha readiness projection returned invalid blockers"
             }
             val blockers = ArrayList<ReadinessBlocker>(blockerCount)
             repeat(blockerCount) { index ->
                 blockers.add(
                     ReadinessBlocker(
-                        canonicalText(fields[17 + index * 2], "blockerCode"),
-                        canonicalText(fields[18 + index * 2], "blockerMessage"),
+                        canonicalText(fields[18 + index * 2], "blockerCode"),
+                        canonicalText(fields[19 + index * 2], "blockerMessage"),
                     ),
                 )
             }
             return ReadinessProjection(
-                cashHandoffCapability = canonicalText(fields[0], "cashHandoffCapability"),
-                requiredBridgeAbiVersion = integer(fields[1], "requiredBridgeAbiVersion"),
-                maximumHops = integer(fields[2], "maximumHops"),
-                assetDefinitionId = canonicalText(fields[3], "assetDefinitionId"),
-                assetScale = fields[4].takeIf { it.isNotEmpty() }?.let { integer(it, "assetScale") },
-                evaluatedBlockHeight = longInteger(fields[5], "evaluatedBlockHeight"),
-                evaluatedBlockHash = requireDigest(fields[6], "evaluatedBlockHash"),
-                proofBackendAvailable = bool(fields[7], "proofBackendAvailable"),
-                recursiveLineageSupported = bool(fields[8], "recursiveLineageSupported"),
-                ready = bool(fields[9], "ready"),
-                transferVerifier = activeVerifier(fields[10]),
-                topUpShieldVerifier = activeVerifier(fields[11]),
-                unshieldVerifier = activeVerifier(fields[12]),
-                recursiveStepEqVerifier = activeVerifier(fields[13]),
-                recursiveStepEpVerifier = activeVerifier(fields[14]),
-                artifactSet = authenticatedArtifactSet(fields[15]),
+                peerId = canonicalText(fields[0], "peerId"),
+                cashHandoffCapability = canonicalText(fields[1], "cashHandoffCapability"),
+                requiredBridgeAbiVersion = integer(fields[2], "requiredBridgeAbiVersion"),
+                maximumHops = integer(fields[3], "maximumHops"),
+                assetDefinitionId = canonicalText(fields[4], "assetDefinitionId"),
+                assetScale = fields[5].takeIf { it.isNotEmpty() }?.let { integer(it, "assetScale") },
+                evaluatedBlockHeight = longInteger(fields[6], "evaluatedBlockHeight"),
+                evaluatedBlockHash = requireDigest(fields[7], "evaluatedBlockHash"),
+                proofBackendAvailable = bool(fields[8], "proofBackendAvailable"),
+                recursiveLineageSupported = bool(fields[9], "recursiveLineageSupported"),
+                ready = bool(fields[10], "ready"),
+                transferVerifier = activeVerifier(fields[11]),
+                topUpShieldVerifier = activeVerifier(fields[12]),
+                unshieldVerifier = activeVerifier(fields[13]),
+                recursiveStepEqVerifier = activeVerifier(fields[14]),
+                recursiveStepEpVerifier = activeVerifier(fields[15]),
+                artifactSet = authenticatedArtifactSet(fields[16]),
                 blockers = blockers,
             )
         }
@@ -3904,6 +3905,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     class ReadinessBlocker(val code: String, val message: String)
 
     class ReadinessProjection internal constructor(
+        val peerId: String,
         val cashHandoffCapability: String,
         val requiredBridgeAbiVersion: Int,
         val maximumHops: Int,

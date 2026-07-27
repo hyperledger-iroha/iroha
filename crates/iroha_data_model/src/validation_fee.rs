@@ -30,12 +30,12 @@ use crate::{
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
 /// Decimal scale required for the initial policy fee asset.
 pub const VALIDATION_FEE_DS_SCALE: u8 = 2;
-/// Canonical fee amount required by the initial validation-fee policy (0.10 SBD).
+/// Canonical fee amount required by the initial validation-fee policy (0.10 DS).
 pub const VALIDATION_FEE_INITIAL_AMOUNT: &str = "0.10";
 /// Minimum delay from Parliament enactment to policy activation.
 pub const VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS: u64 = 120_960;
-/// Exact SBD batch consumed by every validation-fee payout lifecycle tick.
-pub const VALIDATION_FEE_PAYOUT_BATCH_SBD: &str = "10";
+/// Exact DS batch consumed by every validation-fee payout lifecycle tick.
+pub const VALIDATION_FEE_PAYOUT_BATCH_DS: &str = "10";
 /// Exact inclusive minimum XOR output accepted by the payout lifecycle.
 pub const VALIDATION_FEE_PAYOUT_MIN_XOR: &str = "4";
 /// Exact inclusive maximum XOR output accepted by the payout lifecycle.
@@ -1601,14 +1601,14 @@ pub struct ValidationFeeTreasuryPayoutBindingV1 {
     pub entrypoint: Name,
     /// Immutable non-signable contract subject and policy treasury.
     pub treasury_account_id: AccountId,
-    /// Exact policy SBD fee asset used by the pool quote leg.
-    pub sbd_asset_id: AssetDefinitionId,
+    /// Exact policy DS fee asset used by the pool quote leg.
+    pub ds_asset_id: AssetDefinitionId,
     /// Exact XOR asset returned by the pool base leg.
     pub xor_asset_id: AssetDefinitionId,
-    /// Exact pool vault receiving SBD and sourcing XOR.
+    /// Exact pool vault receiving DS and sourcing XOR.
     pub pool_vault_account_id: AccountId,
-    /// Exact SBD amount consumed per successful payout tick.
-    pub batch_sbd: Quantity,
+    /// Exact DS amount consumed per successful payout tick.
+    pub batch_ds: Quantity,
     /// Inclusive minimum XOR output accepted from the pool.
     pub min_xor_out: Quantity,
     /// Inclusive maximum XOR output accepted from the pool.
@@ -1651,11 +1651,11 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
         if self.treasury_account_id == self.pool_vault_account_id {
             return Some("validation-fee treasury payout treasury and pool vault must differ");
         }
-        if self.sbd_asset_id == self.xor_asset_id {
-            return Some("validation-fee treasury payout SBD and XOR assets must differ");
+        if self.ds_asset_id == self.xor_asset_id {
+            return Some("validation-fee treasury payout DS and XOR assets must differ");
         }
-        if self.batch_sbd != validation_fee_payout_batch_sbd() {
-            return Some("validation-fee treasury payout batch must be exactly 10 SBD");
+        if self.batch_ds != validation_fee_payout_batch_ds() {
+            return Some("validation-fee treasury payout batch must be exactly 10 DS");
         }
         if self.min_xor_out != validation_fee_payout_min_xor()
             || self.max_xor_out != validation_fee_payout_max_xor()
@@ -1801,7 +1801,7 @@ impl ValidationFeePolicyV1 {
             ValidationFeeChargingMode::PerQualifyingTransferInstruction
                 if self.fee != initial_validation_fee_amount() =>
             {
-                return Some("enabled validation-fee policy amount must be exactly 0.10 SBD");
+                return Some("enabled validation-fee policy amount must be exactly 0.10 DS");
             }
             ValidationFeeChargingMode::Disabled
             | ValidationFeeChargingMode::PerQualifyingTransferInstruction => {}
@@ -1836,14 +1836,14 @@ impl ValidationFeePolicyV1 {
                         "validation-fee treasury payout contract subject must equal the policy treasury",
                     );
                 }
-                if binding.sbd_asset_id != self.ds_asset_id {
+                if binding.ds_asset_id != self.ds_asset_id {
                     return Some(
-                        "validation-fee treasury payout SBD asset must equal the policy fee asset",
+                        "validation-fee treasury payout DS asset must equal the policy fee asset",
                     );
                 }
-                if binding.batch_sbd.scale() > u32::from(self.ds_scale) {
+                if binding.batch_ds.scale() > u32::from(self.ds_scale) {
                     return Some(
-                        "validation-fee treasury payout SBD batch exceeds the policy asset scale",
+                        "validation-fee treasury payout DS batch exceeds the policy asset scale",
                     );
                 }
             }
@@ -1882,10 +1882,10 @@ pub fn initial_validation_fee_amount() -> Quantity {
         .expect("hard-coded validation-fee amount is canonical")
 }
 
-/// Return the exact SBD payout batch amount.
+/// Return the exact DS payout batch amount.
 #[must_use]
-pub fn validation_fee_payout_batch_sbd() -> Quantity {
-    VALIDATION_FEE_PAYOUT_BATCH_SBD
+pub fn validation_fee_payout_batch_ds() -> Quantity {
+    VALIDATION_FEE_PAYOUT_BATCH_DS
         .parse()
         .expect("hard-coded validation-fee payout batch is canonical")
 }
@@ -1980,10 +1980,10 @@ mod parliament_tests {
             contract_address,
             code_hash: [0x11; 32],
             entrypoint: Name::from_str("autonomous_validation_fee_tick").expect("entrypoint"),
-            sbd_asset_id: fee_asset(),
+            ds_asset_id: fee_asset(),
             xor_asset_id: xor_asset(),
             pool_vault_account_id: account(2),
-            batch_sbd: validation_fee_payout_batch_sbd(),
+            batch_ds: validation_fee_payout_batch_ds(),
             min_xor_out: validation_fee_payout_min_xor(),
             max_xor_out: validation_fee_payout_max_xor(),
             recipients: (3..=6)
@@ -2401,7 +2401,7 @@ mod parliament_tests {
             enabled.fee = malformed_fee.parse().expect("quantity");
             assert_eq!(
                 enabled.policy_invariant_error(),
-                Some("enabled validation-fee policy amount must be exactly 0.10 SBD")
+                Some("enabled validation-fee policy amount must be exactly 0.10 DS")
             );
         }
     }
@@ -2426,12 +2426,12 @@ mod parliament_tests {
         for malformed in [
             {
                 let mut value = binding.clone();
-                value.batch_sbd = "9.99".parse().expect("quantity");
+                value.batch_ds = "9.99".parse().expect("quantity");
                 value
             },
             {
                 let mut value = binding.clone();
-                value.batch_sbd = "10.01".parse().expect("quantity");
+                value.batch_ds = "10.01".parse().expect("quantity");
                 value
             },
             {

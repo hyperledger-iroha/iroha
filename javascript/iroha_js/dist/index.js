@@ -62,6 +62,11 @@ export {
   computeValidationFeePayoutLifecycleProposalFingerprintV1,
   computeValidationFeePolicyProposalFingerprintV1,
 } from "./validationFeeProposal.js";
+export {
+  VALIDATION_FEE_DS_SCALE,
+  VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+  normalizeValidationFeePolicyV1,
+} from "./validationFeePolicy.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
   ToriiClient,

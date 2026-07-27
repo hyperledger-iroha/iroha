@@ -230,11 +230,11 @@ pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
                 return None;
             };
             let binding = &lifecycle.payout_binding;
-            let wrapper_sbd_asset = iroha_data_model::asset::AssetId::new(
-                binding.sbd_asset_id.clone(),
+            let wrapper_ds_asset = iroha_data_model::asset::AssetId::new(
+                binding.ds_asset_id.clone(),
                 binding.treasury_account_id.clone(),
             );
-            (transfer.asset == wrapper_sbd_asset).then(|| binding.pool_vault_account_id.clone())
+            (transfer.asset == wrapper_ds_asset).then(|| binding.pool_vault_account_id.clone())
         })
 }
 
@@ -1191,7 +1191,7 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
             treasury_account_id: binding.treasury_account_id.clone(),
             fee_asset_definition_id,
             asset_scale: policy.ds_scale,
-            amount: binding.batch_sbd.clone(),
+            amount: binding.batch_ds.clone(),
         };
         match consume_validation_fee_credit(state_transaction, &credit) {
             Ok(()) => {}
@@ -1275,7 +1275,7 @@ fn validate_treasury_payout_effect_plan(
         transfers: Vec::new(),
         multisig_fee_markers: Vec::new(),
     };
-    collect_instruction_asset_transfers(instructions, 0, &binding.sbd_asset_id, &mut collection)?;
+    collect_instruction_asset_transfers(instructions, 0, &binding.ds_asset_id, &mut collection)?;
     if collection.transfers.len() != 6 {
         return Err(mismatch(
             "every instruction must be one direct non-batched asset transfer",
@@ -1292,14 +1292,14 @@ fn validate_treasury_payout_effect_plan(
         }
     }
 
-    let sbd_leg = &collection.transfers[0];
-    if sbd_leg.asset_definition_id != binding.sbd_asset_id
-        || sbd_leg.source_account_id != binding.treasury_account_id
-        || sbd_leg.destination_account_id != binding.pool_vault_account_id
-        || &sbd_leg.amount != &binding.batch_sbd
+    let ds_leg = &collection.transfers[0];
+    if ds_leg.asset_definition_id != binding.ds_asset_id
+        || ds_leg.source_account_id != binding.treasury_account_id
+        || ds_leg.destination_account_id != binding.pool_vault_account_id
+        || &ds_leg.amount != &binding.batch_ds
     {
         return Err(mismatch(
-            "instruction 0 must be the exact bound SBD treasury-to-vault batch",
+            "instruction 0 must be the exact bound DS treasury-to-vault batch",
         ));
     }
 
@@ -2004,13 +2004,13 @@ fn validate_treasury_payout_contract_subject(
             },
         );
     }
-    let sbd_credit = ValidationFeeCredit {
+    let ds_credit = ValidationFeeCredit {
         treasury_account_id: binding.treasury_account_id.clone(),
-        fee_asset_definition_id: binding.sbd_asset_id.clone(),
+        fee_asset_definition_id: binding.ds_asset_id.clone(),
         asset_scale: policy.ds_scale,
-        amount: binding.batch_sbd.clone(),
+        amount: binding.batch_ds.clone(),
     };
-    validation_fee_credit_asset_spec(state_transaction, &sbd_credit)?;
+    validation_fee_credit_asset_spec(state_transaction, &ds_credit)?;
     let xor_definition = state_transaction
         .world
         .asset_definition(&binding.xor_asset_id)
@@ -3816,10 +3816,10 @@ mod tests {
                 .parse()
                 .expect("payout entrypoint"),
             treasury_account_id: treasury,
-            sbd_asset_id: fee_asset(),
+            ds_asset_id: fee_asset(),
             xor_asset_id: xor_asset(),
             pool_vault_account_id: account(2),
-            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+            batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
             min_xor_out: Quantity::from(4_u64),
             max_xor_out: Quantity::from(100_u64),
             recipients: (3..=6)
@@ -4383,8 +4383,8 @@ mod tests {
         let mut instructions = vec![
             transfer(
                 &binding.treasury_account_id,
-                &binding.sbd_asset_id,
-                binding.batch_sbd.clone(),
+                &binding.ds_asset_id,
+                binding.batch_ds.clone(),
                 &binding.pool_vault_account_id,
             ),
             transfer(
@@ -5197,7 +5197,7 @@ mod tests {
                 Err(ValidationFeeAdmissionError::MissingFee {
                     required_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
                 }),
-                "an adjacent ordinary SBD transfer must still pay the exact validation fee",
+                "an adjacent ordinary DS transfer must still pay the exact validation fee",
             );
 
             let fee = transfer(
@@ -6146,7 +6146,7 @@ mod tests {
         let mut wrong_batch = canonical.clone();
         wrong_batch[0] = transfer(
             &treasury,
-            &binding.sbd_asset_id,
+            &binding.ds_asset_id,
             Quantity::from(2_u64),
             &binding.pool_vault_account_id,
         );
@@ -6158,19 +6158,19 @@ mod tests {
             &ordered_treasury_payout_plan(&binding, &wrong_batch),
         );
 
-        let mut wrong_sbd_asset = canonical.clone();
-        wrong_sbd_asset[0] = transfer(
+        let mut wrong_ds_asset = canonical.clone();
+        wrong_ds_asset[0] = transfer(
             &treasury,
             &binding.xor_asset_id,
-            binding.batch_sbd.clone(),
+            binding.batch_ds.clone(),
             &binding.pool_vault_account_id,
         );
-        let wrong_sbd_asset_groups =
-            std::collections::BTreeMap::from([(treasury.clone(), wrong_sbd_asset.clone())]);
+        let wrong_ds_asset_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), wrong_ds_asset.clone())]);
         assert_treasury_payout_plan_mismatch(
             &binding,
-            &wrong_sbd_asset_groups,
-            &ordered_treasury_payout_plan(&binding, &wrong_sbd_asset),
+            &wrong_ds_asset_groups,
+            &ordered_treasury_payout_plan(&binding, &wrong_ds_asset),
         );
 
         let mut wrong_vault = canonical.clone();
@@ -6564,7 +6564,7 @@ mod tests {
             OpaqueDeferredValidationOutcome::NoOp,
         );
         let payout_credit_minor_units =
-            quantity_to_minor_units(&binding.batch_sbd, policy.ds_scale, usize::MAX)
+            quantity_to_minor_units(&binding.batch_ds, policy.ds_scale, usize::MAX)
                 .expect("payout batch must fit the policy minor-unit domain");
         let payout_credit = ValidationFeeCredit::from_policy_minor_units(
             treasury.clone(),
@@ -7425,7 +7425,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_sbd_transfer_from_bound_treasury_remains_fee_bearing() {
+    fn ordinary_ds_transfer_from_bound_treasury_remains_fee_bearing() {
         let user = account(1);
         let binding = treasury_payout_binding(test_contract_address(), b"bound-pool");
         let treasury = binding.treasury_account_id.clone();

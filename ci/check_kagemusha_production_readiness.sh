@@ -43,6 +43,7 @@ VALUE_CONTRACT = "crates/iroha_data_model/tests/kagemusha_value_contract.rs"
 SCHEMA_GOLDEN = "crates/iroha_data_model/tests/offline_public_schema_golden.rs"
 CONFIG = "crates/iroha_config/src/parameters/user.rs"
 NODE = "crates/irohad/src/main.rs"
+TORII = "crates/iroha_torii/src/lib.rs"
 KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
 ROUTES = "crates/iroha_torii_shared/src/route_catalog.rs"
 WORKFLOW = ".github/workflows/pr_kagemusha_payload_bench.yml"
@@ -336,6 +337,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             SCHEMA_GOLDEN,
             CONFIG,
             NODE,
+            TORII,
             KAGAMI,
             ROUTES,
             WORKFLOW,
@@ -515,7 +517,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         r'instruction_count\":1',
     )
     require(
-        texts[CONFIG] + texts[NODE],
+        texts[CONFIG] + texts[NODE] + texts[TORII],
         "configured V4 runtime",
         errors,
         "kagemusha_release_policy_path",

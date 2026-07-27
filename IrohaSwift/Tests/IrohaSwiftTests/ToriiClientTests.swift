@@ -1499,6 +1499,8 @@ final class ToriiClientTests: XCTestCase {
     private let onboardingToken = String(repeating: "T", count: 32)
     private let encodedRoseAssetID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+    private let canonicalKagemushaPeerId =
+        "ea01308683839424703437C5C8701F3A92D76E228337D2327602B8C0CED667A6ED7F8AD6360948B24FC21849E77411A0975B6D"
 
     private var authority: String {
         try! Keypair(privateKeyBytes: canonicalSigningSeed)
@@ -1516,6 +1518,7 @@ final class ToriiClientTests: XCTestCase {
 
     private var currentKagemushaReadinessFields: String {
         """
+        "peer_id": "\(canonicalKagemushaPeerId)",
         "cash_handoff_capability": "cash_handoff_v1",
         "required_bridge_abi_version": 21,
         "max_hops": 8,
@@ -11758,6 +11761,10 @@ final class ToriiClientTests: XCTestCase {
         let readiness = try await makeClient().getKagemushaReadiness(
             assetDefinitionId: "xor#wonderland"
         )
+        XCTAssertEqual(
+            readiness.peerId,
+            canonicalKagemushaPeerId
+        )
         XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
         XCTAssertEqual(readiness.requiredBridgeAbiVersion, 21)
         XCTAssertEqual(readiness.maxHops, 8)
@@ -11861,6 +11868,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertFalse(blockedReadiness.ready)
 
         let mutations: [((inout [String: Any]) -> Void, String)] = [
+            ({ $0["peer_id"] = self.canonicalKagemushaPeerId.lowercased() }, "peer_id"),
             ({ $0["cash_handoff_capability"] = "cash_handoff_v2" }, "cash_handoff_capability"),
             ({ $0["required_bridge_abi_version"] = 20 }, "required_bridge_abi_version"),
             ({ $0["max_hops"] = 9 }, "max_hops"),
@@ -12729,6 +12737,10 @@ final class ToriiClientTests: XCTestCase {
         }
         let cases: [(String, String)] = try [
             (
+                without("peer_id"),
+                "peer_id"
+            ),
+            (
                 without("cash_handoff_capability"),
                 "cash_handoff_capability"
             ),
@@ -12797,6 +12809,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessAcceptsUnsupportedScaleAndUnavailableVerifierBlockers() async throws {
         let payload = """
         {
+          "peer_id": "\(canonicalKagemushaPeerId)",
           "cash_handoff_capability": "cash_handoff_v1",
           "required_bridge_abi_version": 21,
           "max_hops": 8,

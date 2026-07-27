@@ -3407,6 +3407,7 @@ mod serde_tests {
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
             },
+            peer_id: "ed0120AABB".to_owned(),
             peers: 3,
             blocks: 42,
             blocks_non_empty: 39,
@@ -5573,6 +5574,9 @@ pub struct Status {
     /// Build metadata for the currently running node binary.
     #[norito(default)]
     pub build: BuildStatus,
+    /// Canonical identity of the validator serving this status snapshot.
+    #[norito(default)]
+    pub peer_id: String,
     /// Millisecond UNIX timestamp when this status snapshot was observed.
     #[norito(default)]
     pub observed_at_ms: u64,
@@ -5689,6 +5693,8 @@ struct StatusPayload {
     #[norito(default)]
     build: BuildStatus,
     #[norito(default)]
+    peer_id: String,
+    #[norito(default)]
     observed_at_ms: u64,
     peers: u64,
     blocks: u64,
@@ -5753,6 +5759,7 @@ impl From<&Status> for StatusPayload {
     fn from(status: &Status) -> Self {
         Self {
             build: status.build.clone(),
+            peer_id: status.peer_id.clone(),
             observed_at_ms: status.observed_at_ms,
             peers: status.peers,
             blocks: status.blocks,
@@ -5794,6 +5801,7 @@ impl From<StatusPayload> for Status {
     fn from(payload: StatusPayload) -> Self {
         Self {
             build: payload.build,
+            peer_id: payload.peer_id,
             observed_at_ms: payload.observed_at_ms,
             peers: payload.peers,
             blocks: payload.blocks,
@@ -6559,6 +6567,7 @@ impl From<&Metrics> for Status {
         };
         Self {
             build: BuildStatus::current(),
+            peer_id: String::new(),
             observed_at_ms: now_ms,
             peers: value.connected_peers.get(),
             blocks: value.block_height.get(),
@@ -21356,6 +21365,7 @@ mod test {
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
             },
+            peer_id: "ed0120AABB".to_owned(),
             observed_at_ms: 1_234_999,
             peers: 4,
             blocks: 5,

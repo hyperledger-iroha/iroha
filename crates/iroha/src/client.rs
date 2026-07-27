@@ -8289,6 +8289,7 @@ mod offline_client_tests {
 
     fn first_release_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
         OfflineReadiness {
+            peer_id: "ed0120AABB".to_owned(),
             cash_handoff_capability:
                 iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:

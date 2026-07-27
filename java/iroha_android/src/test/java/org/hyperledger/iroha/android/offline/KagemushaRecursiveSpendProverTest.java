@@ -951,6 +951,7 @@ public final class KagemushaRecursiveSpendProverTest {
       final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet,
       final boolean proofBackendAvailable) {
     return new KagemushaRecursiveSpendProver.ReadinessProjection(
+        "ea01308683839424703437C5C8701F3A92D76E228337D2327602B8C0CED667A6ED7F8AD6360948B24FC21849E77411A0975B6D",
         cashHandoffCapability,
         21,
         8,

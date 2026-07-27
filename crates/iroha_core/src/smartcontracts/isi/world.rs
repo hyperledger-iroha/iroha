@@ -4006,7 +4006,7 @@ pub mod isi {
 
         if let Some(binding) = policy.treasury_payout_binding.as_ref() {
             if binding.treasury_account_id != policy.treasury_account_id
-                || binding.sbd_asset_id != policy.ds_asset_id
+                || binding.ds_asset_id != policy.ds_asset_id
                 || binding.contract_address.subject_id() != policy.treasury_account_id
             {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -4363,18 +4363,18 @@ pub mod isi {
                     ),
                 ));
             }
-            let sbd_definition = state_transaction
+            let ds_definition = state_transaction
                 .world
-                .asset_definition(&self.payout_binding.sbd_asset_id)
+                .asset_definition(&self.payout_binding.ds_asset_id)
                 .map_err(Error::from)?;
-            if sbd_definition.spec().scale()
+            if ds_definition.spec().scale()
                 != Some(u32::from(
                     iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE,
                 ))
             {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
-                        "validation-fee payout lifecycle SBD asset scale must be 2".into(),
+                        "validation-fee payout lifecycle DS asset scale must be 2".into(),
                     ),
                 ));
             }
@@ -7169,7 +7169,7 @@ pub mod isi {
     ) -> Permission {
         iroha_executor_data_model::permission::asset::CanTransferAsset {
             asset: AssetId::new(
-                binding.sbd_asset_id.clone(),
+                binding.ds_asset_id.clone(),
                 binding.treasury_account_id.clone(),
             ),
         }
@@ -7322,7 +7322,7 @@ pub mod isi {
             (
                 validation_fee_payout_effect_permission(binding),
                 binding.pool_vault_account_id.clone(),
-                "the wrapper SBD asset transfer effect",
+                "the wrapper DS asset transfer effect",
             ),
         ]
     }
@@ -20789,7 +20789,7 @@ pub mod isi {
             super::require_absent_validation_fee_runtime_permission(
                 &stx,
                 &permission,
-                "the wrapper SBD asset transfer effect",
+                "the wrapper DS asset transfer effect",
             )
             .expect("an absent effect permission is eligible for protected derivation");
 
@@ -20799,7 +20799,7 @@ pub mod isi {
             let direct_error = super::require_absent_validation_fee_runtime_permission(
                 &stx,
                 &permission,
-                "the wrapper SBD asset transfer effect",
+                "the wrapper DS asset transfer effect",
             )
             .expect_err("a caller-made direct effect grant must fail closed");
             assert!(
@@ -20816,7 +20816,7 @@ pub mod isi {
             let role_error = super::require_absent_validation_fee_runtime_permission(
                 &stx,
                 &permission,
-                "the wrapper SBD asset transfer effect",
+                "the wrapper DS asset transfer effect",
             )
             .expect_err("a role-owned effect grant must fail closed");
             assert!(
@@ -20887,7 +20887,7 @@ pub mod isi {
                 (
                     effect_permission.clone(),
                     BOB_ID.clone(),
-                    "the wrapper SBD asset transfer effect",
+                    "the wrapper DS asset transfer effect",
                 ),
             ];
 
