@@ -3974,7 +3974,9 @@ pub mod contracts_and_verification_keys {
     }
 
     const fn app_unprojected_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_projections(RouteProjections::NONE)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::Unauthenticated)
+            .with_projections(RouteProjections::NONE)
     }
 
     const fn app_unprojected_static_asset_get(
@@ -5573,6 +5575,20 @@ mod tests {
                 "{}",
                 route.stable_route_id()
             );
+        }
+
+        for route in [
+            contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
+        ] {
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.projections(), RouteProjections::NONE);
+            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
         }
 
         for route in [
