@@ -1940,6 +1940,17 @@ mod tests {
             ))
     }
 
+    fn bootle_lantern_activation() -> PrivacyProtocolActivationRecordV1 {
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
+            .expect("fixed Bootle/Lantern profile derives")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 100,
+                    activate_at_height: 400,
+                },
+            ))
+    }
+
     fn orchard_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
             .expect("fixed Orchard profile derives")
@@ -1967,9 +1978,129 @@ mod tests {
                 PrivacyProtocolIdV1::IrohaZkAmsV1,
                 PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
                 PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
                 PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             ]
         );
+    }
+
+    #[test]
+    fn bootle_lantern_profile_is_deterministic_complete_bounded_and_mutation_closed() {
+        let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
+        let first = compiled_privacy_profile_v1(protocol_id).expect("profile");
+        let second = compiled_privacy_profile_v1(protocol_id).expect("profile");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.proof_system_id,
+            PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm
+        );
+        assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeLanternLnp22);
+        assert_eq!(
+            first.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::IrohaBootleLanternAnoncredV1
+        );
+        assert_eq!(APPLICATION_RING_DEGREE_V1, 64);
+        assert_eq!(
+            APPLICATION_RING_DEGREE_V1,
+            BOOTLE_LANTERN_MODEL_RING_DEGREE_V1
+        );
+        assert_eq!(
+            BOOTLE_LANTERN_APPLICATION_MODULUS_V1,
+            BOOTLE_LANTERN_MODEL_APPLICATION_MODULUS_V1
+        );
+        assert_eq!(APPLICATION_ROWS_V1, 8);
+        assert_eq!(APPLICATION_ROWS_V1, BOOTLE_LANTERN_MODEL_ATTRIBUTE_COUNT_V1);
+        assert_eq!(APPLICATION_WITNESS_POLYNOMIALS_V1, 48);
+        assert_eq!(BOOTLE_LANTERN_PROOF_BYTES_V1, 70_344);
+        assert!(
+            u64::try_from(BOOTLE_LANTERN_PROOF_BYTES_V1).expect("proof size fits u64")
+                <= u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
+        );
+        assert_ne!(public_parameter_seed_v1(), [0; 32]);
+        for digest in [
+            *first.parameter_id.as_bytes(),
+            *first.parameter_digest.as_bytes(),
+            *first.verifier_digest.as_bytes(),
+            *first.statement_schema_digest.as_bytes(),
+            *first.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
+        assert_eq!(
+            (
+                hex::encode(first.parameter_id.as_bytes()),
+                hex::encode(first.parameter_digest.as_bytes()),
+                hex::encode(first.verifier_digest.as_bytes()),
+                hex::encode(first.statement_schema_digest.as_bytes()),
+                hex::encode(first.engine_manifest_digest.as_bytes()),
+            ),
+            (
+                "REPLACE_PARAMETER_ID".to_owned(),
+                "REPLACE_PARAMETER_DIGEST".to_owned(),
+                "REPLACE_VERIFIER_DIGEST".to_owned(),
+                "REPLACE_STATEMENT_SCHEMA_DIGEST".to_owned(),
+                "REPLACE_ENGINE_MANIFEST_DIGEST".to_owned(),
+            ),
+            "every consensus-critical Bootle/Lantern binding is a pinned KAT"
+        );
+
+        let valid = bootle_lantern_activation();
+        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+        let mutations: [(
+            CompiledPrivacyProfileValidationErrorV1,
+            fn(&mut PrivacyProtocolActivationRecordV1),
+        ); 8] = [
+            (
+                CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
+                |record| {
+                    record.proof_system_id =
+                        PrivacyProofSystemIdV1::FcmpPlusPlusCurveTreeBulletproofs;
+                },
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
+                |record| record.engine_id = PrivacyEngineIdV1::NativeFcmpPlusPlus,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
+                |record| record.parameter_id.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch,
+                |record| record.parameter_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch,
+                |record| record.verifier_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch,
+                |record| record.statement_schema_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
+                |record| record.engine_manifest_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
+                |record| {
+                    record.protocol_limits =
+                        PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+                            JindoActivationLimitsV1 {
+                                max_polynomial_count: 1,
+                            },
+                        );
+                },
+            ),
+        ];
+        for (expected, mutate) in mutations {
+            let mut changed = valid;
+            mutate(&mut changed);
+            assert_eq!(
+                validate_compiled_privacy_activation_v1(&changed),
+                Err(expected)
+            );
+        }
     }
 
     #[test]

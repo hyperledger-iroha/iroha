@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import {
+  linkSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -170,6 +172,7 @@ function runFixtureNativeBuild({
   publicationFailpoint,
   repoRoot,
   state = sourceState(),
+  writeProvenance,
 }) {
   const targetRoot = path.join(repoRoot, "target");
   const snapshots = createInjectedSnapshotFactory({
@@ -185,6 +188,7 @@ function runFixtureNativeBuild({
     verifySourceSnapshot: () => state,
     cleanupSourceSnapshot: snapshots.cleanupSourceSnapshot,
     publicationFailpoint,
+    writeProvenance,
     runCargo(args, options) {
       const runNativePath = nativeBuildOutputPath({
         repoRoot,
@@ -676,4 +680,391 @@ test("malformed Cargo JSON is rejected without provenance", () => {
     label: /malformed JSON build message/u,
     output: () => "{not-json}\n",
   });
+});
+
+test("overlapping native builds use distinct private Cargo targets", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-overlap-")),
+  );
+  try {
+    let innerTarget;
+    let outerTarget;
+    const outerStatus = runFixtureNativeBuild({
+      repoRoot,
+      cargoHandler({ options }) {
+        outerTarget = options.cargoEnv.CARGO_TARGET_DIR;
+        const innerStatus = runFixtureNativeBuild({
+          repoRoot,
+          cargoHandler({ options: innerOptions }) {
+            innerTarget = innerOptions.cargoEnv.CARGO_TARGET_DIR;
+            return { status: 7, stdout: "" };
+          },
+        });
+        assert.equal(innerStatus, 7);
+        return { status: 7, stdout: "" };
+      },
+    });
+    assert.equal(outerStatus, 7);
+    assert.notEqual(outerTarget, innerTarget);
+    assert.notEqual(path.dirname(outerTarget), path.dirname(innerTarget));
+    assert.equal(path.basename(outerTarget), "cargo-target");
+    assert.equal(path.basename(innerTarget), "cargo-target");
+    const runDirectoryPattern =
+      /^\.iroha-js-native-build-run-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+    assert.match(path.basename(path.dirname(outerTarget)), runDirectoryPattern);
+    assert.match(path.basename(path.dirname(innerTarget)), runDirectoryPattern);
+    assert.equal(isPathInside(repoRoot, outerTarget), false);
+    assert.equal(isPathInside(repoRoot, innerTarget), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("the publication lock rejects an overlapping publisher and removes its stage", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-publish-lock-")),
+  );
+  try {
+    let innerAttempted = false;
+    assert.equal(
+      runFixtureNativeBuild({
+        bytes: "outer-native-output",
+        repoRoot,
+        publicationFailpoint(stage) {
+          if (stage !== "after-invalidation") return;
+          innerAttempted = true;
+          assert.throws(
+            () =>
+              runFixtureNativeBuild({
+                bytes: "inner-native-output",
+                repoRoot,
+              }),
+            /publication is in progress/u,
+          );
+          const nativePath = finalNativePath(repoRoot);
+          const staged = readdirSync(path.dirname(nativePath)).filter((name) =>
+            name.startsWith(`.${path.basename(nativePath)}.stage-`),
+          );
+          assert.equal(staged.length, 1);
+          assert.match(
+            staged[0],
+            /^\.libiroha_js_host\.so\.stage-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+          );
+        },
+      }),
+      0,
+    );
+    assert.equal(innerAttempted, true);
+    const nativePath = finalNativePath(repoRoot);
+    assert.equal(readFileSync(nativePath, "utf8"), "outer-native-output");
+    assert.equal(
+      readNativeBuildProvenance(nativePath).source_tree_sha256,
+      SOURCE_DIGEST,
+    );
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("Cargo failure or missing artifact leaves the prior authenticated pair valid", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-prepublish-")),
+  );
+  try {
+    const oldState = sourceState({
+      sourceGitRevision: "c".repeat(40),
+      sourceTreeSha256: "d".repeat(64),
+    });
+    const { nativePath, provenance } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      oldState,
+    );
+    const failedStatus = runFixtureNativeBuild({
+      repoRoot,
+      cargoHandler: () => ({ status: 7, stdout: "" }),
+    });
+    assert.equal(failedStatus, 7);
+    assert.deepEqual(readNativeBuildProvenance(nativePath), provenance);
+    assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
+
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          repoRoot,
+          cargoHandler: () => ({
+            status: 0,
+            stdout: cargoJson({ reason: "build-finished", success: true }),
+          }),
+        }),
+      /exactly one iroha_js_host compiler artifact/u,
+    );
+    assert.deepEqual(readNativeBuildProvenance(nativePath), provenance);
+    assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("failure after invalidation leaves the old binary unauthenticated", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-invalidate-")),
+  );
+  try {
+    const oldState = sourceState({
+      sourceGitRevision: "c".repeat(40),
+      sourceTreeSha256: "d".repeat(64),
+    });
+    const { nativePath } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      oldState,
+    );
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          repoRoot,
+          publicationFailpoint(stage) {
+            if (stage === "after-invalidation") {
+              throw new Error("injected failure after invalidation");
+            }
+          },
+        }),
+      /injected failure after invalidation/u,
+    );
+    assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
+    assert.throws(
+      () => readNativeBuildProvenance(nativePath),
+      /ENOENT|unreadable/u,
+    );
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("failure after binary publication cannot leave stale provenance valid", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-published-")),
+  );
+  try {
+    const oldState = sourceState({
+      sourceGitRevision: "c".repeat(40),
+      sourceTreeSha256: "d".repeat(64),
+    });
+    const { nativePath } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      oldState,
+    );
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          bytes: "replacement-native-output",
+          repoRoot,
+          publicationFailpoint(stage) {
+            if (stage === "after-binary-publish") {
+              throw new Error("injected failure after binary publication");
+            }
+          },
+        }),
+      /injected failure after binary publication/u,
+    );
+    assert.equal(
+      readFileSync(nativePath, "utf8"),
+      "replacement-native-output",
+    );
+    assert.throws(
+      () => readNativeBuildProvenance(nativePath),
+      /ENOENT|unreadable/u,
+    );
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a provenance writer failure invalidates any sidecar it partially published", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-writer-fail-")),
+  );
+  try {
+    const oldState = sourceState({
+      sourceGitRevision: "c".repeat(40),
+      sourceTreeSha256: "d".repeat(64),
+    });
+    const { nativePath } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      oldState,
+    );
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          bytes: "replacement-native-output",
+          repoRoot,
+          writeProvenance(path_, provenance) {
+            writeNativeBuildProvenance(path_, provenance);
+            throw new Error("injected failure after sidecar publication");
+          },
+        }),
+      /injected failure after sidecar publication/u,
+    );
+    assert.equal(
+      readFileSync(nativePath, "utf8"),
+      "replacement-native-output",
+    );
+    assert.throws(
+      () => readNativeBuildProvenance(nativePath),
+      /ENOENT|unreadable/u,
+    );
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a final-binary switch after sidecar publication invalidates that sidecar", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-final-switch-")),
+  );
+  try {
+    const { nativePath } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      sourceState({
+        sourceGitRevision: "c".repeat(40),
+        sourceTreeSha256: "d".repeat(64),
+      }),
+    );
+    const victimPath = path.join(repoRoot, "switch-victim");
+    writeFileSync(victimPath, "switch-victim-bytes");
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          bytes: "replacement-native-output",
+          repoRoot,
+          writeProvenance(path_, provenance) {
+            writeNativeBuildProvenance(path_, provenance);
+            rmSync(path_);
+            symlinkSync(victimPath, path_);
+          },
+        }),
+      /canonical singly linked regular file/u,
+    );
+    assert.equal(readFileSync(victimPath, "utf8"), "switch-victim-bytes");
+    assert.throws(
+      () => readNativeBuildProvenance(nativePath),
+      /ENOENT|unreadable/u,
+    );
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("byte-identical replacement publishes the new source provenance", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-identical-")),
+  );
+  try {
+    const oldState = sourceState({
+      sourceGitRevision: "c".repeat(40),
+      sourceTreeSha256: "d".repeat(64),
+    });
+    const newState = sourceState({
+      sourceGitRevision: "e".repeat(40),
+      sourceTreeSha256: "f".repeat(64),
+    });
+    const { nativePath } = writeAuthenticatedPair(
+      repoRoot,
+      "identical-native-output",
+      oldState,
+    );
+    assert.equal(
+      runFixtureNativeBuild({
+        bytes: "identical-native-output",
+        repoRoot,
+        state: newState,
+      }),
+      0,
+    );
+    const provenance = readNativeBuildProvenance(nativePath);
+    assert.equal(provenance.source_git_revision, newState.sourceGitRevision);
+    assert.equal(provenance.source_tree_sha256, newState.sourceTreeSha256);
+    assert.notEqual(
+      provenance.source_tree_sha256,
+      oldState.sourceTreeSha256,
+    );
+    assert.equal(readFileSync(nativePath, "utf8"), "identical-native-output");
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("Cargo artifact outside the private run target is rejected before publication", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-wrong-target-")),
+  );
+  try {
+    const oldState = sourceState({
+      sourceGitRevision: "c".repeat(40),
+      sourceTreeSha256: "d".repeat(64),
+    });
+    const { nativePath, provenance } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      oldState,
+    );
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          repoRoot,
+          cargoHandler({ runNativePath, snapshot }) {
+            mkdirSync(path.dirname(runNativePath), { recursive: true });
+            writeFileSync(runNativePath, "new-native-output");
+            return {
+              status: 0,
+              stdout: successfulCargoJson(snapshot, nativePath),
+            };
+          },
+        }),
+      /invalid iroha_js_host cdylib compiler artifact/u,
+    );
+    assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
+    assert.deepEqual(readNativeBuildProvenance(nativePath), provenance);
+    assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("publication rejects symbolic-link and hardlink final targets without touching victims", () => {
+  for (const kind of ["symlink", "hardlink"]) {
+    const repoRoot = realpathSync(
+      mkdtempSync(path.join(os.tmpdir(), `iroha-js-native-${kind}-`)),
+    );
+    try {
+      const nativePath = finalNativePath(repoRoot);
+      const victimPath = path.join(repoRoot, `${kind}-victim`);
+      mkdirSync(path.dirname(nativePath), { recursive: true });
+      writeFileSync(victimPath, `${kind}-victim-bytes`);
+      if (kind === "symlink") symlinkSync(victimPath, nativePath);
+      else linkSync(victimPath, nativePath);
+      assert.throws(
+        () => runFixtureNativeBuild({ repoRoot }),
+        /canonical singly linked regular file/u,
+      );
+      assert.equal(
+        readFileSync(victimPath, "utf8"),
+        `${kind}-victim-bytes`,
+      );
+      assertNoPublicationTransients(nativePath);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  }
 });

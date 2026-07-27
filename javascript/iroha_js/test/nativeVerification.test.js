@@ -139,7 +139,7 @@ variantTest("verifyNativeBinding succeeds when checksum matches manifest entry",
   });
 });
 
-variantTest("checksum-only entries are rejected without V2 source provenance", async () => {
+variantTest("checksum-only entries are rejected without V3 source provenance", async () => {
   __resetNativeStateForTests();
   await withTempDir(async (dir) => {
     const bindingPath = path.join(dir, "iroha_js_host.node");

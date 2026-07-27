@@ -511,28 +511,47 @@ function createStagedNative(sourcePath, finalPath, sourceSeal) {
     path: stagePath,
     uuid: stageUuid,
   });
-  if (
-    !sameOutputIdentity(sourceBefore, sourceAfter) ||
-    !staged.isFile() ||
-    staged.isSymbolicLink() ||
-    staged.nlink !== 1n ||
-    staged.size !== copied
-  ) {
-    throw new Error("Native build artifact or staging file changed after copy.");
+  try {
+    if (
+      !sameOutputIdentity(sourceBefore, sourceAfter) ||
+      !staged.isFile() ||
+      staged.isSymbolicLink() ||
+      staged.nlink !== 1n ||
+      staged.size !== copied
+    ) {
+      throw new Error("Native build artifact or staging file changed after copy.");
+    }
+    const stagedSeal = sealNativeOutput(stagePath);
+    if (
+      stagedSeal.sha256 !== sourceSeal.sha256 ||
+      !sameOutputIdentity(stagedSeal.identity, owned.identity)
+    ) {
+      throw new Error("Native build staging copy does not match its artifact.");
+    }
+    syncDirectory(finalDirectory);
+    return Object.freeze({
+      ...owned,
+      prefix: stagePrefix,
+      sha256: stagedSeal.sha256,
+    });
+  } catch (error) {
+    try {
+      if (lstatOrNull(stagePath) !== null) {
+        removeOwnedRegularFile(
+          owned,
+          finalDirectory,
+          stagePrefix,
+          "Native build failed staging file",
+        );
+      }
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Native build staging validation and safe cleanup both failed.",
+      );
+    }
+    throw error;
   }
-  const stagedSeal = sealNativeOutput(stagePath);
-  if (
-    stagedSeal.sha256 !== sourceSeal.sha256 ||
-    !sameOutputIdentity(stagedSeal.identity, owned.identity)
-  ) {
-    throw new Error("Native build staging copy does not match its artifact.");
-  }
-  syncDirectory(finalDirectory);
-  return Object.freeze({
-    ...owned,
-    prefix: stagePrefix,
-    sha256: stagedSeal.sha256,
-  });
 }
 
 function acquirePublicationLock(finalPath) {
@@ -591,7 +610,27 @@ function publishStagedNative({
 }) {
   const finalDirectory = dirname(finalPath);
   const retiredPrefix = `.${basename(finalPath)}.retired-`;
-  const lock = acquirePublicationLock(finalPath);
+  let lock;
+  try {
+    lock = acquirePublicationLock(finalPath);
+  } catch (error) {
+    try {
+      if (lstatOrNull(stage.path) !== null) {
+        removeOwnedRegularFile(
+          stage,
+          finalDirectory,
+          stage.prefix,
+          "Native build unpublished staging file",
+        );
+      }
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Native build publication lock and safe staging cleanup both failed.",
+      );
+    }
+    throw error;
+  }
   let binaryPublished = false;
   let publishedOutputIdentity;
   let retired;
@@ -684,12 +723,14 @@ function publishStagedNative({
       invalidateProvenance(finalPath);
       throw error;
     }
-    if (
-      !sameOutputIdentity(
-        publishedOutputIdentity,
-        outputIdentityOrNull(finalPath),
-      )
-    ) {
+    let finalIdentity;
+    try {
+      finalIdentity = outputIdentityOrNull(finalPath);
+    } catch (error) {
+      invalidateProvenance(finalPath);
+      throw error;
+    }
+    if (!sameOutputIdentity(publishedOutputIdentity, finalIdentity)) {
       invalidateProvenance(finalPath);
       throw new Error(
         "Native build binary changed while final provenance was published.",
@@ -931,10 +972,11 @@ export function runNativeBuild({
     canonicalRepoRoot,
     targetRoot,
   );
-  const runCargoTarget = createRunCargoTarget(runContainer);
+  let runCargoTarget;
   let snapshot;
   let snapshotPlacementVerified = false;
   try {
+    runCargoTarget = createRunCargoTarget(runContainer);
     snapshot = createSourceSnapshot(canonicalRepoRoot, runContainer.path, {
       env,
     });
@@ -1050,7 +1092,9 @@ export function runNativeBuild({
       if (snapshotPlacementVerified) cleanupSourceSnapshot(snapshot);
     } finally {
       try {
-        cleanupRunCargoTarget(runCargoTarget, runContainer);
+        if (runCargoTarget !== undefined) {
+          cleanupRunCargoTarget(runCargoTarget, runContainer);
+        }
       } finally {
         cleanupRunContainer(runContainer);
       }

@@ -13,16 +13,15 @@ use iroha_data_model::{
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
             RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyProtocolActivationV1,
-            RegisterPrivacyZkAcePolicyV1,
-            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
-            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyZkAcePolicyV1,
-            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
-            RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
-            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyZkAcePolicyV1,
-            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
-            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RegisterPrivacyZkAcePolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyZkAcePolicyV1,
+            RevokePrivacyZkX509CertificatePolicyV1, RevokePrivacyZkX509CrlV1,
+            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyBootleLanternIssuerPolicyV1,
+            RotatePrivacyZkAcePolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
+            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
+            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
+            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
         },
     },
     permission::Permission,
@@ -1546,6 +1545,11 @@ fn require_registered_bootle_lantern_protocol(
         .ok_or_else(|| {
             invalid_privacy_parameter("Bootle/Lantern privacy protocol is not registered")
         })?;
+    if activation.protocol_id != protocol_id {
+        return Err(Error::InvariantViolation(
+            "registered Bootle/Lantern activation has a mismatched protocol id".into(),
+        ));
+    }
     activation.validate().map_err(|error| {
         Error::InvariantViolation(
             format!("registered Bootle/Lantern activation is invalid: {error}").into(),
@@ -2495,6 +2499,226 @@ impl Execute for RevokePrivacyZkAcePolicyV1 {
         let key = PrivacyCommitmentKeyV1::zk_ace_policy(current.policy_id)
             .map_err(invalid_privacy_parameter)?;
         let record = PrivacyStateItemRecordV1::zk_ace_policy_governance(
+            self.successor,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, record);
+        Ok(())
+    }
+}
+
+impl Execute for RegisterPrivacyBootleLanternIssuerPolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "Bootle/Lantern issuer-policy registration canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        require_registered_bootle_lantern_protocol(state_transaction)?;
+        self.policy.validate_initial().map_err(|error| {
+            invalid_privacy_parameter(format!(
+                "Bootle/Lantern issuer-policy registration rejected: {error}"
+            ))
+        })?;
+        let policy_count = privacy_bootle_lantern_issuer_policy_count_v1(
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            Error::InvariantViolation(
+                format!("persisted Bootle/Lantern issuer-policy registry is invalid: {error}")
+                    .into(),
+            )
+        })?;
+        if policy_count >= BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1 {
+            return Err(invalid_privacy_parameter(format!(
+                "Bootle/Lantern issuer-policy registry is full at {} policies",
+                BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1
+            )));
+        }
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+            self.policy.issuer_id,
+            self.policy.policy_id,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_commitments
+            .get(&key)
+            .is_some()
+        {
+            return Err(invalid_privacy_parameter(
+                "Bootle/Lantern issuer policy is already registered",
+            ));
+        }
+        let record = PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(
+            self.policy,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, record);
+        Ok(())
+    }
+}
+
+impl Execute for RotatePrivacyBootleLanternIssuerPolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "Bootle/Lantern issuer-policy rotation canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        require_registered_bootle_lantern_protocol(state_transaction)?;
+        if self.expected_current_record_digest.is_zero() {
+            return Err(invalid_privacy_parameter(
+                "Bootle/Lantern expected current issuer-policy digest must be non-zero",
+            ));
+        }
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+            self.successor.issuer_id,
+            self.successor.policy_id,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_commitments
+            .get(&key)
+            .is_none()
+        {
+            return Err(invalid_privacy_parameter(
+                "Bootle/Lantern issuer policy is not registered",
+            ));
+        }
+        let current = load_privacy_bootle_lantern_issuer_policy_v1(
+            self.successor.issuer_id,
+            self.successor.policy_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            Error::InvariantViolation(
+                format!("trusted Bootle/Lantern issuer-policy state failed validation: {error}")
+                    .into(),
+            )
+        })?;
+        if current.record_digest != self.expected_current_record_digest {
+            return Err(invalid_privacy_parameter(
+                "Bootle/Lantern issuer-policy rotation expected a stale or substituted current record",
+            ));
+        }
+        self.successor
+            .validate_rotation_successor(&current)
+            .map_err(|error| {
+                invalid_privacy_parameter(format!(
+                    "Bootle/Lantern issuer-policy rotation rejected: {error}"
+                ))
+            })?;
+        let record = PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(
+            self.successor,
+            state_transaction.block_height(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(key, record);
+        Ok(())
+    }
+}
+
+impl Execute for RevokePrivacyBootleLanternIssuerPolicyV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "Bootle/Lantern issuer-policy revocation canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        require_registered_bootle_lantern_protocol(state_transaction)?;
+        if self.expected_current_record_digest.is_zero() {
+            return Err(invalid_privacy_parameter(
+                "Bootle/Lantern expected current issuer-policy digest must be non-zero",
+            ));
+        }
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+            self.successor.issuer_id,
+            self.successor.policy_id,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_commitments
+            .get(&key)
+            .is_none()
+        {
+            return Err(invalid_privacy_parameter(
+                "Bootle/Lantern issuer policy is not registered",
+            ));
+        }
+        let current = load_privacy_bootle_lantern_issuer_policy_v1(
+            self.successor.issuer_id,
+            self.successor.policy_id,
+            &state_transaction.world.privacy_commitments,
+        )
+        .map_err(|error| {
+            Error::InvariantViolation(
+                format!("trusted Bootle/Lantern issuer-policy state failed validation: {error}")
+                    .into(),
+            )
+        })?;
+        if current.record_digest != self.expected_current_record_digest {
+            return Err(invalid_privacy_parameter(
+                "Bootle/Lantern issuer-policy revocation expected a stale or substituted current record",
+            ));
+        }
+        self.successor
+            .validate_revocation_successor(&current)
+            .map_err(|error| {
+                invalid_privacy_parameter(format!(
+                    "Bootle/Lantern issuer-policy revocation rejected: {error}"
+                ))
+            })?;
+        let record = PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(
             self.successor,
             state_transaction.block_height(),
         )
@@ -4481,6 +4705,75 @@ mod tests {
         }
     }
 
+    fn rotate_bootle_lantern_policy(
+        current: &BootleLanternIssuerPolicyV1,
+    ) -> BootleLanternIssuerPolicyV1 {
+        let mut successor = current.clone();
+        successor.epoch = current
+            .epoch
+            .checked_add(1)
+            .expect("fixture epoch advances");
+        successor.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Active;
+        successor.issuer_parameter_id.0[0] ^= 1;
+        successor.issuer_parameter_digest = successor
+            .computed_issuer_parameter_digest()
+            .expect("rotated issuer matrix");
+        successor.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        successor.record_digest = successor
+            .computed_record_digest()
+            .expect("rotated policy digest");
+        successor
+            .validate_rotation_successor(current)
+            .expect("canonical active successor");
+        successor
+    }
+
+    fn revoke_bootle_lantern_policy(
+        current: &BootleLanternIssuerPolicyV1,
+    ) -> BootleLanternIssuerPolicyV1 {
+        let mut successor = current.clone();
+        successor.epoch = current
+            .epoch
+            .checked_add(1)
+            .expect("fixture epoch advances");
+        successor.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        successor.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        successor.record_digest = successor
+            .computed_record_digest()
+            .expect("revoked policy digest");
+        successor
+            .validate_revocation_successor(current)
+            .expect("canonical terminal successor");
+        successor
+    }
+
+    fn state_with_exact_bootle_lantern_activation() -> State {
+        let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
+        let activation = compiled_privacy_profile_v1(protocol_id)
+            .expect("compiled Bootle/Lantern profile")
+            .activation_record(active_lifecycle());
+        validate_compiled_privacy_activation_v1(&activation)
+            .expect("exact compiled Bootle/Lantern activation");
+
+        let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
+        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let mut world = World::with([domain], [alice], []);
+        world
+            .privacy_activations
+            .insert(PrivacyActivationKeyV1::new(protocol_id), activation);
+        let mut state = State::new_with_chain_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            TEST_CHAIN_ID.into(),
+        );
+        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(TEST_GENESIS_HASH),
+        ));
+        state
+    }
+
     fn zk_ace_asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::new(
             DomainId::try_new("privacy", "universal").expect("domain"),
@@ -4763,11 +5056,30 @@ mod tests {
             );
         }
 
-        let revoked = bootle_lantern_policy(2, BootleLanternIssuerPolicyLifecycleV1::Revoked);
+        let rotated = rotate_bootle_lantern_policy(&policy);
+        commitments.insert(
+            key,
+            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(rotated.clone(), 8)
+                .expect("valid rotated policy state"),
+        );
+        let error = load_active_bootle_lantern_policy_v1(&statement, &commitments.view())
+            .expect_err("statement selecting a superseded policy revision must reject");
+        assert!(
+            smart_contract_parameter_message(&error).contains("does not exactly match"),
+            "{error:?}"
+        );
+        let rotated_statement = bootle_lantern_statement(&rotated);
+        assert_eq!(
+            load_active_bootle_lantern_policy_v1(&rotated_statement, &commitments.view())
+                .expect("statement selects current rotated policy"),
+            rotated
+        );
+
+        let revoked = revoke_bootle_lantern_policy(&rotated);
         let revoked_statement = bootle_lantern_statement(&revoked);
         commitments.insert(
             key,
-            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(revoked, 8)
+            PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(revoked, 9)
                 .expect("valid terminal policy state"),
         );
         let error = load_active_bootle_lantern_policy_v1(&revoked_statement, &commitments.view())
@@ -4804,6 +5116,346 @@ mod tests {
             matches!(error, Error::InvariantViolation(_)),
             "wrong-role state returned {error:?}"
         );
+    }
+
+    #[test]
+    fn bootle_lantern_governance_requires_the_exact_registered_activation() {
+        let initial = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+            initial.issuer_id,
+            initial.policy_id,
+        )
+        .expect("Bootle/Lantern policy key");
+        let state = state_with_activation(active_lifecycle());
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+
+        let budget_before = transaction.privacy_budget_for_testing();
+        let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("an unrelated compiled activation does not register Bootle/Lantern");
+        assert!(
+            smart_contract_parameter_message(&error).contains("not registered"),
+            "{error:?}"
+        );
+        assert_eq!(transaction.world.privacy_commitments.get(&key), None);
+        assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+
+        let unrelated_activation = *transaction
+            .world
+            .privacy_activations
+            .get(&PrivacyActivationKeyV1::new(
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            ))
+            .expect("unrelated compiled activation");
+        transaction.world.privacy_activations.insert(
+            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1),
+            unrelated_activation,
+        );
+        let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("a wrong-role activation under the exact key fails closed");
+        assert!(
+            matches!(error, Error::InvariantViolation(_)),
+            "wrong-role activation returned {error:?}"
+        );
+        assert!(
+            error.to_string().contains("mismatched protocol id"),
+            "{error}"
+        );
+        assert_eq!(transaction.world.privacy_commitments.get(&key), None);
+        assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+    }
+
+    #[test]
+    fn bootle_lantern_governance_registers_rotates_revokes_and_is_failure_atomic() {
+        let state = state_with_exact_bootle_lantern_activation();
+        let mut block = state.block(test_header());
+        let initial = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+            initial.issuer_id,
+            initial.policy_id,
+        )
+        .expect("Bootle/Lantern policy key");
+
+        {
+            let mut transaction = block.transaction();
+            let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("governance permission is mandatory");
+            assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
+            assert_eq!(transaction.world.privacy_commitments.get(&key), None);
+            assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
+        }
+
+        {
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            let instruction = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone());
+            let encoded_instruction_bytes = u64::try_from(
+                norito::to_bytes(&instruction)
+                    .expect("registration instruction encoding")
+                    .len(),
+            )
+            .expect("registration instruction length fits u64");
+            instruction
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register exact origin policy");
+            assert_eq!(
+                transaction.privacy_budget_for_testing().0,
+                1,
+                "registration reserves one action"
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing().1,
+                encoded_instruction_bytes,
+                "governance preflight accounts for the complete ISI encoding"
+            );
+            assert_eq!(
+                load_privacy_bootle_lantern_issuer_policy_v1(
+                    initial.issuer_id,
+                    initial.policy_id,
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("registered policy"),
+                initial
+            );
+            transaction.apply();
+        }
+
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("duplicate registration must reject");
+            assert!(
+                smart_contract_parameter_message(&error).contains("already registered"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
+
+        let rotated = rotate_bootle_lantern_policy(&initial);
+        {
+            let mut transaction = block.transaction();
+            RotatePrivacyBootleLanternIssuerPolicyV1::new(initial.record_digest, rotated.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("rotate exactly one active epoch");
+            assert_eq!(
+                load_privacy_bootle_lantern_issuer_policy_v1(
+                    initial.issuer_id,
+                    initial.policy_id,
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("rotated policy"),
+                rotated
+            );
+            transaction.apply();
+        }
+
+        {
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let stale_successor = rotate_bootle_lantern_policy(&rotated);
+            let error = RotatePrivacyBootleLanternIssuerPolicyV1::new(
+                initial.record_digest,
+                stale_successor,
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("stale compare-and-swap digest must reject");
+            assert!(
+                smart_contract_parameter_message(&error).contains("stale or substituted"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+            assert_eq!(
+                transaction
+                    .world
+                    .privacy_commitments
+                    .get(&key)
+                    .and_then(PrivacyStateItemRecordV1::bootle_lantern_issuer_policy),
+                Some(&rotated)
+            );
+        }
+
+        let revoked = revoke_bootle_lantern_policy(&rotated);
+        {
+            let mut transaction = block.transaction();
+            RevokePrivacyBootleLanternIssuerPolicyV1::new(rotated.record_digest, revoked.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("revoke exactly one epoch without changing policy material");
+            assert_eq!(
+                load_privacy_bootle_lantern_issuer_policy_v1(
+                    initial.issuer_id,
+                    initial.policy_id,
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("terminal policy"),
+                revoked
+            );
+            transaction.apply();
+        }
+
+        {
+            let mut post_terminal = revoked.clone();
+            post_terminal.epoch += 1;
+            post_terminal.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Active;
+            post_terminal.issuer_parameter_id.0[0] ^= 1;
+            post_terminal.issuer_parameter_digest = post_terminal
+                .computed_issuer_parameter_digest()
+                .expect("post-terminal issuer matrix");
+            post_terminal.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+            post_terminal.record_digest = post_terminal
+                .computed_record_digest()
+                .expect("post-terminal policy digest");
+
+            let mut transaction = block.transaction();
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error =
+                RotatePrivacyBootleLanternIssuerPolicyV1::new(revoked.record_digest, post_terminal)
+                    .execute(&ALICE_ID, &mut transaction)
+                    .expect_err("revoked lineage is terminal");
+            assert!(
+                smart_contract_parameter_message(&error).contains("already revoked"),
+                "{error:?}"
+            );
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+            assert_eq!(
+                transaction
+                    .world
+                    .privacy_commitments
+                    .get(&key)
+                    .and_then(PrivacyStateItemRecordV1::bootle_lantern_issuer_policy),
+                Some(&revoked)
+            );
+        }
+    }
+
+    #[test]
+    fn bootle_lantern_governance_preflight_and_registry_cap_reject_without_mutation() {
+        let initial = bootle_lantern_policy(1, BootleLanternIssuerPolicyLifecycleV1::Active);
+        let key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+            initial.issuer_id,
+            initial.policy_id,
+        )
+        .expect("Bootle/Lantern policy key");
+
+        let state = state_with_exact_bootle_lantern_activation();
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        grant_governance(&mut transaction);
+        transaction
+            .reserve_privacy_action(0, 64)
+            .expect("consume the sole transaction action");
+        let budget_before = transaction.privacy_budget_for_testing();
+        let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("exhausted transaction action budget");
+        assert!(
+            error
+                .to_string()
+                .contains("action count per transaction exceeded"),
+            "{error}"
+        );
+        assert_eq!(transaction.world.privacy_commitments.get(&key), None);
+        assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+
+        let state = state_with_exact_bootle_lantern_activation();
+        let mut block = state.block(test_header());
+        {
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            let template = initial.clone();
+            for index in 0..(BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1 - 1) {
+                let mut policy = template.clone();
+                let index = u64::try_from(index).expect("policy index fits u64");
+                let mut policy_id = [0; 32];
+                policy_id[0] = 0xC1;
+                policy_id[1..9].copy_from_slice(&index.to_le_bytes());
+                policy.policy_id = PrivacyPolicyIdV1::new(policy_id);
+                policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+                policy.record_digest = policy
+                    .computed_record_digest()
+                    .expect("bounded policy digest");
+                let policy_key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+                    policy.issuer_id,
+                    policy.policy_id,
+                )
+                .expect("bounded policy key");
+                let record =
+                    PrivacyStateItemRecordV1::bootle_lantern_issuer_policy_governance(policy, 1)
+                        .expect("bounded policy record");
+                transaction
+                    .world
+                    .privacy_commitments
+                    .insert(policy_key, record);
+            }
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("valid registry below the cap"),
+                BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1 - 1
+            );
+            RegisterPrivacyBootleLanternIssuerPolicyV1::new(initial.clone())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("the final policy slot is admissible");
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("valid registry exactly at the cap"),
+                BOOTLE_LANTERN_MAX_ISSUER_POLICIES_V1
+            );
+            assert_eq!(
+                transaction
+                    .world
+                    .privacy_commitments
+                    .get(&key)
+                    .and_then(PrivacyStateItemRecordV1::bootle_lantern_issuer_policy),
+                Some(&initial)
+            );
+            transaction.apply();
+        }
+
+        {
+            let mut over_policy = initial;
+            over_policy.policy_id = PrivacyPolicyIdV1::new([0xD1; 32]);
+            over_policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+            over_policy.record_digest = over_policy
+                .computed_record_digest()
+                .expect("over-cap policy digest");
+            let over_key = PrivacyCommitmentKeyV1::bootle_lantern_issuer_policy(
+                over_policy.issuer_id,
+                over_policy.policy_id,
+            )
+            .expect("over-cap policy key");
+
+            let mut transaction = block.transaction();
+            let count_before = privacy_bootle_lantern_issuer_policy_count_v1(
+                &transaction.world.privacy_commitments,
+            )
+            .expect("valid registry at the cap");
+            let budget_before = transaction.privacy_budget_for_testing();
+            let error = RegisterPrivacyBootleLanternIssuerPolicyV1::new(over_policy)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("policy registry at cap must reject");
+            assert!(
+                smart_contract_parameter_message(&error).contains("registry is full"),
+                "{error:?}"
+            );
+            assert_eq!(
+                privacy_bootle_lantern_issuer_policy_count_v1(
+                    &transaction.world.privacy_commitments,
+                )
+                .expect("failed registration preserves a valid capped registry"),
+                count_before
+            );
+            assert_eq!(transaction.world.privacy_commitments.get(&over_key), None);
+            assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
+        }
     }
 
     #[test]
