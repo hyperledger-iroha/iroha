@@ -4560,6 +4560,8 @@ impl Kura {
     ///
     /// The instance keeps blocks in memory for normal test access, while any background writer
     /// activity is redirected into a per-instance temporary directory instead of the crate root.
+    /// Its empty canonical data, index, hash, and count journals match production first-boot
+    /// storage so startup-boundary tests cannot accidentally rely on a fileless test-only shape.
     pub fn blank_kura_for_testing() -> Arc<Kura> {
         Self::blank_kura_for_testing_with_lane_config_and_retention(
             &LaneConfig::default(),
@@ -4614,8 +4616,8 @@ impl Kura {
         let mut block_store =
             BlockStore::with_fsync(&blocks_root, FsyncMode::Batched, FSYNC_INTERVAL);
         block_store
-            .write_commit_marker(0)
-            .expect("initialize empty durable Kura commit marker for tests");
+            .create_files_if_they_do_not_exist()
+            .expect("initialize empty canonical Kura journal for tests");
         let merge_log_path = primary_lane.merge_log_path(&store_root);
         let merge_log = MergeLedgerLog::open_at(&merge_log_path, MERGE_LEDGER_CACHE_CAPACITY)
             .expect("create temporary Kura merge ledger for tests");
@@ -50228,6 +50230,32 @@ mod tests {
         assert!(
             expected_blocks.is_dir(),
             "canonical primary block directory must exist"
+        );
+        for name in [
+            DATA_FILE_NAME,
+            INDEX_FILE_NAME,
+            HASHES_FILE_NAME,
+            COUNT_FILE_NAME,
+        ] {
+            let path = expected_blocks.join(name);
+            let metadata =
+                std::fs::symlink_metadata(&path).expect("inspect blank canonical journal file");
+            assert!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "blank test Kura must initialize canonical journal file {name}"
+            );
+            if name != COUNT_FILE_NAME {
+                assert_eq!(
+                    metadata.len(),
+                    0,
+                    "blank canonical journal file {name} must be empty"
+                );
+            }
+        }
+        assert_eq!(
+            kura.exact_durable_blocks_count()
+                .expect("read blank durable height"),
+            0
         );
         assert!(
             expected_merge.is_file(),
