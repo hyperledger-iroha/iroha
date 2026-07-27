@@ -58,6 +58,7 @@ models=(
   SumeragiV2ExactServeRestartTombstoneMutation.tla
   SumeragiV2ExactResponseClaimLifecycleMutation.tla
   SumeragiV2ExactServeFrozenPredecessorMutation.tla
+  SumeragiV2ExactInstalledTcRetentionMutation.tla
   SumeragiV2AdequateLeaderWireTombstoneMutation.tla
   SumeragiV2AdequateLeaderCandidateTombstoneMutation.tla
 )
@@ -79,7 +80,7 @@ for model in "${models[@]}"; do
     exit 1
   }
 done
-echo "[sany] all six liveness-ownership mutation models parsed with frozen Java 21.0.12"
+echo "[sany] all seven liveness-ownership mutation models parsed with frozen Java 21.0.12"
 
 common=(
   "$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC
@@ -122,6 +123,7 @@ fixed_cases=(
   "exact-serve-restart-tombstone|SumeragiV2ExactServeRestartTombstoneMutation.tla|exact_serve_restart_tombstone_fixed.cfg"
   "exact-response-claim-lifecycle|SumeragiV2ExactResponseClaimLifecycleMutation.tla|exact_response_claim_lifecycle_fixed.cfg"
   "exact-serve-frozen-predecessor|SumeragiV2ExactServeFrozenPredecessorMutation.tla|exact_serve_frozen_predecessor_fixed.cfg"
+  "exact-installed-tc-retention|SumeragiV2ExactInstalledTcRetentionMutation.tla|exact_installed_tc_retention_fixed.cfg"
   "adequate-leader-wire-tombstone|SumeragiV2AdequateLeaderWireTombstoneMutation.tla|adequate_leader_wire_tombstone_fixed.cfg"
   "adequate-leader-candidate-tombstone|SumeragiV2AdequateLeaderCandidateTombstoneMutation.tla|adequate_leader_candidate_tombstone_fixed.cfg"
 )
@@ -141,6 +143,7 @@ mutation_cases=(
   "exact-response-post-consume-resurrection|SumeragiV2ExactResponseClaimLifecycleMutation.tla|exact_response_claim_resurrection_bug.cfg|ConsumedFamilyCannotResurrect"
   "exact-response-restart-reopen|SumeragiV2ExactResponseClaimLifecycleMutation.tla|exact_response_claim_restart_reopen_bug.cfg|SameHeightRestartReopensDurableFamily"
   "exact-serve-later-owner-churn|SumeragiV2ExactServeFrozenPredecessorMutation.tla|exact_serve_frozen_predecessor_churn_bug.cfg|ReservedServeCapacityCannotBeStolen"
+  "exact-installed-tc-view-only-replacement|SumeragiV2ExactInstalledTcRetentionMutation.tla|exact_installed_tc_view_only_bug.cfg|ExactInstalledTcAuthority"
   "adequate-wire-slot-cardinality|SumeragiV2AdequateLeaderWireTombstoneMutation.tla|adequate_leader_wire_slot_cardinality_bug.cfg|SlotTableCardinalityIsRosterClassBounded"
   "adequate-wire-same-view-replacement|SumeragiV2AdequateLeaderWireTombstoneMutation.tla|adequate_leader_wire_same_view_replacement_bug.cfg|SameViewIdentityCannotReplaceFirstOwner"
   "adequate-wire-retry-coalescing|SumeragiV2AdequateLeaderWireTombstoneMutation.tla|adequate_leader_wire_retry_coalescing_bug.cfg|ExactRetryCoalescesIntoOneOwner"
@@ -168,4 +171,4 @@ for case_spec in "${mutation_cases[@]}"; do
     "Error: The behavior up to this point is:"
 done
 
-echo "[tlc] all 25 liveness-ownership mutations produced their exact named counterexamples; repaired models passed"
+echo "[tlc] all 26 liveness-ownership mutations produced their exact named counterexamples; repaired models passed"

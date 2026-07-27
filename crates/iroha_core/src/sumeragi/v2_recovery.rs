@@ -34,7 +34,10 @@ use super::{
     v2_lane_work::durable_lane_completion_matches_finality,
 };
 use crate::{
-    kura::{CommitManifestBindingState, Kura, KuraV2CommitReceipt},
+    kura::{
+        CommitManifestBindingState, ExactReplayBoundary, Kura, KuraV2CommitReceipt,
+        V2StartupFinalityVerificationSession, V2StartupReplayStorageBinding,
+    },
     state::{
         State, WorldReadOnly, live_consensus_key_pop_for_peer,
         public_lane_validator_record_matches_key,
@@ -47,12 +50,38 @@ use crate::{
 /// a checkpoint-bound commit manifest, and a cryptographically verified finality artifact. The
 /// only height outside that prefix may be the durable tip interrupted between Kura publication
 /// and finality-sidecar publication.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct V2StartupReplayPlan {
     durable_height: usize,
+    durable_boundary_hash: Hash,
+    storage_binding: Option<V2StartupReplayStorageBinding>,
     audited_bootstrap_prefix_height: usize,
     complete_prefix_height: usize,
     pending_tip_height: Option<u64>,
+}
+
+impl PartialEq for V2StartupReplayPlan {
+    fn eq(&self, other: &Self) -> bool {
+        self.durable_height == other.durable_height
+            && self.durable_boundary_hash == other.durable_boundary_hash
+            && self.audited_bootstrap_prefix_height == other.audited_bootstrap_prefix_height
+            && self.complete_prefix_height == other.complete_prefix_height
+            && self.pending_tip_height == other.pending_tip_height
+    }
+}
+
+impl Eq for V2StartupReplayPlan {}
+
+const V2_STARTUP_REPLAY_BOUNDARY_HASH_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:startup-replay-boundary:v1\0";
+
+fn v2_startup_replay_boundary_hash(boundary: &ExactReplayBoundary) -> Hash {
+    let count = boundary.count.to_le_bytes();
+    let mut chunks = Vec::with_capacity(boundary.hashes.len().saturating_add(2));
+    chunks.push(V2_STARTUP_REPLAY_BOUNDARY_HASH_DOMAIN);
+    chunks.push(count.as_slice());
+    chunks.extend(boundary.hashes.iter().map(|hash| hash.as_ref().as_slice()));
+    Hash::new_from_chunks(&chunks)
 }
 
 /// Non-forgeable startup authorization for one exact imported snapshot lineage.
@@ -133,6 +162,27 @@ impl V2StartupReplayPlan {
         self.pending_tip_height
     }
 
+    fn validate_exact_kura_boundary(&self, kura: &Kura) -> Result<(), V2StartupReplayError> {
+        let binding =
+            self.storage_binding
+                .as_ref()
+                .ok_or(V2StartupReplayError::InvalidReplayMetadata {
+                    height: u64::try_from(self.durable_height)?,
+                    reason: "startup replay plan has no Kura-minted storage identity binding",
+                })?;
+        let boundary = binding.replay_boundary();
+        if usize::try_from(boundary.count)? != self.durable_height
+            || v2_startup_replay_boundary_hash(boundary) != self.durable_boundary_hash
+        {
+            return Err(V2StartupReplayError::InvalidReplayMetadata {
+                height: u64::try_from(self.durable_height)?,
+                reason: "startup replay plan disagrees with its Kura-minted storage binding",
+            });
+        }
+        kura.validate_v2_startup_replay_storage_binding(binding)?;
+        Ok(())
+    }
+
     /// Validate that a restored WSV can be reconciled without skipping an incomplete height.
     ///
     /// # Errors
@@ -177,7 +227,34 @@ impl V2StartupReplayPlan {
 ///
 /// Returns [`V2StartupReplayError`] for malformed Kura metadata or a non-tip recovery gap.
 pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
-    let durable_height = kura.exact_durable_blocks_count()?;
+    let planned = (|| {
+        let mut startup_verification = kura.begin_v2_startup_finality_verification()?;
+        if startup_verification.is_none() {
+            kura.refresh_v2_startup_finality_verification()?;
+            startup_verification = kura.begin_v2_startup_finality_verification()?;
+        }
+        let startup_verification =
+            startup_verification.ok_or(V2StartupReplayError::InvalidReplayMetadata {
+                height: u64::try_from(kura.exact_durable_blocks_count()?)?,
+                reason: "Kura could not bind its verified startup storage inventory",
+            })?;
+        let mut plan = plan_v2_startup_replay_inner(kura, Some(&startup_verification))?;
+        plan.storage_binding = Some(startup_verification.storage_binding()?);
+        Ok(plan)
+    })();
+    if planned.is_err() {
+        kura.finish_v2_startup_finality_verification();
+    }
+    planned
+}
+
+fn plan_v2_startup_replay_inner(
+    kura: &Kura,
+    startup_verification: Option<&V2StartupFinalityVerificationSession<'_>>,
+) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
+    let durable_boundary = kura.exact_replay_boundary()?;
+    let durable_height = usize::try_from(durable_boundary.count)?;
+    let durable_boundary_hash = v2_startup_replay_boundary_hash(&durable_boundary);
     let durable_height_u64 = u64::try_from(durable_height)?;
     let mut complete_prefix_height = 0_usize;
     let mut audited_bootstrap_prefix_height = 0_usize;
@@ -207,7 +284,11 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
 
         let checkpoint = kura.wsv_checkpoint(height)?;
         let manifest = kura.commit_manifest(height)?;
-        let finality = kura.v2_finality_artifact_with_receipt(height)?;
+        let finality = if let Some(session) = startup_verification {
+            kura.v2_finality_artifact_with_receipt_for_startup(session, height)?
+        } else {
+            kura.v2_finality_artifact_with_receipt(height)?
+        };
 
         match (checkpoint.as_ref(), manifest.as_ref(), finality.as_ref()) {
             (Some(_), Some(manifest), Some((artifact, _))) => {
@@ -271,6 +352,8 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
                         Ok(false) => {
                             return Ok(V2StartupReplayPlan {
                                 durable_height,
+                                durable_boundary_hash,
+                                storage_binding: None,
                                 audited_bootstrap_prefix_height,
                                 complete_prefix_height,
                                 pending_tip_height: Some(height),
@@ -316,6 +399,8 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
                 }
                 return Ok(V2StartupReplayPlan {
                     durable_height,
+                    durable_boundary_hash,
+                    storage_binding: None,
                     audited_bootstrap_prefix_height,
                     complete_prefix_height,
                     pending_tip_height: Some(height),
@@ -330,6 +415,8 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
                 }
                 return Ok(V2StartupReplayPlan {
                     durable_height,
+                    durable_boundary_hash,
+                    storage_binding: None,
                     audited_bootstrap_prefix_height,
                     complete_prefix_height,
                     pending_tip_height: Some(height),
@@ -340,6 +427,8 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
 
     Ok(V2StartupReplayPlan {
         durable_height,
+        durable_boundary_hash,
+        storage_binding: None,
         audited_bootstrap_prefix_height,
         complete_prefix_height,
         pending_tip_height: None,
@@ -1162,15 +1251,40 @@ impl RecoveredV2Height {
 /// never inferred from mutable local configuration: height one comes from
 /// signed genesis, and every successor is checked against the durable parent
 /// artifact and current finalized state.
+#[cfg(test)]
 pub(crate) fn recover_active_height(
     kura: &Kura,
     state: &State,
     fresh_genesis: Option<GenesisV2Bootstrap>,
     genesis_public_key: PublicKey,
 ) -> Result<RecoveredV2Height, V2RecoveryError> {
+    let replay_plan = plan_v2_startup_replay(kura)?;
+    recover_active_height_with_plan(kura, state, fresh_genesis, genesis_public_key, replay_plan)
+}
+
+struct StartupFinalityInventoryCleanup<'a>(&'a Kura);
+
+impl Drop for StartupFinalityInventoryCleanup<'_> {
+    fn drop(&mut self) {
+        self.0.finish_v2_startup_finality_verification();
+    }
+}
+
+/// Select the active height from the exact replay plan already authenticated
+/// by startup before the Sumeragi worker was launched.
+pub(crate) fn recover_active_height_with_plan(
+    kura: &Kura,
+    state: &State,
+    fresh_genesis: Option<GenesisV2Bootstrap>,
+    genesis_public_key: PublicKey,
+    replay_plan: V2StartupReplayPlan,
+) -> Result<RecoveredV2Height, V2RecoveryError> {
+    // Recovery consumes the O(H) startup-only inventory. Clear it on every
+    // success and error exit; the fixed-size runtime LRU remains available.
+    let _inventory_cleanup = StartupFinalityInventoryCleanup(kura);
+    replay_plan.validate_exact_kura_boundary(kura)?;
     let storage_root = kura.sumeragi_v2_storage_root();
     let context_store = V2ContextStore::open(&storage_root)?;
-    let replay_plan = plan_v2_startup_replay(kura)?;
     let durable_height = u64::try_from(replay_plan.durable_height())?;
     let state_height = u64::try_from(state.committed_height())?;
     replay_plan.validate_restored_state_height(state.committed_height())?;
@@ -1761,7 +1875,7 @@ mod tests {
         authenticate_v2_snapshot_replay_boundary, authenticate_v2_snapshot_startup,
         authenticated_v2_snapshot_startup_mode, build_verified_successor,
         committed_nexus_amx_context_hash, plan_v2_startup_replay, recover_active_height,
-        successor_proofs_of_possession,
+        recover_active_height_with_plan, successor_proofs_of_possession,
     };
     use crate::{
         block::{CommittedBlock, ValidBlock},
@@ -3236,6 +3350,140 @@ mod tests {
             plan.validate_restored_state_height(3),
             Err(V2StartupReplayError::StateHeightOutsidePlan { .. })
         ));
+    }
+
+    #[test]
+    fn startup_audit_is_reused_by_planning_and_recovery_then_cleared() {
+        let (verified, keys) = verified_context();
+        let context = verified.context().clone();
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_consensus_keys(&kura, context.chain_id.clone(), &keys);
+        let block = dummy_block(&keys[0], 1, None);
+        kura.store_block(block.clone())
+            .expect("persist audited canonical block");
+        commit_to_state(&state, &block, &context);
+        let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
+        persist_complete_height(kura.as_ref(), &state, &artifact);
+        V2ContextStore::open(kura.sumeragi_v2_storage_root())
+            .expect("open startup-audit context store")
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist authenticated parent context");
+
+        kura.clear_v2_finality_verification_cache_for_test();
+        kura.reset_v2_finality_crypto_verifications_for_test();
+        let first_plan =
+            plan_v2_startup_replay(kura.as_ref()).expect("audit and plan complete height");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications_for_test(),
+            1,
+            "the startup audit performs the sole cryptographic pass"
+        );
+        assert_eq!(kura.v2_startup_finality_inventory_len_for_test(), 1);
+
+        kura.clear_v2_finality_verification_cache_for_test();
+        let second_plan =
+            plan_v2_startup_replay(kura.as_ref()).expect("reuse exact startup inventory");
+        assert_eq!(first_plan.complete_prefix_height(), 1);
+        assert_eq!(second_plan.complete_prefix_height(), 1);
+        assert_eq!(
+            kura.v2_finality_crypto_verifications_for_test(),
+            1,
+            "replanning beyond an empty runtime LRU must reuse the startup audit"
+        );
+
+        kura.clear_v2_finality_verification_cache_for_test();
+        recover_active_height_with_plan(
+            kura.as_ref(),
+            &state,
+            None,
+            keys[0].public_key().clone(),
+            second_plan,
+        )
+        .expect("recover successor from authenticated complete tip");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications_for_test(),
+            1,
+            "recovery consumes the plan without another finality scan"
+        );
+        assert_eq!(
+            kura.v2_startup_finality_inventory_len_for_test(),
+            0,
+            "recovery consumes the O(H) startup inventory"
+        );
+    }
+
+    #[test]
+    fn recovery_rejects_post_plan_storage_identity_replacement_and_clears_inventory() {
+        for replacement_target in [
+            "blocks.data",
+            "v2_finality",
+            "wsv_checkpoints",
+            "commit_manifests",
+        ] {
+            let (verified, keys) = verified_context();
+            let context = verified.context().clone();
+            let kura = Kura::blank_kura_for_testing();
+            let state = state_with_consensus_keys(&kura, context.chain_id.clone(), &keys);
+            let block = dummy_block(&keys[0], 1, None);
+            kura.store_block(block.clone())
+                .expect("persist replacement fixture block");
+            commit_to_state(&state, &block, &context);
+            let artifact = authenticated_artifact_for(context, block.as_ref(), &keys);
+            persist_complete_height(kura.as_ref(), &state, &artifact);
+            let plan =
+                plan_v2_startup_replay(kura.as_ref()).expect("bind exact pre-replacement storage");
+            assert_eq!(kura.v2_startup_finality_inventory_len_for_test(), 1);
+            let consensus_storage_root = kura.sumeragi_v2_storage_root();
+            assert!(
+                !consensus_storage_root.exists(),
+                "fixture must begin without recovery-owned consensus storage"
+            );
+
+            let blocks_dir = primary_lane_blocks_dir(kura.as_ref());
+            let path = match replacement_target {
+                "blocks.data" => blocks_dir.join("blocks.data"),
+                "v2_finality" => blocks_dir
+                    .join("v2_finality")
+                    .join("00000000000000000001.norito"),
+                "wsv_checkpoints" => blocks_dir
+                    .join("wsv_checkpoints")
+                    .join("00000000000000000001.norito"),
+                "commit_manifests" => blocks_dir
+                    .join("commit_manifests")
+                    .join("00000000000000000001.norito"),
+                _ => unreachable!("replacement target list is exhaustive"),
+            };
+            let replacement = path.with_extension("startup-replacement");
+            std::fs::write(
+                &replacement,
+                std::fs::read(&path).expect("read exact pre-plan bytes"),
+            )
+            .expect("write equal-byte replacement");
+            std::fs::remove_file(&path).expect("unlink validated storage identity");
+            std::fs::rename(&replacement, &path).expect("publish equal-byte replacement");
+
+            assert!(matches!(
+                recover_active_height_with_plan(
+                    kura.as_ref(),
+                    &state,
+                    None,
+                    keys[0].public_key().clone(),
+                    plan,
+                ),
+                Err(V2RecoveryError::StartupReplay(V2StartupReplayError::Kura(
+                    _
+                )))
+            ));
+            assert!(
+                !consensus_storage_root.exists(),
+                "tampered replay binding must fail before recovery creates consensus storage"
+            );
+            assert_eq!(
+                kura.v2_startup_finality_inventory_len_for_test(),
+                0,
+                "error-path recovery must clear the startup inventory"
+            );
+        }
     }
 
     #[test]

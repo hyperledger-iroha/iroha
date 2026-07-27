@@ -169,6 +169,47 @@ impl fmt::Display for SetTransactionResultsError {
 
 impl std::error::Error for SetTransactionResultsError {}
 
+/// Error returned when independent-batch receipts cannot be attached to result leaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetBatchTransferOutcomesError {
+    /// The block does not yet carry transaction results.
+    MissingTransactionResults,
+    /// Entrypoint and result counts differ.
+    ResultCountMismatch {
+        /// Number of canonical entrypoint hashes.
+        entrypoints: usize,
+        /// Number of canonical transaction results.
+        results: usize,
+    },
+    /// An outcome row references an entrypoint absent from this block.
+    UnknownEntrypoint {
+        /// Unknown canonical entrypoint hash.
+        hash: HashOf<TransactionEntrypoint>,
+    },
+}
+
+impl fmt::Display for SetBatchTransferOutcomesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingTransactionResults => {
+                f.write_str("cannot attach batch outcomes before transaction results")
+            }
+            Self::ResultCountMismatch {
+                entrypoints,
+                results,
+            } => write!(
+                f,
+                "cannot attach batch outcomes to misaligned block results: {entrypoints} entrypoints, {results} results",
+            ),
+            Self::UnknownEntrypoint { hash } => {
+                write!(f, "batch outcomes reference unknown entrypoint {hash}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetBatchTransferOutcomesError {}
+
 impl SignedBlock {
     /// Create new block with a given signature
     ///
@@ -386,6 +427,52 @@ impl SignedBlock {
         if let Some(result) = self.result.as_mut() {
             result.trigger_completions = trigger_completions;
         }
+    }
+
+    /// Replace durable independent-batch outcomes captured while executing this block.
+    #[cfg(feature = "transparent_api")]
+    pub fn set_batch_transfer_outcomes(
+        &mut self,
+        outcomes: BTreeMap<
+            HashOf<crate::transaction::signed::TransactionEntrypoint>,
+            Vec<crate::events::data::prelude::AssetBatchTransferOutcome>,
+        >,
+    ) -> Result<(), SetBatchTransferOutcomesError> {
+        let result = self
+            .result
+            .as_mut()
+            .ok_or(SetBatchTransferOutcomesError::MissingTransactionResults)?;
+        let entrypoint_hashes = result.merkle.leaves().collect::<Vec<_>>();
+        if entrypoint_hashes.len() != result.transaction_results.len() {
+            return Err(SetBatchTransferOutcomesError::ResultCountMismatch {
+                entrypoints: entrypoint_hashes.len(),
+                results: result.transaction_results.len(),
+            });
+        }
+        let assignments = outcomes
+            .into_iter()
+            .map(|(hash, receipts)| {
+                entrypoint_hashes
+                    .iter()
+                    .position(|candidate| *candidate == hash)
+                    .map(|index| (index, receipts))
+                    .ok_or(SetBatchTransferOutcomesError::UnknownEntrypoint { hash })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for transaction_result in &mut result.transaction_results {
+            transaction_result.set_batch_transfer_outcomes(Vec::new());
+        }
+        for (index, receipts) in assignments {
+            result.transaction_results[index].set_batch_transfer_outcomes(receipts);
+        }
+        result.result_merkle = result
+            .transaction_results
+            .iter()
+            .map(TransactionResult::hash)
+            .collect();
+        self.payload.header.result_merkle_root = result.result_merkle.root();
+        Ok(())
     }
 
     /// Number of successful execution fragments recorded with this block result.

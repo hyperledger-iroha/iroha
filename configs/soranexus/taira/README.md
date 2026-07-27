@@ -19,6 +19,19 @@ The v2 chain is a fresh-genesis reset. Never point a v2 validator at the archive
 queue journal, or RBC session directories, and never attempt a mixed v1/v2 rolling upgrade. Keep
 the archived chain data read-only for incident analysis.
 
+`check_mcp_rollout.sh` derives its default expected chain ID from this
+directory's canonical `config.toml`, so an archived-chain signer fails closed
+by default. When an operator deliberately restores the archived testnet, keep
+the canonical config and examples unchanged and pass the deployed identity
+explicitly:
+
+```bash
+--expected-chain-id 809574f5-fee7-5e69-bfcf-52451e42d50f
+```
+
+The override is enforced when the rollout checker prepares the signed-canary
+config and when it derives the canary account for faucet recovery.
+
 ## Public API contract
 
 For the examples below, replace `PUBLIC_TORII_ROOT` with the live public

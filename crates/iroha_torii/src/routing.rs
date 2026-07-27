@@ -17770,6 +17770,7 @@ async fn submit_contract_call_request(
         contract_alias,
         entrypoint,
         payload,
+        metadata: caller_metadata,
         creation_time_ms,
         transaction_ttl_ms,
         fee_payment,
@@ -17817,7 +17818,7 @@ async fn submit_contract_call_request(
     let arguments = bound_signed_contract_arguments(arguments).map_err(conversion_error)?;
     let payload_digest_hex = contract_payload_digest_hex(normalized_payload.as_ref());
 
-    let metadata = build_contract_call_metadata(
+    let system_metadata = build_contract_call_metadata(
         &manifest,
         &contract_address,
         &code_hash,
@@ -17825,6 +17826,7 @@ async fn submit_contract_call_request(
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
     );
+    let metadata = merge_contract_call_metadata(caller_metadata, system_metadata)?;
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new(
@@ -18569,6 +18571,22 @@ pub async fn handle_post_contract_call(
     )
     .await?;
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/contracts/call/batch/prepare — resolve and ABI-bind one exact ordered batch.
+#[cfg(feature = "app_api")]
+pub fn handle_post_contract_call_batch_prepare(
+    state: Arc<CoreState>,
+    NoritoJson(request): NoritoJson<ContractCallBatchPrepareDto>,
+) -> Result<impl IntoResponse> {
+    let response = prepare_contract_call_batch(state.as_ref(), request)?;
+    let body = norito::json::to_json_pretty(&response).map_err(norito_internal_error)?;
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -19578,6 +19596,295 @@ struct ContractCallSimulationError {
 pub const CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Maximum number of VM executions admitted by one contract view batch.
 pub const CONTRACT_VIEW_BATCH_MAX_ITEMS: usize = 256;
+/// Maximum number of ordered executable items admitted by contract-call batch preparation.
+pub const CONTRACT_CALL_BATCH_MAX_ITEMS: usize = 256;
+
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_BINDING_VERSION_V1: u16 = 1;
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1: &[u8] = b"iroha:contract-call-batch-binding:v1\0";
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1: &[u8] = b"iroha:contract-call-batch-arguments:v1\0";
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1: &[u8] =
+    b"iroha:contract-call-batch-instruction:v1\0";
+
+#[cfg(feature = "app_api")]
+fn contract_call_batch_digest(domain: &[u8], chunks: &[&[u8]]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    for chunk in chunks {
+        hasher.update(chunk);
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn exact_contract_hash_pin(expected: Option<&str>, actual: &Hash, field: &str) -> Result<String> {
+    let actual = hex::encode(actual.as_ref());
+    if let Some(expected) = expected {
+        let is_canonical = expected.len() == 64
+            && expected
+                .as_bytes()
+                .iter()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        if !is_canonical {
+            return Err(conversion_error(format!(
+                "{field} must contain exactly 32 lowercase hexadecimal bytes"
+            )));
+        }
+        if expected != actual {
+            return Err(conversion_error(format!(
+                "{field} `{expected}` does not match the active value `{actual}`"
+            )));
+        }
+    }
+    Ok(actual)
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_instruction_from_base64(
+    encoded: &str,
+    index: usize,
+) -> Result<(InstructionBox, Vec<u8>, String)> {
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| {
+            conversion_error(format!(
+                "batch entry {index} instruction_b64 is not valid padded base64: {error}"
+            ))
+        })?;
+    if base64::engine::general_purpose::STANDARD.encode(&raw) != encoded {
+        return Err(conversion_error(format!(
+            "batch entry {index} instruction_b64 must use exact canonical padded base64"
+        )));
+    }
+    let instruction = norito::decode_from_bytes::<InstructionBox>(&raw).map_err(|error| {
+        conversion_error(format!(
+            "batch entry {index} instruction_b64 does not contain one framed InstructionBox: {error}"
+        ))
+    })?;
+    let canonical = norito::to_bytes(&instruction).map_err(|error| {
+        conversion_error(format!(
+            "batch entry {index} native instruction cannot be canonically encoded: {error}"
+        ))
+    })?;
+    if canonical != raw {
+        return Err(conversion_error(format!(
+            "batch entry {index} native instruction is not canonically framed"
+        )));
+    }
+    let wire_id = iroha_data_model::isi::instruction_wire_id(&instruction)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "batch entry {index} native instruction is absent from the registry"
+            ))
+        })?
+        .to_owned();
+    Ok((instruction, canonical, wire_id))
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_contract_call_batch(
+    state: &CoreState,
+    request: ContractCallBatchPrepareDto,
+) -> Result<ContractCallBatchPlanDto> {
+    if request.entries.is_empty() {
+        return Err(conversion_error(
+            "contract call batch must include at least one entry".to_owned(),
+        ));
+    }
+    if request.entries.len() > CONTRACT_CALL_BATCH_MAX_ITEMS {
+        return Err(conversion_error(format!(
+            "contract call batch exceeds the {CONTRACT_CALL_BATCH_MAX_ITEMS}-entry limit"
+        )));
+    }
+
+    let mut binding_items = Vec::with_capacity(request.entries.len());
+    let mut prepared_entries = Vec::with_capacity(request.entries.len());
+    let alias_resolution_time_ms = current_time_millis();
+    for (index, item) in request.entries.into_iter().enumerate() {
+        let response_index = u32::try_from(index).expect("batch limit fits u32");
+        match (item.contract_call, item.instruction_b64) {
+            (Some(call), None) => {
+                let prepared = match (call.contract_address.as_ref(), call.contract_alias.as_ref())
+                {
+                    (Some(address), None) => prepare_contract_call_by_address(state, address)?,
+                    (None, Some(alias)) => {
+                        prepare_contract_call_by_alias(state, alias, alias_resolution_time_ms)?
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(conversion_error(format!(
+                            "batch entry {index} must provide exactly one contract target"
+                        )));
+                    }
+                    (None, None) => {
+                        return Err(conversion_error(format!(
+                            "batch entry {index} must provide one contract target"
+                        )));
+                    }
+                };
+                let PreparedContractCall {
+                    program,
+                    code_hash,
+                    abi_hash,
+                    manifest,
+                    dataspace,
+                    contract_address,
+                    contract_alias,
+                } = prepared;
+                if let Some(expected_address) = call.expected_contract_address.as_ref() {
+                    if expected_address != &contract_address {
+                        return Err(conversion_error(format!(
+                            "batch entry {index} expected_contract_address `{expected_address}` \
+                             does not match resolved address `{contract_address}`"
+                        )));
+                    }
+                }
+                let code_hash_hex = exact_contract_hash_pin(
+                    call.expected_code_hash_hex.as_deref(),
+                    &code_hash,
+                    &format!("batch entry {index} expected_code_hash_hex"),
+                )?;
+                let abi_hash_hex = exact_contract_hash_pin(
+                    call.expected_abi_hash_hex.as_deref(),
+                    &abi_hash,
+                    &format!("batch entry {index} expected_abi_hash_hex"),
+                )?;
+                let entrypoint = explicit_contract_entrypoint(&call.entrypoint)?;
+                if entrypoint != call.entrypoint {
+                    return Err(conversion_error(format!(
+                        "batch entry {index} entrypoint must not contain surrounding whitespace"
+                    )));
+                }
+                let descriptor = ensure_contract_call_entrypoint(&manifest, entrypoint, None)?;
+                {
+                    let world = state.world_view();
+                    iroha_core::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
+                        &world,
+                        &contract_address,
+                        code_hash,
+                        descriptor.kind,
+                    )
+                    .map_err(|error| conversion_error(error.to_string()))?;
+                }
+                let normalized_payload =
+                    normalize_contract_payload(descriptor, call.payload.as_ref())?;
+                let arguments = encode_contract_argument_record(
+                    program.prepared_contract(),
+                    entrypoint,
+                    normalized_payload.as_ref(),
+                )
+                .map_err(conversion_error)?;
+                let _ =
+                    bound_signed_contract_arguments(arguments.clone()).map_err(conversion_error)?;
+                let arguments_digest_hex = match arguments.as_deref() {
+                    Some(bytes) => contract_call_batch_digest(
+                        CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1,
+                        &[&[1], bytes],
+                    ),
+                    None => {
+                        contract_call_batch_digest(CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1, &[&[0]])
+                    }
+                };
+                let payload_digest_hex = contract_payload_digest_hex(normalized_payload.as_ref());
+                let contract_alias_literal = contract_alias.as_ref().map(ToString::to_string);
+                let contract_address_literal = contract_address.to_string();
+                let entrypoint = entrypoint.to_owned();
+
+                binding_items.push(ContractCallBatchBindingItemDto {
+                    index: response_index,
+                    kind: "contract_call".to_owned(),
+                    contract_alias: contract_alias_literal,
+                    contract_address: Some(contract_address_literal.clone()),
+                    dataspace: Some(dataspace),
+                    code_hash_hex: Some(code_hash_hex.clone()),
+                    abi_hash_hex: Some(abi_hash_hex.clone()),
+                    entrypoint: Some(entrypoint.clone()),
+                    payload_digest_hex: Some(payload_digest_hex),
+                    arguments_digest_hex: Some(arguments_digest_hex),
+                    wire_id: None,
+                    instruction_digest_hex: None,
+                });
+                prepared_entries.push(ContractCallBatchPreparedItemDto {
+                    index: response_index,
+                    kind: "contract_call".to_owned(),
+                    contract_address: Some(contract_address_literal),
+                    code_hash_hex: Some(code_hash_hex),
+                    abi_hash_hex: Some(abi_hash_hex),
+                    entrypoint: Some(entrypoint),
+                    arguments_b64: arguments
+                        .as_ref()
+                        .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)),
+                    wire_id: None,
+                    instruction_b64: None,
+                });
+            }
+            (None, Some(instruction_b64)) => {
+                let (_instruction, canonical, wire_id) =
+                    canonical_instruction_from_base64(&instruction_b64, index)?;
+                let instruction_digest_hex = contract_call_batch_digest(
+                    CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1,
+                    &[&canonical],
+                );
+                binding_items.push(ContractCallBatchBindingItemDto {
+                    index: response_index,
+                    kind: "instruction".to_owned(),
+                    contract_alias: None,
+                    contract_address: None,
+                    dataspace: None,
+                    code_hash_hex: None,
+                    abi_hash_hex: None,
+                    entrypoint: None,
+                    payload_digest_hex: None,
+                    arguments_digest_hex: None,
+                    wire_id: Some(wire_id.clone()),
+                    instruction_digest_hex: Some(instruction_digest_hex),
+                });
+                prepared_entries.push(ContractCallBatchPreparedItemDto {
+                    index: response_index,
+                    kind: "instruction".to_owned(),
+                    contract_address: None,
+                    code_hash_hex: None,
+                    abi_hash_hex: None,
+                    entrypoint: None,
+                    arguments_b64: None,
+                    wire_id: Some(wire_id),
+                    instruction_b64: Some(instruction_b64),
+                });
+            }
+            _ => {
+                return Err(conversion_error(format!(
+                    "batch entry {index} must provide exactly one of contract_call or instruction_b64"
+                )));
+            }
+        }
+    }
+
+    let binding = ContractCallBatchBindingDto {
+        version: CONTRACT_CALL_BATCH_BINDING_VERSION_V1,
+        items: binding_items,
+    };
+    let binding_value = norito::json::to_value(&binding).map_err(|error| {
+        conversion_error(format!(
+            "failed to materialize canonical contract batch binding: {error}"
+        ))
+    })?;
+    let binding_bytes = norito::json::to_vec(&binding_value).map_err(|error| {
+        conversion_error(format!(
+            "failed to encode canonical contract batch binding: {error}"
+        ))
+    })?;
+    let binding_digest_hex =
+        contract_call_batch_digest(CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1, &[&binding_bytes]);
+
+    Ok(ContractCallBatchPlanDto {
+        ok: true,
+        binding,
+        binding_digest_hex,
+        prepared_entries,
+    })
+}
 
 #[cfg(feature = "app_api")]
 fn append_contract_simulation_json_literal(
@@ -20620,6 +20927,48 @@ fn build_contract_call_metadata(
         }
     }
     metadata
+}
+
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_RESERVED_METADATA_PREFIXES: &[&str] = &["contract_", "validation_fee_"];
+
+#[cfg(feature = "app_api")]
+const CONTRACT_CALL_RESERVED_METADATA_KEYS: &[&str] = &[
+    "fee_sponsor",
+    "fee_sponsor_account",
+    "gas_asset_id",
+    "gas_limit",
+];
+
+#[cfg(feature = "app_api")]
+fn is_reserved_contract_call_metadata_key(key: &str) -> bool {
+    CONTRACT_CALL_RESERVED_METADATA_KEYS.contains(&key)
+        || CONTRACT_CALL_RESERVED_METADATA_PREFIXES
+            .iter()
+            .any(|prefix| key.starts_with(prefix))
+}
+
+#[cfg(feature = "app_api")]
+fn merge_contract_call_metadata(
+    mut caller_metadata: Metadata,
+    system_metadata: Metadata,
+) -> Result<Metadata> {
+    for (key, _) in caller_metadata.iter() {
+        if is_reserved_contract_call_metadata_key(key.as_ref()) {
+            return Err(conversion_error(format!(
+                "contract call metadata key `{key}` is reserved"
+            )));
+        }
+    }
+    for (key, value) in system_metadata.iter() {
+        if caller_metadata.contains(key) {
+            return Err(conversion_error(format!(
+                "contract call metadata key `{key}` is reserved"
+            )));
+        }
+        caller_metadata.insert(key.clone(), value.clone());
+    }
+    Ok(caller_metadata)
 }
 
 #[cfg(feature = "app_api")]
@@ -25105,6 +25454,7 @@ mod multisig_selector_tests {
                 contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
+                metadata: Metadata::default(),
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
                 fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -25149,6 +25499,7 @@ mod multisig_selector_tests {
                 contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
+                metadata: Metadata::default(),
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
                 fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -25188,6 +25539,7 @@ mod multisig_selector_tests {
                 contract_alias: Some("boi-preauth-ret-01::is".parse().expect("contract alias")),
                 entrypoint: "main".to_owned(),
                 payload: None,
+                metadata: Metadata::default(),
                 creation_time_ms: Some(1_700_000_000_234),
                 transaction_ttl_ms: None,
                 fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
@@ -30143,6 +30495,12 @@ pub struct ContractCallDto {
     /// Optional Norito JSON payload forwarded to the contract.
     #[norito(default)]
     pub payload: Option<IrohaJson>,
+    /// Caller-owned business metadata authenticated by the transaction signature.
+    ///
+    /// Contract and validation-fee namespaces are consensus-owned and rejected
+    /// on collision.
+    #[norito(default)]
+    pub metadata: Metadata,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -30151,6 +30509,171 @@ pub struct ContractCallDto {
     pub transaction_ttl_ms: Option<u64>,
     /// Explicit payer selection, sponsor revision, fee limits, and gas bound.
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// One manifest-resolved contract-call intent in an ordered batch.
+pub struct ContractCallBatchIntentDto {
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias.
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional exact address pin for alias resolution.
+    #[norito(default)]
+    pub expected_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional exact lowercase code-hash pin.
+    #[norito(default)]
+    pub expected_code_hash_hex: Option<String>,
+    /// Optional exact lowercase ABI-hash pin.
+    #[norito(default)]
+    pub expected_abi_hash_hex: Option<String>,
+    /// Exact callable entrypoint selector.
+    pub entrypoint: String,
+    /// Optional payload normalized against the active manifest ABI.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// One ordered input to contract-call batch preparation.
+pub struct ContractCallBatchPrepareItemDto {
+    /// Contract-call intent. Exactly one input field is required.
+    #[norito(default)]
+    pub contract_call: Option<ContractCallBatchIntentDto>,
+    /// Canonical padded base64 of one exact framed native instruction.
+    #[norito(default)]
+    pub instruction_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Request for canonical ordered contract-call batch preparation.
+pub struct ContractCallBatchPrepareDto {
+    /// Ordered call and native-instruction items.
+    pub entries: Vec<ContractCallBatchPrepareItemDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// Signature-bound public descriptor for one prepared batch item.
+pub struct ContractCallBatchBindingItemDto {
+    /// Zero-based position in the prepared executable.
+    pub index: u32,
+    /// Stable item discriminator: `contract_call` or `instruction`.
+    pub kind: String,
+    /// Resolved alias when the caller selected a contract by alias.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
+    /// Canonical resolved contract address.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    /// Resolved contract dataspace.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub dataspace: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract code.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code_hash_hex: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract ABI.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    /// Resolved contract entrypoint.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Lowercase hexadecimal digest of the exact executable call payload.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_digest_hex: Option<String>,
+    /// Lowercase hexadecimal digest of the canonical call arguments.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub arguments_digest_hex: Option<String>,
+    /// Stable instruction wire identifier for a native instruction item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub wire_id: Option<String>,
+    /// Lowercase hexadecimal digest of the exact framed native instruction.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub instruction_digest_hex: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// Canonical manifest embedded in signed transaction metadata.
+pub struct ContractCallBatchBindingDto {
+    /// Binding schema version.
+    pub version: u16,
+    /// Ordered descriptors for every executable item.
+    pub items: Vec<ContractCallBatchBindingItemDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// One exact executable item returned by batch preparation.
+pub struct ContractCallBatchPreparedItemDto {
+    /// Zero-based position in the prepared executable.
+    pub index: u32,
+    /// Stable item discriminator: `contract_call` or `instruction`.
+    pub kind: String,
+    /// Canonical contract address for a contract-call item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract code.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code_hash_hex: Option<String>,
+    /// Lowercase hexadecimal digest of the resolved contract ABI.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    /// Resolved contract entrypoint for a contract-call item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Canonical padded base64 of the exact executable call arguments.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub arguments_b64: Option<String>,
+    /// Stable instruction wire identifier for a native instruction item.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub wire_id: Option<String>,
+    /// Canonical padded base64 of the exact framed native instruction.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub instruction_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+/// Canonical plan returned by contract-call batch preparation.
+pub struct ContractCallBatchPlanDto {
+    /// Whether canonical preparation completed successfully.
+    pub ok: bool,
+    /// Signature-bound ordered manifest.
+    pub binding: ContractCallBatchBindingDto,
+    /// Lowercase hexadecimal digest of the canonical binding.
+    pub binding_digest_hex: String,
+    /// Ordered exact executable items.
+    pub prepared_entries: Vec<ContractCallBatchPreparedItemDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -41209,9 +41732,9 @@ mod tx_query_filter_tests {
         });
 
         let result = if result_ok {
-            dm::TransactionResult(Ok(dm::DataTriggerSequence::default()))
+            dm::TransactionResult::new(Ok(dm::DataTriggerSequence::default()))
         } else {
-            dm::TransactionResult(Err(dm::TransactionRejectionReason::Validation(
+            dm::TransactionResult::new(Err(dm::TransactionRejectionReason::Validation(
                 dm::ValidationFail::InternalError("x".into()),
             )))
         };
@@ -41342,7 +41865,7 @@ mod tx_query_filter_tests {
 
         let entry_hash =
             GenericHashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
-        let result = dm::TransactionResult(Ok(dm::DataTriggerSequence::default()));
+        let result = dm::TransactionResult::new(Ok(dm::DataTriggerSequence::default()));
 
         iroha_data_model::query::CommittedTransaction {
             block_hash: dummy_block_hash(),
@@ -79445,6 +79968,7 @@ pub async fn handle_status(
     tail: Option<&str>,
     nexus_enabled: bool,
     nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
+    authoritative_block_height: Option<u64>,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
@@ -79460,7 +79984,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
-    normalize_status_block_visibility(&mut status);
+    normalize_status_block_visibility(&mut status, authoritative_block_height);
     if !nexus_enabled {
         status.strip_nexus();
     } else if let Some(policy) = nexus_routing_policy {
@@ -79525,15 +80049,19 @@ pub async fn handle_status(
 }
 
 #[cfg(feature = "telemetry")]
-fn normalize_status_block_visibility(status: &mut Status) {
-    let Some(sumeragi) = status.sumeragi.as_ref() else {
-        return;
-    };
-    let finality_height = sumeragi.commit_qc_height;
-    if finality_height <= status.blocks {
-        return;
-    }
-    status.blocks = finality_height;
+/// Keep the public chain-height field monotonic and anchored to applied state.
+///
+/// The Prometheus block counter is populated by a lazy Kura scan and can trail
+/// while a peer applies a catch-up batch. The state block-hash journal publishes
+/// query-visible committed height on the apply path, so `/status.blocks` must
+/// not wait for that telemetry scan.
+fn normalize_status_block_visibility(status: &mut Status, authoritative_block_height: Option<u64>) {
+    let telemetry_commit_height = status
+        .sumeragi
+        .as_ref()
+        .map_or(0, |sumeragi| sumeragi.commit_qc_height);
+    let visible_height = authoritative_block_height.unwrap_or(telemetry_commit_height);
+    status.blocks = status.blocks.max(visible_height);
 }
 
 #[cfg(feature = "telemetry")]
@@ -79726,7 +80254,10 @@ fn is_nexus_status_segment(tail: &str) -> bool {
 
 #[cfg(all(test, feature = "telemetry"))]
 mod tests {
-    use std::{io::Cursor, sync::Mutex};
+    use std::{
+        io::Cursor,
+        sync::{Arc, Mutex},
+    };
 
     use http::StatusCode;
     use http_body_util::BodyExt;
@@ -79912,14 +80443,71 @@ mod tests {
         sumeragi.highest_qc_height = 4_275;
         sumeragi.locked_qc_height = 4_273;
 
-        super::normalize_status_block_visibility(&mut status);
+        super::normalize_status_block_visibility(&mut status, None);
 
         assert_eq!(status.blocks, 4_274);
         assert_eq!(status.blocks_non_empty, 0);
 
         status.blocks = 4_273;
-        super::normalize_status_block_visibility(&mut status);
+        super::normalize_status_block_visibility(&mut status, None);
         assert_eq!(status.blocks, 4_274);
+    }
+
+    #[test]
+    fn status_block_visibility_uses_authoritative_applied_height() {
+        let metrics = Metrics::default();
+        metrics.block_height.inc_by(4_193);
+        let mut status = Status::from(&metrics);
+        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
+        sumeragi.commit_qc_height = 4_275;
+
+        super::normalize_status_block_visibility(&mut status, Some(4_274));
+
+        assert_eq!(
+            status.blocks, 4_274,
+            "a CommitQC pending apply must not lead query-visible state"
+        );
+
+        super::normalize_status_block_visibility(&mut status, Some(4_200));
+        assert_eq!(
+            status.blocks, 4_274,
+            "an older reducer snapshot must not regress visible height"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_response_does_not_wait_for_lazy_block_counter_sync() {
+        let metrics = Arc::new(Metrics::default());
+        metrics.block_height.inc_by(4_193);
+        let telemetry = MaybeTelemetry::from_profile(
+            Some(Telemetry::new(metrics, true)),
+            TelemetryProfile::Full,
+        );
+
+        let response = super::handle_status(
+            &telemetry,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            None,
+            true,
+            None,
+            Some(4_274),
+            None,
+        )
+        .await
+        .expect("status succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status body")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status payload");
+
+        assert_eq!(
+            payload.get("blocks").and_then(norito::json::Value::as_u64),
+            Some(4_274)
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -79948,7 +80536,7 @@ mod tests {
         });
 
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None)
+        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None, None)
             .await
             .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -80008,6 +80596,7 @@ mod tests {
             None,
             true,
             Some(&policy),
+            None,
             None,
         )
         .await
@@ -80094,6 +80683,7 @@ mod tests {
             None,
             true,
             None,
+            None,
             Some(offline.clone()),
         )
         .await
@@ -80126,6 +80716,7 @@ mod tests {
             Some("offline/assets/0/asset_definition_id"),
             true,
             None,
+            None,
             Some(offline),
         )
         .await
@@ -80145,10 +80736,17 @@ mod tests {
     #[tokio::test]
     async fn status_tail_rejects_nexus_fields_when_disabled() {
         let telemetry = MaybeTelemetry::for_tests();
-        let err =
-            super::handle_status(&telemetry, None, Some("teu_lane_commit"), false, None, None)
-                .await
-                .expect_err("lane-specific tails must be rejected when nexus is disabled");
+        let err = super::handle_status(
+            &telemetry,
+            None,
+            Some("teu_lane_commit"),
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("lane-specific tails must be rejected when nexus is disabled");
         assert!(matches!(err, Error::StatusSegmentNotFound(_)));
     }
 
@@ -80417,6 +81015,7 @@ mod tests {
             )),
             None,
             true,
+            None,
             None,
             None,
         )

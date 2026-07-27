@@ -4644,6 +4644,15 @@ pub struct SumeragiStartArgs {
     pub queue: Arc<Queue>,
     /// Persistent block store interface.
     pub kura: Arc<Kura>,
+    /// Exact startup replay boundary authenticated before Kura replay and
+    /// moved into active-height recovery without a historical rescan.
+    pub startup_replay_plan: V2StartupReplayPlan,
+    /// Ownership guard for the startup-only O(H) finality inventory.
+    ///
+    /// The caller must acquire this immediately after replay planning so every
+    /// later startup error clears the inventory, then move it here for the
+    /// recovery handoff.
+    pub startup_replay_inventory_guard: V2StartupReplayInventoryGuard,
     /// Network transport handle for broadcasting consensus messages.
     pub network: IrohaNetwork,
     /// Maximum encrypted P2P frame bytes accepted by the transport.
@@ -4712,6 +4721,8 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
+            startup_replay_plan,
+            startup_replay_inventory_guard,
             network,
             max_frame_bytes,
             max_frame_bytes_consensus,
@@ -4807,6 +4818,8 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
+            startup_replay_plan,
+            startup_replay_inventory_guard,
             network,
             genesis_network,
             lane_relay_rx,
@@ -4864,6 +4877,60 @@ mod worker_launch_tests {
         assert!(output_guard.restart_required());
         assert!(output_guard.acquire().is_none());
     }
+
+    #[test]
+    fn startup_inventory_cleanup_guard_clears_on_launch_path_drop() {
+        let kura = Kura::blank_kura_for_testing();
+        let _plan =
+            plan_v2_startup_replay(kura.as_ref()).expect("plan and install startup inventory");
+        assert!(
+            kura.begin_v2_startup_finality_verification()
+                .expect("inspect installed startup binding")
+                .is_some()
+        );
+
+        // Model any fallible irohad startup step between replay planning and
+        // the Sumeragi recovery handoff.
+        drop(V2StartupReplayInventoryGuard::new(Arc::clone(&kura)));
+
+        assert!(
+            kura.begin_v2_startup_finality_verification()
+                .expect("inspect cleared startup binding")
+                .is_none(),
+            "every launch-path guard drop must release startup-only metadata"
+        );
+    }
+}
+
+/// RAII owner for Kura's startup-only O(H) finality inventory.
+///
+/// Construct this immediately after [`plan_v2_startup_replay`] succeeds and
+/// retain it across all subsequent fallible startup work. Dropping the guard
+/// releases the inventory; Sumeragi moves it into active-height recovery and
+/// explicitly finishes it once the handoff completes.
+#[must_use = "dropping the guard immediately clears the startup replay inventory"]
+pub struct V2StartupReplayInventoryGuard {
+    kura: Option<Arc<Kura>>,
+}
+
+impl V2StartupReplayInventoryGuard {
+    /// Own cleanup of the startup replay inventory installed in `kura`.
+    #[must_use]
+    pub fn new(kura: Arc<Kura>) -> Self {
+        Self { kura: Some(kura) }
+    }
+
+    fn finish(&mut self) {
+        if let Some(kura) = self.kura.take() {
+            kura.finish_v2_startup_finality_verification();
+        }
+    }
+}
+
+impl Drop for V2StartupReplayInventoryGuard {
+    fn drop(&mut self) {
+        self.finish();
+    }
 }
 
 struct SumeragiWorker {
@@ -4873,6 +4940,8 @@ struct SumeragiWorker {
     state: Arc<State>,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
+    startup_replay_plan: V2StartupReplayPlan,
+    startup_replay_inventory_guard: V2StartupReplayInventoryGuard,
     network: IrohaNetwork,
     genesis_network: GenesisWithPubKey,
     lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,

@@ -19684,6 +19684,31 @@ pub mod isi {
                 .asset_definitions_in_domain_iter(&domain_id)
                 .map(|ad| ad.id().clone())
                 .collect();
+            let orchard_pool_references =
+                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+                    &state_transaction.world.privacy_commitments,
+                )
+                .map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister domain {domain_id}: persisted Orchard pool state is invalid: {message}"
+                        )
+                        .into(),
+                    )
+                })?;
+            if let Some(reference) = orchard_pool_references.iter().find(|reference| {
+                remove_asset_definitions.contains(reference.asset_definition_id())
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: asset definition {} backs governed Orchard pool {:?}",
+                        reference.asset_definition_id(),
+                        reference.namespace()
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             for account_id in &relabeled_accounts {
                 if account_id == &state_transaction.gov.bond_escrow_account

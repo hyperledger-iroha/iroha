@@ -12,13 +12,15 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     privacy::{
         AnonymousPgcKOutOfNStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-        PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, OrchardHalo2ActionsStatementV1,
+        PrivacyCommitmentV1, PrivacyConsensusLimitsV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyDigestV1,
+        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
         PrivacyProofEnvelopeValidationError, PrivacyProofV1, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyVeRangeBitLengthV1, VegaExistingCredentialStatementV1,
+        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVeRangeBitLengthV1,
+        VegaExistingCredentialStatementV1,
     },
     zk::ZkAcePrivacyPublicInputsV1,
 };
@@ -32,6 +34,10 @@ use crate::{
             payment::{AnonymousPgcPaymentStatementV1, verify_payment_encoded},
         },
         jindo::{JindoErrorV1, jindo_crs_digest_v1, verify_batched_evaluation_v1},
+        orchard::{
+            OrchardActionPublicV1, OrchardBundlePublicV1, OrchardNativeErrorV1,
+            verify_orchard_bundle_v1,
+        },
         p256::{CompressedPointV1, TranscriptBindingV1},
         vega::{VegaMdlConsensusBindingV1, VegaMdlError, verify_mdl_figure9_v1},
         verange::{
@@ -48,7 +54,10 @@ use crate::{
     privacy_profiles::{
         CompiledPrivacyProfileValidationErrorV1, validate_compiled_privacy_activation_v1,
     },
-    privacy_state::compute_privacy_pgc_account_state_root_v1,
+    privacy_state::{
+        PrivacyOrchardPoolSnapshotV1, PrivacyOrchardPoolStateV1,
+        compute_privacy_pgc_account_state_root_v1,
+    },
 };
 
 /// Complete trusted PGC pool state selected before native verification.
@@ -98,6 +107,8 @@ pub(crate) struct PrivacyVerificationContextV1<'a> {
     pub(crate) block_timestamp_ms: u64,
     /// Complete trusted PGC state, required only by Anonymous-PGC payments.
     pub(crate) pgc_state: Option<PrivacyPgcVerificationStateV1<'a>>,
+    /// Complete trusted Orchard pool state, required only by Orchard bundles.
+    pub(crate) orchard_state: Option<&'a PrivacyOrchardPoolSnapshotV1>,
 }
 
 /// Complete successor account-table transition derived by the native verifier.
@@ -170,6 +181,93 @@ pub(crate) struct VerifiedZkAceAuthorizationV1 {
     pub(crate) replay_nullifier: PrivacyNullifierV1,
 }
 
+/// Complete Orchard state transition and public bridge authorized by one proof.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VerifiedOrchardLedgerEffectV1 {
+    namespace: PrivacyNamespaceV1,
+    bootstrap_digest: iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1,
+    asset_definition_id: AssetDefinitionId,
+    reserve_account: AccountId,
+    anchor: PrivacyRootV1,
+    anchor_epoch: u64,
+    current_root: PrivacyRootV1,
+    current_epoch: u64,
+    successor_state: PrivacyOrchardPoolStateV1,
+    nullifiers: Vec<[u8; 32]>,
+    value_balance: PrivacyValueBalanceV1,
+    fee: u128,
+    expiry_height: u64,
+}
+
+impl VerifiedOrchardLedgerEffectV1 {
+    #[must_use]
+    pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
+        self.namespace
+    }
+
+    #[must_use]
+    pub(crate) const fn bootstrap_digest(
+        &self,
+    ) -> iroha_data_model::privacy::PrivacyOrchardPoolBootstrapDigestV1 {
+        self.bootstrap_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn asset_definition_id(&self) -> &AssetDefinitionId {
+        &self.asset_definition_id
+    }
+
+    #[must_use]
+    pub(crate) const fn reserve_account(&self) -> &AccountId {
+        &self.reserve_account
+    }
+
+    #[must_use]
+    pub(crate) const fn anchor(&self) -> PrivacyRootV1 {
+        self.anchor
+    }
+
+    #[must_use]
+    pub(crate) const fn anchor_epoch(&self) -> u64 {
+        self.anchor_epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn current_root(&self) -> PrivacyRootV1 {
+        self.current_root
+    }
+
+    #[must_use]
+    pub(crate) const fn current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn successor_state(&self) -> &PrivacyOrchardPoolStateV1 {
+        &self.successor_state
+    }
+
+    #[must_use]
+    pub(crate) fn nullifiers(&self) -> &[[u8; 32]] {
+        &self.nullifiers
+    }
+
+    #[must_use]
+    pub(crate) const fn value_balance(&self) -> PrivacyValueBalanceV1 {
+        self.value_balance
+    }
+
+    #[must_use]
+    pub(crate) const fn fee(&self) -> u128 {
+        self.fee
+    }
+
+    #[must_use]
+    pub(crate) const fn expiry_height(&self) -> u64 {
+        self.expiry_height
+    }
+}
+
 /// Ledger mutation class produced only after successful native verification.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VerifiedPrivacyLedgerEffectsV1 {
@@ -177,6 +275,8 @@ pub(crate) enum VerifiedPrivacyLedgerEffectsV1 {
     None,
     /// Complete Anonymous-PGC encrypted account-table transition.
     AnonymousPgcPayment(VerifiedAnonymousPgcLedgerEffectV1),
+    /// Atomic Orchard nullifier, compact-frontier, root, and public bridge transition.
+    OrchardActions(VerifiedOrchardLedgerEffectV1),
     /// Atomic ZK-AMS PHC/seed admission and AccountRegistry successor.
     ZkAmsBatchAdmission(VerifiedZkAmsBatchAdmissionV1),
     /// Atomic ZK-AMS provisioning key image and fresh account creation.
@@ -398,6 +498,10 @@ pub(crate) fn verify_privacy_envelope_v1(
             PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement),
             PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof),
         ) => verify_jindo_batched_evaluation_v1(statement, proof, envelope, &context)?,
+        (
+            PrivacyStatementV1::OrchardHalo2ActionsV1(statement),
+            PrivacyProofV1::OrchardHalo2ActionsV1(proof),
+        ) => verify_orchard_actions_v1(statement, proof, envelope, &context)?,
         _ => {
             return Err(PrivacyVerificationErrorV1::EngineUnavailable(Box::new(
                 PrivacyEngineUnavailableFailureV1 {
@@ -415,6 +519,111 @@ pub(crate) fn verify_privacy_envelope_v1(
         encoded_action_bytes,
         ledger,
     })
+}
+
+fn orchard_state_error(code: PrivacyOrchardStateFailureCodeV1) -> PrivacyVerificationErrorV1 {
+    PrivacyVerificationErrorV1::OrchardState(Box::new(PrivacyOrchardStateFailureV1 { code }))
+}
+
+fn verify_orchard_actions_v1(
+    statement: &OrchardHalo2ActionsStatementV1,
+    proof: &PrivacyProofBytesV1,
+    envelope: &PrivacyProofEnvelopeV1,
+    context: &PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
+    let snapshot = context.orchard_state.ok_or_else(|| {
+        orchard_state_error(PrivacyOrchardStateFailureCodeV1::MissingTrustedState)
+    })?;
+    let expected_namespace = PrivacyNamespaceV1::from_statement(&envelope.statement);
+    if snapshot.namespace() != expected_namespace {
+        return Err(orchard_state_error(
+            PrivacyOrchardStateFailureCodeV1::NamespaceMismatch,
+        ));
+    }
+    if snapshot.state().asset_definition_id() != &statement.asset_definition_id {
+        return Err(orchard_state_error(
+            PrivacyOrchardStateFailureCodeV1::AssetMismatch,
+        ));
+    }
+    if !snapshot.contains_retained_anchor(statement.anchor_epoch, statement.anchor) {
+        return Err(orchard_state_error(
+            PrivacyOrchardStateFailureCodeV1::AnchorNotRetained,
+        ));
+    }
+    if context.current_height > statement.expiry_height {
+        return Err(orchard_state_error(
+            PrivacyOrchardStateFailureCodeV1::Expired,
+        ));
+    }
+
+    let magnitude = i64::try_from(statement.value_balance.amount).map_err(|_| {
+        orchard_state_error(PrivacyOrchardStateFailureCodeV1::ValueBalanceOutOfRange)
+    })?;
+    let value_balance = match statement.value_balance.direction {
+        PrivacyValueBalanceDirectionV1::Balanced => 0,
+        PrivacyValueBalanceDirectionV1::IntoPool => magnitude.checked_neg().ok_or_else(|| {
+            orchard_state_error(PrivacyOrchardStateFailureCodeV1::ValueBalanceOutOfRange)
+        })?,
+        PrivacyValueBalanceDirectionV1::OutOfPool => magnitude,
+    };
+
+    let mut public_actions = Vec::with_capacity(statement.actions.len());
+    let mut note_commitments = Vec::with_capacity(statement.actions.len());
+    let mut nullifiers = Vec::with_capacity(statement.actions.len());
+    for action in &statement.actions {
+        let encrypted_note =
+            action.encrypted_note.as_slice().try_into().map_err(|_| {
+                orchard_state_error(PrivacyOrchardStateFailureCodeV1::CiphertextWidth)
+            })?;
+        let outgoing_ciphertext = action
+            .outgoing_ciphertext
+            .as_slice()
+            .try_into()
+            .map_err(|_| orchard_state_error(PrivacyOrchardStateFailureCodeV1::CiphertextWidth))?;
+        public_actions.push(OrchardActionPublicV1 {
+            nullifier: action.nullifier,
+            randomized_key: action.randomized_key,
+            note_commitment: action.note_commitment,
+            ephemeral_key: action.ephemeral_key,
+            encrypted_note,
+            outgoing_ciphertext,
+            value_commitment: action.value_commitment,
+        });
+        note_commitments.push(action.note_commitment);
+        nullifiers.push(action.nullifier);
+    }
+    let successor_state = snapshot
+        .derive_successor(&note_commitments)
+        .map_err(|_| orchard_state_error(PrivacyOrchardStateFailureCodeV1::SuccessorDerivation))?;
+    let native_public = OrchardBundlePublicV1 {
+        transaction_intent_digest: *statement.context.transaction_intent_digest.as_bytes(),
+        anchor: statement.anchor.into_bytes(),
+        value_balance,
+        actions: public_actions,
+    };
+    verify_orchard_bundle_v1(&native_public, proof.as_bytes()).map_err(|source| {
+        PrivacyVerificationErrorV1::NativeOrchard(Box::new(PrivacyOrchardVerificationFailureV1 {
+            source,
+        }))
+    })?;
+
+    Ok(VerifiedPrivacyLedgerEffectsV1::OrchardActions(
+        VerifiedOrchardLedgerEffectV1 {
+            namespace: snapshot.namespace(),
+            bootstrap_digest: snapshot.bootstrap_digest(),
+            asset_definition_id: statement.asset_definition_id.clone(),
+            reserve_account: snapshot.state().reserve_account().clone(),
+            anchor: statement.anchor,
+            anchor_epoch: statement.anchor_epoch,
+            current_root: snapshot.current_root(),
+            current_epoch: snapshot.current_epoch(),
+            successor_state,
+            nullifiers,
+            value_balance: statement.value_balance,
+            fee: statement.fee,
+            expiry_height: statement.expiry_height,
+        },
+    ))
 }
 
 fn verify_zk_ams_v1(
@@ -711,6 +920,12 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     /// Native ZK-AMS decoding or verification failed.
     #[error(transparent)]
     NativeZkAms(Box<PrivacyZkAmsVerificationFailureV1>),
+    /// Trusted persisted Orchard state was absent or inconsistent with the statement.
+    #[error(transparent)]
+    OrchardState(Box<PrivacyOrchardStateFailureV1>),
+    /// Native Orchard decoding or verification failed.
+    #[error(transparent)]
+    NativeOrchard(Box<PrivacyOrchardVerificationFailureV1>),
     /// Trusted persisted Anonymous-PGC state was absent or inconsistent.
     #[error(transparent)]
     AnonymousPgcState(Box<PrivacyAnonymousPgcStateFailureV1>),
@@ -803,6 +1018,40 @@ pub(crate) struct PrivacyZkAmsVerificationFailureV1 {
     source: ZkAmsErrorV1,
 }
 
+/// Stable trusted-state failure detected before or after native Orchard proof verification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrivacyOrchardStateFailureCodeV1 {
+    /// The submit path did not supply a trusted pool snapshot.
+    MissingTrustedState,
+    /// Trusted state belongs to another protocol/pool namespace.
+    NamespaceMismatch,
+    /// The statement selected a different public asset.
+    AssetMismatch,
+    /// The statement anchor is not in the exact retained root window.
+    AnchorNotRetained,
+    /// The current block is later than the statement expiry.
+    Expired,
+    /// The public value balance cannot be represented by the native API.
+    ValueBalanceOutOfRange,
+    /// A fixed-width Orchard ciphertext did not retain its canonical width.
+    CiphertextWidth,
+    /// The authoritative compact frontier could not derive a successor.
+    SuccessorDerivation,
+}
+
+#[derive(Debug, Error)]
+#[error("trusted Orchard state failed validation: {code:?}")]
+pub(crate) struct PrivacyOrchardStateFailureV1 {
+    /// Exact stable failure category.
+    pub(crate) code: PrivacyOrchardStateFailureCodeV1,
+}
+
+#[derive(Debug, Error)]
+#[error("native Orchard verification failed: {source}")]
+pub(crate) struct PrivacyOrchardVerificationFailureV1 {
+    source: OrchardNativeErrorV1,
+}
+
 /// Stable trusted-state failure detected before or after native PGC proof
 /// verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -852,6 +1101,7 @@ pub(crate) struct PrivacyCanonicalEncodingFailureV1;
 mod tests {
     use std::{str::FromStr as _, sync::OnceLock};
 
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
@@ -859,13 +1109,15 @@ mod tests {
         privacy::{
             IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1, PrivacyActiveLifecycleV1,
             PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
-            PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyP256PointV1,
+            PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyOrchardActionV1,
+            PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256PointV1,
             PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
             PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
             PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
             PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-            PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
-            PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1,
+            PrivacyValueBalanceV1, PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
+            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
             PrivacyVegaMdlSignatureAlgorithmV1, VeRangeTransparentRangeStatementV1,
         },
     };
@@ -886,6 +1138,7 @@ mod tests {
                 JINDO_NATIVE_PROOF_BYTES_V1, commit_polynomial_v1, evaluate_polynomial_v1,
                 prove_batched_evaluation_v1,
             },
+            orchard::tests::fixture as orchard_native_fixture,
             p256::SecretScalarV1,
             vega::derive_device_authentication_digest_v1,
             verange::{commit, prove_batch},
@@ -1152,6 +1405,7 @@ mod tests {
                 expected_action_index: 0,
                 block_timestamp_ms: 1_800_000_000_000,
                 pgc_state: None,
+                orchard_state: None,
             }
         }
     }
@@ -1238,6 +1492,149 @@ mod tests {
             activation,
             chain_id,
         )
+    }
+
+    struct OrchardFixture {
+        envelope: PrivacyProofEnvelopeV1,
+        activation: PrivacyProtocolActivationRecordV1,
+        chain_id: ChainId,
+        namespace: PrivacyNamespaceV1,
+        snapshot: PrivacyOrchardPoolSnapshotV1,
+    }
+
+    impl OrchardFixture {
+        fn new() -> Self {
+            let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+                .expect("compiled Orchard");
+            let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
+                PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1,
+                    activated_at_height: 2,
+                    state_since_height: 2,
+                },
+            ));
+            let chain_id = ChainId::from("taira-privacy-orchard-test");
+            let pool_id = PrivacyPoolIdV1::new([0xB6; 32]);
+            let namespace = PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id }),
+            );
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("orchard_asset").expect("name"),
+            );
+            let reserve_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::Ed25519)
+                .expect("reserve keypair");
+            let snapshot = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+                namespace,
+                PrivacyOrchardPoolBootstrapDigestV1::new([0xB8; 32]),
+                asset_definition_id.clone(),
+                AccountId::new(reserve_key.public_key().clone()),
+            );
+            let (public, authorization) = orchard_native_fixture();
+            assert_eq!(
+                public.anchor,
+                snapshot.current_root().into_bytes(),
+                "native fixture uses the canonical empty Orchard anchor"
+            );
+            let value_balance = match public.value_balance.cmp(&0) {
+                core::cmp::Ordering::Equal => PrivacyValueBalanceV1::balanced(),
+                core::cmp::Ordering::Less => PrivacyValueBalanceV1 {
+                    direction: PrivacyValueBalanceDirectionV1::IntoPool,
+                    amount: u128::from(public.value_balance.unsigned_abs()),
+                },
+                core::cmp::Ordering::Greater => PrivacyValueBalanceV1 {
+                    direction: PrivacyValueBalanceDirectionV1::OutOfPool,
+                    amount: u128::from(public.value_balance.unsigned_abs()),
+                },
+            };
+            let statement =
+                PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
+                    context: PrivacyStatementContextV1 {
+                        chain_id: chain_id.clone(),
+                        action_index: 0,
+                        transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(
+                            public.transaction_intent_digest,
+                        ),
+                        parameter_id: compiled.parameter_id,
+                        parameter_digest: compiled.parameter_digest,
+                        verifier_digest: compiled.verifier_digest,
+                        statement_schema_digest: compiled.statement_schema_digest,
+                        engine_manifest_digest: compiled.engine_manifest_digest,
+                    },
+                    asset_definition_id,
+                    pool_id,
+                    anchor: snapshot.current_root(),
+                    anchor_epoch: snapshot.current_epoch(),
+                    actions: public
+                        .actions
+                        .iter()
+                        .map(|action| PrivacyOrchardActionV1 {
+                            nullifier: action.nullifier,
+                            randomized_key: action.randomized_key,
+                            note_commitment: action.note_commitment,
+                            ephemeral_key: action.ephemeral_key,
+                            encrypted_note: action.encrypted_note.to_vec(),
+                            outgoing_ciphertext: action.outgoing_ciphertext.to_vec(),
+                            value_commitment: action.value_commitment,
+                        })
+                        .collect(),
+                    value_balance,
+                    fee: 0,
+                    expiry_height: 100,
+                });
+            let statement_digest = statement.digest().expect("Orchard statement digest");
+            let envelope = PrivacyProofEnvelopeV1 {
+                protocol_id: compiled.protocol_id,
+                proof_system_id: compiled.proof_system_id,
+                engine_id: compiled.engine_id,
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+                statement_digest,
+                statement,
+                proof: PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(
+                    authorization.clone(),
+                )),
+            };
+            Self {
+                envelope,
+                activation,
+                chain_id,
+                namespace,
+                snapshot,
+            }
+        }
+
+        fn verification_context(&self) -> PrivacyVerificationContextV1<'_> {
+            PrivacyVerificationContextV1 {
+                activation: &self.activation,
+                consensus_limits: &TEST_CONSENSUS_LIMITS,
+                chain_id: &self.chain_id,
+                genesis_hash: [0xA7; 32],
+                current_height: 10,
+                expected_action_index: 0,
+                block_timestamp_ms: 1_800_000_000_000,
+                pgc_state: None,
+                orchard_state: Some(&self.snapshot),
+            }
+        }
+    }
+
+    fn orchard_fixture() -> &'static OrchardFixture {
+        static FIXTURE: OnceLock<OrchardFixture> = OnceLock::new();
+        FIXTURE.get_or_init(OrchardFixture::new)
+    }
+
+    fn orchard_statement_mut(
+        envelope: &mut PrivacyProofEnvelopeV1,
+    ) -> &mut OrchardHalo2ActionsStatementV1 {
+        let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &mut envelope.statement else {
+            unreachable!("Orchard fixture")
+        };
+        statement
     }
 
     struct PgcFixture {
@@ -1475,6 +1872,7 @@ mod tests {
                 expected_action_index: 0,
                 block_timestamp_ms: 1_800_000_000_000,
                 pgc_state: Some(self.pgc_state(&self.accounts)),
+                orchard_state: None,
             }
         }
 
@@ -1515,6 +1913,7 @@ mod tests {
             expected_action_index: 0,
             block_timestamp_ms: 1_800_000_000_000,
             pgc_state: None,
+            orchard_state: None,
         }
     }
 
@@ -1618,7 +2017,8 @@ mod tests {
         let effect = match effects.ledger() {
             VerifiedPrivacyLedgerEffectsV1::AnonymousPgcPayment(effect) => effect,
             VerifiedPrivacyLedgerEffectsV1::None => panic!("missing PGC ledger effect"),
-            VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(_)
+            VerifiedPrivacyLedgerEffectsV1::OrchardActions(_)
+            | VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(_)
             | VerifiedPrivacyLedgerEffectsV1::ZkAmsProvisionAccount(_)
             | VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(_) => {
                 panic!("unexpected non-PGC ledger effect")
@@ -1854,6 +2254,243 @@ mod tests {
             verify_privacy_envelope_v1(&replayed, fixture.verification_context()),
             Err(PrivacyVerificationErrorV1::Envelope(_))
         ));
+    }
+
+    #[test]
+    fn verified_orchard_effect_is_complete_and_derived_from_authoritative_frontier() {
+        let fixture = orchard_fixture();
+        let effects = verify_privacy_envelope_v1(&fixture.envelope, fixture.verification_context())
+            .expect("valid Orchard action");
+        assert_eq!(
+            effects.protocol_id(),
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+        );
+        assert_eq!(
+            effects.statement_digest(),
+            fixture.envelope.statement_digest
+        );
+        assert_eq!(effects.action_index(), 0);
+        assert_eq!(
+            effects.encoded_action_bytes(),
+            u64::try_from(
+                norito::to_bytes(&fixture.envelope)
+                    .expect("encode Orchard envelope")
+                    .len()
+            )
+            .expect("bounded envelope length")
+        );
+        let statement = match &fixture.envelope.statement {
+            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => statement,
+            _ => unreachable!("Orchard fixture"),
+        };
+        let effect = match effects.ledger() {
+            VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => effect,
+            VerifiedPrivacyLedgerEffectsV1::None
+            | VerifiedPrivacyLedgerEffectsV1::AnonymousPgcPayment(_)
+            | VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission(_)
+            | VerifiedPrivacyLedgerEffectsV1::ZkAmsProvisionAccount(_)
+            | VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(_) => {
+                panic!("missing Orchard ledger effect")
+            }
+        };
+        assert_eq!(effect.namespace(), fixture.namespace);
+        assert_eq!(
+            effect.bootstrap_digest(),
+            fixture.snapshot.bootstrap_digest()
+        );
+        assert_eq!(
+            effect.asset_definition_id(),
+            fixture.snapshot.state().asset_definition_id()
+        );
+        assert_eq!(
+            effect.reserve_account(),
+            fixture.snapshot.state().reserve_account()
+        );
+        assert_eq!(effect.anchor(), statement.anchor);
+        assert_eq!(effect.anchor_epoch(), statement.anchor_epoch);
+        assert_eq!(effect.current_root(), fixture.snapshot.current_root());
+        assert_eq!(effect.current_epoch(), fixture.snapshot.current_epoch());
+        assert_eq!(
+            effect.successor_state().epoch(),
+            fixture.snapshot.current_epoch() + 1
+        );
+        assert_eq!(effect.successor_state().tree_size(), 1);
+        assert_ne!(
+            effect.successor_state().root(),
+            fixture.snapshot.current_root()
+        );
+        assert_eq!(
+            effect.nullifiers(),
+            statement
+                .actions
+                .iter()
+                .map(|action| action.nullifier)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(effect.value_balance(), statement.value_balance);
+        assert_eq!(effect.fee(), statement.fee);
+        assert_eq!(effect.expiry_height(), statement.expiry_height);
+    }
+
+    #[test]
+    fn orchard_trusted_state_statement_and_authorization_tampering_fail_closed() {
+        let fixture = orchard_fixture();
+
+        let mut context = fixture.verification_context();
+        context.orchard_state = None;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::MissingTrustedState
+        ));
+
+        let other_namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xC1; 32]),
+            }),
+        );
+        let other_pool = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+            other_namespace,
+            PrivacyOrchardPoolBootstrapDigestV1::new([0xC2; 32]),
+            fixture.snapshot.state().asset_definition_id().clone(),
+            fixture.snapshot.state().reserve_account().clone(),
+        );
+        let mut context = fixture.verification_context();
+        context.orchard_state = Some(&other_pool);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::NamespaceMismatch
+        ));
+
+        let wrong_asset = PrivacyOrchardPoolSnapshotV1::canonical_bootstrap_for_test(
+            fixture.namespace,
+            PrivacyOrchardPoolBootstrapDigestV1::new([0xC3; 32]),
+            AssetDefinitionId::new(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("wrong_orchard_asset").expect("name"),
+            ),
+            fixture.snapshot.state().reserve_account().clone(),
+        );
+        let mut context = fixture.verification_context();
+        context.orchard_state = Some(&wrong_asset);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::AssetMismatch
+        ));
+
+        let mut stale_anchor = fixture.envelope.clone();
+        let statement = orchard_statement_mut(&mut stale_anchor);
+        statement.anchor = PrivacyRootV1::new([0xC4; 32]);
+        statement.anchor_epoch += 1;
+        refresh_statement_digest(&mut stale_anchor);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&stale_anchor, fixture.verification_context()),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::AnchorNotRetained
+        ));
+
+        let mut context = fixture.verification_context();
+        context.current_height = 101;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&fixture.envelope, context),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::Expired
+        ));
+
+        let mut invalid_commitment = fixture.envelope.clone();
+        orchard_statement_mut(&mut invalid_commitment).actions[0].note_commitment = [u8::MAX; 32];
+        refresh_statement_digest(&mut invalid_commitment);
+        assert!(matches!(
+            verify_privacy_envelope_v1(
+                &invalid_commitment,
+                fixture.verification_context()
+            ),
+            Err(PrivacyVerificationErrorV1::OrchardState(detail))
+                if detail.code == PrivacyOrchardStateFailureCodeV1::SuccessorDerivation
+        ));
+
+        let mut wrong_width = fixture.envelope.clone();
+        orchard_statement_mut(&mut wrong_width).actions[0]
+            .encrypted_note
+            .pop();
+        refresh_statement_digest(&mut wrong_width);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&wrong_width, fixture.verification_context()),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+
+        let public_mutations: [fn(&mut OrchardHalo2ActionsStatementV1); 7] = [
+            |statement| statement.context.transaction_intent_digest.0[0] ^= 1,
+            |statement| statement.actions[0].nullifier[0] ^= 1,
+            |statement| statement.actions[0].randomized_key[0] ^= 1,
+            |statement| statement.actions[0].ephemeral_key[0] ^= 1,
+            |statement| statement.actions[0].encrypted_note[0] ^= 1,
+            |statement| statement.actions[0].outgoing_ciphertext[0] ^= 1,
+            |statement| statement.actions[0].value_commitment[0] ^= 1,
+        ];
+        for mutate in public_mutations {
+            let mut changed = fixture.envelope.clone();
+            mutate(orchard_statement_mut(&mut changed));
+            refresh_statement_digest(&mut changed);
+            assert!(
+                matches!(
+                    verify_privacy_envelope_v1(&changed, fixture.verification_context()),
+                    Err(PrivacyVerificationErrorV1::NativeOrchard(_))
+                ),
+                "every native public field must be proof/signature bound"
+            );
+        }
+
+        let mut changed_balance = fixture.envelope.clone();
+        orchard_statement_mut(&mut changed_balance).value_balance = PrivacyValueBalanceV1 {
+            direction: PrivacyValueBalanceDirectionV1::OutOfPool,
+            amount: 1,
+        };
+        refresh_statement_digest(&mut changed_balance);
+        assert!(matches!(
+            verify_privacy_envelope_v1(&changed_balance, fixture.verification_context()),
+            Err(PrivacyVerificationErrorV1::NativeOrchard(_))
+        ));
+
+        let PrivacyProofV1::OrchardHalo2ActionsV1(valid_proof) = &fixture.envelope.proof else {
+            unreachable!("Orchard proof")
+        };
+        for invalid_bytes in [
+            valid_proof.as_bytes()[..valid_proof.as_bytes().len() - 1].to_vec(),
+            {
+                let mut trailing = valid_proof.as_bytes().to_vec();
+                trailing.push(0);
+                trailing
+            },
+            {
+                let mut corrupt = valid_proof.as_bytes().to_vec();
+                corrupt[0] ^= 1;
+                corrupt
+            },
+            {
+                let mut corrupt = valid_proof.as_bytes().to_vec();
+                let middle = corrupt.len() / 2;
+                corrupt[middle] ^= 1;
+                corrupt
+            },
+            {
+                let mut corrupt = valid_proof.as_bytes().to_vec();
+                let last = corrupt.len() - 1;
+                corrupt[last] ^= 1;
+                corrupt
+            },
+        ] {
+            let mut changed = fixture.envelope.clone();
+            changed.proof =
+                PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(invalid_bytes));
+            assert!(matches!(
+                verify_privacy_envelope_v1(&changed, fixture.verification_context()),
+                Err(PrivacyVerificationErrorV1::NativeOrchard(_))
+            ));
+        }
     }
 
     #[test]

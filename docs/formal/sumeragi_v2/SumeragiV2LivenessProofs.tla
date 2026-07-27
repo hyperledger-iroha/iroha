@@ -286,19 +286,19 @@ NextCandidateGeneration(currentGeneration) ==
 
 FrozenInstallProposalSuccessor(command, installedContext,
                                priorGeneration, subject) ==
-  AsyncCandidateWithIdentity(
+  AsyncCandidateWithIdentityAndOrigin(
     "Normal", "AssembleBody", command.node, installedContext.height,
     command.view + 1, subject, NoAsyncItem, installedContext,
     command.view + 1, NextCandidateGeneration(priorGeneration),
-    command.evidence, subject, subject, subject)
+    command.evidence, subject, subject, subject, command.causalOrigin)
 
 FrozenNormalBeginPrepareCandidate(parent, blockHeight) ==
-  AsyncCandidateWithIdentity(
+  AsyncCandidateWithIdentityAndOrigin(
     "Normal", "BeginPrepare", parent.node, blockHeight, parent.view,
     parent.subject, NoAsyncItem, parent.consumerContext,
     parent.consumerView, parent.consumerGeneration, parent.evidence,
     parent.bodyIdentity, parent.manifestIdentity,
-    parent.commitmentIdentity)
+    parent.commitmentIdentity, parent.causalOrigin)
 
 (***************************************************************************
 Canonical historical shapes for the two item-free Normal owners.  Initial and

@@ -7,6 +7,7 @@
 
 use std::sync::OnceLock;
 
+use incrementalmerkletree::{Position, frontier::Frontier};
 use nonempty::NonEmpty;
 use orchard::{
     Action, Anchor, Bundle, Proof,
@@ -14,6 +15,7 @@ use orchard::{
     circuit::{OrchardCircuitVersion, VerifyingKey},
     note::{ExtractedNoteCommitment, Nullifier, TransmittedNoteCiphertext},
     primitives::redpallas::{self, Binding, SpendAuth},
+    tree::MerkleHashOrchard,
     value::ValueCommitment,
 };
 use sha2::{Digest as _, Sha256};
@@ -36,6 +38,7 @@ pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|pro
 const SIGHASH_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.bundle-sighash.v1";
 const ORCHARD_AUTHORIZATION_HEADER_BYTES_V1: usize = ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1.len() + 1;
 const ORCHARD_REDPALLAS_SIGNATURE_BYTES_V1: usize = 64;
+const ORCHARD_TREE_DEPTH_V1: u8 = 32;
 
 /// Exact public data for one Orchard V3 action.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,6 +70,19 @@ pub(crate) struct OrchardBundlePublicV1 {
     pub(crate) value_balance: i64,
     /// Non-empty ordered Orchard actions.
     pub(crate) actions: Vec<OrchardActionPublicV1>,
+}
+
+/// Canonical compact representation of one Orchard note-commitment frontier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrchardFrontierPartsV1 {
+    /// Number of leaves already appended.
+    pub(crate) tree_size: u64,
+    /// Most recently appended leaf, absent only for the empty tree.
+    pub(crate) leaf: Option<[u8; 32]>,
+    /// Past subtree roots needed to continue appending.
+    pub(crate) ommers: Vec<[u8; 32]>,
+    /// Root derived from the complete compact frontier.
+    pub(crate) root: [u8; 32],
 }
 
 /// Failure returned by the native first-release Orchard verifier.
@@ -154,10 +170,155 @@ pub(crate) enum OrchardNativeErrorV1 {
     Halo2Proof,
 }
 
+/// Failure while restoring or advancing the authoritative Orchard frontier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub(crate) enum OrchardFrontierErrorV1 {
+    /// Empty and non-empty shape fields disagree.
+    #[error("Orchard frontier tree size, leaf, and ommers have an inconsistent empty shape")]
+    EmptyShape,
+    /// The persisted leaf is not a canonical Pallas-base encoding.
+    #[error("Orchard frontier leaf is not canonical")]
+    LeafEncoding,
+    /// One persisted ommer is not a canonical Pallas-base encoding.
+    #[error("Orchard frontier ommer {index} is not canonical")]
+    OmmerEncoding {
+        /// Zero-based ommer index.
+        index: usize,
+    },
+    /// The compact parts do not describe a valid depth-32 frontier.
+    #[error("Orchard compact frontier parts are inconsistent or exceed depth 32")]
+    FrontierShape,
+    /// The reconstructed root differs from persisted authoritative state.
+    #[error("Orchard reconstructed frontier root differs from persisted root")]
+    RootMismatch,
+    /// An output note commitment is not a canonical Orchard leaf.
+    #[error("Orchard output action {index} note commitment is not canonical")]
+    NoteCommitmentEncoding {
+        /// Zero-based output action index.
+        index: usize,
+    },
+    /// Appending another action would exceed the depth-32 tree capacity.
+    #[error("Orchard note-commitment tree is full")]
+    TreeFull,
+}
+
 struct ParsedOrchardAuthorizationV1<'a> {
     halo2_proof: &'a [u8],
     spend_authorization_signatures: Vec<[u8; ORCHARD_REDPALLAS_SIGNATURE_BYTES_V1]>,
     binding_signature: [u8; ORCHARD_REDPALLAS_SIGNATURE_BYTES_V1],
+}
+
+fn decode_merkle_hash(
+    bytes: &[u8; 32],
+    error: OrchardFrontierErrorV1,
+) -> Result<MerkleHashOrchard, OrchardFrontierErrorV1> {
+    Option::<MerkleHashOrchard>::from(MerkleHashOrchard::from_bytes(bytes)).ok_or(error)
+}
+
+fn restore_orchard_frontier_v1(
+    tree_size: u64,
+    leaf: Option<[u8; 32]>,
+    ommers: &[[u8; 32]],
+) -> Result<Frontier<MerkleHashOrchard, ORCHARD_TREE_DEPTH_V1>, OrchardFrontierErrorV1> {
+    if tree_size == 0 {
+        if leaf.is_some() || !ommers.is_empty() {
+            return Err(OrchardFrontierErrorV1::EmptyShape);
+        }
+        return Ok(Frontier::empty());
+    }
+    let leaf = leaf.ok_or(OrchardFrontierErrorV1::EmptyShape)?;
+    let leaf = decode_merkle_hash(&leaf, OrchardFrontierErrorV1::LeafEncoding)?;
+    let ommers = ommers
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| {
+            decode_merkle_hash(bytes, OrchardFrontierErrorV1::OmmerEncoding { index })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Frontier::from_parts(Position::from(tree_size - 1), leaf, ommers)
+        .map_err(|_| OrchardFrontierErrorV1::FrontierShape)
+}
+
+fn orchard_frontier_parts_v1(
+    frontier: Frontier<MerkleHashOrchard, ORCHARD_TREE_DEPTH_V1>,
+) -> OrchardFrontierPartsV1 {
+    let root = frontier.root().to_bytes();
+    let tree_size = frontier.tree_size();
+    let (leaf, ommers) = frontier.take().map_or((None, Vec::new()), |frontier| {
+        let (_, leaf, ommers) = frontier.into_parts();
+        (
+            Some(leaf.to_bytes()),
+            ommers.into_iter().map(|ommer| ommer.to_bytes()).collect(),
+        )
+    });
+    OrchardFrontierPartsV1 {
+        tree_size,
+        leaf,
+        ommers,
+        root,
+    }
+}
+
+/// Return the unique pinned Orchard V3 empty-tree root.
+#[must_use]
+pub(crate) fn orchard_empty_root_v1() -> [u8; 32] {
+    Frontier::<MerkleHashOrchard, ORCHARD_TREE_DEPTH_V1>::empty()
+        .root()
+        .to_bytes()
+}
+
+/// Return whether bytes are one canonical Orchard nullifier encoding.
+#[must_use]
+pub(crate) fn is_canonical_orchard_nullifier_v1(bytes: &[u8; 32]) -> bool {
+    bool::from(Nullifier::from_bytes(bytes).is_some())
+}
+
+/// Reconstruct and validate one persisted compact Orchard frontier.
+///
+/// # Errors
+///
+/// Rejects inconsistent empty/non-empty shape, non-canonical field values,
+/// impossible ommer structure or depth, and a root mismatch.
+pub(crate) fn validate_orchard_frontier_v1(
+    tree_size: u64,
+    leaf: Option<[u8; 32]>,
+    ommers: &[[u8; 32]],
+    expected_root: [u8; 32],
+) -> Result<(), OrchardFrontierErrorV1> {
+    let frontier = restore_orchard_frontier_v1(tree_size, leaf, ommers)?;
+    if frontier.root().to_bytes() != expected_root {
+        return Err(OrchardFrontierErrorV1::RootMismatch);
+    }
+    Ok(())
+}
+
+/// Append ordered output commitments and return the complete successor parts.
+///
+/// # Errors
+///
+/// Rejects malformed persisted state, non-canonical commitments, or a full
+/// depth-32 tree.
+pub(crate) fn append_orchard_commitments_v1(
+    tree_size: u64,
+    leaf: Option<[u8; 32]>,
+    ommers: &[[u8; 32]],
+    expected_root: [u8; 32],
+    output_commitments: &[[u8; 32]],
+) -> Result<OrchardFrontierPartsV1, OrchardFrontierErrorV1> {
+    let mut frontier = restore_orchard_frontier_v1(tree_size, leaf, ommers)?;
+    if frontier.root().to_bytes() != expected_root {
+        return Err(OrchardFrontierErrorV1::RootMismatch);
+    }
+    for (index, commitment) in output_commitments.iter().enumerate() {
+        let commitment = Option::<ExtractedNoteCommitment>::from(
+            ExtractedNoteCommitment::from_bytes(commitment),
+        )
+        .ok_or(OrchardFrontierErrorV1::NoteCommitmentEncoding { index })?;
+        if !frontier.append(MerkleHashOrchard::from_cmx(&commitment)) {
+            return Err(OrchardFrontierErrorV1::TreeFull);
+        }
+    }
+    Ok(orchard_frontier_parts_v1(frontier))
 }
 
 /// Return the unique first-release authorization-wire size for `action_count`.
@@ -358,7 +519,7 @@ pub(crate) fn verify_orchard_bundle_v1(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::OnceLock;
 
     use orchard::{
@@ -426,7 +587,7 @@ mod tests {
         (public, authorization)
     }
 
-    fn build_fixture(
+    pub(crate) fn build_fixture(
         action_count: u8,
         rng_seed: [u8; 32],
         transaction_intent_digest: [u8; 32],
@@ -463,7 +624,7 @@ mod tests {
         raw_bundle(&authorized, transaction_intent_digest)
     }
 
-    fn fixture() -> &'static (OrchardBundlePublicV1, Vec<u8>) {
+    pub(crate) fn fixture() -> &'static (OrchardBundlePublicV1, Vec<u8>) {
         static FIXTURE: OnceLock<(OrchardBundlePublicV1, Vec<u8>)> = OnceLock::new();
         FIXTURE.get_or_init(|| build_fixture(1, [0xA7; 32], [0x44; 32]))
     }
@@ -506,8 +667,8 @@ mod tests {
             ),
             (
                 "26608cec06e9f35580e5cf54eccbab1572b817d39aba56416e5f3bc690970528".to_owned(),
-                "FILL_ORCHARD_PUBLIC_KAT".to_owned(),
-                "FILL_ORCHARD_AUTHORIZATION_KAT".to_owned(),
+                "dcc1e9b3328009a55a8b6b0ba07cc63342a80e0f6c6e09128f91daba029d65b8".to_owned(),
+                "d5468c1031aee6e4692cd046a408fd18c0f283829eb40be657f513d8c4b2cc30".to_owned(),
             )
         );
     }
@@ -542,6 +703,93 @@ mod tests {
             ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1
                 .windows(b"legacy=unrepresentable".len())
                 .any(|window| window == b"legacy=unrepresentable")
+        );
+    }
+
+    #[test]
+    fn empty_frontier_root_matches_upstream_vector_and_shape_is_fail_closed() {
+        assert_eq!(
+            orchard_empty_root_v1(),
+            [
+                0xae, 0x29, 0x35, 0xf1, 0xdf, 0xd8, 0xa2, 0x4a, 0xed, 0x7c, 0x70, 0xdf, 0x7d, 0xe3,
+                0xa6, 0x68, 0xeb, 0x7a, 0x49, 0xb1, 0x31, 0x98, 0x80, 0xdd, 0xe2, 0xbb, 0xd9, 0x03,
+                0x1a, 0xe5, 0xd8, 0x2f,
+            ],
+            "the node-derived origin must match the pinned upstream depth-32 vector"
+        );
+        validate_orchard_frontier_v1(0, None, &[], orchard_empty_root_v1())
+            .expect("canonical empty frontier");
+        assert_eq!(
+            validate_orchard_frontier_v1(0, Some([0; 32]), &[], orchard_empty_root_v1()),
+            Err(OrchardFrontierErrorV1::EmptyShape)
+        );
+        assert_eq!(
+            validate_orchard_frontier_v1(0, None, &[[0; 32]], orchard_empty_root_v1()),
+            Err(OrchardFrontierErrorV1::EmptyShape)
+        );
+        let mut wrong_root = orchard_empty_root_v1();
+        wrong_root[0] ^= 1;
+        assert_eq!(
+            validate_orchard_frontier_v1(0, None, &[], wrong_root),
+            Err(OrchardFrontierErrorV1::RootMismatch)
+        );
+    }
+
+    #[test]
+    fn compact_frontier_round_trips_appends_and_rejects_adversarial_parts() {
+        let successor = append_orchard_commitments_v1(
+            0,
+            None,
+            &[],
+            orchard_empty_root_v1(),
+            &[[0; 32], [1; 32]],
+        )
+        .expect("append two canonical commitments");
+        assert_eq!(successor.tree_size, 2);
+        assert!(successor.leaf.is_some());
+        assert_eq!(successor.ommers.len(), 1);
+        validate_orchard_frontier_v1(
+            successor.tree_size,
+            successor.leaf,
+            &successor.ommers,
+            successor.root,
+        )
+        .expect("persisted compact successor reconstructs exactly");
+
+        assert_eq!(
+            append_orchard_commitments_v1(0, None, &[], orchard_empty_root_v1(), &[[u8::MAX; 32]],),
+            Err(OrchardFrontierErrorV1::NoteCommitmentEncoding { index: 0 })
+        );
+        assert_eq!(
+            validate_orchard_frontier_v1(1, Some([u8::MAX; 32]), &[], successor.root),
+            Err(OrchardFrontierErrorV1::LeafEncoding)
+        );
+        assert_eq!(
+            validate_orchard_frontier_v1(2, Some([0; 32]), &[[u8::MAX; 32]], successor.root,),
+            Err(OrchardFrontierErrorV1::OmmerEncoding { index: 0 })
+        );
+        assert_eq!(
+            validate_orchard_frontier_v1(2, Some([0; 32]), &[], successor.root),
+            Err(OrchardFrontierErrorV1::FrontierShape)
+        );
+
+        let full_ommers = vec![[0; 32]; usize::from(ORCHARD_TREE_DEPTH_V1)];
+        let full = restore_orchard_frontier_v1(
+            1_u64 << ORCHARD_TREE_DEPTH_V1,
+            Some([0; 32]),
+            &full_ommers,
+        )
+        .expect("synthetic full-depth canonical frontier");
+        let full_root = full.root().to_bytes();
+        assert_eq!(
+            append_orchard_commitments_v1(
+                1_u64 << ORCHARD_TREE_DEPTH_V1,
+                Some([0; 32]),
+                &full_ommers,
+                full_root,
+                &[[1; 32]],
+            ),
+            Err(OrchardFrontierErrorV1::TreeFull)
         );
     }
 

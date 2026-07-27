@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 __all__ = ["load_crypto_extension"]
 
@@ -18,40 +19,114 @@ _BUILD_ERROR_MESSAGE = (
     "iroha_python._crypto extension module is not built. "
     "Run `maturin develop` or install the wheel before importing `iroha_python`."
 )
-_PYTHON_FRAMEWORK_VERSION_RE = re.compile(
-    r"Python3?\.framework/Versions/([0-9]+\.[0-9]+)/Python3?"
+_PYTHON_FRAMEWORK_DEPENDENCY_RE = re.compile(
+    r"(?:^|/)Python3?\.framework/Versions/(?P<version>[0-9]+\.[0-9]+)/Python3?$"
+)
+_LIBPYTHON_DEPENDENCY_RE = re.compile(
+    r"(?:^|/)libpython(?P<version>[0-9]+\.[0-9]+)[A-Za-z]*"
+    r"(?:\.dylib|\.so(?:\.[0-9]+)*)$"
+)
+_PYTHON_RUNTIME_DEPENDENCY_MARKER_RE = re.compile(
+    r"(?:^|/)(?:Python3?\.framework/|libpython)"
 )
 
 
-def _linked_python_framework_versions(candidate: Path) -> tuple[str, ...]:
+class _LinkedPythonRuntimeDependency(NamedTuple):
+    kind: str
+    path: str
+    version: str | None
+
+
+def _parse_otool_python_dependencies(output: str) -> tuple[_LinkedPythonRuntimeDependency, ...]:
+    dependencies: list[_LinkedPythonRuntimeDependency] = []
+    for line in output.splitlines():
+        value = line.strip()
+        if not value or value.endswith(":"):
+            continue
+        dependency_path = value.split(" (", maxsplit=1)[0]
+        framework = _PYTHON_FRAMEWORK_DEPENDENCY_RE.search(dependency_path)
+        if framework is not None:
+            dependencies.append(
+                _LinkedPythonRuntimeDependency(
+                    "framework",
+                    dependency_path,
+                    framework.group("version"),
+                )
+            )
+            continue
+        libpython = _LIBPYTHON_DEPENDENCY_RE.search(dependency_path)
+        if libpython is not None:
+            dependencies.append(
+                _LinkedPythonRuntimeDependency(
+                    "libpython",
+                    dependency_path,
+                    libpython.group("version"),
+                )
+            )
+            continue
+        if _PYTHON_RUNTIME_DEPENDENCY_MARKER_RE.search(dependency_path):
+            dependencies.append(
+                _LinkedPythonRuntimeDependency("malformed", dependency_path, None)
+            )
+    return tuple(dependencies)
+
+
+def _linked_python_runtime_dependencies(
+    candidate: Path,
+) -> tuple[_LinkedPythonRuntimeDependency, ...]:
     if sys.platform != "darwin":
         return ()
     try:
         output = subprocess.run(
-            ["otool", "-L", str(candidate)],
+            ["/usr/bin/otool", "-L", str(candidate)],
             check=False,
             capture_output=True,
             text=True,
             timeout=5,
         )
-    except (OSError, subprocess.SubprocessError):
-        return ()
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError(
+            f"could not inspect Python linkage for extension module at {candidate}"
+        ) from error
     if output.returncode != 0:
-        return ()
-    return tuple(dict.fromkeys(_PYTHON_FRAMEWORK_VERSION_RE.findall(output.stdout)))
+        raise RuntimeError(
+            f"could not inspect Python linkage for extension module at {candidate}: "
+            f"otool exited with status {output.returncode}"
+        )
+    return _parse_otool_python_dependencies(output.stdout)
 
 
 def _assert_extension_compatible(candidate: Path) -> None:
-    linked_versions = _linked_python_framework_versions(candidate)
-    if not linked_versions:
+    dependencies = _linked_python_runtime_dependencies(candidate)
+    if not dependencies:
         return
+    if len(dependencies) != 1:
+        linked = ", ".join(dependency.path for dependency in dependencies)
+        raise RuntimeError(
+            "iroha_python._crypto extension module at "
+            f"{candidate} links multiple Python runtimes ({linked}); rebuild it "
+            "with `maturin develop --release`."
+        )
+    dependency = dependencies[0]
+    if dependency.kind == "malformed":
+        raise RuntimeError(
+            "iroha_python._crypto extension module at "
+            f"{candidate} has an unrecognized Python runtime dependency "
+            f"({dependency.path}); rebuild it with `maturin develop --release`."
+        )
+    if dependency.kind == "libpython":
+        raise RuntimeError(
+            "iroha_python._crypto extension module at "
+            f"{candidate} links directly to an alternate Python runtime "
+            f"({dependency.path}); rebuild it with `maturin develop --release` "
+            "using extension-module dynamic lookup."
+        )
     current_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-    if current_version in linked_versions:
+    if dependency.version == current_version:
         return
-    linked = ", ".join(linked_versions)
     raise RuntimeError(
         "iroha_python._crypto extension module at "
-        f"{candidate} links Python {linked}, but the current interpreter is "
+        f"{candidate} links Python {dependency.version}, but the current interpreter is "
         f"Python {current_version}. Rebuild it with `maturin develop --release` "
         f"using Python {current_version}."
     )

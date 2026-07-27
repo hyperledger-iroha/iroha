@@ -2093,7 +2093,7 @@ mod tests {
                 proof: vec![0xDD],
             },
         });
-        let result = TransactionResult(Ok(crate::trigger::DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(crate::trigger::DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
             entrypoint_hash: entrypoint.hash(),

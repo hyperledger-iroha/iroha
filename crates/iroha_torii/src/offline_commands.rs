@@ -2704,7 +2704,7 @@ mod tests {
             request.clone(),
         ))])
         .sign(front_runner.private_key());
-        let rejected_result = TransactionResult(Err(TransactionRejectionReason::Validation(
+        let rejected_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(
                 "outer authority is not the configured Kagemusha submission authority".to_owned(),
             ),
@@ -2750,7 +2750,7 @@ mod tests {
         let request = submission_test_request(0x1A);
         let operation_id = request.authorization.operation_id;
         let transaction = submission_test_transaction(vec![request.clone()]);
-        let applied_result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let applied_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let (applied_record, applied) = terminal_offline_operation_in_transaction(
             &transaction,
             &applied_result,
@@ -2779,7 +2779,7 @@ mod tests {
             "a transaction containing another operation must not satisfy the lookup"
         );
 
-        let rejected_result = TransactionResult(Err(TransactionRejectionReason::Validation(
+        let rejected_result = TransactionResult::new(Err(TransactionRejectionReason::Validation(
             ValidationFail::TooComplex,
         )));
         let expected_rejection = rejected_result
@@ -2885,7 +2885,7 @@ mod tests {
         let carrier = signed_history_block(2, Some(parent_hash), 202, Vec::new(), Vec::new());
         let entry = committed_merge_history_entry(
             transaction,
-            TransactionResult(Err(TransactionRejectionReason::Validation(
+            TransactionResult::new(Err(TransactionRejectionReason::Validation(
                 ValidationFail::NotPermitted("certified merge rejection".to_owned()),
             ))),
             &carrier.header(),
@@ -3054,7 +3054,7 @@ mod tests {
         let carrier = signed_history_block(2, Some(parent_hash), 502, Vec::new(), Vec::new());
         let mut entry = committed_merge_history_entry(
             transaction,
-            TransactionResult(Err(TransactionRejectionReason::Validation(
+            TransactionResult::new(Err(TransactionRejectionReason::Validation(
                 ValidationFail::TooComplex,
             ))),
             &carrier.header(),

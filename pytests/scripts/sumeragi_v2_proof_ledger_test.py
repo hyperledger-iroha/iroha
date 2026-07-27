@@ -7505,6 +7505,11 @@ def test_liveness_ownership_mutation_source_seal_rejects_inventory_drift(
             "failing case matrix must equal",
         ),
         (
+            "|exact_installed_tc_view_only_bug.cfg|ExactInstalledTcAuthority",
+            "|exact_installed_tc_view_only_bug.cfg|TypeInvariant",
+            "failing case matrix must equal",
+        ),
+        (
             "|adequate_leader_candidate_retired_chunk_view_bug.cfg|"
             "RetiredChunkStageCannotReadmitAfterViewAdvance",
             "|adequate_leader_candidate_retired_chunk_view_bug.cfg|"
@@ -7512,7 +7517,7 @@ def test_liveness_ownership_mutation_source_seal_rejects_inventory_drift(
             "failing case matrix must equal",
         ),
         (
-            "all 25 liveness-ownership mutations produced their exact named "
+            "all 26 liveness-ownership mutations produced their exact named "
             "counterexamples; repaired models passed",
             "all liveness-ownership cases passed",
             "exact mutation completion marker",
@@ -22585,6 +22590,19 @@ def test_async_source_fidelity_pins_restart_reset_and_retained_control(
             "RememberedControl(withPrepare, RestartDecisionControl(node))",
             "RememberedControl(cleared, RestartDecisionControl(node))",
             "RestartRetainedControl omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "signatures == RestartSignatureReplay(node)",
+            "signatures == "
+            "FreshRestartCandidateSequence(RestartSignatureReplay(node))",
+            "PreGstResponsiveReplay omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "RememberedControl(withoutOwnTc, items)",
+            "RememberedControl(retained, items)",
+            "InstalledControlAfterTC must equal only",
         ),
         (
             "SumeragiV2AsyncNetwork.tla",

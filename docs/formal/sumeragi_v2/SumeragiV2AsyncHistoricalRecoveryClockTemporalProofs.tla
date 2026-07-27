@@ -64,24 +64,24 @@ The outer tag keeps the two lifecycle namespaces disjoint.
 
 HistoricalDiscoveryCandidateOwnerIdentity(candidate) ==
   [ownerKind |-> "Candidate",
-   identity |-> AsyncCandidateServiceIdentity(candidate)]
+   identity |-> candidate.causalOrigin]
 
 HistoricalDiscoveryServeOwnerIdentity(node, job) ==
   [ownerKind |-> "Serve",
    identity |-> AsyncIoServeJobIdentity(node, job)]
 
-HistoricalDiscoveryPacketCandidateIdentityCarrier(packet) ==
+HistoricalDiscoveryPacketCandidateOwnerIdentityCarrier(packet) ==
   {[ownerKind |-> "Candidate", identity |-> identity]:
      identity \in
-       HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(packet)}
+       HistoricalDiscoveryPacketCandidateCausalOriginCarrier(packet)}
 
-HistoricalDiscoveryPacketServeIdentityCarrier(packet) ==
+HistoricalDiscoveryPacketServeOwnerIdentityCarrier(packet) ==
   {[ownerKind |-> "Serve", identity |-> identity]:
      identity \in HistoricalDiscoveryPacketServeIdentityCarrier(packet)}
 
 HistoricalDiscoveryPacketProducerIdentityCarrier(packet) ==
-  HistoricalDiscoveryPacketCandidateIdentityCarrier(packet)
-    \cup HistoricalDiscoveryPacketServeIdentityCarrier(packet)
+  HistoricalDiscoveryPacketCandidateOwnerIdentityCarrier(packet)
+    \cup HistoricalDiscoveryPacketServeOwnerIdentityCarrier(packet)
 
 HistoricalDiscoveryPacketCandidateIdentitySet(packet) ==
   {HistoricalDiscoveryCandidateOwnerIdentity(candidate):
@@ -99,10 +99,16 @@ HistoricalDiscoveryPacketProducerIdentitySet(packet) ==
 HistoricalDiscoveryPacketCandidateCoveredIdentitySet(packet) ==
   HistoricalDiscoveryPacketCandidateIdentitySet(packet)
     \cup
-  {[ownerKind |-> "Candidate", identity |-> record.identity]:
+  {[ownerKind |-> "Candidate",
+    identity |-> record.identity.payload.causalOrigin]:
      record \in AsyncCandidateServiceTombstones,
-     record.identity
-       \in HistoricalDiscoveryPacketCandidateServiceIdentityCarrier(packet)}
+     record.identity.payload.causalOrigin
+       \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(packet)}
+    \cup
+  {[ownerKind |-> "Candidate", identity |-> record.origin]:
+     record \in asyncCandidateLifecycleAdmissions,
+     record.origin
+       \in HistoricalDiscoveryPacketCandidateCausalOriginCarrier(packet)}
 
 HistoricalDiscoveryPacketServeCoveredIdentitySet(packet) ==
   LET carrier == HistoricalDiscoveryPacketServeIdentityCarrier(packet)
@@ -134,8 +140,8 @@ THEOREM HistoricalDiscoveryPacketProducerIdentityCarrierIsFinite ==
 BY HistoricalDiscoveryPacketCausalCarriersAreFinite,
    FS_Image, FS_Union, Isa
    DEF HistoricalDiscoveryPacketProducerIdentityCarrier,
-       HistoricalDiscoveryPacketCandidateIdentityCarrier,
-       HistoricalDiscoveryPacketServeIdentityCarrier
+       HistoricalDiscoveryPacketCandidateOwnerIdentityCarrier,
+       HistoricalDiscoveryPacketServeOwnerIdentityCarrier
 
 THEOREM HistoricalDiscoveryPacketProducerCoverageStaysInFrozenCarrier ==
   \A packet \in OverdueResponsivePackets:
@@ -153,8 +159,8 @@ BY HistoricalDiscoveryPacketOwnersStayInFrozenCausalCarrier, Isa
        HistoricalDiscoveryPacketCandidateCoveredIdentitySet,
        HistoricalDiscoveryPacketServeCoveredIdentitySet,
        HistoricalDiscoveryPacketProducerIdentityCarrier,
-       HistoricalDiscoveryPacketCandidateIdentityCarrier,
-       HistoricalDiscoveryPacketServeIdentityCarrier
+       HistoricalDiscoveryPacketCandidateOwnerIdentityCarrier,
+       HistoricalDiscoveryPacketServeOwnerIdentityCarrier
 
 THEOREM HistoricalDiscoveryPacketProducerIdentitySetIsFinite ==
   \A packet \in OverdueResponsivePackets:

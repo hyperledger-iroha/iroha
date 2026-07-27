@@ -5173,6 +5173,7 @@ HistoricalTemporalCandidateIdentityBudgetBridgeProperty(specification) ==
                     [left.item EXCEPT !.source = right.item.source]
                /\ AsyncRouteNeutralCandidateEvidence(left.evidence)
                     = AsyncRouteNeutralCandidateEvidence(right.evidence)
+               /\ left.causalOrigin = right.causalOrigin
                /\ left.bodyIdentity = right.bodyIdentity
                /\ left.manifestIdentity = right.manifestIdentity
                /\ left.commitmentIdentity = right.commitmentIdentity

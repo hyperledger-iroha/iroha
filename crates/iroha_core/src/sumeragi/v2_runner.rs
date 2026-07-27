@@ -72,8 +72,8 @@ use super::{
     v2_recovery::{
         DurableSuccessorActivationAuthority, DurableV2PredecessorIdentity,
         RecoveredSuccessorActivationAuthority, SnapshotSuccessorActivationAuthority,
-        build_verified_successor, recover_active_height, successor_block_refinement_projection,
-        successor_context_refinement_projection,
+        build_verified_successor, recover_active_height_with_plan,
+        successor_block_refinement_projection, successor_context_refinement_projection,
     },
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
     v2_worker::{
@@ -789,6 +789,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         state,
         queue,
         kura,
+        startup_replay_plan,
+        mut startup_replay_inventory_guard,
         network,
         genesis_network,
         block_rx,
@@ -819,12 +821,14 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let recovery = output_guard
         .begin_fail_stop_operation()
         .ok_or(V2RunnerError::RestartRequired)?;
-    let recovered = recover_active_height(
+    let recovered = recover_active_height_with_plan(
         kura.as_ref(),
         state.as_ref(),
         v2_bootstrap,
         genesis_public_key.clone(),
+        startup_replay_plan,
     )?;
+    startup_replay_inventory_guard.finish();
     recovery.complete();
     let mut pending_kura_apply = recovered.pending_kura_apply();
     let (

@@ -15,19 +15,21 @@ use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
     IrohaJindoPolynomialCommitmentStatementV1, IrohaZkAmsStatementV1, JindoActivationLimitsV1,
-    PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
-    PrivacyAssuranceV1, PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1,
-    PrivacyCapabilitySnapshotValidationErrorV1, PrivacyCompiledProfileResultV1,
-    PrivacyCompiledProfileSnapshotV1, PrivacyCompiledProfileUnavailableReasonV1,
-    PrivacyCompiledStatementSchemaErrorV1, PrivacyConsensusPolicyV1, PrivacyEngineIdV1,
-    PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+    ORCHARD_MAX_ACTIONS_V1 as ORCHARD_MODEL_MAX_ACTIONS_V1, OrchardActivationLimitsV1,
+    OrchardHalo2ActionsStatementV1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PrivacyAssuranceV1, PrivacyCapabilityRowV1,
+    PrivacyCapabilitySnapshotV1, PrivacyCapabilitySnapshotValidationErrorV1,
+    PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+    PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
+    PrivacyConsensusPolicyV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
+    PrivacyOrchardPoolBootstrapV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
     PrivacyPgcAccountBootstrapV1, PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1,
     PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
     PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
-    TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
-    VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
-    VeRangeTransparentRangeStatementV1, VegaExistingCredentialStatementV1,
-    ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
+    TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
+    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VERANGE_HARD_MAX_AGGREGATION_COUNT_V1,
+    VeRangeActivationLimitsV1, VeRangeTransparentRangeStatementV1,
+    VegaExistingCredentialStatementV1, ZK_AMS_MAX_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1,
     ZK_AMS_RING_SIZES_V1 as ZK_AMS_MODEL_RING_SIZES_V1, ZkAmsActivationLimitsV1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
@@ -68,6 +70,12 @@ use crate::privacy_engines::{
         JINDO_MAX_BATCH_SIZE_V1, JINDO_NATIVE_PROOF_BYTES_V1, JINDO_PARAMETER_MANIFEST_V1,
         JINDO_SOURCE_PROFILE_V1, JINDO_SUITE_V1, jindo_crs_digest_v1,
     },
+    orchard::{
+        ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+        ORCHARD_MAX_ACTIONS_V1 as ORCHARD_ENGINE_MAX_ACTIONS_V1,
+        ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1, ORCHARD_UPSTREAM_CRATE_VERSION_V1,
+        ORCHARD_UPSTREAM_REVISION_V1, orchard_authorization_wire_size_v1, orchard_empty_root_v1,
+    },
     verange::{
         VERANGE_TYPE1_PROOF_VERSION_V1, VERANGE_TYPE1_SOURCE_PROFILE_V1, VERANGE_TYPE1_SUITE_V1,
         VeRangeBitLengthV1, VeRangeParametersV1,
@@ -107,6 +115,15 @@ const JINDO_PARAMETER_SET_LABEL_V1: &[u8] = b"jindo-univariate-batch4-degree256-
 const JINDO_PROOF_WIRE_LABEL_V1: &[u8] = b"IJP1:fixed-rns-le:30-outer:66-inner:strict-exact:v1";
 const JINDO_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:clean-room:eprint-2026-044:figures-1-5:univariate:v1";
+const ORCHARD_PROTOCOL_LABEL_V1: &[u8] = b"orchard-halo2-actions-v1";
+const ORCHARD_PARAMETER_SET_LABEL_V1: &[u8] = b"orchard-v3-post-nu6-3-halo2-ipa-pasta-v1";
+const ORCHARD_PROOF_WIRE_LABEL_V1: &[u8] =
+    b"ORC1:u8-actions:halo2-proof:ordered-redpallas-spend-signatures:binding-signature";
+const ORCHARD_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
+    b"iroha-native-rust:zcash-orchard-v3:post-nu6-3:first-release-no-legacy:v1";
+const ORCHARD_FRONTIER_SCHEMA_V1: &[u8] =
+    b"tree_size:u64|leaf:option<cmx32>|ommers:ordered<merkle_hash32>|root:32|depth:32";
+const ORCHARD_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|bootstrap_digest:32|asset_definition_id:norito|reserve_account:norito|anchor:32|anchor_epoch:u64|current_root:32|current_epoch:u64|successor_frontier|ordered_nullifiers[32]|value_balance:direction+u128|fee:u128|expiry_height:u64";
 const VEGA_PARAMETER_SET_LABEL_V1: &[u8] =
     b"vega-figure9-mdl-age-neutron-nova-spartan-hyrax-t256-v1";
 const VEGA_PROOF_WIRE_LABEL_V1: &[u8] =
@@ -282,6 +299,7 @@ pub fn compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::IrohaZkAmsV1 => compiled_zk_ams_profile_v1(),
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => compiled_jindo_profile_v1(),
         PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => compiled_vega_profile_v1(),
+        PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => compiled_orchard_profile_v1(),
         // TODO(privacy-native-engines): remove each fail-closed branch only
         // after its complete canonical verifier, effect derivation, KATs, and
         // adversarial tests are compiled into this manifest.
@@ -291,13 +309,141 @@ pub fn compiled_privacy_profile_v1(
         }
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
         | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
-        | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
         | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
         | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
         | PrivacyProtocolIdV1::PqMaspStarkV0 => {
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
         }
     }
+}
+
+fn compiled_orchard_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1>
+{
+    let protocol_id = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
+    if ORCHARD_ENGINE_MAX_ACTIONS_V1
+        != usize::try_from(ORCHARD_MODEL_MAX_ACTIONS_V1)
+            .expect("compiled Orchard action count fits usize")
+        || ORCHARD_MODEL_MAX_ACTIONS_V1 > TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1
+        || ORCHARD_MODEL_MAX_ACTIONS_V1 > TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1
+    {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+    let one_action_wire = orchard_authorization_wire_size_v1(1)
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    let two_action_wire = orchard_authorization_wire_size_v1(ORCHARD_ENGINE_MAX_ACTIONS_V1)
+        .and_then(|value| u64::try_from(value).ok())
+        .ok_or(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    if one_action_wire == 0
+        || one_action_wire >= two_action_wire
+        || two_action_wire > u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
+    {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+
+    let action_count = ORCHARD_MODEL_MAX_ACTIONS_V1.to_be_bytes();
+    let one_action_wire = one_action_wire.to_be_bytes();
+    let two_action_wire = two_action_wire.to_be_bytes();
+    let global_proof_cap = TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1.to_be_bytes();
+    let empty_root = orchard_empty_root_v1();
+    let statement_schema_digest = canonical_schema_digest_v1::<OrchardHalo2ActionsStatementV1>()
+        .map_err(
+            |source| CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
+                protocol_id,
+                source,
+            },
+        )?;
+    let bootstrap_schema_digest = canonical_schema_digest_v1::<PrivacyOrchardPoolBootstrapV1>()
+        .map_err(
+            |source| CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
+                protocol_id,
+                source,
+            },
+        )?;
+    let parameter_id = digest_fields_v1(
+        PARAMETER_ID_DOMAIN_V1,
+        &[
+            ORCHARD_PROTOCOL_LABEL_V1,
+            ORCHARD_PARAMETER_SET_LABEL_V1,
+            ORCHARD_UPSTREAM_CRATE_VERSION_V1.as_bytes(),
+            ORCHARD_UPSTREAM_REVISION_V1.as_bytes(),
+            ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1.as_bytes(),
+            &empty_root,
+        ],
+    );
+    let parameter_digest = digest_fields_v1(
+        PARAMETER_DIGEST_DOMAIN_V1,
+        &[
+            ORCHARD_PROTOCOL_LABEL_V1,
+            ORCHARD_PARAMETER_SET_LABEL_V1,
+            ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            ORCHARD_UPSTREAM_CRATE_VERSION_V1.as_bytes(),
+            ORCHARD_UPSTREAM_REVISION_V1.as_bytes(),
+            ORCHARD_POST_NU6_3_CIRCUIT_DESCRIPTION_SHA256_V1.as_bytes(),
+            &empty_root,
+            &action_count,
+            &one_action_wire,
+            &two_action_wire,
+        ],
+    );
+    let verifier_digest = digest_fields_v1(
+        VERIFIER_DIGEST_DOMAIN_V1,
+        &[
+            ORCHARD_PROTOCOL_LABEL_V1,
+            ORCHARD_IMPLEMENTATION_PROVENANCE_V1,
+            ORCHARD_PARAMETER_SET_LABEL_V1,
+            ORCHARD_PROOF_WIRE_LABEL_V1,
+            ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            ORCHARD_FRONTIER_SCHEMA_V1,
+            ORCHARD_VERIFIED_EFFECT_SCHEMA_V1,
+            &statement_schema_digest,
+            &bootstrap_schema_digest,
+            &action_count,
+            &one_action_wire,
+            &two_action_wire,
+            &global_proof_cap,
+        ],
+    );
+    let engine_manifest_digest = digest_fields_v1(
+        ENGINE_MANIFEST_DIGEST_DOMAIN_V1,
+        &[
+            ORCHARD_PROTOCOL_LABEL_V1,
+            ORCHARD_IMPLEMENTATION_PROVENANCE_V1,
+            b"proof-system:halo2-ipa-pasta",
+            b"engine:native-halo2-orchard",
+            ORCHARD_PARAMETER_SET_LABEL_V1,
+            ORCHARD_PROOF_WIRE_LABEL_V1,
+            ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1,
+            ORCHARD_FRONTIER_SCHEMA_V1,
+            ORCHARD_VERIFIED_EFFECT_SCHEMA_V1,
+            &parameter_id,
+            &parameter_digest,
+            &verifier_digest,
+            &statement_schema_digest,
+            &bootstrap_schema_digest,
+            &empty_root,
+            &action_count,
+            &one_action_wire,
+            &two_action_wire,
+            &global_proof_cap,
+        ],
+    );
+
+    Ok(CompiledPrivacyProfileV1 {
+        protocol_id,
+        proof_system_id: PrivacyProofSystemIdV1::Halo2IpaPasta,
+        engine_id: PrivacyEngineIdV1::NativeHalo2Orchard,
+        parameter_id: PrivacyParameterIdV1::new(parameter_id),
+        parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
+        verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
+        statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
+        engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
+        protocol_limits: PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(
+            OrchardActivationLimitsV1 {
+                max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1,
+            },
+        ),
+    })
 }
 
 /// Require exact compiled cryptographic bindings and bounded governed policy.
@@ -1622,6 +1768,17 @@ mod tests {
             ))
     }
 
+    fn orchard_activation() -> PrivacyProtocolActivationRecordV1 {
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+            .expect("fixed Orchard profile derives")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 100,
+                    activate_at_height: 400,
+                },
+            ))
+    }
+
     #[test]
     fn only_complete_engines_have_compiled_profiles() {
         let available = PrivacyProtocolIdV1::ALL
@@ -1638,8 +1795,79 @@ mod tests {
                 PrivacyProtocolIdV1::IrohaZkAmsV1,
                 PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
                 PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             ]
         );
+    }
+
+    #[test]
+    fn orchard_profile_is_deterministic_complete_bounded_and_mutation_closed() {
+        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+            .expect("profile");
+        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+            .expect("profile");
+        assert_eq!(first, second);
+        assert_eq!(first.proof_system_id, PrivacyProofSystemIdV1::Halo2IpaPasta);
+        assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeHalo2Orchard);
+        assert_eq!(
+            first.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
+                max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1,
+            })
+        );
+        assert_eq!(ORCHARD_ENGINE_MAX_ACTIONS_V1, 2);
+        assert_eq!(ORCHARD_MODEL_MAX_ACTIONS_V1, 2);
+        assert!(
+            orchard_authorization_wire_size_v1(2).expect("wire size")
+                <= usize::try_from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
+                    .expect("global proof cap fits usize")
+        );
+        assert_ne!(orchard_empty_root_v1(), [0; 32]);
+        for digest in [
+            *first.parameter_id.as_bytes(),
+            *first.parameter_digest.as_bytes(),
+            *first.verifier_digest.as_bytes(),
+            *first.statement_schema_digest.as_bytes(),
+            *first.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
+        assert_eq!(
+            (
+                hex::encode(first.parameter_id.as_bytes()),
+                hex::encode(first.parameter_digest.as_bytes()),
+                hex::encode(first.verifier_digest.as_bytes()),
+                hex::encode(first.statement_schema_digest.as_bytes()),
+                hex::encode(first.engine_manifest_digest.as_bytes()),
+            ),
+            (
+                "8d5a2946c58314ac12d2968ffe9e8e0c672e3bbceefaaefad6a87420ea7dd212".to_owned(),
+                "d26ee7a1bea91d998bc18351f0e923023d9fb17c98e68b6cc62d53425bdbb40e".to_owned(),
+                "7435c73519e5a4f324baa7ddbf8a289dc4a06850a7e2ef7713666383e8580894".to_owned(),
+                "2b82f59b9cc711d6eb832ececfabc900277525a099684e326e588068c6c84fb3".to_owned(),
+                "75a0ea774499b595b7841f76d84e3b77be451891b4d1f60356ddc9407f70d155".to_owned(),
+            ),
+            "every consensus-critical Orchard profile binding is a pinned KAT"
+        );
+
+        let valid = orchard_activation();
+        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+        let mutations: [fn(&mut PrivacyProtocolActivationRecordV1); 7] = [
+            |record| record.parameter_id.0[0] ^= 1,
+            |record| record.parameter_digest.0[0] ^= 1,
+            |record| record.verifier_digest.0[0] ^= 1,
+            |record| record.statement_schema_digest.0[0] ^= 1,
+            |record| record.engine_manifest_digest.0[0] ^= 1,
+            |record| {
+                record.proof_system_id = PrivacyProofSystemIdV1::FcmpPlusPlusCurveTreeBulletproofs
+            },
+            |record| record.engine_id = PrivacyEngineIdV1::NativeFcmpPlusPlus,
+        ];
+        for mutate in mutations {
+            let mut changed = valid;
+            mutate(&mut changed);
+            assert!(validate_compiled_privacy_activation_v1(&changed).is_err());
+        }
     }
 
     #[cfg(not(feature = "zk-stark"))]
@@ -2345,6 +2573,27 @@ mod tests {
             jindo.engine_manifest_digest,
             jindo_compiled.engine_manifest_digest
         );
+
+        let orchard_compiled =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+                .expect("Orchard profile");
+        let mut orchard = orchard_activation();
+        orchard.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
+                max_action_count: 1,
+            });
+        validate_compiled_privacy_activation_v1(&orchard).expect("lower Orchard policy");
+        assert_eq!(orchard.parameter_id, orchard_compiled.parameter_id);
+        assert_eq!(orchard.parameter_digest, orchard_compiled.parameter_digest);
+        assert_eq!(orchard.verifier_digest, orchard_compiled.verifier_digest);
+        assert_eq!(
+            orchard.statement_schema_digest,
+            orchard_compiled.statement_schema_digest
+        );
+        assert_eq!(
+            orchard.engine_manifest_digest,
+            orchard_compiled.engine_manifest_digest
+        );
     }
 
     #[test]
@@ -2437,6 +2686,20 @@ mod tests {
             );
         invalid.push(zero_jindo);
 
+        let mut orchard_over = orchard_activation();
+        orchard_over.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
+                max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1 + 1,
+            });
+        invalid.push(orchard_over);
+
+        let mut zero_orchard = orchard_activation();
+        zero_orchard.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::OrchardHalo2ActionsV1(OrchardActivationLimitsV1 {
+                max_action_count: 0,
+            });
+        invalid.push(zero_orchard);
+
         let mut wrong_variant = verange_activation();
         wrong_variant.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
             AnonymousPgcActivationLimitsV1 {
@@ -2457,14 +2720,14 @@ mod tests {
     #[test]
     fn unavailable_protocol_fails_before_governance_state_mutation() {
         let mut activation = verange_activation();
-        activation.protocol_id = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
+        activation.protocol_id = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
         activation.proof_system_id = activation.protocol_id.expected_proof_system();
         activation.engine_id = activation.protocol_id.expected_engine();
         assert_eq!(
             validate_compiled_privacy_activation_v1(&activation),
             Err(CompiledPrivacyProfileValidationErrorV1::Profile(
                 CompiledPrivacyProfileErrorV1::EngineUnavailable {
-                    protocol_id: PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                    protocol_id: PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
                 }
             ))
         );

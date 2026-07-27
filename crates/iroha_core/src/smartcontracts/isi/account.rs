@@ -3307,7 +3307,7 @@ pub mod query {
 
             let zero_asset_id = AssetId::new(definition_id.clone(), zero_holder);
             stx.world
-                .asset_or_insert(&zero_asset_id, Quantity::zero())
+                .deposit_numeric_asset(&zero_asset_id, &Quantity::zero())
                 .expect("zero placeholder inserted");
             Mint::asset_quantity(
                 1u32,

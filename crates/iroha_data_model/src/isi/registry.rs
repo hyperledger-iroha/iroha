@@ -111,6 +111,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<escrow::OpenEscrowDispute>,
     InstructionRegistry::register_slice::<escrow::ResolveEscrowDispute>,
     InstructionRegistry::register_slice::<escrow::OpenAssetLock>,
+    InstructionRegistry::register_slice::<escrow::OpenConditionalEscrow>,
+    InstructionRegistry::register_slice::<escrow::AttestEscrowCondition>,
+    InstructionRegistry::register_slice::<escrow::ExpireConditionalEscrow>,
     InstructionRegistry::register_slice::<escrow::DrawdownAssetLock>,
     InstructionRegistry::register_slice::<escrow::CancelAssetLock>,
     InstructionRegistry::register_slice::<escrow::ExpireAssetLock>,
@@ -296,6 +299,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>,
     InstructionRegistry::register_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>,
     InstructionRegistry::register_slice::<privacy::PublishPrivacyRootV1>,
+    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyOrchardPoolV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyPgcAccountsV1>,
     InstructionRegistry::register_slice::<privacy::BootstrapPrivacyZkAmsRegistryV1>,
     InstructionRegistry::register_slice::<privacy::RegisterPrivacyZkAcePolicyV1>,
@@ -448,6 +452,9 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     );
     registry = registry.register_with_id_slice::<privacy::PublishPrivacyRootV1>(
         privacy::PublishPrivacyRootV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyOrchardPoolV1>(
+        privacy::BootstrapPrivacyOrchardPoolV1::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyPgcAccountsV1>(
         privacy::BootstrapPrivacyPgcAccountsV1::WIRE_ID,

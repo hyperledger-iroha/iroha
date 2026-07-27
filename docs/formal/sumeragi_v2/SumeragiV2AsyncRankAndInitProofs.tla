@@ -730,8 +730,8 @@ InitialCausalCandidate(node) ==
 Exact candidate identity.  These are structural obligations, not hash
 collision assumptions: every stored candidate field appears in the frozen
 identity.  Therefore scheduler-wide coalescing can reject only the same
-consumer epoch, payload/evidence, work, body, manifest, and execution
-commitment.
+consumer epoch, payload/evidence, immutable causal origin, work, body,
+manifest, and execution commitment.
 ***************************************************************************)
 
 THEOREM ExactIdentityProjectsConsumerTag ==
@@ -751,6 +751,7 @@ THEOREM ExactIdentityProjectsDirectFields ==
     ExactAsyncCandidateIdentity(left) = ExactAsyncCandidateIdentity(right)
       => /\ left.item = right.item
          /\ left.evidence = right.evidence
+         /\ left.causalOrigin = right.causalOrigin
          /\ left.bodyIdentity = right.bodyIdentity
          /\ left.manifestIdentity = right.manifestIdentity
          /\ left.commitmentIdentity = right.commitmentIdentity
@@ -825,6 +826,7 @@ THEOREM CandidateFieldsDetermineCandidate ==
     /\ left.consumerView = right.consumerView
     /\ left.consumerGeneration = right.consumerGeneration
     /\ left.evidence = right.evidence
+    /\ left.causalOrigin = right.causalOrigin
     /\ left.bodyIdentity = right.bodyIdentity
     /\ left.manifestIdentity = right.manifestIdentity
     /\ left.commitmentIdentity = right.commitmentIdentity
@@ -844,6 +846,7 @@ PROOF
                 /\ left.consumerView = right.consumerView
                 /\ left.consumerGeneration = right.consumerGeneration
                 /\ left.evidence = right.evidence
+                /\ left.causalOrigin = right.causalOrigin
                 /\ left.bodyIdentity = right.bodyIdentity
                 /\ left.manifestIdentity = right.manifestIdentity
                 /\ left.commitmentIdentity = right.commitmentIdentity
@@ -865,9 +868,10 @@ PROOF
         <4>12. CASE key = "bodyIdentity" BY <1>1, <4>12
         <4>13. CASE key = "manifestIdentity" BY <1>1, <4>13
         <4>14. CASE key = "commitmentIdentity" BY <1>1, <4>14
+        <4>15. CASE key = "causalOrigin" BY <1>1, <4>15
         <4> QED BY <3>1, <4>1, <4>2, <4>3, <4>4, <4>5, <4>6,
                      <4>7, <4>8, <4>9, <4>10, <4>11, <4>12, <4>13,
-                     <4>14 DEF AsyncCandidateDomain
+                     <4>14, <4>15 DEF AsyncCandidateDomain
       <3> QED BY <3>1
     <2>2. /\ DOMAIN left = AsyncCandidateDomain
            /\ DOMAIN right = AsyncCandidateDomain
@@ -899,6 +903,7 @@ PROOF
         BY <2>1, ExactIdentityProjectsWorkIdentity
       <3>3. /\ left.item = right.item
              /\ left.evidence = right.evidence
+             /\ left.causalOrigin = right.causalOrigin
              /\ left.bodyIdentity = right.bodyIdentity
              /\ left.manifestIdentity = right.manifestIdentity
              /\ left.commitmentIdentity = right.commitmentIdentity
@@ -943,6 +948,13 @@ BY SMT DEF ExactAsyncCandidateIdentity, AsyncConsumerEventTag
 THEOREM DifferentCandidateEvidenceHasDifferentIdentity ==
   \A left, right:
     left.evidence # right.evidence
+      => ExactAsyncCandidateIdentity(left)
+           # ExactAsyncCandidateIdentity(right)
+BY SMT DEF ExactAsyncCandidateIdentity
+
+THEOREM DifferentCandidateCausalOriginHasDifferentIdentity ==
+  \A left, right:
+    left.causalOrigin # right.causalOrigin
       => ExactAsyncCandidateIdentity(left)
            # ExactAsyncCandidateIdentity(right)
 BY SMT DEF ExactAsyncCandidateIdentity
@@ -1930,6 +1942,13 @@ BY RangeConcatenation, Isa
        RestartPrepareReplay, RestartLockedCommitReplay,
        RestartCandidate, AsyncCandidateAtConsumer,
        AsyncCandidateWithIdentity, SequenceSet
+
+THEOREM RestartSignatureReplayIsNeverTombstoneSuppressed ==
+  \A node:
+    \A candidate \in SequenceSet(RestartSignatureReplay(node)):
+      ~AsyncCandidateRestartReplayTombstoned(candidate)
+BY RestartSignatureReplayCommandsAreSignatures,
+   AsyncRestartScopedCandidateIsNeverReplayTombstoned
 
 THEOREM RestartLockedBodyAndSignatureReplayAreDisjoint ==
   \A node:

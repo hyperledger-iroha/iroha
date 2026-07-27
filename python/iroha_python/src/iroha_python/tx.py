@@ -162,6 +162,18 @@ def _normalize_mapping_payload(payload: Mapping[str, Any], context: str) -> Dict
     return normalized
 
 
+def _payload_mapping(value: Any, context: str) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    to_payload = getattr(value, "to_payload", None)
+    if not callable(to_payload):
+        raise TypeError(f"{context} must be a mapping or expose to_payload()")
+    payload = to_payload()
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context}.to_payload() must return a mapping")
+    return payload
+
+
 def _fee_charge_limits(charge_limits: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     if isinstance(charge_limits, (str, bytes, bytearray, memoryview)):
         raise TypeError("charge_limits must be a sequence of mappings")
@@ -845,6 +857,55 @@ class TransactionDraft:
         )
         return self
 
+    def transfer_asset_batch(
+        self,
+        source_account: str,
+        asset_definition_id: str,
+        payments: Sequence[Any],
+        *,
+        mode: Any = "Independent",
+    ) -> TransactionDraft:
+        """Append one native multi-payment instruction."""
+
+        if isinstance(payments, (str, bytes, bytearray, memoryview)) or not isinstance(
+            payments, Sequence
+        ):
+            raise TypeError("payments must be a sequence")
+        normalized_payments: List[Dict[str, str]] = []
+        for index, payment in enumerate(payments):
+            payment = _payload_mapping(payment, f"payments[{index}]")
+            unknown = set(payment).difference({"id", "to", "amount"})
+            missing = {"id", "to", "amount"}.difference(payment)
+            if unknown or missing:
+                raise ValueError(
+                    f"payments[{index}] must contain exactly id, to, and amount"
+                )
+            normalized_payments.append(
+                {
+                    "id": _require_exact_non_empty_string(
+                        payment["id"], f"payments[{index}].id"
+                    ),
+                    "to": _require_exact_non_empty_string(
+                        payment["to"], f"payments[{index}].to"
+                    ),
+                    "amount": _normalize_positive_quantity(
+                        payment["amount"], f"payments[{index}].amount"
+                    ),
+                }
+            )
+        mode_value = getattr(mode, "value", mode)
+        self.add_instruction(
+            Instruction.transfer_asset_batch(
+                _require_exact_non_empty_string(source_account, "source_account"),
+                _require_exact_non_empty_string(
+                    asset_definition_id, "asset_definition_id"
+                ),
+                json.dumps(normalized_payments, separators=(",", ":"), sort_keys=True),
+                mode=_require_exact_non_empty_string(mode_value, "mode"),
+            )
+        )
+        return self
+
     def set_asset_transfer_freeze(
         self,
         account_id: str,
@@ -950,6 +1011,82 @@ class TransactionDraft:
                 ),
                 expires_at_ms=expires_at_ms,
                 evidence_hashes=list(evidence_hashes or []),
+            )
+        )
+        return self
+
+    def open_conditional_escrow(
+        self,
+        escrow_id: str,
+        asset_definition_id: str,
+        beneficiary: str,
+        amount: QuantityLike,
+        conditions: Sequence[Any],
+        expires_at_ms: int,
+        *,
+        evidence_digests: Optional[Sequence[FixedBytesLike]] = None,
+    ) -> TransactionDraft:
+        """Append an ordered native ``OpenConditionalEscrow`` instruction."""
+
+        if isinstance(conditions, (str, bytes, bytearray, memoryview)):
+            raise TypeError("conditions must be a sequence")
+        normalized_conditions = [
+            dict(
+                _normalize_mapping_payload(
+                    _payload_mapping(condition, f"conditions[{index}]"),
+                    f"conditions[{index}]",
+                )
+            )
+            for index, condition in enumerate(conditions)
+        ]
+        if not normalized_conditions:
+            raise ValueError("conditions must not be empty")
+        if isinstance(expires_at_ms, bool) or not isinstance(expires_at_ms, int):
+            raise TypeError("expires_at_ms must be a positive integer")
+        if expires_at_ms <= 0:
+            raise ValueError("expires_at_ms must be a positive integer")
+        self.add_instruction(
+            Instruction.open_conditional_escrow(
+                _require_exact_non_empty_string(escrow_id, "escrow_id"),
+                _require_exact_non_empty_string(
+                    asset_definition_id,
+                    "asset_definition_id",
+                ),
+                _require_exact_non_empty_string(beneficiary, "beneficiary"),
+                _normalize_positive_quantity(amount, "amount"),
+                normalized_conditions,
+                expires_at_ms,
+                evidence_digests=list(evidence_digests or []),
+            )
+        )
+        return self
+
+    def attest_escrow_condition(
+        self,
+        escrow_id: str,
+        condition_id: str,
+        value: Any,
+        *,
+        evidence_digest: Optional[FixedBytesLike] = None,
+    ) -> TransactionDraft:
+        """Append an ordered native ``AttestEscrowCondition`` instruction."""
+
+        self.add_instruction(
+            Instruction.attest_escrow_condition(
+                _require_exact_non_empty_string(escrow_id, "escrow_id"),
+                _require_exact_non_empty_string(condition_id, "condition_id"),
+                dict(_normalize_mapping_payload(_payload_mapping(value, "value"), "value")),
+                evidence_digest=evidence_digest,
+            )
+        )
+        return self
+
+    def expire_conditional_escrow(self, escrow_id: str) -> TransactionDraft:
+        """Append a native ``ExpireConditionalEscrow`` refund instruction."""
+
+        self.add_instruction(
+            Instruction.expire_conditional_escrow(
+                _require_exact_non_empty_string(escrow_id, "escrow_id")
             )
         )
         return self

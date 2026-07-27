@@ -697,6 +697,193 @@ THEOREM AsyncControlServiceSlotCarrierIsRosterClassBounded ==
 BY FS_Product, FS_Image, FS_Subset, Isa
    DEF AsyncControlServiceSlotSet
 
+(***************************************************************************
+Route-neutral command payloads are defined before candidate construction so
+the first local admission can freeze one normalized causal origin.  The
+normalization is semantic, not a wire rewrite: authenticated bytes remain the
+ingress authority, while aggregate relay choice and quorum-superset encoding
+cannot manufacture a new logical origin after admission.
+***************************************************************************)
+AsyncCandidateQcSemanticPayload(qc) ==
+  CertificateRefOf(qc)
+
+AsyncCandidatePrepareQcSemanticPayload(qc) ==
+  IF qc = NoPrepareQC
+  THEN NoPrepareQC
+  ELSE AsyncCandidateQcSemanticPayload(qc)
+
+AsyncCandidateVoteSemanticPayload(vote) ==
+  [context |-> vote.context,
+   height |-> vote.height,
+   view |-> vote.view,
+   phase |-> vote.phase,
+   subject |-> vote.subject,
+   signer |-> vote.signer]
+
+AsyncCandidateTimeoutVoteSemanticPayload(vote) ==
+  [context |-> vote.context,
+   height |-> vote.height,
+   view |-> vote.view,
+   signer |-> vote.signer,
+   highestPrepareQc |->
+     AsyncCandidatePrepareQcSemanticPayload(vote.highestPrepareQc),
+   highRank |-> vote.highRank,
+   highSubject |-> vote.highSubject]
+
+AsyncCandidateTcSemanticPayload(tc) ==
+  IF tc = NoTimeoutCertificate
+  THEN NoTimeoutCertificate
+  ELSE [context |-> tc.context,
+        height |-> tc.height,
+        view |-> tc.view,
+        highestPrepareQc |->
+          AsyncCandidatePrepareQcSemanticPayload(
+            tc.highestPrepareQc)]
+
+AsyncCandidateProposalSemanticPayload(proposal) ==
+  [context |-> proposal.context,
+   height |-> proposal.height,
+   view |-> proposal.view,
+   subject |-> proposal.subject,
+   proposer |-> proposal.proposer,
+   timeoutCertificate |->
+     AsyncCandidateTcSemanticPayload(proposal.timeoutCertificate),
+   highestPrepareQc |->
+     AsyncCandidatePrepareQcSemanticPayload(
+       proposal.highestPrepareQc),
+   justifyRank |-> proposal.justifyRank,
+   justifySubject |-> proposal.justifySubject]
+
+AsyncCandidateCertifiedRequestHashSemanticPayload(requestHash) ==
+  LET signed == requestHash.exactSignedRequest
+      preimage == signed.preimage
+      signature == signed.signature
+  IN [round |-> preimage.round,
+      subject |-> preimage.subject,
+      certificate |->
+        AsyncCandidateQcSemanticPayload(preimage.certificate),
+      requester |-> preimage.requester,
+      signer |-> signature.signer,
+      signatureNonce |-> signature.nonce]
+
+AsyncCandidateCertifiedRequestItemSemanticPayload(item) ==
+  [recipient |-> item.envelope.recipient,
+   height |-> item.envelope.height,
+   view |-> item.envelope.view,
+   subject |-> item.envelope.subject,
+   requester |-> item.envelope.requester,
+   certificate |->
+     AsyncCandidateQcSemanticPayload(
+       item.envelope.certificate),
+   signatureNonce |-> item.envelope.signatureNonce]
+
+AsyncCandidateCommitRequestItemSemanticPayload(item) ==
+  [kind |-> item.kind,
+   source |-> item.source,
+   recipient |-> item.envelope.recipient,
+   height |-> item.envelope.height,
+   view |-> item.envelope.view,
+   subject |-> item.envelope.subject,
+   chunk |-> item.envelope.chunk,
+   nonce |-> item.envelope.nonce]
+
+AsyncRouteNeutralCandidateItem(item) ==
+  IF item = NoAsyncItem
+  THEN [kind |-> "NoItem",
+        source |-> 0,
+        payload |-> NoAsyncItem]
+  ELSE [kind |-> item.kind,
+        \* Aggregate certificate relays and recovery responses name one
+        \* semantic occurrence independently of their physical relay.
+        source |->
+          IF item.kind
+               \in {"PrepareQC", "CommitQC", "TimeoutCertificate",
+                    "CertifiedResponse", "CommitCertificateResponse"}
+          THEN AsyncUntrustedSource
+          ELSE item.source,
+        payload |->
+          CASE item.kind = "Proposal" ->
+                 [recipient |-> item.envelope.recipient,
+                  proposal |->
+                    AsyncCandidateProposalSemanticPayload(
+                      item.envelope.proposal)]
+            [] item.kind \in {"PrepareVote", "CommitVote"} ->
+                 [recipient |-> item.envelope.recipient,
+                  vote |->
+                    AsyncCandidateVoteSemanticPayload(
+                      item.envelope.vote)]
+            [] item.kind \in {"PrepareQC", "CommitQC"} ->
+                 [recipient |-> item.envelope.recipient,
+                  qc |->
+                    AsyncCandidateQcSemanticPayload(
+                      item.envelope.qc)]
+            [] item.kind = "TimeoutVote" ->
+                 [recipient |-> item.envelope.recipient,
+                  vote |->
+                    AsyncCandidateTimeoutVoteSemanticPayload(
+                      item.envelope.vote)]
+            [] item.kind = "TimeoutCertificate" ->
+                 [recipient |-> item.envelope.recipient,
+                  tc |->
+                    AsyncCandidateTcSemanticPayload(
+                      item.envelope.tc)]
+            [] item.kind = "CertifiedRequest" ->
+                 AsyncCandidateCertifiedRequestItemSemanticPayload(item)
+            [] item.kind = "CommitCertificateRequest" ->
+                 AsyncCandidateCommitRequestItemSemanticPayload(item)
+            [] item.kind = "CertifiedResponse" ->
+                 [recipient |-> item.envelope.recipient,
+                  height |-> item.envelope.height,
+                  view |-> item.envelope.view,
+                  subject |-> item.envelope.subject,
+                  requestHash |->
+                    AsyncCandidateCertifiedRequestHashSemanticPayload(
+                      item.envelope.requestHash),
+                  archiveServer |-> item.envelope.archiveServer,
+                  citedResponder |-> item.envelope.citedResponder,
+                  signatureOwner |-> item.envelope.signatureOwner]
+            [] item.kind = "CommitCertificateResponse" ->
+                 [recipient |-> item.envelope.recipient,
+                  request |->
+                    AsyncCandidateCommitRequestItemSemanticPayload(
+                      item.envelope.request),
+                  qc |->
+                    AsyncCandidateQcSemanticPayload(
+                      item.envelope.qc)]
+            [] OTHER -> item.envelope]
+
+AsyncRouteNeutralCandidateEvidence(evidence) ==
+  IF evidence = NoAsyncItem
+  THEN [kind |-> "NoEvidence", payload |-> NoAsyncItem]
+  ELSE IF evidence \in AsyncNetworkItems
+       THEN [kind |-> "NetworkItem",
+             payload |-> AsyncRouteNeutralCandidateItem(evidence)]
+       ELSE IF evidence \in ProposalRecordSet
+            THEN [kind |-> "Proposal",
+                  payload |->
+                    AsyncCandidateProposalSemanticPayload(evidence)]
+            ELSE IF evidence \in VoteRecordSet
+                 THEN [kind |-> "Vote",
+                       payload |->
+                         AsyncCandidateVoteSemanticPayload(evidence)]
+                 ELSE IF evidence \in TimeoutVoteRecordSet
+                      THEN [kind |-> "TimeoutVote",
+                            payload |->
+                              AsyncCandidateTimeoutVoteSemanticPayload(
+                                evidence)]
+                      ELSE IF evidence \in QcRecordSet
+                           THEN [kind |-> "QC",
+                                 payload |->
+                                   AsyncCandidateQcSemanticPayload(
+                                     evidence)]
+                           ELSE IF evidence \in TcRecordSet
+                                THEN [kind |-> "TC",
+                                      payload |->
+                                        AsyncCandidateTcSemanticPayload(
+                                          evidence)]
+                                ELSE [kind |-> "Body",
+                                      payload |-> evidence]
+
 \* Exact evidence survives queue/pool epochs independently of the delivery
 \* envelope.  Durable restart replay therefore names the authenticated Core
 \* record which caused the work, while ordinary ingress keeps the exact wire
@@ -706,10 +893,71 @@ AsyncEvidenceSet ==
     \cup ProposalRecordSet \cup VoteRecordSet \cup TimeoutVoteRecordSet
     \cup QcRecordSet \cup TcRecordSet \cup BodyRecordSet
 
-AsyncCandidateWithIdentity(
+AsyncRouteNeutralCandidateItemSet ==
+  {AsyncRouteNeutralCandidateItem(item):
+     item \in AsyncNetworkItems \cup {NoAsyncItem}}
+
+AsyncRouteNeutralCandidateEvidenceSet ==
+  {AsyncRouteNeutralCandidateEvidence(evidence):
+     evidence \in AsyncEvidenceSet}
+
+(***************************************************************************
+Immutable internal causal origin.
+
+The value is minted deterministically by the first local candidate admission.
+It freezes the normalized root packet/authority and the root
+target/context/height/leader/view/subject/phase coordinates.  A successor may
+rewrite its mutable work view, evidence, class, body stage, or consumer
+generation, but it must carry this record unchanged.  Transport retries
+therefore reproduce one origin, while a later unrelated packet cannot splice
+itself into the admitted lifecycle.  This record is scheduler-local ghost
+metadata: it is neither a wire field nor a Norito payload.
+***************************************************************************)
+AsyncCandidateCausalOrigin(
+    commandClass, kind, node, blockHeight, roundView, subject, item,
+    consumerContext, evidence,
+    bodyIdentity, manifestIdentity, commitmentIdentity) ==
+  [target |-> node,
+   context |-> consumerContext,
+   height |-> blockHeight,
+   leader |-> Leader(consumerContext, roundView),
+   view |-> roundView,
+   subject |-> subject,
+   phase |-> kind,
+   owner |-> node,
+   kind |-> "CausalOrigin",
+   payload |->
+     [class |-> commandClass,
+      workKind |-> kind,
+      item |-> AsyncRouteNeutralCandidateItem(item),
+      authority |-> AsyncRouteNeutralCandidateEvidence(evidence),
+      body |-> bodyIdentity,
+      manifest |-> manifestIdentity,
+      commitment |-> commitmentIdentity]]
+
+AsyncCandidateCausalOriginSet ==
+  [target: ValidatorIds,
+   context: ContextRecords,
+   height: Heights,
+   leader: ValidatorIds,
+   view: Views,
+   subject: SubjectOrNone,
+   phase: AsyncWorkKinds,
+   owner: ValidatorIds,
+   kind: {"CausalOrigin"},
+   payload:
+     [class: AsyncCommandClasses,
+      workKind: AsyncWorkKinds,
+      item: AsyncRouteNeutralCandidateItemSet,
+      authority: AsyncRouteNeutralCandidateEvidenceSet,
+      body: SubjectOrNone,
+      manifest: SubjectOrNone,
+      commitment: SubjectOrNone]]
+
+AsyncCandidateWithIdentityAndOrigin(
     commandClass, kind, node, blockHeight, roundView, subject, item,
     consumerContext, consumerView, consumerGeneration, evidence,
-    bodyIdentity, manifestIdentity, commitmentIdentity) ==
+    bodyIdentity, manifestIdentity, commitmentIdentity, causalOrigin) ==
   [class |-> commandClass, kind |-> kind, node |-> node,
    height |-> blockHeight, view |-> roundView, subject |-> subject,
    item |-> item, consumerContext |-> consumerContext,
@@ -717,7 +965,21 @@ AsyncCandidateWithIdentity(
    consumerGeneration |-> consumerGeneration,
    evidence |-> evidence, bodyIdentity |-> bodyIdentity,
    manifestIdentity |-> manifestIdentity,
-   commitmentIdentity |-> commitmentIdentity]
+   commitmentIdentity |-> commitmentIdentity,
+   causalOrigin |-> causalOrigin]
+
+AsyncCandidateWithIdentity(
+    commandClass, kind, node, blockHeight, roundView, subject, item,
+    consumerContext, consumerView, consumerGeneration, evidence,
+    bodyIdentity, manifestIdentity, commitmentIdentity) ==
+  AsyncCandidateWithIdentityAndOrigin(
+    commandClass, kind, node, blockHeight, roundView, subject, item,
+    consumerContext, consumerView, consumerGeneration, evidence,
+    bodyIdentity, manifestIdentity, commitmentIdentity,
+    AsyncCandidateCausalOrigin(
+      commandClass, kind, node, blockHeight, roundView, subject, item,
+      consumerContext, evidence,
+      bodyIdentity, manifestIdentity, commitmentIdentity))
 
 AsyncCandidate(commandClass, kind, node, blockHeight, roundView, subject,
                item) ==
@@ -727,13 +989,13 @@ AsyncCandidate(commandClass, kind, node, blockHeight, roundView, subject,
     subject, subject, subject)
 
 AsyncCandidateFrom(commandClass, kind, command) ==
-  AsyncCandidateWithIdentity(
+  AsyncCandidateWithIdentityAndOrigin(
     commandClass, kind, command.node, context.height, command.view,
     command.subject, NoAsyncItem,
     command.consumerContext, command.consumerView,
     command.consumerGeneration, command.evidence,
     command.bodyIdentity, command.manifestIdentity,
-    command.commitmentIdentity)
+    command.commitmentIdentity, command.causalOrigin)
 
 AsyncCandidateAtConsumer(
     commandClass, kind, node, blockHeight, roundView, subject, item,
@@ -743,6 +1005,15 @@ AsyncCandidateAtConsumer(
     commandClass, kind, node, blockHeight, roundView, subject, item,
     context, consumerView, consumerGeneration, evidence,
     bodyIdentity, manifestIdentity, commitmentIdentity)
+
+AsyncCandidateAtConsumerWithOrigin(
+    commandClass, kind, node, blockHeight, roundView, subject, item,
+    consumerView, consumerGeneration, evidence,
+    bodyIdentity, manifestIdentity, commitmentIdentity, causalOrigin) ==
+  AsyncCandidateWithIdentityAndOrigin(
+    commandClass, kind, node, blockHeight, roundView, subject, item,
+    context, consumerView, consumerGeneration, evidence,
+    bodyIdentity, manifestIdentity, commitmentIdentity, causalOrigin)
 
 AsyncConsumerEventTag(candidate) ==
   [context |-> candidate.consumerContext,
@@ -760,6 +1031,7 @@ ExactAsyncCandidateIdentity(candidate) ==
   [consumer |-> AsyncConsumerEventTag(candidate),
    payload |-> candidate.item,
    evidence |-> candidate.evidence,
+   causalOrigin |-> candidate.causalOrigin,
    work |-> AsyncWorkIdentity(candidate),
    body |-> candidate.bodyIdentity,
    manifest |-> candidate.manifestIdentity,
@@ -777,12 +1049,14 @@ AsyncCandidateSet ==
    consumerContext: ContextRecords, consumerView: Views,
    consumerGeneration: Generations, evidence: AsyncEvidenceSet,
    bodyIdentity: SubjectOrNone, manifestIdentity: SubjectOrNone,
-   commitmentIdentity: SubjectOrNone]
+   commitmentIdentity: SubjectOrNone,
+   causalOrigin: AsyncCandidateCausalOriginSet]
 
 AsyncCandidateDomain ==
   {"class", "kind", "node", "height", "view", "subject", "item",
    "consumerContext", "consumerView", "consumerGeneration",
-   "evidence", "bodyIdentity", "manifestIdentity", "commitmentIdentity"}
+   "evidence", "bodyIdentity", "manifestIdentity", "commitmentIdentity",
+   "causalOrigin"}
 
 NoAsyncCandidate ==
   AsyncCandidateWithIdentity(
@@ -980,6 +1254,12 @@ AsyncEvidenceTyped(evidence) ==
   \/ AsyncTcRecordTyped(evidence)
   \/ evidence \in BodyRecordSet
 
+AsyncCandidateCausalOriginTyped(origin) ==
+  /\ origin \in AsyncCandidateCausalOriginSet
+  /\ origin.owner = origin.target
+  /\ origin.leader = Leader(origin.context, origin.view)
+  /\ origin.payload.workKind = origin.phase
+
 AsyncCandidateTyped(candidate) ==
   /\ DOMAIN candidate = AsyncCandidateDomain
   /\ candidate.class \in AsyncCommandClasses
@@ -996,6 +1276,7 @@ AsyncCandidateTyped(candidate) ==
   /\ candidate.bodyIdentity \in SubjectOrNone
   /\ candidate.manifestIdentity \in SubjectOrNone
   /\ candidate.commitmentIdentity \in SubjectOrNone
+  /\ AsyncCandidateCausalOriginTyped(candidate.causalOrigin)
 
 (***************************************************************************
 The service identity below is the route-neutral lifecycle key for one logical
@@ -1032,189 +1313,10 @@ delivery through another relay consequently retains one service identity
 without weakening the signed request/body/certificate authority checked
 before service.
 ***************************************************************************)
-AsyncCandidateQcSemanticPayload(qc) ==
-  CertificateRefOf(qc)
-
-AsyncCandidatePrepareQcSemanticPayload(qc) ==
-  IF qc = NoPrepareQC
-  THEN NoPrepareQC
-  ELSE AsyncCandidateQcSemanticPayload(qc)
-
-AsyncCandidateVoteSemanticPayload(vote) ==
-  [context |-> vote.context,
-   height |-> vote.height,
-   view |-> vote.view,
-   phase |-> vote.phase,
-   subject |-> vote.subject,
-   signer |-> vote.signer]
-
-AsyncCandidateTimeoutVoteSemanticPayload(vote) ==
-  [context |-> vote.context,
-   height |-> vote.height,
-   view |-> vote.view,
-   signer |-> vote.signer,
-   highestPrepareQc |->
-     AsyncCandidatePrepareQcSemanticPayload(vote.highestPrepareQc),
-   highRank |-> vote.highRank,
-   highSubject |-> vote.highSubject]
-
-AsyncCandidateTcSemanticPayload(tc) ==
-  IF tc = NoTimeoutCertificate
-  THEN NoTimeoutCertificate
-  ELSE [context |-> tc.context,
-        height |-> tc.height,
-        view |-> tc.view,
-        highestPrepareQc |->
-          AsyncCandidatePrepareQcSemanticPayload(
-            tc.highestPrepareQc)]
-
-AsyncCandidateProposalSemanticPayload(proposal) ==
-  [context |-> proposal.context,
-   height |-> proposal.height,
-   view |-> proposal.view,
-   subject |-> proposal.subject,
-   proposer |-> proposal.proposer,
-   timeoutCertificate |->
-     AsyncCandidateTcSemanticPayload(proposal.timeoutCertificate),
-   highestPrepareQc |->
-     AsyncCandidatePrepareQcSemanticPayload(
-       proposal.highestPrepareQc),
-   justifyRank |-> proposal.justifyRank,
-   justifySubject |-> proposal.justifySubject]
-
-AsyncCandidateCertifiedRequestHashSemanticPayload(requestHash) ==
-  LET signed == requestHash.exactSignedRequest
-      preimage == signed.preimage
-      signature == signed.signature
-  IN [round |-> preimage.round,
-      subject |-> preimage.subject,
-      certificate |->
-        AsyncCandidateQcSemanticPayload(preimage.certificate),
-      requester |-> preimage.requester,
-      signer |-> signature.signer,
-      signatureNonce |-> signature.nonce]
-
-AsyncCandidateCertifiedRequestItemSemanticPayload(item) ==
-  [recipient |-> item.envelope.recipient,
-   height |-> item.envelope.height,
-   view |-> item.envelope.view,
-   subject |-> item.envelope.subject,
-   requester |-> item.envelope.requester,
-   certificate |->
-     AsyncCandidateQcSemanticPayload(
-       item.envelope.certificate),
-   signatureNonce |-> item.envelope.signatureNonce]
-
-AsyncCandidateCommitRequestItemSemanticPayload(item) ==
-  [kind |-> item.kind,
-   source |-> item.source,
-   recipient |-> item.envelope.recipient,
-   height |-> item.envelope.height,
-   view |-> item.envelope.view,
-   subject |-> item.envelope.subject,
-   chunk |-> item.envelope.chunk,
-   nonce |-> item.envelope.nonce]
-
-AsyncRouteNeutralCandidateItem(item) ==
-  IF item = NoAsyncItem
-  THEN [kind |-> "NoItem",
-        source |-> 0,
-        payload |-> NoAsyncItem]
-  ELSE [kind |-> item.kind,
-        \* Aggregate certificate relays and recovery responses name one
-        \* semantic occurrence independently of their physical relay.
-        source |->
-          IF item.kind
-               \in {"PrepareQC", "CommitQC", "TimeoutCertificate",
-                    "CertifiedResponse", "CommitCertificateResponse"}
-          THEN AsyncUntrustedSource
-          ELSE item.source,
-        payload |->
-          CASE item.kind = "Proposal" ->
-                 [recipient |-> item.envelope.recipient,
-                  proposal |->
-                    AsyncCandidateProposalSemanticPayload(
-                      item.envelope.proposal)]
-            [] item.kind \in {"PrepareVote", "CommitVote"} ->
-                 [recipient |-> item.envelope.recipient,
-                  vote |->
-                    AsyncCandidateVoteSemanticPayload(
-                      item.envelope.vote)]
-            [] item.kind \in {"PrepareQC", "CommitQC"} ->
-                 [recipient |-> item.envelope.recipient,
-                  qc |->
-                    AsyncCandidateQcSemanticPayload(
-                      item.envelope.qc)]
-            [] item.kind = "TimeoutVote" ->
-                 [recipient |-> item.envelope.recipient,
-                  vote |->
-                    AsyncCandidateTimeoutVoteSemanticPayload(
-                      item.envelope.vote)]
-            [] item.kind = "TimeoutCertificate" ->
-                 [recipient |-> item.envelope.recipient,
-                  tc |->
-                    AsyncCandidateTcSemanticPayload(
-                      item.envelope.tc)]
-            [] item.kind = "CertifiedRequest" ->
-                 AsyncCandidateCertifiedRequestItemSemanticPayload(item)
-            [] item.kind = "CommitCertificateRequest" ->
-                 AsyncCandidateCommitRequestItemSemanticPayload(item)
-            [] item.kind = "CertifiedResponse" ->
-                 [recipient |-> item.envelope.recipient,
-                  height |-> item.envelope.height,
-                  view |-> item.envelope.view,
-                  subject |-> item.envelope.subject,
-                  requestHash |->
-                    AsyncCandidateCertifiedRequestHashSemanticPayload(
-                      item.envelope.requestHash),
-                  archiveServer |-> item.envelope.archiveServer,
-                  citedResponder |-> item.envelope.citedResponder,
-                  signatureOwner |-> item.envelope.signatureOwner]
-            [] item.kind = "CommitCertificateResponse" ->
-                 [recipient |-> item.envelope.recipient,
-                  request |->
-                    AsyncCandidateCommitRequestItemSemanticPayload(
-                      item.envelope.request),
-                  qc |->
-                    AsyncCandidateQcSemanticPayload(
-                      item.envelope.qc)]
-            [] OTHER -> item.envelope]
-
-AsyncRouteNeutralCandidateEvidence(evidence) ==
-  IF evidence = NoAsyncItem
-  THEN [kind |-> "NoEvidence", payload |-> NoAsyncItem]
-  ELSE IF AsyncItemTyped(evidence)
-       THEN [kind |-> "NetworkItem",
-             payload |-> AsyncRouteNeutralCandidateItem(evidence)]
-       ELSE IF evidence \in ProposalRecordSet
-            THEN [kind |-> "Proposal",
-                  payload |->
-                    AsyncCandidateProposalSemanticPayload(evidence)]
-            ELSE IF evidence \in VoteRecordSet
-                 THEN [kind |-> "Vote",
-                       payload |->
-                         AsyncCandidateVoteSemanticPayload(evidence)]
-                 ELSE IF evidence \in TimeoutVoteRecordSet
-                      THEN [kind |-> "TimeoutVote",
-                            payload |->
-                              AsyncCandidateTimeoutVoteSemanticPayload(
-                                evidence)]
-                      ELSE IF evidence \in QcRecordSet
-                           THEN [kind |-> "QC",
-                                 payload |->
-                                   AsyncCandidateQcSemanticPayload(
-                                     evidence)]
-                           ELSE IF evidence \in TcRecordSet
-                                THEN [kind |-> "TC",
-                                      payload |->
-                                        AsyncCandidateTcSemanticPayload(
-                                          evidence)]
-                                ELSE [kind |-> "Body",
-                                      payload |-> evidence]
-
 AsyncCandidateServicePayload(candidate) ==
   [class |-> candidate.class,
    workKind |-> candidate.kind,
+   causalOrigin |-> candidate.causalOrigin,
    item |-> AsyncRouteNeutralCandidateItem(candidate.item),
    evidence |-> AsyncRouteNeutralCandidateEvidence(candidate.evidence),
    body |-> candidate.bodyIdentity,
@@ -2757,13 +2859,13 @@ CausalCandidate(commandClass, kind, command) ==
   AsyncCandidateFrom(commandClass, kind, command)
 
 CausalCandidateWithEvidence(commandClass, kind, command, evidence) ==
-  AsyncCandidateWithIdentity(
+  AsyncCandidateWithIdentityAndOrigin(
     commandClass, kind, command.node, context.height, command.view,
     command.subject, NoAsyncItem,
     command.consumerContext, command.consumerView,
     command.consumerGeneration, evidence,
     command.bodyIdentity, command.manifestIdentity,
-    command.commitmentIdentity)
+    command.commitmentIdentity, command.causalOrigin)
 
 RetainedBodyRebindCandidate(command) ==
   CausalCandidate("Completion", "RebindRetainedBody", command)
@@ -2796,7 +2898,7 @@ InstallCommitSignRequests(command) ==
 InstallCommitSignSuccessor(command) ==
   LET signRequest ==
         CHOOSE request \in InstallCommitSignRequests(command): TRUE
-  IN AsyncCandidateAtConsumer(
+  IN AsyncCandidateAtConsumerWithOrigin(
        "Completion", "SignVote", signRequest.node,
        signRequest.vote.context.height, signRequest.vote.view,
        signRequest.vote.subject, NoAsyncItem, command.view + 1,
@@ -2804,7 +2906,8 @@ InstallCommitSignSuccessor(command) ==
        THEN generation[signRequest.node] + 1
        ELSE generation[signRequest.node],
        signRequest.vote, signRequest.vote.subject,
-       signRequest.vote.subject, signRequest.vote.subject)
+       signRequest.vote.subject, signRequest.vote.subject,
+       command.causalOrigin)
 
 (***************************************************************************
 Production retains the full `durable.locked()` PrepareQC.  The TC and durable
@@ -2824,13 +2927,13 @@ InstallLockedFetchSuccessor(command) ==
   LET qc ==
         ResultingInstallLockPrepareQc(
           command.node, InstallTcFromEvidence(command))
-  IN AsyncCandidateAtConsumer(
+  IN AsyncCandidateAtConsumerWithOrigin(
        "Completion", "FetchBody", command.node, qc.context.height,
        qc.view, qc.subject, NoAsyncItem, command.view + 1,
        IF generation[command.node] < MaxGeneration
        THEN generation[command.node] + 1
        ELSE generation[command.node],
-       qc, qc.subject, qc.subject, qc.subject)
+       qc, qc.subject, qc.subject, qc.subject, command.causalOrigin)
 
 InstallLockedFetchSuccessors(command) ==
   IF InstallResultingLockedPrepareQCs(command) = {}
@@ -2861,13 +2964,13 @@ InstallProposalSubject(command) ==
 
 InstallProposalSuccessor(command) ==
   LET subject == InstallProposalSubject(command)
-  IN AsyncCandidateAtConsumer(
+  IN AsyncCandidateAtConsumerWithOrigin(
        "Normal", "AssembleBody", command.node, context.height,
        command.view + 1, subject, NoAsyncItem, command.view + 1,
        IF generation[command.node] < MaxGeneration
        THEN generation[command.node] + 1
        ELSE generation[command.node],
-       command.evidence, subject, subject, subject)
+       command.evidence, subject, subject, subject, command.causalOrigin)
 
 (***************************************************************************
 TC acknowledgement clears production `body_work`, emits exact locked-body
@@ -2952,11 +3055,11 @@ PersistDecisionRecoveryKind(command) ==
 PersistDecisionRecoverySuccessor(command) ==
   LET request == PersistDecisionRequest(command)
       qc == request.qc
-  IN AsyncCandidateAtConsumer(
+  IN AsyncCandidateAtConsumerWithOrigin(
        "Completion", PersistDecisionRecoveryKind(command),
        request.node, qc.context.height, qc.view, qc.subject,
        NoAsyncItem, command.consumerView, command.consumerGeneration, qc,
-       qc.subject, qc.subject, qc.subject)
+       qc.subject, qc.subject, qc.subject, command.causalOrigin)
 
 (***************************************************************************
 Closed inventory of reducer parents which can emit a causal successor.
@@ -3094,6 +3197,27 @@ CommandSuccessors(command) ==
     [] command.kind = "PersistInstallTC" ->
          InstallCommandSuccessors(command)
     [] OTHER -> <<>>
+
+(***************************************************************************
+Closed constructor audit for immutable causal lineage.  Every causal child,
+including the four constructors which deliberately replace evidence, view,
+generation, or body stage, retains the parent's first-admission origin.
+Keeping this theorem adjacent to the complete CASE inventory lets the source
+checker reject any new successor branch which omits the internal metadata.
+***************************************************************************)
+THEOREM CommandSuccessorsRetainCausalOrigin ==
+  \A command:
+    \A successor \in SequenceSet(CommandSuccessors(command)):
+      successor.causalOrigin = command.causalOrigin
+BY SMTT(60)
+   DEF CommandSuccessors, CausalCandidate,
+       CausalCandidateWithEvidence, RetainedBodyRebindCandidate,
+       PersistDecisionRecoverySuccessor, InstallCommandSuccessors,
+       InstallLockedFetchSuccessors, InstallLockedFetchSuccessor,
+       InstallCommitSignSuccessors, InstallCommitSignSuccessor,
+       InstallProposalSuccessor, AsyncCandidateFrom,
+       AsyncCandidateAtConsumerWithOrigin,
+       AsyncCandidateWithIdentityAndOrigin, SequenceSet
 
 (***************************************************************************
 Reducer effects preserve their declared order, but an exact successor which
@@ -3858,12 +3982,18 @@ ReseedExactHighestPrepareControl(retained, node, tc) ==
 
 (***************************************************************************
 InstallTimeout clears volatile local control, except that a strict same-round
-upgrade keeps the exact current TimeoutVote.  It then restores the complete
-durable highest PrepareQC object, replacing any equal-view/different-evidence
-occurrence rather than reconstructing it from rank and subject.
+upgrade keeps the exact current TimeoutVote.  It atomically replaces the
+source's retained TimeoutCertificate class with the exact newly installed TC
+batch: a same-view TC may carry different authenticated evidence, so the
+generic view-only `RememberedControl` replacement rule is insufficient here.
+It then restores the complete durable highest PrepareQC object, replacing any
+equal-view/different-evidence occurrence rather than reconstructing it from
+rank and subject.
 ***************************************************************************)
 InstalledControlAfterTC(retained, node, tc, items) ==
-  LET remembered == RememberedControl(retained, items)
+  LET withoutOwnTc ==
+        retained \ RetainedClassItems(retained, node, "TimeoutCertificate")
+      remembered == RememberedControl(withoutOwnTc, items)
       installed ==
         {item \in remembered:
           item.source # node
@@ -7352,7 +7482,8 @@ restart-scoped: its durable intent must reissue a new-generation callback, so
 it is never eligible for a terminal replay tombstone.
 ***************************************************************************)
 AsyncCandidateRestartReplayTombstoned(candidate) ==
-  AsyncCandidateTerminalTombstoned(candidate)
+  /\ candidate.kind \notin AsyncRestartScopedCandidateServiceKinds
+  /\ AsyncCandidateTerminalTombstoned(candidate)
 
 FreshRestartCandidateSequence(replay) ==
   CASE Len(replay) = 0 -> <<>>
@@ -7809,8 +7940,7 @@ RecoveryCoreReplay(node, candidate) ==
 
 PreGstResponsiveReplay ==
   LET node == asyncRecoveryNode
-      signatures ==
-        FreshRestartCandidateSequence(RestartSignatureReplay(node))
+      signatures == RestartSignatureReplay(node)
       replay == FreshRestartCandidateSequence(RestartReplay(node))
   IN /\ ~gst
      /\ asyncRecoveryPhase = "ReplayRequired"
@@ -8776,6 +8906,7 @@ THEOREM AsyncCandidateServiceRouteNeutralResponseRetryIsStable ==
          [left.item EXCEPT !.source = right.item.source]
     /\ AsyncRouteNeutralCandidateEvidence(left.evidence)
          = AsyncRouteNeutralCandidateEvidence(right.evidence)
+    /\ left.causalOrigin = right.causalOrigin
     /\ left.bodyIdentity = right.bodyIdentity
     /\ left.manifestIdentity = right.manifestIdentity
     /\ left.commitmentIdentity = right.commitmentIdentity
@@ -9038,6 +9169,12 @@ THEOREM AsyncCandidateTransientMarkerDoesNotSuppressRestartReplay ==
     /\ AsyncCandidateTransientServiceMarked(candidate)
     /\ ~AsyncCandidateTerminalTombstoned(candidate)
     => ~AsyncCandidateRestartReplayTombstoned(candidate)
+BY DEF AsyncCandidateRestartReplayTombstoned
+
+THEOREM AsyncRestartScopedCandidateIsNeverReplayTombstoned ==
+  \A candidate \in AsyncCandidateSet:
+    candidate.kind \in AsyncRestartScopedCandidateServiceKinds
+      => ~AsyncCandidateRestartReplayTombstoned(candidate)
 BY DEF AsyncCandidateRestartReplayTombstoned
 
 THEOREM AsyncCandidateResponsiveRestartPermitsNonterminalReconstruction ==

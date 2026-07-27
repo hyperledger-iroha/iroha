@@ -7256,7 +7256,7 @@ mod fault_injection_tests {
             .expect("valid authority"),
         });
 
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
             entrypoint_hash: entry.hash(),
@@ -7319,7 +7319,7 @@ mod fault_injection_tests {
             },
         });
 
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
             entrypoint_hash: entry.hash(),
@@ -7469,7 +7469,7 @@ mod tests {
                 proof: vec![0x44],
             },
         });
-        let result = TransactionResult(Ok(crate::trigger::DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(crate::trigger::DataTriggerSequence::default()));
         CommittedTransaction {
             block_hash: zero_hash(),
             entrypoint_hash: entrypoint.hash(),

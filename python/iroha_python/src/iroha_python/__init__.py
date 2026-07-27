@@ -44,6 +44,7 @@ from .sorafs_replication import (
     decode_replication_order_instruction,
 )
 from .client import (
+    ContractCallIntent,
     ResolvedToriiClientConfig,
     ToriiClient,
     TransactionStatusError,
@@ -331,6 +332,11 @@ from .repo import (
     RepoGovernance,
 )
 from .settlement import (
+    BatchMode,
+    DeadlineCondition,
+    EscrowValue,
+    OracleCondition,
+    Payment,
     SettlementAtomicity,
     SettlementExecutionOrder,
     SettlementLeg,
@@ -545,6 +551,7 @@ _BASE_EXPORTS = [
     "AccountAddress",
     "AccountAddressError",
     "ToriiClient",
+    "ContractCallIntent",
     "create_torii_client",
     "TransactionStatusError",
     "DataModelMismatchError",
@@ -575,6 +582,11 @@ _BASE_EXPORTS = [
     "SettlementPlan",
     "SettlementExecutionOrder",
     "SettlementAtomicity",
+    "BatchMode",
+    "Payment",
+    "EscrowValue",
+    "OracleCondition",
+    "DeadlineCondition",
     "RepoAgreementRecord",
     "RepoAgreementListPage",
     "PipelineDagSnapshot",

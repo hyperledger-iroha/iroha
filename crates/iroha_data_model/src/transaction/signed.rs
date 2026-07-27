@@ -35,6 +35,7 @@ use crate::{
     ChainId,
     account::{AccountController, AccountId, MultisigPolicy},
     asset::AssetDefinitionId,
+    events::data::prelude::AssetBatchTransferOutcome,
     isi::{
         CustomInstruction, ExecuteTrigger, InstructionBox, OpaqueInstruction,
         privacy::SubmitPrivacyProofV1,
@@ -359,23 +360,13 @@ mod model {
 
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Display,
-        Decode,
-        Encode,
-        From,
-        Deref,
-        IntoSchema,
-    )]
-    #[display("TransactionResult")]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    pub struct TransactionResult(pub TransactionResultInner);
+    pub struct TransactionResult(
+        pub TransactionResultInner,
+        /// Durable per-leg receipts emitted by an independently settled native transfer batch.
+        pub Vec<AssetBatchTransferOutcome>,
+    );
 
     /// The outcome of processing a transaction:
     /// either a sequence of data triggers, or a rejection reason.
@@ -1899,6 +1890,10 @@ impl norito::json::JsonSerialize for TransactionResult {
                 norito::json::JsonSerialize::json_serialize(reason, out);
             }
         }
+        out.push(',');
+        norito::json::write_json_string("batch_transfer_outcomes", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.1, out);
         out.push('}');
     }
 }
@@ -1910,22 +1905,56 @@ impl norito::json::JsonDeserialize for TransactionResult {
     ) -> Result<Self, norito::json::Error> {
         parser.skip_ws();
         parser.consume_char(b'{')?;
-        parser.skip_ws();
-        let key = parser.parse_key()?;
-        let inner = match key.as_str() {
-            "Ok" => TransactionResultInner::Ok(DataTriggerSequence::json_deserialize(parser)?),
-            "Err" => TransactionResultInner::Err(
-                error::TransactionRejectionReason::json_deserialize(parser)?,
-            ),
-            other => {
-                return Err(norito::json::Error::UnknownField {
-                    field: other.to_owned(),
-                });
+        let mut inner = None;
+        let mut batch_transfer_outcomes = None;
+        loop {
+            parser.skip_ws();
+            if parser.try_consume_char(b'}')? {
+                break;
             }
-        };
-        parser.skip_ws();
-        parser.consume_char(b'}')?;
-        Ok(TransactionResult(inner))
+
+            let key = parser.parse_key()?;
+            match key.as_str() {
+                "Ok" => {
+                    if inner.is_some() {
+                        return Err(norito::json::Error::duplicate_field("Ok"));
+                    }
+                    inner = Some(TransactionResultInner::Ok(
+                        DataTriggerSequence::json_deserialize(parser)?,
+                    ));
+                }
+                "Err" => {
+                    if inner.is_some() {
+                        return Err(norito::json::Error::duplicate_field("Err"));
+                    }
+                    inner = Some(TransactionResultInner::Err(
+                        error::TransactionRejectionReason::json_deserialize(parser)?,
+                    ));
+                }
+                "batch_transfer_outcomes" => {
+                    if batch_transfer_outcomes.is_some() {
+                        return Err(norito::json::Error::duplicate_field(
+                            "batch_transfer_outcomes",
+                        ));
+                    }
+                    batch_transfer_outcomes =
+                        Some(Vec::<AssetBatchTransferOutcome>::json_deserialize(parser)?);
+                }
+                other => return Err(norito::json::Error::unknown_field(other.to_owned())),
+            }
+
+            parser.skip_ws();
+            if parser.try_consume_char(b',')? {
+                continue;
+            }
+            parser.consume_char(b'}')?;
+            break;
+        }
+
+        Ok(TransactionResult(
+            inner.ok_or_else(|| norito::json::Error::missing_field("Ok or Err"))?,
+            batch_transfer_outcomes.unwrap_or_default(),
+        ))
     }
 }
 
@@ -4582,7 +4611,7 @@ mod tests {
     #[test]
     fn transaction_result_hash_matches_inner() {
         let ok_inner = DataTriggerSequence::default();
-        let result_ok = TransactionResult(Ok(ok_inner.clone()));
+        let result_ok = TransactionResult::new(Ok(ok_inner.clone()));
         assert_eq!(HashOf::new(&result_ok), result_ok.hash());
         assert_eq!(
             result_ok.hash(),
@@ -4594,7 +4623,7 @@ mod tests {
                 reason: "limit exceeded".into(),
             });
         let err_inner: TransactionResultInner = Err(err_reason.clone());
-        let result_err = TransactionResult(err_inner.clone());
+        let result_err = TransactionResult::new(err_inner.clone());
         assert_eq!(HashOf::new(&result_err), result_err.hash());
         assert_eq!(
             result_err.hash(),
@@ -4709,7 +4738,7 @@ mod tests {
     #[cfg(feature = "json")]
     #[test]
     fn transaction_result_json_roundtrip() {
-        let ok_result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let ok_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let json = norito::json::to_json(&ok_result).expect("serialize ok result");
         let decoded: TransactionResult =
             norito::json::from_str(&json).expect("deserialize ok result");
@@ -4719,7 +4748,7 @@ mod tests {
             error::TransactionRejectionReason::LimitCheck(error::TransactionLimitError {
                 reason: "limit exceeded".into(),
             });
-        let err_result = TransactionResult(Err(err_reason));
+        let err_result = TransactionResult::new(Err(err_reason));
         let json = norito::json::to_json(&err_result).expect("serialize err result");
         let decoded: TransactionResult =
             norito::json::from_str(&json).expect("deserialize err result");
@@ -5034,6 +5063,26 @@ impl TransactionEntrypoint {
 }
 
 impl TransactionResult {
+    /// Construct a transaction result without independent-batch receipts.
+    #[inline]
+    #[must_use]
+    pub fn new(inner: TransactionResultInner) -> Self {
+        Self(inner, Vec::new())
+    }
+
+    /// Durable per-leg receipts emitted by an independently settled native transfer batch.
+    #[inline]
+    #[must_use]
+    pub fn batch_transfer_outcomes(&self) -> &[AssetBatchTransferOutcome] {
+        &self.1
+    }
+
+    /// Replace the durable per-leg receipts committed by this transaction-result leaf.
+    #[inline]
+    pub fn set_batch_transfer_outcomes(&mut self, outcomes: Vec<AssetBatchTransferOutcome>) {
+        self.1 = outcomes;
+    }
+
     /// Hash for this transaction result.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
@@ -5043,7 +5092,29 @@ impl TransactionResult {
     /// Hash for this transaction result computed from its inner representation.
     #[inline]
     pub fn hash_from_inner(inner: &TransactionResultInner) -> HashOf<Self> {
-        HashOf::new(&TransactionResult(inner.clone()))
+        HashOf::new(&TransactionResult::new(inner.clone()))
+    }
+}
+
+impl From<TransactionResultInner> for TransactionResult {
+    #[inline]
+    fn from(inner: TransactionResultInner) -> Self {
+        Self::new(inner)
+    }
+}
+
+impl core::ops::Deref for TransactionResult {
+    type Target = TransactionResultInner;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::fmt::Display for TransactionResult {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("TransactionResult")
     }
 }
 

@@ -96,7 +96,8 @@ use iroha_core::{
     sumeragi::{
         GenesisWithPubKey, InboundBlockMessage, LaneRelayMessage,
         ProductionTwoStageRelayRetryTraceProjection, SumeragiHandle, SumeragiIngressDisposition,
-        SumeragiStartArgs, VotingBlock, filter_validators_from_trusted, network_topology::Topology,
+        SumeragiStartArgs, V2StartupReplayInventoryGuard, VotingBlock,
+        filter_validators_from_trusted, network_topology::Topology,
         check_production_two_stage_relay_retry_transition,
     },
 };
@@ -8521,6 +8522,10 @@ impl Iroha {
         // Kura boundary have already been authenticated.
         let mut v2_replay_plan = iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref())
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        // Planning installs O(H) metadata used to avoid another historical
+        // finality scan. Own its cleanup across every remaining startup error
+        // and transfer that ownership to Sumeragi recovery below.
+        let startup_replay_inventory_guard = V2StartupReplayInventoryGuard::new(Arc::clone(&kura));
         v2_replay_plan
             .validate_restored_state_height(state.committed_height())
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
@@ -9666,6 +9671,8 @@ impl Iroha {
             state: state.clone(),
             queue: queue.clone(),
             kura: kura.clone(),
+            startup_replay_plan: v2_replay_plan,
+            startup_replay_inventory_guard,
             network: network.clone(),
             max_frame_bytes: config.network.max_frame_bytes,
             max_frame_bytes_consensus: config.network.max_frame_bytes_consensus,

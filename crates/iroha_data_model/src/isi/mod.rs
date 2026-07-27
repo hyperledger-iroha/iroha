@@ -235,6 +235,11 @@ impl From<crate::isi::privacy::PublishPrivacyRootV1> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::BootstrapPrivacyOrchardPoolV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::BootstrapPrivacyOrchardPoolV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1> for InstructionBox {
     fn from(i: crate::isi::privacy::BootstrapPrivacyPgcAccountsV1) -> Self {
         InstructionBox(Box::new(i))
@@ -959,6 +964,21 @@ impl From<crate::isi::escrow::ResolveEscrowDispute> for InstructionBox {
 }
 impl From<crate::isi::escrow::OpenAssetLock> for InstructionBox {
     fn from(i: crate::isi::escrow::OpenAssetLock) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::OpenConditionalEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenConditionalEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::AttestEscrowCondition> for InstructionBox {
+    fn from(i: crate::isi::escrow::AttestEscrowCondition) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ExpireConditionalEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::ExpireConditionalEscrow) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -3592,10 +3612,47 @@ pub mod error {
             InvalidParameter(#[source] InvalidParameterError),
             /// Account admission rejected
             AccountAdmission(#[source] AccountAdmissionError),
+            /// Asset transfer admission rejected
+            AssetTransferAdmission(#[source] AssetTransferAdmissionError),
             /// Iroha invariant violation: {0}
             ///
             /// i.e. you can't burn last key
             InvariantViolation(Box<str>),
+        }
+
+        /// Typed asset-transfer policy failure.
+        ///
+        /// The variant is the stable machine classification. Human-readable
+        /// detail is deliberately carried separately so receipt codes never
+        /// depend on matching display text.
+        #[derive(
+            Debug,
+            displaydoc::Display,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Decode,
+            Encode,
+            IntoSchema,
+        )]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+        #[derive(thiserror::Error)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub enum AssetTransferAdmissionError {
+            /// HoldingLimitExceeded: {0}
+            HoldingLimitExceeded(Box<str>),
+            /// Outbound transfer is frozen: {0}
+            Frozen(Box<str>),
+            /// Account is blacklisted for outbound transfer: {0}
+            Blacklisted(Box<str>),
+            /// Transfer policy rejected the operation: {0}
+            PolicyRejected(Box<str>),
         }
 
         /// Quota scope used by [`AccountAdmissionError::QuotaExceeded`].
@@ -4143,10 +4200,11 @@ pub mod prelude {
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },
         escrow::{
-            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
-            CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
-            MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent, OpenAnonymousAssetEscrow,
-            OpenAnonymousEscrowDispute, OpenAssetEscrow, OpenAssetLock, OpenEscrowDispute,
+            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, AttestEscrowCondition,
+            CancelAnonymousAssetEscrow, CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock,
+            ExpireAssetLock, ExpireConditionalEscrow, MarkAnonymousEscrowPaymentSent,
+            MarkEscrowPaymentSent, OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute,
+            OpenAssetEscrow, OpenAssetLock, OpenConditionalEscrow, OpenEscrowDispute,
             ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
             ResolveEscrowDispute,
         },
@@ -4156,7 +4214,8 @@ pub mod prelude {
         ministry::SubmitAgendaProposal,
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         privacy::{
-            BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
+            BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
+            BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
             RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
             RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509TrustAnchorV1,
             RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,

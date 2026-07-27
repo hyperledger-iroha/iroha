@@ -352,6 +352,7 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2ExactServeRestartTombstoneMutation.tla",
     "SumeragiV2ExactResponseClaimLifecycleMutation.tla",
     "SumeragiV2ExactServeFrozenPredecessorMutation.tla",
+    "SumeragiV2ExactInstalledTcRetentionMutation.tla",
     "SumeragiV2AdequateLeaderWireTombstoneMutation.tla",
     "SumeragiV2AdequateLeaderCandidateTombstoneMutation.tla",
     "exact_ingress_ticket_priority_fixed.cfg",
@@ -365,6 +366,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "exact_response_claim_restart_reopen_bug.cfg",
     "exact_serve_frozen_predecessor_fixed.cfg",
     "exact_serve_frozen_predecessor_churn_bug.cfg",
+    "exact_installed_tc_retention_fixed.cfg",
+    "exact_installed_tc_view_only_bug.cfg",
     "adequate_leader_wire_tombstone_fixed.cfg",
     "adequate_leader_wire_slot_cardinality_bug.cfg",
     "adequate_leader_wire_same_view_replacement_bug.cfg",
@@ -408,6 +411,9 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2ExactServeFrozenPredecessorMutation.tla": (
         "9d20b3f129e9bf3ad2b9cd39eabbf2f4200f411aca64d548c042081e4570cc1a"
     ),
+    "SumeragiV2ExactInstalledTcRetentionMutation.tla": (
+        "6a67f962a092c40159e0be2e8a07f47661aecbfe05c9ba2827e55a7e93394389"
+    ),
     "SumeragiV2AdequateLeaderWireTombstoneMutation.tla": (
         "a27d2b99a3841b6f14532adaa6f10065cb946d5f5d8cf86da9f503d46a2c186d"
     ),
@@ -446,6 +452,12 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     ),
     "exact_serve_frozen_predecessor_churn_bug.cfg": (
         "b1b8479fbd63354d3ace4ad65e263bbac880f0b08cacbfb65c6706042511a6a5"
+    ),
+    "exact_installed_tc_retention_fixed.cfg": (
+        "9d3cca98987fac04c2ac299eb7c06a290ec026f64438fd59151e0047a37641c2"
+    ),
+    "exact_installed_tc_view_only_bug.cfg": (
+        "b1b58094e561aa81637353b513087b0381855c8c510f96a22bab7fd63aadaf5d"
     ),
     "adequate_leader_wire_tombstone_fixed.cfg": (
         "6d7f2982a9b768b14d7ebeedeaae736660b84da0f1118b0752f860123556d42d"
@@ -508,7 +520,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "cb537e05878351e50108268cb8a462f1856e66c931f2dadc4d306da89afcca63"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "85693682c572d6331d1892ade36670a2726c2b5d393a5a0e7faa86fba6f0e100"
+        "51b2b2e4957f380d623c327c1689ffdbccd699f3c46d1a165fbd2e81c9be6458"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -516,12 +528,14 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "SumeragiV2ExactServeRestartTombstone*.tla",
     "SumeragiV2ExactResponseClaimLifecycle*.tla",
     "SumeragiV2ExactServeFrozenPredecessor*.tla",
+    "SumeragiV2ExactInstalledTcRetention*.tla",
     "SumeragiV2AdequateLeaderWireTombstone*.tla",
     "SumeragiV2AdequateLeaderCandidateTombstone*.tla",
     "exact_ingress_ticket_*.cfg",
     "exact_serve_restart_tombstone_*.cfg",
     "exact_response_claim_*.cfg",
     "exact_serve_frozen_predecessor_*.cfg",
+    "exact_installed_tc_*.cfg",
     "adequate_leader_wire_*.cfg",
     "adequate_leader_candidate_*.cfg",
 )
@@ -25809,19 +25823,19 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"currentGeneration + 1 ELSE currentGeneration"
               ),
               "FrozenInstallProposalSuccessor": (
-                r'AsyncCandidateWithIdentity( "Normal", "AssembleBody", '
+                r'AsyncCandidateWithIdentityAndOrigin( "Normal", "AssembleBody", '
                 r"command.node, installedContext.height, command.view + 1, "
                 r"subject, NoAsyncItem, installedContext, command.view + 1, "
                 r"NextCandidateGeneration(priorGeneration), command.evidence, "
-                r"subject, subject, subject)"
+                r"subject, subject, subject, command.causalOrigin)"
               ),
               "FrozenNormalBeginPrepareCandidate": (
-                r'AsyncCandidateWithIdentity( "Normal", "BeginPrepare", '
+                r'AsyncCandidateWithIdentityAndOrigin( "Normal", "BeginPrepare", '
                 r"parent.node, blockHeight, parent.view, parent.subject, "
                 r"NoAsyncItem, parent.consumerContext, parent.consumerView, "
                 r"parent.consumerGeneration, parent.evidence, "
                 r"parent.bodyIdentity, parent.manifestIdentity, "
-                r"parent.commitmentIdentity)"
+                r"parent.commitmentIdentity, parent.causalOrigin)"
               ),
               "NormalProposalPrepareNoItemCandidate": (
                 r'/\ candidate.item = NoAsyncItem '
@@ -28532,11 +28546,12 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
             ),
             "PersistDecisionRecoverySuccessor": (
                 "LET request == PersistDecisionRequest(command) "
-                "qc == request.qc IN AsyncCandidateAtConsumer( "
+                "qc == request.qc IN AsyncCandidateAtConsumerWithOrigin( "
                 '"Completion", PersistDecisionRecoveryKind(command), '
                 "request.node, qc.context.height, "
                 "qc.view, qc.subject, NoAsyncItem, command.consumerView, "
-                "command.consumerGeneration, qc, qc.subject, qc.subject, qc.subject)"
+                "command.consumerGeneration, qc, qc.subject, qc.subject, "
+                "qc.subject, command.causalOrigin)"
             ),
         }
         for symbol, exact_body in exact_persist_decision_operators.items():
@@ -28603,8 +28618,8 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PersistDecisionBody",
         "PersistDecisionValidationHeld",
         "PersistDecisionRequest",
-        "AsyncCandidateAtConsumer",
-        "AsyncCandidateWithIdentity",
+        "AsyncCandidateAtConsumerWithOrigin",
+        "AsyncCandidateWithIdentityAndOrigin",
         "CandidateConsumerCurrent",
         "PersistDecisionRequests",
     )
@@ -41086,7 +41101,7 @@ def _liveness_ownership_mutation_source_fidelity_errors(
     formal_dir: Path = FORMAL_DIR,
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
-    """Seal the exact-ingress/adequate-leader positive and failing TLC pairs."""
+    """Seal exact-ingress, timeout-authority, and leader TLC pairs."""
 
     errors: list[str] = []
     expected_formal = set(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS)
@@ -41097,15 +41112,15 @@ def _liveness_ownership_mutation_source_fidelity_errors(
     fixed_count = sum(name.endswith("_fixed.cfg") for name in expected_formal)
     mutation_count = sum(name.endswith("_bug.cfg") for name in expected_formal)
     if (
-        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 37
-        or model_count != 6
-        or config_count != 31
-        or fixed_count != 6
-        or mutation_count != 25
+        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 40
+        or model_count != 7
+        or config_count != 33
+        or fixed_count != 7
+        or mutation_count != 26
     ):
         errors.append(
-            "liveness-ownership mutation source seal must name exactly six "
-            "models, six repaired configurations, and twenty-five failing "
+            "liveness-ownership mutation source seal must name exactly seven "
+            "models, seven repaired configurations, and twenty-six failing "
             "configurations; found "
             f"models={model_count}, repaired={fixed_count}, "
             f"failing={mutation_count}, configurations={config_count}, "
@@ -41114,7 +41129,7 @@ def _liveness_ownership_mutation_source_fidelity_errors(
     if digest_names != expected_all:
         errors.append(
             "liveness-ownership mutation digest inventory must equal the "
-            f"exact 38-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"exact 41-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -41190,6 +41205,11 @@ def _liveness_ownership_mutation_source_fidelity_errors(
             "exact_serve_frozen_predecessor_fixed.cfg",
         ),
         (
+            "exact-installed-tc-retention",
+            "SumeragiV2ExactInstalledTcRetentionMutation.tla",
+            "exact_installed_tc_retention_fixed.cfg",
+        ),
+        (
             "adequate-leader-wire-tombstone",
             "SumeragiV2AdequateLeaderWireTombstoneMutation.tla",
             "adequate_leader_wire_tombstone_fixed.cfg",
@@ -41242,6 +41262,12 @@ def _liveness_ownership_mutation_source_fidelity_errors(
             "SumeragiV2ExactServeFrozenPredecessorMutation.tla",
             "exact_serve_frozen_predecessor_churn_bug.cfg",
             "ReservedServeCapacityCannotBeStolen",
+        ),
+        (
+            "exact-installed-tc-view-only-replacement",
+            "SumeragiV2ExactInstalledTcRetentionMutation.tla",
+            "exact_installed_tc_view_only_bug.cfg",
+            "ExactInstalledTcAuthority",
         ),
         (
             "adequate-wire-slot-cardinality",
@@ -41366,13 +41392,13 @@ def _liveness_ownership_mutation_source_fidelity_errors(
     if observed_fixed_cases != expected_fixed_cases:
         errors.append(
             f"{runner_path}: repaired case matrix must equal the exact reviewed "
-            f"six cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
+            f"seven cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
             f"extra={sorted(observed_fixed_cases - expected_fixed_cases)}"
         )
     if observed_mutation_cases != expected_mutation_cases:
         errors.append(
             f"{runner_path}: failing case matrix must equal the exact reviewed "
-            "twenty-five config/invariant pairs; "
+            "twenty-six config/invariant pairs; "
             f"missing={sorted(expected_mutation_cases - observed_mutation_cases)}, "
             f"extra={sorted(observed_mutation_cases - expected_mutation_cases)}"
         )
@@ -41402,7 +41428,7 @@ def _liveness_ownership_mutation_source_fidelity_errors(
             "exact named invariant marker",
         ),
         (
-            "all 25 liveness-ownership mutations produced their exact named "
+            "all 26 liveness-ownership mutations produced their exact named "
             "counterexamples; repaired models passed",
             "exact mutation completion marker",
         ),
@@ -44919,7 +44945,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "IN IF exactCurrentClass THEN currentClass ELSE {}"
         ),
         "InstalledControlAfterTC": (
-            "LET remembered == RememberedControl(retained, items) "
+            "LET withoutOwnTc == retained \\ RetainedClassItems("
+            'retained, node, "TimeoutCertificate") '
+            "remembered == RememberedControl(withoutOwnTc, items) "
             "installed == {item \\in remembered: "
             "item.source # node \\/ ControlClass(item) "
             "\\in AsyncInstallRetainedControlKinds} "
@@ -47772,8 +47800,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncRecoveryReplayQueue' = asyncRecoveryReplayQueue",
         ),
         "PreGstResponsiveReplay": (
-            "signatures == "
-            "FreshRestartCandidateSequence(RestartSignatureReplay(node))",
+            "signatures == RestartSignatureReplay(node)",
             "replay == FreshRestartCandidateSequence(RestartReplay(node))",
             'asyncRecoveryPhase = "ReplayRequired"',
             "NodeIdle(node)",

@@ -8,26 +8,32 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_data_model::privacy::{
-    ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, IrohaZkX509StarkP256StatementV1,
-    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
-    PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyActivationValidationError, PrivacyConsensusLimitsV1,
-    PrivacyConsensusPolicyV1, PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-    PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-    PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-    PrivacyPolicyIdV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
-    PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-    PrivacyTrustAnchorPolicyNamespaceV1, PrivacyZkAcePolicyRecordDigestV1,
-    PrivacyZkAcePolicyRecordV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
-    PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
-    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
-    PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordDigestV1,
-    PrivacyZkX509TrustAnchorRecordV1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
-    ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
-    ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_zk_x509_certificate_policy_revocation_v1,
-    validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_trust_anchor_revocation_v1,
-    validate_zk_x509_trust_anchor_rotation_v1,
+use iroha_data_model::{
+    AssetDefinitionId,
+    account::AccountId,
+    privacy::{
+        ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, IrohaZkX509StarkP256StatementV1,
+        ORCHARD_MAX_ACTIONS_V1, PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+        PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+        PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyActivationValidationError, PrivacyConsensusLimitsV1,
+        PrivacyConsensusPolicyV1, PrivacyIssuerIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+        PrivacyNullifierV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyP256CiphertextV1,
+        PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
+        PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+        PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootPublicationV1,
+        PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTrustAnchorPolicyNamespaceV1, PrivacyZkAcePolicyRecordDigestV1,
+        PrivacyZkAcePolicyRecordV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+        PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
+        PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordDigestV1,
+        PrivacyZkX509TrustAnchorRecordV1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
+        ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
+        ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_zk_x509_certificate_policy_revocation_v1,
+        validate_zk_x509_certificate_policy_rotation_v1,
+        validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
+    },
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -831,6 +837,8 @@ fn validate_pgc_retained_root_chain_v1(
         | PrivacyRootProvenanceV1::ZkX509Governance { .. }
         | PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
         | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
+        | PrivacyRootProvenanceV1::OrchardPoolBootstrap { .. }
+        | PrivacyRootProvenanceV1::OrchardPoolSuccessor { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. } => {
             return Err("privacy PGC retained history begins with invalid provenance".to_owned());
         }
@@ -1986,6 +1994,8 @@ fn validate_zk_ams_retained_root_chain_v1(
         }
         PrivacyRootProvenanceV1::Governance { .. }
         | PrivacyRootProvenanceV1::ZkX509Governance { .. }
+        | PrivacyRootProvenanceV1::OrchardPoolBootstrap { .. }
+        | PrivacyRootProvenanceV1::OrchardPoolSuccessor { .. }
         | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. }
         | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
@@ -2229,6 +2239,8 @@ pub(crate) fn validate_privacy_persisted_state_v1(
 
     let mut zk_ams_bootstraps =
         BTreeMap::<PrivacyNamespaceV1, PrivacyZkAmsRegistryBootstrapDigestV1>::new();
+    let mut orchard_bootstraps =
+        BTreeMap::<PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1>::new();
     for ((namespace, role), history) in &history_by_scope {
         let retained_root_count =
             if namespace.protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
@@ -2289,6 +2301,24 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             {
                 return Err(format!(
                     "duplicate ZK-AMS AccountRegistry scope for {namespace:?}"
+                ));
+            }
+        } else if namespace.protocol_id() == PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+            && *role == PrivacyRootRoleV1::NoteCommitmentAnchor
+        {
+            let snapshot = load_privacy_orchard_pool_snapshot_v1(
+                *namespace,
+                retained_root_count,
+                commitments,
+                roots,
+                root_heads,
+            )?;
+            if orchard_bootstraps
+                .insert(*namespace, snapshot.bootstrap_digest())
+                .is_some()
+            {
+                return Err(format!(
+                    "duplicate Orchard note-commitment scope for {namespace:?}"
                 ));
             }
         } else if namespace.protocol_id() == PrivacyProtocolIdV1::IrohaZkX509StarkP256V0 {
@@ -2419,6 +2449,22 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     ));
                 }
             }
+            PrivacyCommitmentKeyV1::OrchardPoolState { namespace } => {
+                let bootstrap_digest = orchard_bootstraps.get(namespace).ok_or_else(|| {
+                    format!(
+                        "Orchard pool state {namespace:?} has no authoritative note-commitment history"
+                    )
+                })?;
+                if !matches!(
+                    record,
+                    PrivacyStateItemRecordV1::OrchardPoolState { state }
+                        if state.bootstrap_digest() == *bootstrap_digest
+                ) {
+                    return Err(format!(
+                        "Orchard pool state {namespace:?} has wrong-role or cross-bootstrap provenance"
+                    ));
+                }
+            }
             PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
             | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. } => {}
             PrivacyCommitmentKeyV1::ZkAmsIssuerPolicyRecord { namespace, .. }
@@ -2444,6 +2490,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                         } if observed == bootstrap_digest
                     ),
                     PrivacyCommitmentKeyV1::ZkAcePolicy { .. }
+                    | PrivacyCommitmentKeyV1::OrchardPoolState { .. }
                     | PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
                     | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. } => false,
                 };
@@ -2473,6 +2520,24 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 ) {
                     return Err(format!(
                         "ZK-AMS key image {namespace:?} has wrong-role or cross-bootstrap provenance"
+                    ));
+                }
+            }
+            PrivacyNullifierKeyV1::OrchardNullifier { namespace, .. } => {
+                let bootstrap_digest = orchard_bootstraps.get(namespace).ok_or_else(|| {
+                    format!(
+                        "Orchard nullifier {namespace:?} has no authoritative note-commitment pool"
+                    )
+                })?;
+                if !matches!(
+                    record,
+                    PrivacyStateItemRecordV1::OrchardVerifiedNullifier {
+                        bootstrap_digest: observed,
+                        ..
+                    } if observed == bootstrap_digest
+                ) {
+                    return Err(format!(
+                        "Orchard nullifier {namespace:?} has wrong-role or cross-bootstrap provenance"
                     ));
                 }
             }
@@ -2632,6 +2697,620 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     Ok(())
 }
 
+/// Complete authoritative compact state for one governed Orchard V3 pool.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
+pub struct PrivacyOrchardPoolStateV1 {
+    bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+    asset_definition_id: AssetDefinitionId,
+    reserve_account: AccountId,
+    epoch: u64,
+    root: PrivacyRootV1,
+    tree_size: u64,
+    leaf: Option<[u8; 32]>,
+    ommers: Vec<[u8; 32]>,
+}
+
+impl PrivacyOrchardPoolStateV1 {
+    /// Construct the sole empty-frontier origin for a governed Orchard pool.
+    pub(crate) fn bootstrap(
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        asset_definition_id: AssetDefinitionId,
+        reserve_account: AccountId,
+    ) -> Result<Self, &'static str> {
+        Self::new(
+            bootstrap_digest,
+            asset_definition_id,
+            reserve_account,
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+            PrivacyRootV1::new(crate::privacy_engines::orchard::orchard_empty_root_v1()),
+            0,
+            None,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        asset_definition_id: AssetDefinitionId,
+        reserve_account: AccountId,
+        epoch: u64,
+        root: PrivacyRootV1,
+        tree_size: u64,
+        leaf: Option<[u8; 32]>,
+        ommers: Vec<[u8; 32]>,
+    ) -> Result<Self, &'static str> {
+        let state = Self {
+            bootstrap_digest,
+            asset_definition_id,
+            reserve_account,
+            epoch,
+            root,
+            tree_size,
+            leaf,
+            ommers,
+        };
+        state.validate()?;
+        Ok(state)
+    }
+
+    /// Derive the next durable state from native frontier output.
+    pub(crate) fn advance(
+        &self,
+        successor: crate::privacy_engines::orchard::OrchardFrontierPartsV1,
+    ) -> Result<Self, &'static str> {
+        self.validate()?;
+        let appended = successor
+            .tree_size
+            .checked_sub(self.tree_size)
+            .ok_or("Orchard successor tree size regressed")?;
+        if appended == 0 || appended > u64::from(ORCHARD_MAX_ACTIONS_V1) {
+            return Err("Orchard successor must append one or two actions");
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("Orchard root epoch overflow")?;
+        if successor.root == self.root.into_bytes() {
+            return Err("Orchard successor root must differ from its parent");
+        }
+        Self::new(
+            self.bootstrap_digest,
+            self.asset_definition_id.clone(),
+            self.reserve_account.clone(),
+            epoch,
+            PrivacyRootV1::new(successor.root),
+            successor.tree_size,
+            successor.leaf,
+            successor.ommers,
+        )
+    }
+
+    /// Validate complete restored state by reconstructing and rehashing it.
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        if self.bootstrap_digest.is_zero() {
+            return Err("Orchard pool bootstrap digest must be non-zero");
+        }
+        if self.epoch < PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1 {
+            return Err("Orchard pool epoch must be non-zero");
+        }
+        if self.root.is_zero() {
+            return Err("Orchard pool root must be non-zero");
+        }
+        if (self.tree_size == 0) != (self.epoch == PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1) {
+            return Err("Orchard empty frontier and origin epoch disagree");
+        }
+        let transitions = self
+            .epoch
+            .checked_sub(PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1)
+            .ok_or("Orchard pool epoch precedes its canonical origin")?;
+        let maximum_tree_size = transitions
+            .checked_mul(u64::from(ORCHARD_MAX_ACTIONS_V1))
+            .ok_or("Orchard pool transition count overflow")?;
+        if self.tree_size < transitions || self.tree_size > maximum_tree_size {
+            return Err("Orchard tree size is inconsistent with its transition epoch");
+        }
+        crate::privacy_engines::orchard::validate_orchard_frontier_v1(
+            self.tree_size,
+            self.leaf,
+            &self.ommers,
+            self.root.into_bytes(),
+        )
+        .map_err(|_| "Orchard compact frontier is invalid")
+    }
+
+    #[must_use]
+    pub(crate) const fn bootstrap_digest(&self) -> PrivacyOrchardPoolBootstrapDigestV1 {
+        self.bootstrap_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn asset_definition_id(&self) -> &AssetDefinitionId {
+        &self.asset_definition_id
+    }
+
+    #[must_use]
+    pub(crate) const fn reserve_account(&self) -> &AccountId {
+        &self.reserve_account
+    }
+
+    #[must_use]
+    pub(crate) const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn root(&self) -> PrivacyRootV1 {
+        self.root
+    }
+
+    #[must_use]
+    pub(crate) const fn tree_size(&self) -> u64 {
+        self.tree_size
+    }
+
+    #[must_use]
+    pub(crate) const fn leaf(&self) -> Option<[u8; 32]> {
+        self.leaf
+    }
+
+    #[must_use]
+    pub(crate) fn ommers(&self) -> &[[u8; 32]] {
+        &self.ommers
+    }
+}
+
+/// Public ledger objects that one governed Orchard pool must retain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyOrchardPoolReferenceV1 {
+    namespace: PrivacyNamespaceV1,
+    asset_definition_id: AssetDefinitionId,
+    reserve_account: AccountId,
+}
+
+impl PrivacyOrchardPoolReferenceV1 {
+    /// Return the exact governed Orchard pool namespace.
+    #[must_use]
+    pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
+        self.namespace
+    }
+
+    /// Borrow the backing public asset definition.
+    #[must_use]
+    pub(crate) const fn asset_definition_id(&self) -> &AssetDefinitionId {
+        &self.asset_definition_id
+    }
+
+    /// Borrow the public account that custodies pool reserves.
+    #[must_use]
+    pub(crate) const fn reserve_account(&self) -> &AccountId {
+        &self.reserve_account
+    }
+}
+
+/// Load every governed Orchard pool's exact public ledger dependencies.
+///
+/// The key range covers only singleton Orchard pool-state rows, so destructive
+/// ledger operations remain proportional to the number of governed pools
+/// rather than the potentially much larger privacy commitment table.
+///
+/// # Errors
+///
+/// Rejects malformed keys, invalid records, and wrong-role provenance.
+pub(crate) fn load_privacy_orchard_pool_references_v1(
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+) -> Result<Vec<PrivacyOrchardPoolReferenceV1>, String> {
+    let mut references = Vec::new();
+    for (key, record) in commitments.range(PrivacyCommitmentKeyV1::orchard_pool_state_range()) {
+        key.validate()
+            .map_err(|error| format!("invalid Orchard pool-state key: {error}"))?;
+        record
+            .validate()
+            .map_err(|error| format!("invalid Orchard pool-state record: {error}"))?;
+        let namespace = key.orchard_namespace().ok_or_else(|| {
+            "Orchard pool-state key range returned a differently typed key".to_owned()
+        })?;
+        let state = record
+            .orchard_pool_state_ref()
+            .ok_or_else(|| format!("Orchard pool state {namespace:?} has wrong-role provenance"))?;
+        references.push(PrivacyOrchardPoolReferenceV1 {
+            namespace,
+            asset_definition_id: state.asset_definition_id().clone(),
+            reserve_account: state.reserve_account().clone(),
+        });
+    }
+    Ok(references)
+}
+
+/// Reject a restored world with dangling Orchard public-ledger dependencies.
+///
+/// # Errors
+///
+/// Rejects malformed Orchard state or a missing reserve account or asset
+/// definition.
+pub(crate) fn validate_privacy_orchard_public_dependencies_v1<
+    AccountValue: mv::Value,
+    AssetDefinitionValue: mv::Value,
+>(
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    accounts: &impl StorageReadOnly<AccountId, AccountValue>,
+    asset_definitions: &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionValue>,
+) -> Result<(), String> {
+    for reference in load_privacy_orchard_pool_references_v1(commitments)? {
+        if accounts.get(reference.reserve_account()).is_none() {
+            return Err(format!(
+                "Orchard pool {:?} references missing reserve account {}",
+                reference.namespace(),
+                reference.reserve_account()
+            ));
+        }
+        if asset_definitions
+            .get(reference.asset_definition_id())
+            .is_none()
+        {
+            return Err(format!(
+                "Orchard pool {:?} references missing asset definition {}",
+                reference.namespace(),
+                reference.asset_definition_id()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Fully validated, transaction-local view of one governed Orchard pool.
+///
+/// The snapshot joins the singleton compact frontier to the exact retained
+/// root chain. Native verification and successor derivation therefore consume
+/// one coherent authoritative state instead of caller-duplicated roots.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyOrchardPoolSnapshotV1 {
+    namespace: PrivacyNamespaceV1,
+    state: PrivacyOrchardPoolStateV1,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
+    retained_roots: Vec<(PrivacyRootKeyV1, PrivacyRootProvenanceV1)>,
+}
+
+impl PrivacyOrchardPoolSnapshotV1 {
+    #[must_use]
+    pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
+        self.namespace
+    }
+
+    #[must_use]
+    pub(crate) const fn state(&self) -> &PrivacyOrchardPoolStateV1 {
+        &self.state
+    }
+
+    #[must_use]
+    pub(crate) const fn current_epoch(&self) -> u64 {
+        self.state.epoch()
+    }
+
+    #[must_use]
+    pub(crate) const fn current_root(&self) -> PrivacyRootV1 {
+        self.state.root()
+    }
+
+    #[must_use]
+    pub(crate) const fn bootstrap_digest(&self) -> PrivacyOrchardPoolBootstrapDigestV1 {
+        self.state.bootstrap_digest()
+    }
+
+    #[must_use]
+    pub(crate) const fn retention_anchor(&self) -> Option<PrivacyRootRetentionAnchorV1> {
+        self.retention_anchor
+    }
+
+    /// Return whether the exact statement anchor is in the retained root window.
+    #[must_use]
+    pub(crate) fn contains_retained_anchor(&self, epoch: u64, root: PrivacyRootV1) -> bool {
+        self.retained_roots
+            .iter()
+            .any(|(key, _)| key.epoch() == epoch && key.root() == root)
+    }
+
+    /// Append canonical note commitments to the authoritative current frontier.
+    pub(crate) fn derive_successor(
+        &self,
+        note_commitments: &[[u8; 32]],
+    ) -> Result<PrivacyOrchardPoolStateV1, String> {
+        let successor = crate::privacy_engines::orchard::append_orchard_commitments_v1(
+            self.state.tree_size(),
+            self.state.leaf(),
+            self.state.ommers(),
+            self.state.root().into_bytes(),
+            note_commitments,
+        )
+        .map_err(|error| format!("failed to append Orchard note commitments: {error}"))?;
+        self.state
+            .advance(successor)
+            .map_err(|error| format!("invalid Orchard successor state: {error}"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn canonical_bootstrap_for_test(
+        namespace: PrivacyNamespaceV1,
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        asset_definition_id: AssetDefinitionId,
+        reserve_account: AccountId,
+    ) -> Self {
+        validate_orchard_namespace(namespace).expect("test Orchard namespace is canonical");
+        let state = PrivacyOrchardPoolStateV1::bootstrap(
+            bootstrap_digest,
+            asset_definition_id,
+            reserve_account,
+        )
+        .expect("test Orchard state is canonical");
+        let provenance = PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 1)
+            .expect("test Orchard provenance is canonical");
+        let root_key = PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            state.epoch(),
+            state.root(),
+        )
+        .expect("test Orchard root key is canonical");
+        Self {
+            namespace,
+            state,
+            retention_anchor: None,
+            retained_roots: vec![(root_key, provenance)],
+        }
+    }
+}
+
+fn validate_orchard_successor_link_v1(
+    namespace: PrivacyNamespaceV1,
+    key: PrivacyRootKeyV1,
+    provenance: PrivacyRootProvenanceV1,
+    bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+) -> Result<(u64, PrivacyRootV1), String> {
+    let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
+        bootstrap_digest: observed_bootstrap_digest,
+        parent_epoch,
+        parent_root,
+        ..
+    } = provenance
+    else {
+        return Err(format!(
+            "Orchard note-commitment history {namespace:?} contains a non-successor advancement"
+        ));
+    };
+    if observed_bootstrap_digest != bootstrap_digest {
+        return Err(format!(
+            "Orchard successor {} is bound to a different pool bootstrap",
+            key.epoch()
+        ));
+    }
+    if parent_epoch.checked_add(1) != Some(key.epoch()) {
+        return Err(format!(
+            "Orchard successor {} does not advance parent epoch {parent_epoch} by exactly one",
+            key.epoch()
+        ));
+    }
+    Ok((parent_epoch, parent_root))
+}
+
+fn validate_orchard_retained_root_chain_v1(
+    namespace: PrivacyNamespaceV1,
+    bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+    retained_root_count: usize,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
+    history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
+) -> Result<(), String> {
+    if retained_root_count == 0 {
+        return Err("Orchard retained-root count must be non-zero".to_owned());
+    }
+    if history.is_empty() {
+        return Err("Orchard pool has no retained note-commitment roots".to_owned());
+    }
+    if history.len() > retained_root_count {
+        return Err(format!(
+            "Orchard note-commitment history exceeds retention {retained_root_count}"
+        ));
+    }
+
+    let canonical_empty_root =
+        PrivacyRootV1::new(crate::privacy_engines::orchard::orchard_empty_root_v1());
+    let (first_key, first_provenance) = history[0];
+    match first_provenance {
+        PrivacyRootProvenanceV1::OrchardPoolBootstrap {
+            bootstrap_digest: observed_bootstrap_digest,
+            ..
+        } => {
+            if observed_bootstrap_digest != bootstrap_digest {
+                return Err("Orchard note-commitment origin differs from its pool state".to_owned());
+            }
+            if retention_anchor.is_some() {
+                return Err(
+                    "Orchard retained bootstrap history has an unexpected pruned-prefix anchor"
+                        .to_owned(),
+                );
+            }
+            if first_key.epoch() != PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1
+                || first_key.root() != canonical_empty_root
+            {
+                return Err(
+                    "Orchard pool bootstrap is not the canonical epoch-one empty root".to_owned(),
+                );
+            }
+        }
+        PrivacyRootProvenanceV1::OrchardPoolSuccessor { .. } => {
+            let (parent_epoch, parent_root) = validate_orchard_successor_link_v1(
+                namespace,
+                first_key,
+                first_provenance,
+                bootstrap_digest,
+            )?;
+            if first_key.epoch() <= PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1 {
+                return Err(
+                    "Orchard pruned history begins at or before the canonical bootstrap epoch"
+                        .to_owned(),
+                );
+            }
+            let anchor = retention_anchor.ok_or_else(|| {
+                "Orchard pruned-prefix history has no exact retention anchor".to_owned()
+            })?;
+            if anchor.epoch().checked_add(1) != Some(first_key.epoch())
+                || parent_epoch != anchor.epoch()
+                || parent_root != anchor.root()
+            {
+                return Err(
+                    "Orchard first retained successor does not consume its exact pruned-prefix anchor"
+                        .to_owned(),
+                );
+            }
+            if anchor.epoch() == PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1
+                && anchor.root() != canonical_empty_root
+            {
+                return Err(
+                    "Orchard pruned bootstrap anchor differs from the canonical empty root"
+                        .to_owned(),
+                );
+            }
+        }
+        PrivacyRootProvenanceV1::Governance { .. }
+        | PrivacyRootProvenanceV1::ZkX509Governance { .. }
+        | PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
+        | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
+        | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
+        | PrivacyRootProvenanceV1::VerifiedProof { .. }
+        | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
+            return Err(
+                "Orchard retained note-commitment history begins with invalid provenance"
+                    .to_owned(),
+            );
+        }
+    }
+
+    for adjacent in history.windows(2) {
+        let (parent_key, _) = adjacent[0];
+        let (child_key, child_provenance) = adjacent[1];
+        let (declared_parent_epoch, declared_parent_root) = validate_orchard_successor_link_v1(
+            namespace,
+            child_key,
+            child_provenance,
+            bootstrap_digest,
+        )?;
+        if parent_key.epoch().checked_add(1) != Some(child_key.epoch())
+            || declared_parent_epoch != parent_key.epoch()
+            || declared_parent_root != parent_key.root()
+        {
+            return Err(format!(
+                "Orchard retained history has a gap or forged parent between epochs {} and {}",
+                parent_key.epoch(),
+                child_key.epoch()
+            ));
+        }
+    }
+    if retention_anchor.is_some() && history.len() != retained_root_count {
+        return Err(format!(
+            "Orchard anchored history has {} roots but must fill retention {retained_root_count}",
+            history.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Load and cross-validate every authoritative component of one Orchard pool.
+pub(crate) fn load_privacy_orchard_pool_snapshot_v1(
+    namespace: PrivacyNamespaceV1,
+    retained_root_count: u32,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
+) -> Result<PrivacyOrchardPoolSnapshotV1, String> {
+    validate_orchard_namespace(namespace)
+        .map_err(|error| format!("invalid Orchard pool namespace: {error}"))?;
+    if retained_root_count == 0 {
+        return Err("Orchard retained-root count must be non-zero".to_owned());
+    }
+    let retained_root_count = usize::try_from(retained_root_count)
+        .map_err(|_| "Orchard retained-root count cannot be represented".to_owned())?;
+
+    let state_key = PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
+        .map_err(|error| format!("invalid Orchard pool-state key: {error}"))?;
+    let state_record = commitments
+        .get(&state_key)
+        .ok_or_else(|| "Orchard pool has no authoritative compact frontier".to_owned())?;
+    state_record
+        .validate()
+        .map_err(|error| format!("invalid Orchard pool-state record: {error}"))?;
+    let state = state_record
+        .orchard_pool_state_ref()
+        .ok_or_else(|| "Orchard pool-state key has wrong-role provenance".to_owned())?
+        .clone();
+
+    let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::NoteCommitmentAnchor)
+        .map_err(|error| format!("invalid Orchard root-head key: {error}"))?;
+    let head = root_heads
+        .get(&head_key)
+        .copied()
+        .ok_or_else(|| "Orchard pool has no current note-commitment head".to_owned())?;
+    head.validate()
+        .map_err(|error| format!("invalid Orchard note-commitment head: {error}"))?;
+
+    let mut retained_roots = Vec::new();
+    for (key, provenance) in roots.range(PrivacyRootKeyV1::history_range(
+        namespace,
+        PrivacyRootRoleV1::NoteCommitmentAnchor,
+    )) {
+        if retained_roots.len() == retained_root_count {
+            return Err(format!(
+                "Orchard note-commitment history exceeds retention {retained_root_count}"
+            ));
+        }
+        key.validate()
+            .map_err(|error| format!("invalid Orchard root key: {error}"))?;
+        provenance
+            .validate()
+            .map_err(|error| format!("invalid Orchard root provenance: {error}"))?;
+        if retained_roots.last().is_some_and(
+            |(previous, _): &(PrivacyRootKeyV1, PrivacyRootProvenanceV1)| {
+                previous.epoch() == key.epoch()
+            },
+        ) {
+            return Err(format!(
+                "Orchard note-commitment history contains duplicate epoch {}",
+                key.epoch()
+            ));
+        }
+        retained_roots.push((*key, *provenance));
+    }
+    validate_orchard_retained_root_chain_v1(
+        namespace,
+        state.bootstrap_digest(),
+        retained_root_count,
+        head.retention_anchor(),
+        &retained_roots,
+    )?;
+    let latest = retained_roots
+        .last()
+        .expect("non-empty Orchard history checked above");
+    if head.epoch() != latest.0.epoch()
+        || head.root() != latest.0.root()
+        || head.provenance() != latest.1
+    {
+        return Err(
+            "Orchard note-commitment head does not equal latest retained history".to_owned(),
+        );
+    }
+    if state.epoch() != head.epoch() || state.root() != head.root() {
+        return Err("Orchard compact frontier does not equal its current root head".to_owned());
+    }
+    if head.provenance().orchard_bootstrap_digest() != Some(state.bootstrap_digest()) {
+        return Err("Orchard root head differs from its governed pool bootstrap".to_owned());
+    }
+
+    Ok(PrivacyOrchardPoolSnapshotV1 {
+        namespace,
+        state,
+        retention_anchor: head.retention_anchor(),
+        retained_roots,
+    })
+}
+
 /// Closed role-separated key for one consumed privacy replay marker.
 ///
 /// The enum discriminant is part of canonical Norito key bytes. A ZK-AMS key
@@ -2652,6 +3331,13 @@ pub enum PrivacyNullifierKeyV1 {
         namespace: PrivacyNamespaceV1,
         /// Canonical nonzero compressed Ristretto key image.
         key_image: PrivacyZkAmsKeyImageV1,
+    },
+    /// One consumed Orchard nullifier in its exact pool namespace.
+    OrchardNullifier {
+        /// Governed Orchard pool namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Canonical Pallas-base nullifier encoding.
+        nullifier: [u8; 32],
     },
 }
 
@@ -2696,11 +3382,26 @@ impl PrivacyNullifierKeyV1 {
         })
     }
 
+    /// Construct a pool-scoped canonical Orchard nullifier key.
+    pub(crate) fn orchard_nullifier(
+        namespace: PrivacyNamespaceV1,
+        nullifier: [u8; 32],
+    ) -> Result<Self, &'static str> {
+        validate_orchard_namespace(namespace)?;
+        if !crate::privacy_engines::orchard::is_canonical_orchard_nullifier_v1(&nullifier) {
+            return Err("Orchard nullifier encoding is not canonical");
+        }
+        Ok(Self::OrchardNullifier {
+            namespace,
+            nullifier,
+        })
+    }
+
     /// Return the exact ZK-AMS namespace, if this is a key-image marker.
     #[must_use]
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
-            Self::ZkAceReplay { .. } => None,
+            Self::ZkAceReplay { .. } | Self::OrchardNullifier { .. } => None,
             Self::ZkAmsKeyImage { namespace, .. } => Some(namespace),
         }
     }
@@ -2709,8 +3410,26 @@ impl PrivacyNullifierKeyV1 {
     #[must_use]
     pub const fn zk_ams_image(self) -> Option<PrivacyZkAmsKeyImageV1> {
         match self {
-            Self::ZkAceReplay { .. } => None,
+            Self::ZkAceReplay { .. } | Self::OrchardNullifier { .. } => None,
             Self::ZkAmsKeyImage { key_image, .. } => Some(key_image),
+        }
+    }
+
+    /// Return the Orchard namespace, if this is an Orchard nullifier.
+    #[must_use]
+    pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
+        match self {
+            Self::OrchardNullifier { namespace, .. } => Some(namespace),
+            Self::ZkAceReplay { .. } | Self::ZkAmsKeyImage { .. } => None,
+        }
+    }
+
+    /// Return the exact Orchard nullifier bytes, if present.
+    #[must_use]
+    pub(crate) const fn orchard_nullifier_bytes(self) -> Option<[u8; 32]> {
+        match self {
+            Self::OrchardNullifier { nullifier, .. } => Some(nullifier),
+            Self::ZkAceReplay { .. } | Self::ZkAmsKeyImage { .. } => None,
         }
     }
 
@@ -2720,6 +3439,7 @@ impl PrivacyNullifierKeyV1 {
         match self {
             Self::ZkAceReplay { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
             Self::ZkAmsKeyImage { .. } => PrivacyProtocolIdV1::IrohaZkAmsV1,
+            Self::OrchardNullifier { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
         }
     }
 
@@ -2737,6 +3457,20 @@ impl PrivacyNullifierKeyV1 {
         }
     }
 
+    /// Ordered bounds covering all consumed nullifiers in one Orchard pool.
+    #[must_use]
+    pub(crate) fn orchard_nullifier_range(
+        namespace: PrivacyNamespaceV1,
+    ) -> core::ops::RangeInclusive<Self> {
+        Self::OrchardNullifier {
+            namespace,
+            nullifier: [0; 32],
+        }..=Self::OrchardNullifier {
+            namespace,
+            nullifier: [u8::MAX; 32],
+        }
+    }
+
     fn validate(self) -> Result<(), &'static str> {
         match self {
             Self::ZkAceReplay {
@@ -2747,6 +3481,10 @@ impl PrivacyNullifierKeyV1 {
                 namespace,
                 key_image,
             } => Self::zk_ams_key_image(namespace, key_image).map(|_| ()),
+            Self::OrchardNullifier {
+                namespace,
+                nullifier,
+            } => Self::orchard_nullifier(namespace, nullifier).map(|_| ()),
         }
     }
 }
@@ -2762,6 +3500,11 @@ pub enum PrivacyCommitmentKeyV1 {
     ZkAcePolicy {
         /// Stable policy lookup key.
         policy_id: PrivacyPolicyIdV1,
+    },
+    /// Complete authoritative compact state of one Orchard pool.
+    OrchardPoolState {
+        /// Governed Orchard pool namespace.
+        namespace: PrivacyNamespaceV1,
     },
     /// One immutable revision in an X.509 trust-anchor lineage.
     ZkX509TrustAnchorRevision {
@@ -2811,6 +3554,30 @@ impl PrivacyCommitmentKeyV1 {
         Ok(Self::ZkAcePolicy { policy_id })
     }
 
+    /// Construct the singleton compact-state key for one Orchard pool.
+    pub(crate) fn orchard_pool_state(namespace: PrivacyNamespaceV1) -> Result<Self, &'static str> {
+        validate_orchard_namespace(namespace)?;
+        Ok(Self::OrchardPoolState { namespace })
+    }
+
+    /// Ordered bounds covering exactly the complete Orchard pool-state table.
+    #[must_use]
+    pub(crate) fn orchard_pool_state_range() -> core::ops::RangeInclusive<Self> {
+        let namespace = |pool_id| {
+            PrivacyNamespaceV1::new(
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: PrivacyPoolIdV1::new(pool_id),
+                }),
+            )
+        };
+        Self::OrchardPoolState {
+            namespace: namespace([0; 32]),
+        }..=Self::OrchardPoolState {
+            namespace: namespace([u8::MAX; 32]),
+        }
+    }
+
     /// Ordered bounds covering exactly the complete ZK-ACE policy table.
     #[must_use]
     pub fn zk_ace_policy_range() -> core::ops::RangeInclusive<Self> {
@@ -2818,6 +3585,20 @@ impl PrivacyCommitmentKeyV1 {
             policy_id: PrivacyPolicyIdV1::new([0; 32]),
         }..=Self::ZkAcePolicy {
             policy_id: PrivacyPolicyIdV1::new([u8::MAX; 32]),
+        }
+    }
+
+    /// Return the Orchard pool namespace, if this is a compact-state key.
+    #[must_use]
+    pub(crate) const fn orchard_namespace(self) -> Option<PrivacyNamespaceV1> {
+        match self {
+            Self::OrchardPoolState { namespace } => Some(namespace),
+            Self::ZkAcePolicy { .. }
+            | Self::ZkX509TrustAnchorRevision { .. }
+            | Self::ZkX509CertificatePolicyRevision { .. }
+            | Self::ZkAmsIssuerPolicyRecord { .. }
+            | Self::ZkAmsPhc { .. }
+            | Self::ZkAmsSeedKey { .. } => None,
         }
     }
 
@@ -2967,6 +3748,7 @@ impl PrivacyCommitmentKeyV1 {
     pub const fn zk_ams_namespace(self) -> Option<PrivacyNamespaceV1> {
         match self {
             Self::ZkAcePolicy { .. }
+            | Self::OrchardPoolState { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. } => None,
             Self::ZkAmsIssuerPolicyRecord { namespace, .. }
@@ -2980,6 +3762,7 @@ impl PrivacyCommitmentKeyV1 {
     pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
         match self {
             Self::ZkAcePolicy { .. } => PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+            Self::OrchardPoolState { .. } => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
             Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. } => {
                 PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
@@ -2997,6 +3780,7 @@ impl PrivacyCommitmentKeyV1 {
     ) -> Option<PrivacyZkAmsIssuerPolicyRecordDigestV1> {
         match self {
             Self::ZkAcePolicy { .. }
+            | Self::OrchardPoolState { .. }
             | Self::ZkX509TrustAnchorRevision { .. }
             | Self::ZkX509CertificatePolicyRevision { .. } => None,
             Self::ZkAmsIssuerPolicyRecord { record_digest, .. } => Some(record_digest),
@@ -3045,6 +3829,7 @@ impl PrivacyCommitmentKeyV1 {
     fn validate(self) -> Result<(), &'static str> {
         match self {
             Self::ZkAcePolicy { policy_id } => Self::zk_ace_policy(policy_id).map(|_| ()),
+            Self::OrchardPoolState { namespace } => Self::orchard_pool_state(namespace).map(|_| ()),
             Self::ZkX509TrustAnchorRevision {
                 trust_anchor_id,
                 record_epoch,
@@ -3079,6 +3864,16 @@ fn validate_zk_ams_namespace(namespace: PrivacyNamespaceV1) -> Result<(), &'stat
         .map_err(|_| "ZK-AMS state namespace is invalid")?;
     if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkAmsV1 {
         return Err("ZK-AMS state key requires the ZK-AMS protocol namespace");
+    }
+    Ok(())
+}
+
+fn validate_orchard_namespace(namespace: PrivacyNamespaceV1) -> Result<(), &'static str> {
+    namespace
+        .validate()
+        .map_err(|_| "Orchard state namespace is invalid")?;
+    if namespace.protocol_id() != PrivacyProtocolIdV1::OrchardHalo2ActionsV1 {
+        return Err("Orchard state key requires the Orchard protocol namespace");
     }
     Ok(())
 }
@@ -3279,6 +4074,28 @@ pub(crate) enum PrivacyRootProvenanceV1 {
         /// Exact root consumed by the verified transition.
         parent_root: PrivacyRootV1,
     },
+    /// Initial Orchard note-commitment root installed by its typed pool bootstrap.
+    OrchardPoolBootstrap {
+        /// Digest of the exact canonical pool-bootstrap payload.
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        /// Block height at which the bootstrap became durable.
+        admitted_at_height: u64,
+    },
+    /// Orchard note-commitment successor derived from a verified action bundle.
+    OrchardPoolSuccessor {
+        /// Immutable typed pool-bootstrap provenance.
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the successor became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+        /// Exact epoch consumed by the verified transition.
+        parent_epoch: u64,
+        /// Exact root consumed by the verified transition.
+        parent_root: PrivacyRootV1,
+    },
     /// Initial PGC account-state root certified by a native bootstrap proof.
     VerifiedBootstrap {
         /// Digest of the exact canonical public bootstrap payload.
@@ -3457,6 +4274,57 @@ impl PrivacyRootProvenanceV1 {
         })
     }
 
+    /// Construct typed Orchard pool-bootstrap provenance.
+    pub(crate) fn orchard_pool_bootstrap(
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("Orchard pool bootstrap digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy root admission height must be non-zero");
+        }
+        Ok(Self::OrchardPoolBootstrap {
+            bootstrap_digest,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct an Orchard successor with immutable pool-origin binding.
+    pub(crate) fn orchard_pool_successor(
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        statement_digest: PrivacyStatementDigestV1,
+        admitted_at_height: u64,
+        action_index: u32,
+        parent_epoch: u64,
+        parent_root: PrivacyRootV1,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("Orchard pool bootstrap digest must be non-zero");
+        }
+        if statement_digest.is_zero() {
+            return Err("Orchard statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy root admission height must be non-zero");
+        }
+        if parent_epoch == 0 {
+            return Err("Orchard parent epoch must be non-zero");
+        }
+        if parent_root.is_zero() {
+            return Err("Orchard parent root must be non-zero");
+        }
+        Ok(Self::OrchardPoolSuccessor {
+            bootstrap_digest,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            parent_root,
+        })
+    }
+
     /// Construct native PGC bootstrap provenance.
     ///
     /// # Errors
@@ -3571,10 +4439,16 @@ impl PrivacyRootProvenanceV1 {
                 parent_epoch,
                 parent_root,
                 ..
+            }
+            | Self::OrchardPoolSuccessor {
+                parent_epoch,
+                parent_root,
+                ..
             } => Some((parent_epoch, parent_root)),
             Self::Governance { .. }
             | Self::ZkX509Governance { .. }
             | Self::ZkAmsRegistryBootstrap { .. }
+            | Self::OrchardPoolBootstrap { .. }
             | Self::VerifiedBootstrap { .. } => None,
         }
     }
@@ -3594,6 +4468,30 @@ impl PrivacyRootProvenanceV1 {
             } => Some(bootstrap_digest),
             Self::Governance { .. }
             | Self::ZkX509Governance { .. }
+            | Self::OrchardPoolBootstrap { .. }
+            | Self::OrchardPoolSuccessor { .. }
+            | Self::VerifiedBootstrap { .. }
+            | Self::VerifiedProof { .. }
+            | Self::VerifiedPgcSuccessor { .. } => None,
+        }
+    }
+
+    /// Return the immutable Orchard pool origin carried by typed root provenance.
+    #[must_use]
+    pub(crate) const fn orchard_bootstrap_digest(
+        self,
+    ) -> Option<PrivacyOrchardPoolBootstrapDigestV1> {
+        match self {
+            Self::OrchardPoolBootstrap {
+                bootstrap_digest, ..
+            }
+            | Self::OrchardPoolSuccessor {
+                bootstrap_digest, ..
+            } => Some(bootstrap_digest),
+            Self::Governance { .. }
+            | Self::ZkX509Governance { .. }
+            | Self::ZkAmsRegistryBootstrap { .. }
+            | Self::ZkAmsRegistrySuccessor { .. }
             | Self::VerifiedBootstrap { .. }
             | Self::VerifiedProof { .. }
             | Self::VerifiedPgcSuccessor { .. } => None,
@@ -3647,6 +4545,26 @@ impl PrivacyRootProvenanceV1 {
                 parent_epoch,
                 parent_root,
             } => Self::zk_ams_registry_successor(
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+            )
+            .map(|_| ()),
+            Self::OrchardPoolBootstrap {
+                bootstrap_digest,
+                admitted_at_height,
+            } => Self::orchard_pool_bootstrap(bootstrap_digest, admitted_at_height).map(|_| ()),
+            Self::OrchardPoolSuccessor {
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+            } => Self::orchard_pool_successor(
                 bootstrap_digest,
                 statement_digest,
                 admitted_at_height,
@@ -3843,6 +4761,22 @@ pub enum PrivacyStateItemRecordV1 {
         /// Block height at which governance admitted this revision.
         admitted_at_height: u64,
     },
+    /// Complete authoritative compact frontier and invariant for one Orchard pool.
+    OrchardPoolState {
+        /// Canonical pool state reconstructed and rehashed on restore.
+        state: PrivacyOrchardPoolStateV1,
+    },
+    /// Replay marker emitted by one directly verified Orchard action.
+    OrchardVerifiedNullifier {
+        /// Immutable pool bootstrap selected for verification.
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the nullifier was consumed.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+    },
     /// Replay marker emitted by one directly verified ZK-ACE authorization.
     ZkAceVerifiedAuthorization {
         /// Stable policy lineage used for verification.
@@ -3925,6 +4859,38 @@ impl PrivacyStateItemRecordV1 {
         Ok(Self::ZkX509CertificatePolicyGovernance {
             record,
             admitted_at_height,
+        })
+    }
+
+    /// Construct the singleton authoritative state for one governed Orchard pool.
+    pub(crate) fn orchard_pool_state(
+        state: PrivacyOrchardPoolStateV1,
+    ) -> Result<Self, &'static str> {
+        state.validate()?;
+        Ok(Self::OrchardPoolState { state })
+    }
+
+    /// Construct provenance for one consumed Orchard nullifier.
+    pub(crate) fn orchard_verified_nullifier(
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        statement_digest: PrivacyStatementDigestV1,
+        admitted_at_height: u64,
+        action_index: u32,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("Orchard pool bootstrap digest must be non-zero");
+        }
+        if statement_digest.is_zero() {
+            return Err("privacy state statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::OrchardVerifiedNullifier {
+            bootstrap_digest,
+            statement_digest,
+            admitted_at_height,
+            action_index,
         })
     }
 
@@ -4018,6 +4984,19 @@ impl PrivacyStateItemRecordV1 {
                 admitted_at_height,
             } => Self::zk_x509_certificate_policy_governance(record.clone(), *admitted_at_height)
                 .map(|_| ()),
+            Self::OrchardPoolState { state } => Self::orchard_pool_state(state.clone()).map(|_| ()),
+            Self::OrchardVerifiedNullifier {
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+            } => Self::orchard_verified_nullifier(
+                *bootstrap_digest,
+                *statement_digest,
+                *admitted_at_height,
+                *action_index,
+            )
+            .map(|_| ()),
             Self::ZkAceVerifiedAuthorization {
                 policy_id,
                 policy_record_digest,
@@ -4058,6 +5037,8 @@ impl PrivacyStateItemRecordV1 {
             Self::ZkAcePolicyGovernance { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::OrchardVerifiedNullifier { .. }
             | Self::ZkAceVerifiedAuthorization { .. } => None,
             Self::ZkAmsGovernance {
                 bootstrap_digest, ..
@@ -4076,6 +5057,23 @@ impl PrivacyStateItemRecordV1 {
             Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::OrchardVerifiedNullifier { .. }
+            | Self::ZkAmsGovernance { .. }
+            | Self::ZkAmsVerifiedProof { .. } => None,
+        }
+    }
+
+    /// Borrow the complete authoritative Orchard pool state carried by this record.
+    #[must_use]
+    pub(crate) const fn orchard_pool_state_ref(&self) -> Option<&PrivacyOrchardPoolStateV1> {
+        match self {
+            Self::OrchardPoolState { state } => Some(state),
+            Self::ZkAcePolicyGovernance { .. }
+            | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::OrchardVerifiedNullifier { .. }
+            | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
         }
@@ -4088,6 +5086,8 @@ impl PrivacyStateItemRecordV1 {
             Self::ZkX509TrustAnchorGovernance { record, .. } => Some(record),
             Self::ZkAcePolicyGovernance { .. }
             | Self::ZkX509CertificatePolicyGovernance { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::OrchardVerifiedNullifier { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
@@ -4103,6 +5103,8 @@ impl PrivacyStateItemRecordV1 {
             Self::ZkX509CertificatePolicyGovernance { record, .. } => Some(record),
             Self::ZkAcePolicyGovernance { .. }
             | Self::ZkX509TrustAnchorGovernance { .. }
+            | Self::OrchardPoolState { .. }
+            | Self::OrchardVerifiedNullifier { .. }
             | Self::ZkAceVerifiedAuthorization { .. }
             | Self::ZkAmsGovernance { .. }
             | Self::ZkAmsVerifiedProof { .. } => None,
@@ -4335,12 +5337,13 @@ pub(crate) fn plan_privacy_root_retention_reduction_v1(
     Ok(plans)
 }
 
-/// Validate that every non-PGC history already satisfies a future retention cap.
+/// Validate that every unanchored history already satisfies a future retention cap.
 ///
-/// Non-PGC histories have no typed parent anchor in the first release and
-/// therefore cannot be pruned implicitly. Governance must not schedule a
-/// chain-wide retention tightening which would orphan one of those histories.
-pub(crate) fn validate_non_pgc_privacy_root_retention_v1(
+/// PGC account-state, ZK-AMS registry, and Orchard note-commitment histories
+/// carry typed parent links plus an exact pruned-prefix anchor and can therefore
+/// be reduced atomically at the scheduled height. Every other history must
+/// already fit the future cap; governance cannot silently orphan it.
+pub(crate) fn validate_unanchored_privacy_root_retention_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     retained_root_count: u32,
 ) -> Result<(), String> {
@@ -4353,7 +5356,19 @@ pub(crate) fn validate_non_pgc_privacy_root_retention_v1(
     for (key, _) in roots.iter() {
         key.validate()
             .map_err(|error| format!("invalid privacy root key: {error}"))?;
-        if key.namespace().protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+        if matches!(
+            (key.namespace().protocol_id(), key.role()),
+            (
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                PrivacyRootRoleV1::PgcAccountState
+            ) | (
+                PrivacyProtocolIdV1::IrohaZkAmsV1,
+                PrivacyRootRoleV1::AccountRegistry
+            ) | (
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                PrivacyRootRoleV1::NoteCommitmentAnchor
+            )
+        ) {
             continue;
         }
         let count = counts.entry((key.namespace(), key.role())).or_default();
@@ -4364,7 +5379,7 @@ pub(crate) fn validate_non_pgc_privacy_root_retention_v1(
     for ((namespace, role), count) in counts {
         if count > retained {
             return Err(format!(
-                "non-PGC privacy root history for {namespace:?}/{role:?} has {count} roots, exceeding scheduled retention {retained}"
+                "unanchored privacy root history for {namespace:?}/{role:?} has {count} roots, exceeding scheduled retention {retained}"
             ));
         }
     }
@@ -4515,6 +5530,15 @@ mod tests {
                 issuer_id: PrivacyIssuerIdV1::new(nonzero(0x91)),
                 registry_id: PrivacyZkAmsRegistryIdV1::new(nonzero(registry_byte)),
                 policy_id: PrivacyPolicyIdV1::new(nonzero(0x92)),
+            }),
+        )
+    }
+
+    fn orchard_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
             }),
         )
     }
@@ -5037,6 +6061,817 @@ mod tests {
         assert!(
             error.contains(expected),
             "expected `{expected}` in persisted-state rejection, got `{error}`"
+        );
+    }
+
+    struct OrchardPersistedFixture {
+        activations: Storage<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
+        pgc_accounts: Storage<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>,
+        pgc_pool_invariants: Storage<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>,
+        nullifiers: Storage<PrivacyNullifierKeyV1, PrivacyStateItemRecordV1>,
+        commitments: Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+        roots: Storage<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+        root_heads: Storage<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
+        namespace: PrivacyNamespaceV1,
+        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
+        state_key: PrivacyCommitmentKeyV1,
+        head_key: PrivacyRootHeadKeyV1,
+    }
+
+    impl OrchardPersistedFixture {
+        fn validate(&self) -> Result<(), String> {
+            validate_privacy_persisted_state_v1(
+                &PrivacyConsensusPolicyV1::taira_default(),
+                &self.activations.view(),
+                &self.pgc_accounts.view(),
+                &self.pgc_pool_invariants.view(),
+                &self.nullifiers.view(),
+                &self.commitments.view(),
+                &self.roots.view(),
+                &self.root_heads.view(),
+            )
+        }
+
+        fn load_with_retention(
+            &self,
+            retained_root_count: u32,
+        ) -> Result<PrivacyOrchardPoolSnapshotV1, String> {
+            load_privacy_orchard_pool_snapshot_v1(
+                self.namespace,
+                retained_root_count,
+                &self.commitments.view(),
+                &self.roots.view(),
+                &self.root_heads.view(),
+            )
+        }
+
+        fn state(&self) -> PrivacyOrchardPoolStateV1 {
+            self.commitments
+                .view()
+                .get(&self.state_key)
+                .and_then(PrivacyStateItemRecordV1::orchard_pool_state_ref)
+                .expect("fixture Orchard pool state")
+                .clone()
+        }
+
+        fn set_state(&mut self, state: PrivacyOrchardPoolStateV1) {
+            self.commitments.insert(
+                self.state_key,
+                PrivacyStateItemRecordV1::orchard_pool_state(state)
+                    .expect("canonical Orchard pool state record"),
+            );
+        }
+
+        fn advance_with_retention(
+            &mut self,
+            retained_root_count: u32,
+            note_commitments: &[[u8; 32]],
+        ) {
+            let snapshot = self
+                .load_with_retention(retained_root_count)
+                .expect("coherent Orchard predecessor");
+            let successor = snapshot
+                .derive_successor(note_commitments)
+                .expect("canonical Orchard commitments");
+            let next_epoch = successor.epoch();
+            let mut statement_bytes = [0xC0; 32];
+            statement_bytes[..8].copy_from_slice(&next_epoch.to_be_bytes());
+            let statement_digest = PrivacyStatementDigestV1::new(statement_bytes);
+            let root_provenance = PrivacyRootProvenanceV1::orchard_pool_successor(
+                self.bootstrap_digest,
+                statement_digest,
+                next_epoch + 10,
+                0,
+                snapshot.current_epoch(),
+                snapshot.current_root(),
+            )
+            .expect("successor root provenance");
+            let next_key = PrivacyRootKeyV1::new(
+                self.namespace,
+                PrivacyRootRoleV1::NoteCommitmentAnchor,
+                next_epoch,
+                successor.root(),
+            )
+            .expect("successor root key");
+            let removals = plan_privacy_root_history_update_v1(
+                &self.roots.view(),
+                &[next_key],
+                retained_root_count,
+            )
+            .expect("successor history plan");
+            let predecessor_head = *self
+                .root_heads
+                .view()
+                .get(&self.head_key)
+                .expect("fixture predecessor head");
+            let retention_anchor = removals
+                .last()
+                .map(|key| {
+                    PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root())
+                        .expect("pruned Orchard root anchor")
+                })
+                .or(predecessor_head.retention_anchor());
+            let retained = self
+                .roots
+                .view()
+                .iter()
+                .filter(|(key, _)| !removals.contains(key))
+                .map(|(key, provenance)| (*key, *provenance))
+                .collect::<Vec<_>>();
+            self.roots = retained.into_iter().collect();
+            self.roots.insert(next_key, root_provenance);
+            self.root_heads.insert(
+                self.head_key,
+                PrivacyRootHeadRecordV1::new(
+                    next_epoch,
+                    successor.root(),
+                    root_provenance,
+                    retention_anchor,
+                )
+                .expect("successor root head"),
+            );
+            self.set_state(successor);
+        }
+    }
+
+    fn orchard_persisted_fixture() -> OrchardPersistedFixture {
+        let namespace = orchard_namespace(0xA7);
+        let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0xA8));
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("orchard_asset").expect("asset name"),
+        );
+        let state = PrivacyOrchardPoolStateV1::bootstrap(
+            bootstrap_digest,
+            asset_definition_id,
+            account(0xA9),
+        )
+        .expect("canonical Orchard empty state");
+        let root = state.root();
+        let provenance = PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 9)
+            .expect("Orchard bootstrap provenance");
+        let root_key = PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+            root,
+        )
+        .expect("Orchard bootstrap root key");
+        let head_key =
+            PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::NoteCommitmentAnchor)
+                .expect("Orchard head key");
+        let state_key =
+            PrivacyCommitmentKeyV1::orchard_pool_state(namespace).expect("Orchard state key");
+
+        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        )
+        .expect("compiled Orchard profile");
+        let activation = profile.activation_record(PrivacyProtocolLifecycleV1::Active(
+            PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 2,
+                state_since_height: 2,
+            },
+        ));
+        let mut activations = Storage::new();
+        activations.insert(
+            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::OrchardHalo2ActionsV1),
+            activation,
+        );
+        let mut commitments = Storage::new();
+        commitments.insert(
+            state_key,
+            PrivacyStateItemRecordV1::orchard_pool_state(state).expect("Orchard state record"),
+        );
+        let mut roots = Storage::new();
+        roots.insert(root_key, provenance);
+        let mut root_heads = Storage::new();
+        root_heads.insert(
+            head_key,
+            PrivacyRootHeadRecordV1::new(
+                PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+                root,
+                provenance,
+                None,
+            )
+            .expect("Orchard bootstrap head"),
+        );
+
+        OrchardPersistedFixture {
+            activations,
+            pgc_accounts: Storage::new(),
+            pgc_pool_invariants: Storage::new(),
+            nullifiers: Storage::new(),
+            commitments,
+            roots,
+            root_heads,
+            namespace,
+            bootstrap_digest,
+            state_key,
+            head_key,
+        }
+    }
+
+    fn expect_orchard_persisted_error(
+        mutate: impl FnOnce(&mut OrchardPersistedFixture),
+        expected: &str,
+    ) {
+        let mut fixture = orchard_persisted_fixture();
+        mutate(&mut fixture);
+        let error = fixture
+            .validate()
+            .expect_err("adversarial Orchard state must reject");
+        assert!(
+            error.contains(expected),
+            "expected `{expected}` in Orchard persisted-state rejection, got `{error}`"
+        );
+    }
+
+    #[test]
+    fn orchard_bootstrap_is_canonical_authoritative_and_restart_safe() {
+        let mut fixture = orchard_persisted_fixture();
+        fixture.validate().expect("coherent Orchard bootstrap");
+        let snapshot = fixture
+            .load_with_retention(
+                PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+            )
+            .expect("bounded Orchard snapshot");
+        assert_eq!(snapshot.namespace(), fixture.namespace);
+        assert_eq!(
+            snapshot.current_epoch(),
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1
+        );
+        assert_eq!(
+            snapshot.current_root().into_bytes(),
+            crate::privacy_engines::orchard::orchard_empty_root_v1()
+        );
+        assert_eq!(snapshot.state().tree_size(), 0);
+        assert_eq!(snapshot.state().leaf(), None);
+        assert!(snapshot.state().ommers().is_empty());
+        assert_eq!(snapshot.bootstrap_digest(), fixture.bootstrap_digest);
+        assert!(snapshot.contains_retained_anchor(
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+            snapshot.current_root()
+        ));
+        assert_eq!(snapshot.retention_anchor(), None);
+
+        let activations = norito::json::to_json(&fixture.activations).expect("encode activations");
+        let nullifiers = norito::json::to_json(&fixture.nullifiers).expect("encode nullifiers");
+        let commitments = norito::json::to_json(&fixture.commitments).expect("encode commitments");
+        let roots = norito::json::to_json(&fixture.roots).expect("encode roots");
+        let root_heads = norito::json::to_json(&fixture.root_heads).expect("encode root heads");
+        fixture.activations = norito::json::from_json(&activations).expect("restore activations");
+        fixture.nullifiers = norito::json::from_json(&nullifiers).expect("restore nullifiers");
+        fixture.commitments = norito::json::from_json(&commitments).expect("restore commitments");
+        fixture.roots = norito::json::from_json(&roots).expect("restore roots");
+        fixture.root_heads = norito::json::from_json(&root_heads).expect("restore root heads");
+        fixture
+            .validate()
+            .expect("restored Orchard state preserves every invariant");
+    }
+
+    #[test]
+    fn orchard_public_dependencies_are_typed_bounded_and_fail_closed() {
+        let fixture = orchard_persisted_fixture();
+        let state = fixture.state();
+        let references = load_privacy_orchard_pool_references_v1(&fixture.commitments.view())
+            .expect("canonical Orchard public dependencies");
+        assert_eq!(
+            references,
+            vec![PrivacyOrchardPoolReferenceV1 {
+                namespace: fixture.namespace,
+                asset_definition_id: state.asset_definition_id().clone(),
+                reserve_account: state.reserve_account().clone(),
+            }]
+        );
+
+        let mut accounts = Storage::<AccountId, ()>::new();
+        let mut asset_definitions = Storage::<AssetDefinitionId, ()>::new();
+        accounts.insert(state.reserve_account().clone(), ());
+        asset_definitions.insert(state.asset_definition_id().clone(), ());
+        validate_privacy_orchard_public_dependencies_v1(
+            &fixture.commitments.view(),
+            &accounts.view(),
+            &asset_definitions.view(),
+        )
+        .expect("both exact public dependencies exist");
+
+        let error = validate_privacy_orchard_public_dependencies_v1(
+            &fixture.commitments.view(),
+            &Storage::<AccountId, ()>::new().view(),
+            &asset_definitions.view(),
+        )
+        .expect_err("missing reserve account must reject restored state");
+        assert!(error.contains("references missing reserve account"));
+        assert!(error.contains(&state.reserve_account().to_string()));
+
+        let error = validate_privacy_orchard_public_dependencies_v1(
+            &fixture.commitments.view(),
+            &accounts.view(),
+            &Storage::<AssetDefinitionId, ()>::new().view(),
+        )
+        .expect_err("missing asset definition must reject restored state");
+        assert!(error.contains("references missing asset definition"));
+        assert!(error.contains(&state.asset_definition_id().to_string()));
+    }
+
+    #[test]
+    fn orchard_compact_state_rehashes_and_rejects_impossible_transition_shapes() {
+        let fixture = orchard_persisted_fixture();
+        let state = fixture.state();
+        state.validate().expect("canonical empty state");
+
+        let successor = crate::privacy_engines::orchard::append_orchard_commitments_v1(
+            state.tree_size(),
+            state.leaf(),
+            state.ommers(),
+            state.root().into_bytes(),
+            &[[0; 32], [1; 32]],
+        )
+        .expect("two canonical Orchard leaves");
+        let advanced = state
+            .advance(successor.clone())
+            .expect("one two-action transition");
+        assert_eq!(advanced.epoch(), state.epoch() + 1);
+        assert_eq!(advanced.tree_size(), 2);
+        assert_eq!(advanced.asset_definition_id(), state.asset_definition_id());
+        assert_eq!(advanced.reserve_account(), state.reserve_account());
+        advanced.validate().expect("successor rehashes exactly");
+
+        let no_op = crate::privacy_engines::orchard::append_orchard_commitments_v1(
+            state.tree_size(),
+            state.leaf(),
+            state.ommers(),
+            state.root().into_bytes(),
+            &[],
+        )
+        .expect("empty native append is representable but not a ledger transition");
+        assert_eq!(
+            state.advance(no_op),
+            Err("Orchard successor must append one or two actions")
+        );
+        let three = crate::privacy_engines::orchard::append_orchard_commitments_v1(
+            state.tree_size(),
+            state.leaf(),
+            state.ommers(),
+            state.root().into_bytes(),
+            &[[0; 32], [1; 32], [2; 32]],
+        )
+        .expect("three leaves fit the tree but exceed the compiled action bound");
+        assert_eq!(
+            state.advance(three),
+            Err("Orchard successor must append one or two actions")
+        );
+
+        let mut corruptions = Vec::new();
+        let mut changed = state.clone();
+        changed.bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new([0; 32]);
+        corruptions.push(changed);
+        let mut changed = state.clone();
+        changed.epoch = 0;
+        corruptions.push(changed);
+        let mut changed = state.clone();
+        changed.root = PrivacyRootV1::new([0; 32]);
+        corruptions.push(changed);
+        let mut changed = state.clone();
+        changed.tree_size = 1;
+        corruptions.push(changed);
+        let mut changed = advanced.clone();
+        changed.epoch = PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1;
+        corruptions.push(changed);
+        let mut changed = advanced.clone();
+        changed.tree_size = 3;
+        corruptions.push(changed);
+        let mut changed = advanced.clone();
+        let mut changed_root = changed.root().into_bytes();
+        changed_root[0] ^= 1;
+        changed.root = PrivacyRootV1::new(changed_root);
+        corruptions.push(changed);
+        let mut changed = advanced.clone();
+        changed.leaf = Some([u8::MAX; 32]);
+        corruptions.push(changed);
+        let mut changed = advanced;
+        changed.ommers.clear();
+        corruptions.push(changed);
+        for corrupted in corruptions {
+            assert!(
+                corrupted.validate().is_err(),
+                "every malformed or impossible compact state must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn orchard_persisted_state_rejects_orphans_wrong_roles_and_cross_origin_state() {
+        expect_orchard_persisted_error(
+            |fixture| fixture.activations = Storage::new(),
+            "unregistered protocol",
+        );
+        expect_orchard_persisted_error(
+            |fixture| fixture.commitments = Storage::new(),
+            "no authoritative compact frontier",
+        );
+        expect_orchard_persisted_error(
+            |fixture| fixture.roots = Storage::new(),
+            "has no retained history",
+        );
+        expect_orchard_persisted_error(
+            |fixture| fixture.root_heads = Storage::new(),
+            "has no current head",
+        );
+        expect_orchard_persisted_error(
+            |fixture| {
+                fixture.commitments.insert(
+                    fixture.state_key,
+                    PrivacyStateItemRecordV1::zk_ams_verified_proof(
+                        PrivacyZkAmsRegistryBootstrapDigestV1::new(nonzero(0x31)),
+                        PrivacyStatementDigestV1::new(nonzero(0x32)),
+                        3,
+                        0,
+                    )
+                    .expect("locally valid wrong-role record"),
+                );
+            },
+            "wrong-role provenance",
+        );
+        expect_orchard_persisted_error(
+            |fixture| {
+                let mut state = fixture.state();
+                state.bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x33));
+                fixture.set_state(state);
+            },
+            "origin differs from its pool state",
+        );
+        expect_orchard_persisted_error(
+            |fixture| {
+                let snapshot = fixture
+                    .load_with_retention(
+                        PrivacyConsensusPolicyV1::taira_default().admission_retained_root_count(),
+                    )
+                    .expect("bootstrap snapshot");
+                let successor = snapshot
+                    .derive_successor(&[[0; 32]])
+                    .expect("valid but uncommitted successor");
+                fixture.set_state(successor);
+            },
+            "compact frontier does not equal its current root head",
+        );
+        expect_orchard_persisted_error(
+            |fixture| {
+                let head = *fixture
+                    .root_heads
+                    .view()
+                    .get(&fixture.head_key)
+                    .expect("bootstrap head");
+                fixture.root_heads.insert(
+                    fixture.head_key,
+                    PrivacyRootHeadRecordV1::new(
+                        head.epoch(),
+                        PrivacyRootV1::new(nonzero(0x34)),
+                        head.provenance(),
+                        None,
+                    )
+                    .expect("locally valid mismatched head"),
+                );
+            },
+            "does not equal latest",
+        );
+        expect_orchard_persisted_error(
+            |fixture| {
+                let key = *fixture
+                    .roots
+                    .view()
+                    .iter()
+                    .next()
+                    .map(|(key, _)| key)
+                    .expect("bootstrap root");
+                fixture.roots.insert(
+                    key,
+                    PrivacyRootProvenanceV1::governance(
+                        PrivacyRootPublicationDigestV1::new(nonzero(0x35)),
+                        9,
+                    )
+                    .expect("locally valid wrong origin"),
+                );
+            },
+            "invalid provenance",
+        );
+    }
+
+    #[test]
+    fn orchard_nullifiers_are_canonical_pool_scoped_origin_bound_and_restart_safe() {
+        let mut fixture = orchard_persisted_fixture();
+        let nullifier = [0; 32];
+        let key = PrivacyNullifierKeyV1::orchard_nullifier(fixture.namespace, nullifier)
+            .expect("canonical Orchard nullifier");
+        let record = PrivacyStateItemRecordV1::orchard_verified_nullifier(
+            fixture.bootstrap_digest,
+            PrivacyStatementDigestV1::new(nonzero(0x41)),
+            10,
+            0,
+        )
+        .expect("verified nullifier record");
+        fixture.nullifiers.insert(key, record.clone());
+        fixture.validate().expect("origin-bound nullifier");
+        let encoded = norito::json::to_json(&fixture.nullifiers).expect("encode nullifiers");
+        fixture.nullifiers = norito::json::from_json(&encoded).expect("restore nullifiers");
+        fixture
+            .validate()
+            .expect("canonical nullifier survives restart");
+
+        assert!(
+            PrivacyNullifierKeyV1::orchard_nullifier(fixture.namespace, [u8::MAX; 32]).is_err(),
+            "non-canonical Pallas-base encodings must reject"
+        );
+        assert!(
+            PrivacyNullifierKeyV1::orchard_nullifier(vega_namespace(), nullifier).is_err(),
+            "a nullifier cannot be relabeled into another protocol namespace"
+        );
+
+        let mut cross_origin = orchard_persisted_fixture();
+        cross_origin.nullifiers.insert(
+            key,
+            PrivacyStateItemRecordV1::orchard_verified_nullifier(
+                PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x42)),
+                PrivacyStatementDigestV1::new(nonzero(0x43)),
+                10,
+                0,
+            )
+            .expect("locally valid cross-origin record"),
+        );
+        assert!(
+            cross_origin
+                .validate()
+                .expect_err("cross-origin nullifier")
+                .contains("wrong-role or cross-bootstrap")
+        );
+
+        let mut wrong_role = orchard_persisted_fixture();
+        wrong_role.nullifiers.insert(
+            key,
+            PrivacyStateItemRecordV1::zk_ams_verified_proof(
+                PrivacyZkAmsRegistryBootstrapDigestV1::new(nonzero(0x44)),
+                PrivacyStatementDigestV1::new(nonzero(0x45)),
+                10,
+                0,
+            )
+            .expect("locally valid wrong-role record"),
+        );
+        assert!(
+            wrong_role
+                .validate()
+                .expect_err("wrong-role nullifier")
+                .contains("wrong-role or cross-bootstrap")
+        );
+
+        let mut orphan = orchard_persisted_fixture();
+        let orphan_namespace = orchard_namespace(0x46);
+        let orphan_key = PrivacyNullifierKeyV1::orchard_nullifier(orphan_namespace, nullifier)
+            .expect("canonical orphan key");
+        orphan.nullifiers.insert(orphan_key, record);
+        assert!(
+            orphan
+                .validate()
+                .expect_err("orphan nullifier")
+                .contains("no authoritative note-commitment pool")
+        );
+    }
+
+    #[test]
+    fn orchard_retained_window_rejects_gaps_duplicates_forgery_and_bad_anchors() {
+        let rolled = || {
+            let mut fixture = orchard_persisted_fixture();
+            for index in 0..5 {
+                fixture
+                    .advance_with_retention(3, &[if index % 2 == 0 { [0; 32] } else { [1; 32] }]);
+            }
+            let snapshot = fixture
+                .load_with_retention(3)
+                .expect("valid retained Orchard window");
+            assert_eq!(snapshot.current_epoch(), 6);
+            assert_eq!(
+                snapshot
+                    .retention_anchor()
+                    .expect("pruned prefix anchor")
+                    .epoch(),
+                3
+            );
+            assert_eq!(fixture.roots.view().iter().count(), 3);
+            fixture
+        };
+
+        let mut restart = rolled();
+        let commitments =
+            norito::json::to_json(&restart.commitments).expect("encode compact state");
+        let roots = norito::json::to_json(&restart.roots).expect("encode retained roots");
+        let heads = norito::json::to_json(&restart.root_heads).expect("encode root heads");
+        restart.commitments = norito::json::from_json(&commitments).expect("restore compact state");
+        restart.roots = norito::json::from_json(&roots).expect("restore retained roots");
+        restart.root_heads = norito::json::from_json(&heads).expect("restore root heads");
+        restart
+            .load_with_retention(3)
+            .expect("retained window survives exact restart");
+
+        let mut fixture = rolled();
+        let keys = fixture
+            .roots
+            .view()
+            .iter()
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        fixture.roots = fixture
+            .roots
+            .view()
+            .iter()
+            .filter(|(key, _)| **key != keys[1])
+            .map(|(key, provenance)| (*key, *provenance))
+            .collect();
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("middle gap")
+                .contains("gap or forged parent")
+        );
+
+        let mut fixture = rolled();
+        let (first_key, first_provenance) = fixture
+            .roots
+            .view()
+            .iter()
+            .next()
+            .map(|(key, provenance)| (*key, *provenance))
+            .expect("first retained root");
+        let duplicate_key = PrivacyRootKeyV1::new(
+            fixture.namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            first_key.epoch(),
+            PrivacyRootV1::new(nonzero(0x51)),
+        )
+        .expect("same-epoch alternate root");
+        fixture.roots.insert(duplicate_key, first_provenance);
+        assert!(
+            fixture
+                .load_with_retention(4)
+                .expect_err("duplicate epoch")
+                .contains("duplicate epoch")
+        );
+
+        let mut fixture = rolled();
+        let retained = fixture
+            .roots
+            .view()
+            .iter()
+            .map(|(key, provenance)| (*key, *provenance))
+            .collect::<Vec<_>>();
+        fixture.roots.insert(retained[0].0, retained[1].1);
+        fixture.roots.insert(retained[1].0, retained[0].1);
+        assert!(
+            fixture.load_with_retention(3).is_err(),
+            "reordered successor provenance must reject"
+        );
+
+        let mut fixture = rolled();
+        let (first_key, first_provenance) = fixture
+            .roots
+            .view()
+            .iter()
+            .next()
+            .map(|(key, provenance)| (*key, *provenance))
+            .expect("first retained root");
+        let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            ..
+        } = first_provenance
+        else {
+            panic!("rolled Orchard prefix starts with a successor");
+        };
+        fixture.roots.insert(
+            first_key,
+            PrivacyRootProvenanceV1::orchard_pool_successor(
+                fixture.bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                PrivacyRootV1::new(nonzero(0x52)),
+            )
+            .expect("locally valid forged parent"),
+        );
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("forged pruned-prefix parent")
+                .contains("exact pruned-prefix anchor")
+        );
+
+        let mut fixture = rolled();
+        let (last_key, last_provenance) = fixture
+            .roots
+            .view()
+            .iter()
+            .last()
+            .map(|(key, provenance)| (*key, *provenance))
+            .expect("latest retained root");
+        let PrivacyRootProvenanceV1::OrchardPoolSuccessor {
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            parent_root,
+            ..
+        } = last_provenance
+        else {
+            panic!("latest Orchard root is a successor");
+        };
+        let forged = PrivacyRootProvenanceV1::orchard_pool_successor(
+            PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0x53)),
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            parent_root,
+        )
+        .expect("locally valid cross-origin successor");
+        fixture.roots.insert(last_key, forged);
+        fixture.root_heads.insert(
+            fixture.head_key,
+            PrivacyRootHeadRecordV1::new(
+                last_key.epoch(),
+                last_key.root(),
+                forged,
+                fixture
+                    .root_heads
+                    .view()
+                    .get(&fixture.head_key)
+                    .expect("rolled head")
+                    .retention_anchor(),
+            )
+            .expect("cross-origin head"),
+        );
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("cross-origin successor")
+                .contains("different pool bootstrap")
+        );
+
+        for anchor in [
+            None,
+            Some(
+                PrivacyRootRetentionAnchorV1::new(3, PrivacyRootV1::new(nonzero(0x54)))
+                    .expect("wrong-root anchor"),
+            ),
+            Some(
+                PrivacyRootRetentionAnchorV1::new(2, PrivacyRootV1::new(nonzero(0x55)))
+                    .expect("stale anchor"),
+            ),
+            Some(
+                PrivacyRootRetentionAnchorV1::new(4, PrivacyRootV1::new(nonzero(0x56)))
+                    .expect("advanced anchor"),
+            ),
+        ] {
+            let mut fixture = rolled();
+            let head = *fixture
+                .root_heads
+                .view()
+                .get(&fixture.head_key)
+                .expect("rolled head");
+            fixture.root_heads.insert(
+                fixture.head_key,
+                PrivacyRootHeadRecordV1::new(head.epoch(), head.root(), head.provenance(), anchor)
+                    .expect("locally valid forged anchor"),
+            );
+            assert!(
+                fixture.load_with_retention(3).is_err(),
+                "missing, wrong-root, stale, and advanced anchors must reject"
+            );
+        }
+
+        let mut fixture = orchard_persisted_fixture();
+        let bootstrap_key = *fixture
+            .roots
+            .view()
+            .iter()
+            .next()
+            .map(|(key, _)| key)
+            .expect("bootstrap key");
+        fixture.roots.insert(
+            bootstrap_key,
+            PrivacyRootProvenanceV1::governance(
+                PrivacyRootPublicationDigestV1::new(nonzero(0x57)),
+                9,
+            )
+            .expect("wrong-role origin"),
+        );
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("governance-forged Orchard origin")
+                .contains("invalid provenance")
         );
     }
 
@@ -5965,9 +7800,9 @@ mod tests {
     }
 
     #[test]
-    fn future_non_pgc_retention_is_prevalidated_while_pgc_is_prunable() {
-        let orchard_namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+    fn future_unanchored_retention_is_prevalidated_while_typed_histories_are_prunable() {
+        let fcmp_namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new(nonzero(0xA7)),
             }),
@@ -5981,40 +7816,58 @@ mod tests {
         for epoch in 1..=2 {
             non_pgc_roots.insert(
                 PrivacyRootKeyV1::new(
-                    orchard_namespace,
-                    PrivacyRootRoleV1::NoteCommitmentAnchor,
+                    fcmp_namespace,
+                    PrivacyRootRoleV1::OutputSet,
                     epoch,
                     PrivacyRootV1::new([u8::try_from(epoch).expect("small epoch"); 32]),
                 )
-                .expect("Orchard root key"),
+                .expect("FCMP++ root key"),
                 provenance,
             );
         }
-        validate_non_pgc_privacy_root_retention_v1(&non_pgc_roots.view(), 2)
+        validate_unanchored_privacy_root_retention_v1(&non_pgc_roots.view(), 2)
             .expect("inclusive future cap");
         assert!(
-            validate_non_pgc_privacy_root_retention_v1(&non_pgc_roots.view(), 1)
-                .expect_err("non-PGC histories cannot be implicitly pruned")
+            validate_unanchored_privacy_root_retention_v1(&non_pgc_roots.view(), 1)
+                .expect_err("unanchored histories cannot be implicitly pruned")
                 .contains("exceeding scheduled retention 1")
         );
-        assert!(validate_non_pgc_privacy_root_retention_v1(&non_pgc_roots.view(), 0).is_err());
+        assert!(validate_unanchored_privacy_root_retention_v1(&non_pgc_roots.view(), 0).is_err());
 
-        let pgc_namespace = pgc_namespace(0xB7);
-        let mut pgc_roots = Storage::new();
-        for epoch in 1..=3 {
-            pgc_roots.insert(
-                PrivacyRootKeyV1::new(
-                    pgc_namespace,
-                    PrivacyRootRoleV1::PgcAccountState,
-                    epoch,
-                    PrivacyRootV1::new([u8::try_from(epoch).expect("small epoch"); 32]),
-                )
-                .expect("PGC root key"),
-                provenance,
+        for (namespace, role, label) in [
+            (
+                pgc_namespace(0xB7),
+                PrivacyRootRoleV1::PgcAccountState,
+                "PGC",
+            ),
+            (
+                zk_ams_namespace(0xB8),
+                PrivacyRootRoleV1::AccountRegistry,
+                "ZK-AMS",
+            ),
+            (
+                orchard_namespace(0xB9),
+                PrivacyRootRoleV1::NoteCommitmentAnchor,
+                "Orchard",
+            ),
+        ] {
+            let mut roots = Storage::new();
+            for epoch in 1..=3 {
+                roots.insert(
+                    PrivacyRootKeyV1::new(
+                        namespace,
+                        role,
+                        epoch,
+                        PrivacyRootV1::new([u8::try_from(epoch).expect("small epoch"); 32]),
+                    )
+                    .expect("typed root key"),
+                    provenance,
+                );
+            }
+            validate_unanchored_privacy_root_retention_v1(&roots.view(), 1).unwrap_or_else(
+                |error| panic!("{label} must use its typed pruning planner: {error}"),
             );
         }
-        validate_non_pgc_privacy_root_retention_v1(&pgc_roots.view(), 1)
-            .expect("PGC histories use the typed due-height pruning planner");
     }
 
     #[test]
