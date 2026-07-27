@@ -541,8 +541,9 @@ pub use routing::handle_p2p_ws;
 pub use routing::{
     AssetTransferIntentDto, AssetTransferReceiptDto, AssetTransferRequestDto,
     AssetTransferResponseDto, AssetTransferSigningPayloadDto, ContractAliasResolveRequestDto,
-    ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto,
-    ContractCallSimulateDto, ContractCallSimulateResponseDto, ContractDeploymentStateRequestDto,
+    ContractAliasResolveResponseDto, ContractCallBatchPlanDto, ContractCallBatchPrepareDto,
+    ContractCallDto, ContractCallResponseDto, ContractCallSimulateDto,
+    ContractCallSimulateResponseDto, ContractDeploymentStateRequestDto,
     ContractDeploymentStateResponseDto, ContractViewDto, ContractViewResponseDto,
     EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
     KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
@@ -553,12 +554,13 @@ pub use routing::{
     ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk,
     handle_post_asset_transfer, handle_post_contract_alias_set, handle_post_contract_call,
-    handle_post_contract_call_simulate, handle_post_contract_view,
-    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
-    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
-    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
-    handle_queries_with_opts, handle_v1_events_sse, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
+    handle_post_contract_call_batch_prepare, handle_post_contract_call_simulate,
+    handle_post_contract_view, handle_post_sorafs_register_manifest,
+    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
+    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
+    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
+    handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
+    handle_v1_sumeragi_vrf_penalties, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -41511,6 +41513,31 @@ async fn handler_post_contract_call(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_contract_call_batch_prepare(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::ContractCallBatchPrepareDto>,
+) -> Result<AxResponse, Error> {
+    check_public_contract_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/contracts/call/batch/prepare",
+        "call_batch_prepare",
+    )
+    .await?;
+    match crate::routing::handle_post_contract_call_batch_prepare(app.state.clone(), request) {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => {
+            app.telemetry
+                .with_metrics(|telemetry| telemetry.inc_torii_contract_error("call_batch_prepare"));
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_call_simulate(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -46545,6 +46572,16 @@ fn pipeline_status_response(
     if let Some(block_height) = entry.block_height.map(NonZeroU64::get) {
         response.trigger_completions =
             trigger_completion_summaries_for_entrypoint_hash(app, block_height, &hash.to_string());
+        if let Some(height) = usize::try_from(block_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            && let Some(block) = app.kura.get_block(height)
+        {
+            let entrypoint_hash =
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::from(hash.clone()));
+            response.batch_transfer_outcomes =
+                block.batch_transfer_outcomes_for(&entrypoint_hash).to_vec();
+        }
     }
     response
 }
@@ -53556,6 +53593,11 @@ impl Torii {
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_POST,
             catalog_post(handler_post_contract_call).layer(contracts_body_limit.clone()),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_BATCH_PREPARE_POST,
+            catalog_post(handler_post_contract_call_batch_prepare)
+                .layer(contracts_body_limit.clone()),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,

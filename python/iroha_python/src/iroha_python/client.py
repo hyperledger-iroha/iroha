@@ -37,6 +37,7 @@ from typing import (
 from urllib.parse import quote, urlencode, urlparse, urlunparse
 
 import requests
+from blake3 import blake3
 from iroha_torii_client.client import (
     ConfidentialGasSchedule,
     ConfigurationSnapshot,
@@ -10269,6 +10270,117 @@ def _extract_pipeline_status_kind(payload: Any) -> Optional[str]:
     return None
 
 
+def _batch_transfer_receipt(payload: Any) -> Optional[Dict[str, Any]]:
+    """Project native durable batch outcomes into an ergonomic ordered receipt."""
+
+    if not isinstance(payload, Mapping):
+        return None
+    raw_outcomes = payload.get("batch_transfer_outcomes")
+    if not isinstance(raw_outcomes, Sequence) or isinstance(
+        raw_outcomes,
+        (str, bytes, bytearray, memoryview),
+    ):
+        content = payload.get("content")
+        if isinstance(content, Mapping):
+            return _batch_transfer_receipt(content)
+        return None
+
+    legs: List[Dict[str, Any]] = []
+    for index, raw_outcome in enumerate(raw_outcomes):
+        if not isinstance(raw_outcome, Mapping):
+            raise RuntimeError(
+                f"batch_transfer_outcomes[{index}] must be an object"
+            )
+        leg = dict(raw_outcome)
+        leg_id = leg.get("leg_id", leg.get("id"))
+        leg_index = leg.get("leg_index", leg.get("index", index))
+        status_payload = leg.get("status")
+        status: Optional[str] = None
+        rejection: Optional[Mapping[str, Any]] = None
+        if isinstance(status_payload, Mapping):
+            status_value = status_payload.get("status", status_payload.get("kind"))
+            if status_value is not None:
+                status = str(status_value)
+            value = status_payload.get("value")
+            if isinstance(value, Mapping):
+                rejection = value
+        elif status_payload is not None:
+            status = str(status_payload)
+
+        code: Optional[str] = None
+        message: Optional[str] = None
+        if rejection is not None:
+            code_payload = rejection.get("code")
+            if isinstance(code_payload, Mapping):
+                code_value = code_payload.get("code", code_payload.get("kind"))
+                if code_value is not None:
+                    code = str(code_value)
+            elif code_payload is not None:
+                code = str(code_payload)
+            message_payload = rejection.get("message")
+            if message_payload is not None:
+                message = str(message_payload)
+
+        leg["id"] = str(leg_id) if leg_id is not None else str(index)
+        leg["leg_id"] = leg["id"]
+        leg["index"] = leg_index
+        leg["leg_index"] = leg_index
+        if status is not None:
+            leg["status"] = status
+        if code is not None:
+            leg["code"] = code
+            leg["rejection_code"] = code
+        if message is not None:
+            leg["message"] = message
+        legs.append(leg)
+
+    return {"mode": "Independent", "legs": legs}
+
+
+def _with_batch_transfer_receipt(payload: Any) -> Any:
+    """Attach the stable convenience projection without hiding native evidence."""
+
+    receipt = _batch_transfer_receipt(payload)
+    if receipt is None or not isinstance(payload, Mapping):
+        return payload
+    projected = dict(payload)
+    projected["batch_receipt"] = receipt
+    return projected
+
+
+def _normalize_contract_call_metadata(
+    value: Optional[Mapping[str, Any]],
+    *,
+    context: str,
+) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{context} must be a mapping")
+    normalized: Dict[str, Any] = {}
+    for raw_key, raw_value in value.items():
+        if not isinstance(raw_key, str):
+            raise TypeError(f"{context} keys must be strings")
+        if (
+            not raw_key
+            or raw_key != raw_key.strip()
+            or any(character.isspace() for character in raw_key)
+            or any(character in "@#$" for character in raw_key)
+        ):
+            raise ValueError(f"{context} contains an invalid metadata key")
+        if raw_key in _CONTRACT_CALL_RESERVED_METADATA_KEYS or raw_key.startswith(
+            _CONTRACT_CALL_RESERVED_METADATA_PREFIXES
+        ):
+            raise ValueError(f"{context} key {raw_key!r} is reserved")
+        try:
+            normalized[raw_key] = json.loads(
+                json.dumps(raw_value, allow_nan=False)
+            )
+        except (TypeError, ValueError) as error:
+            raise TypeError(f"{context}[{raw_key!r}] must be strict JSON") from error
+    return normalized
+
+
 def _pick_api_token(torii_section: Optional[Mapping[str, Any]]) -> Optional[str]:
     if not isinstance(torii_section, Mapping):
         return None
@@ -10387,8 +10499,125 @@ def signed_transaction_envelope_from_json(envelope_json: str) -> "SignedTransact
     return _require_crypto().signed_transaction_envelope_from_json(envelope_json)
 
 
+@dataclass(frozen=True, init=False)
+class ContractCallIntent:
+    """One manifest-resolved call requested for an ordered atomic batch."""
+
+    entrypoint: str
+    contract_address: Optional[str] = None
+    contract_alias: Optional[str] = None
+    payload: Any = None
+    expected_contract_address: Optional[str] = None
+    expected_code_hash_hex: Optional[str] = None
+    expected_abi_hash_hex: Optional[str] = None
+
+    def __init__(
+        self,
+        entrypoint: str,
+        *,
+        contract_address: Optional[str] = None,
+        contract_alias: Optional[str] = None,
+        payload: Any = None,
+        expected_contract_address: Optional[str] = None,
+        expected_code_hash_hex: Optional[str] = None,
+        expected_abi_hash_hex: Optional[str] = None,
+    ) -> None:
+        object.__setattr__(self, "entrypoint", entrypoint)
+        object.__setattr__(self, "contract_address", contract_address)
+        object.__setattr__(self, "contract_alias", contract_alias)
+        object.__setattr__(self, "payload", payload)
+        object.__setattr__(
+            self,
+            "expected_contract_address",
+            expected_contract_address,
+        )
+        object.__setattr__(self, "expected_code_hash_hex", expected_code_hash_hex)
+        object.__setattr__(self, "expected_abi_hash_hex", expected_abi_hash_hex)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        _require_exact_non_empty_string(
+            self.entrypoint,
+            "ContractCallIntent.entrypoint",
+        )
+        if (self.contract_address is None) == (self.contract_alias is None):
+            raise ValueError(
+                "ContractCallIntent requires exactly one of "
+                "contract_address or contract_alias"
+            )
+        for value, field in (
+            (self.contract_address, "contract_address"),
+            (self.contract_alias, "contract_alias"),
+            (self.expected_contract_address, "expected_contract_address"),
+        ):
+            if value is not None:
+                _require_exact_non_empty_string(
+                    value,
+                    f"ContractCallIntent.{field}",
+                )
+        for value, field in (
+            (self.expected_code_hash_hex, "expected_code_hash_hex"),
+            (self.expected_abi_hash_hex, "expected_abi_hash_hex"),
+        ):
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                raise TypeError(f"ContractCallIntent.{field} must be a string")
+            if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError(
+                    f"ContractCallIntent.{field} must be exactly "
+                    "32 lowercase hexadecimal bytes"
+                )
+
+    def to_payload(self) -> Dict[str, Any]:
+        """Return the strict Torii preparation intent."""
+
+        payload: Dict[str, Any] = {"entrypoint": self.entrypoint}
+        if self.contract_address is not None:
+            payload["contract_address"] = self.contract_address
+        if self.contract_alias is not None:
+            payload["contract_alias"] = self.contract_alias
+        if self.payload is not None:
+            try:
+                payload["payload"] = json.loads(
+                    json.dumps(self.payload, allow_nan=False)
+                )
+            except (TypeError, ValueError) as error:
+                raise TypeError(
+                    "ContractCallIntent.payload must be strict JSON"
+                ) from error
+        if self.expected_contract_address is not None:
+            payload["expected_contract_address"] = self.expected_contract_address
+        if self.expected_code_hash_hex is not None:
+            payload["expected_code_hash_hex"] = self.expected_code_hash_hex
+        if self.expected_abi_hash_hex is not None:
+            payload["expected_abi_hash_hex"] = self.expected_abi_hash_hex
+        return payload
+
+
+@dataclass(frozen=True)
+class _PreparedContractCallBatchItem:
+    index: int
+    kind: str
+    contract_address: Optional[str] = None
+    code_hash_hex: Optional[str] = None
+    abi_hash_hex: Optional[str] = None
+    entrypoint: Optional[str] = None
+    arguments: Optional[bytes] = None
+    wire_id: Optional[str] = None
+    instruction: Optional[bytes] = None
+
+
+@dataclass(frozen=True)
+class _ContractCallBatchPlan:
+    binding: Dict[str, Any]
+    binding_digest_hex: str
+    prepared_entries: Tuple[_PreparedContractCallBatchItem, ...]
+
+
 __all__ = [
     "ToriiClient",
+    "ContractCallIntent",
     "create_torii_client",
     "TransactionStatusError",
     "DataModelMismatchError",
@@ -10519,6 +10748,16 @@ _DEFAULT_FAILURE_STATUSES = frozenset({"Rejected", "Expired"})
 _DEFAULT_RETRY_STATUSES = frozenset({502, 503, 504})
 _DEFAULT_RETRY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _TRANSACTION_STATUS_SCOPES = frozenset({"local", "global"})
+_CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 = b"iroha:contract-call-batch-binding:v1\0"
+_CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 = b"iroha:contract-call-batch-arguments:v1\0"
+_CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1 = (
+    b"iroha:contract-call-batch-instruction:v1\0"
+)
+_CONTRACT_CALL_BATCH_MAX_ITEMS = 256
+_CONTRACT_CALL_RESERVED_METADATA_PREFIXES = ("contract_", "validation_fee_")
+_CONTRACT_CALL_RESERVED_METADATA_KEYS = frozenset(
+    {"fee_sponsor", "fee_sponsor_account", "gas_asset_id", "gas_limit"}
+)
 
 
 def _normalize_transaction_status_scope(value: str, context: str) -> str:
@@ -10789,6 +11028,231 @@ class ToriiClient(_BaseToriiClient):
         if receipt is not None:
             return receipt
         return type(self)._maybe_json(response)
+
+    @staticmethod
+    def _escrow_query_signing_key(
+        *,
+        private_key: Optional[bytes],
+        private_key_hex: Optional[str],
+    ) -> bytes:
+        if (private_key is None) == (private_key_hex is None):
+            raise ValueError("provide exactly one of private_key or private_key_hex")
+        if private_key_hex is not None:
+            try:
+                return bytes.fromhex(private_key_hex)
+            except ValueError as error:
+                raise ValueError("private_key_hex must be valid hexadecimal") from error
+        if not isinstance(private_key, (bytes, bytearray, memoryview)):
+            raise TypeError("private_key must be bytes-like")
+        return bytes(private_key)
+
+    def get_asset_escrow(
+        self,
+        *,
+        escrow_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+    ) -> Mapping[str, Any]:
+        """Execute ``FindAssetEscrowById`` and return its complete native record."""
+
+        from .crypto import build_find_asset_escrow_query
+
+        request = build_find_asset_escrow_query(
+            self._native_transaction_account_id(authority, "authority"),
+            self._escrow_query_signing_key(
+                private_key=private_key,
+                private_key_hex=private_key_hex,
+            ),
+            _require_exact_non_empty_string(escrow_id, "escrow_id"),
+        )
+        response = self._request(
+            "POST",
+            "/query",
+            data=request,
+            headers={
+                "Content-Type": "application/x-norito",
+                "Accept": "application/json",
+            },
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("unexpected native escrow query response")
+        records = self._asset_escrow_records_from_query_payload(payload)
+        if len(records) != 1:
+            raise RuntimeError(
+                "native escrow query did not return exactly one asset escrow record"
+            )
+        return records[0]
+
+    @staticmethod
+    def _asset_escrow_records_from_query_payload(
+        payload: Mapping[str, Any],
+    ) -> List[Mapping[str, Any]]:
+        records: List[Mapping[str, Any]] = []
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                if value.get("kind") == "AssetEscrowRecord":
+                    content = value.get("content")
+                    if isinstance(content, Mapping):
+                        records.append(dict(content))
+                    elif isinstance(content, Sequence) and not isinstance(
+                        content,
+                        (str, bytes, bytearray, memoryview),
+                    ):
+                        for item in content:
+                            if not isinstance(item, Mapping):
+                                raise RuntimeError(
+                                    "native escrow query returned a malformed record"
+                                )
+                            records.append(dict(item))
+                    else:
+                        raise RuntimeError(
+                            "native escrow query returned malformed record content"
+                        )
+                    return
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, Sequence) and not isinstance(
+                value,
+                (str, bytes, bytearray, memoryview),
+            ):
+                for child in value:
+                    visit(child)
+
+        visit(payload)
+        return records
+
+    @staticmethod
+    def _asset_escrow_status(record: Mapping[str, Any]) -> Optional[str]:
+        status = record.get("status")
+        if isinstance(status, Mapping):
+            for key in ("status", "kind"):
+                value = status.get(key)
+                if value is not None:
+                    return str(value)
+        if status is not None:
+            return str(status)
+        return None
+
+    def _list_asset_escrows_by_party(
+        self,
+        *,
+        account_id: str,
+        authority: str,
+        private_key: Optional[bytes],
+        private_key_hex: Optional[str],
+        party: str,
+        status: Optional[str],
+        escrow_id: Optional[str],
+    ) -> Sequence[Mapping[str, Any]]:
+        from .crypto import (
+            build_find_asset_escrows_by_buyer_query,
+            build_find_asset_escrows_by_seller_query,
+        )
+
+        signing_key = self._escrow_query_signing_key(
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+        )
+        canonical_authority = self._native_transaction_account_id(
+            authority,
+            "authority",
+        )
+        canonical_account = self._native_transaction_account_id(
+            account_id,
+            party,
+        )
+        if party == "seller":
+            request = build_find_asset_escrows_by_seller_query(
+                canonical_authority,
+                signing_key,
+                canonical_account,
+            )
+        elif party == "buyer":
+            request = build_find_asset_escrows_by_buyer_query(
+                canonical_authority,
+                signing_key,
+                canonical_account,
+            )
+        else:  # pragma: no cover - private invariant
+            raise AssertionError(f"unsupported escrow party {party!r}")
+
+        response = self._request(
+            "POST",
+            "/query",
+            data=request,
+            headers={
+                "Content-Type": "application/x-norito",
+                "Accept": "application/json",
+            },
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("unexpected native escrow query response")
+        records = self._asset_escrow_records_from_query_payload(payload)
+        if escrow_id is not None:
+            expected_id = _require_exact_non_empty_string(escrow_id, "escrow_id")
+            records = [
+                record
+                for record in records
+                if str(record.get("id", record.get("escrow_id"))) == expected_id
+            ]
+        if status is not None:
+            expected_status = _require_exact_non_empty_string(status, "status")
+            records = [
+                record
+                for record in records
+                if self._asset_escrow_status(record) == expected_status
+            ]
+        return records
+
+    def list_asset_escrows_by_seller(
+        self,
+        *,
+        seller: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        status: Optional[str] = None,
+        escrow_id: Optional[str] = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return native escrow records funded by ``seller``."""
+
+        return self._list_asset_escrows_by_party(
+            account_id=seller,
+            authority=authority,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            party="seller",
+            status=status,
+            escrow_id=escrow_id,
+        )
+
+    def list_asset_escrows_by_buyer(
+        self,
+        *,
+        buyer: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        status: Optional[str] = None,
+        escrow_id: Optional[str] = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return native escrow records benefiting ``buyer``."""
+
+        return self._list_asset_escrows_by_party(
+            account_id=buyer,
+            authority=authority,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            party="buyer",
+            status=status,
+            escrow_id=escrow_id,
+        )
 
     def submit_transaction_envelope(self, envelope: "SignedTransactionEnvelope") -> Optional[Any]:
         """Submit a transaction using a :class:`SignedTransactionEnvelope`."""
@@ -14147,7 +14611,7 @@ class ToriiClient(_BaseToriiClient):
         if response.status_code == 404:
             return None
         self._expect_status(response, {200, 202, 204})
-        return self._maybe_json(response)
+        return _with_batch_transfer_receipt(self._maybe_json(response))
 
     def wait_for_transaction_status(
         self,
@@ -14279,12 +14743,12 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         ttl_ms: Optional[int] = 900_000,
         nonce: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> "TransactionDraft":
-        from .tx import TransactionConfig, TransactionDraft
+        from .tx import TransactionConfig, TransactionDraft, authority_fee_payment
 
         effective_chain_id = _require_exact_non_empty_string(chain_id, "chain_id")
         effective_authority = self._native_transaction_account_id(
@@ -14295,7 +14759,11 @@ class ToriiClient(_BaseToriiClient):
             TransactionConfig(
                 chain_id=effective_chain_id,
                 authority=effective_authority,
-                fee_payment=fee_payment,
+                fee_payment=(
+                    fee_payment
+                    if fee_payment is not None
+                    else authority_fee_payment(charge_limits=[])
+                ),
                 ttl_ms=ttl_ms,
                 nonce=nonce,
                 metadata=metadata,
@@ -14432,7 +14900,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -14512,7 +14980,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -14550,7 +15018,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -14640,7 +15108,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -14681,7 +15149,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         mints: Iterable[Mapping[str, Any]],
@@ -14778,7 +15246,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -14815,6 +15283,83 @@ class ToriiClient(_BaseToriiClient):
         """Alias for :meth:`transfer_asset_quantity_and_wait`."""
 
         return self.transfer_asset_quantity_and_wait(**kwargs)
+
+    def transfer_asset_batch_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        fee_payment: Optional[Mapping[str, Any]] = None,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        source_account: str,
+        payments: Sequence[Any],
+        mode: Any = "Independent",
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Submit one native transfer batch with ordered, durable leg outcomes."""
+
+        if isinstance(payments, (str, bytes, bytearray, memoryview)) or not isinstance(
+            payments,
+            Sequence,
+        ):
+            raise TypeError("payments must be a sequence")
+        normalized_payments: List[Dict[str, Any]] = []
+        for index, payment in enumerate(payments):
+            if isinstance(payment, Mapping):
+                payload = dict(payment)
+            else:
+                to_payload = getattr(payment, "to_payload", None)
+                if not callable(to_payload):
+                    raise TypeError(
+                        f"payments[{index}] must be a mapping or expose to_payload()"
+                    )
+                payload = dict(to_payload())
+            if "to" in payload:
+                payload["to"] = self._native_transaction_account_id(
+                    payload["to"],
+                    f"payments[{index}].to",
+                )
+            normalized_payments.append(payload)
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            fee_payment=fee_payment,
+            metadata=transaction_metadata,
+        )
+        draft.transfer_asset_batch(
+            self._native_transaction_account_id(source_account, "source_account"),
+            _require_exact_non_empty_string(
+                asset_definition_id,
+                "asset_definition_id",
+            ),
+            normalized_payments,
+            mode=mode,
+        )
+        result = dict(
+            self._submit_transaction_draft_result(
+                draft,
+                private_key=private_key,
+                private_key_hex=private_key_hex,
+                wait=wait,
+                timeout=timeout,
+                interval=interval,
+            )
+        )
+        terminal = result.get("terminal")
+        receipt = (
+            terminal.get("batch_receipt")
+            if isinstance(terminal, Mapping)
+            else None
+        )
+        if isinstance(receipt, Mapping):
+            result["batch_receipt"] = dict(receipt)
+        return result
 
     def set_asset_transfer_freeze_and_wait(
         self,
@@ -14975,7 +15520,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15023,24 +15568,213 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def drawdown_asset_lock_and_wait(
+    def open_conditional_escrow_and_wait(
         self,
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
+        asset_definition_id: str,
         amount: QuantityLike,
-        expected_remaining_amount: QuantityLike,
+        beneficiary: str,
+        conditions: Sequence[Any],
+        release_policy: Any = "AllConditions",
+        expires_at_ms: int,
+        evidence_digests: Optional[Sequence[Any]] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Draw down a native asset lock and optionally wait for commit."""
+        """Open an ordered, queryable native conditional escrow."""
 
+        policy = getattr(release_policy, "value", release_policy)
+        if policy != "AllConditions":
+            raise ValueError(
+                "release_policy must be 'AllConditions'; native conditional escrows "
+                "release only after every ordered predicate passes"
+            )
+        if isinstance(conditions, (str, bytes, bytearray, memoryview)) or not isinstance(
+            conditions,
+            Sequence,
+        ):
+            raise TypeError("conditions must be a sequence")
+        normalized_conditions: List[Dict[str, Any]] = []
+        for index, condition in enumerate(conditions):
+            if isinstance(condition, Mapping):
+                payload = dict(condition)
+            else:
+                to_payload = getattr(condition, "to_payload", None)
+                if not callable(to_payload):
+                    raise TypeError(
+                        f"conditions[{index}] must be a mapping or expose to_payload()"
+                    )
+                payload = dict(to_payload())
+            if payload.get("kind") == "Oracle":
+                oracle = payload.get("value")
+                if not isinstance(oracle, Mapping):
+                    raise TypeError(f"conditions[{index}].value must be a mapping")
+                normalized_oracle = dict(oracle)
+                if "attestor" in normalized_oracle:
+                    normalized_oracle["attestor"] = self._native_transaction_account_id(
+                        normalized_oracle["attestor"],
+                        f"conditions[{index}].value.attestor",
+                    )
+                payload["value"] = normalized_oracle
+            normalized_conditions.append(payload)
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            fee_payment=fee_payment,
+            metadata=transaction_metadata,
+        )
+        draft.open_conditional_escrow(
+            escrow_id,
+            _require_exact_non_empty_string(
+                asset_definition_id,
+                "asset_definition_id",
+            ),
+            self._native_transaction_account_id(beneficiary, "beneficiary"),
+            amount,
+            normalized_conditions,
+            expires_at_ms,
+            evidence_digests=evidence_digests,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def attest_escrow_condition_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        fee_payment: Optional[Mapping[str, Any]] = None,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        escrow_id: str,
+        claim: str,
+        value: Any,
+        evidence_digest: Optional[Any] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Attest one condition; the final passing claim releases custody."""
+
+        from .settlement import EscrowValue
+
+        if isinstance(value, Mapping) or callable(getattr(value, "to_payload", None)):
+            typed_value = value
+        elif isinstance(value, bool):
+            typed_value = EscrowValue.boolean(value)
+        elif isinstance(value, str):
+            typed_value = EscrowValue.text(value)
+        elif isinstance(value, (int, float, Decimal)):
+            typed_value = EscrowValue.quantity(value)
+        else:
+            raise TypeError(
+                "value must be an EscrowValue, mapping, bool, string, or quantity"
+            )
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            fee_payment=fee_payment,
+            metadata=transaction_metadata,
+        )
+        draft.attest_escrow_condition(
+            escrow_id,
+            claim,
+            typed_value,
+            evidence_digest=evidence_digest,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def expire_conditional_escrow_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        fee_payment: Optional[Mapping[str, Any]] = None,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        escrow_id: str,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Expire a conditional escrow and atomically refund its opener."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            fee_payment=fee_payment,
+            metadata=transaction_metadata,
+        )
+        draft.expire_conditional_escrow(escrow_id)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def drawdown_asset_lock_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        fee_payment: Optional[Mapping[str, Any]] = None,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        escrow_id: str,
+        amount: QuantityLike,
+        expected_remaining_amount: Optional[QuantityLike] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Draw down a lock while retaining native optimistic concurrency.
+
+        When the caller omits ``expected_remaining_amount``, the SDK obtains the
+        current signed escrow record and binds that exact value into the native
+        instruction.
+        """
+
+        if expected_remaining_amount is None:
+            escrow = self.get_asset_escrow(
+                escrow_id=escrow_id,
+                authority=authority,
+                private_key=private_key,
+                private_key_hex=private_key_hex,
+            )
+            expected_remaining_amount = escrow.get("remaining_amount")
+            if expected_remaining_amount is None:
+                raise RuntimeError(
+                    "native escrow record omitted remaining_amount"
+                )
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
@@ -15062,18 +15796,30 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
-        expected_remaining_amount: QuantityLike,
+        expected_remaining_amount: Optional[QuantityLike] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Cancel from an exact bounded lock-ID preimage and optionally await commit."""
+        """Cancel a lock while binding the latest signed remaining amount."""
 
+        if expected_remaining_amount is None:
+            escrow = self.get_asset_escrow(
+                escrow_id=escrow_id,
+                authority=authority,
+                private_key=private_key,
+                private_key_hex=private_key_hex,
+            )
+            expected_remaining_amount = escrow.get("remaining_amount")
+            if expected_remaining_amount is None:
+                raise RuntimeError(
+                    "native escrow record omitted remaining_amount"
+                )
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
@@ -15095,7 +15841,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -17176,16 +17922,404 @@ class ToriiClient(_BaseToriiClient):
         self._expect_status(response, {200, 202})
         return self._maybe_json(response)
 
+    @staticmethod
+    def _canonical_contract_batch_base64(value: Any, context: str) -> bytes:
+        if not isinstance(value, str) or not value:
+            raise TypeError(f"{context} must be a non-empty base64 string")
+        try:
+            encoded = value.encode("ascii")
+            decoded = base64.b64decode(encoded, validate=True)
+        except (UnicodeEncodeError, binascii.Error, ValueError) as error:
+            raise ValueError(f"{context} must be canonical padded base64") from error
+        if base64.b64encode(decoded).decode("ascii") != value:
+            raise ValueError(f"{context} must be canonical padded base64")
+        return decoded
+
+    def prepare_contract_call_batch(
+        self,
+        entries: Sequence[Any],
+    ) -> _ContractCallBatchPlan:
+        """Resolve and ABI-bind an exact ordered executable batch."""
+
+        if isinstance(entries, (str, bytes, bytearray, memoryview)) or not isinstance(
+            entries,
+            Sequence,
+        ):
+            raise TypeError("entries must be a sequence")
+        if not entries:
+            raise ValueError("entries must not be empty")
+        if len(entries) > _CONTRACT_CALL_BATCH_MAX_ITEMS:
+            raise ValueError("entries must contain at most 256 items")
+
+        from .crypto import _NativeInstruction
+
+        normalized: List[Dict[str, Any]] = []
+        for index, entry in enumerate(entries):
+            if isinstance(entry, ContractCallIntent):
+                normalized.append({"contract_call": entry.to_payload()})
+            elif isinstance(entry, _NativeInstruction):
+                instruction = bytes(entry.to_norito_bytes())
+                normalized.append(
+                    {
+                        "instruction_b64": base64.b64encode(instruction).decode(
+                            "ascii"
+                        )
+                    }
+                )
+            elif isinstance(entry, Mapping) and set(entry) == {"contract_call"}:
+                intent = entry["contract_call"]
+                if not isinstance(intent, Mapping):
+                    raise TypeError(
+                        f"entries[{index}].contract_call must be a mapping"
+                    )
+                normalized.append({"contract_call": dict(intent)})
+            elif isinstance(entry, Mapping) and set(entry) == {"instruction_b64"}:
+                encoded = entry["instruction_b64"]
+                self._canonical_contract_batch_base64(
+                    encoded,
+                    f"entries[{index}].instruction_b64",
+                )
+                normalized.append({"instruction_b64": encoded})
+            else:
+                raise TypeError(
+                    f"entries[{index}] must be a ContractCallIntent, "
+                    "Instruction, or strict preparation item"
+                )
+
+        response = self._request(
+            "POST",
+            "/v1/contracts/call/batch/prepare",
+            data=json.dumps(
+                {"entries": normalized},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        self._expect_status(response, {200})
+        body = self._maybe_json(response)
+        if not isinstance(body, Mapping) or body.get("ok") is not True:
+            raise RuntimeError("contract batch preparation returned an invalid plan")
+        if set(body) != {
+            "ok",
+            "binding",
+            "binding_digest_hex",
+            "prepared_entries",
+        }:
+            raise RuntimeError("contract batch plan contains unsupported fields")
+
+        binding_payload = body.get("binding")
+        prepared_payload = body.get("prepared_entries")
+        if not isinstance(binding_payload, Mapping):
+            raise RuntimeError("contract batch plan binding must be an object")
+        binding = dict(binding_payload)
+        if set(binding) != {"version", "items"} or binding.get("version") != 1:
+            raise RuntimeError("contract batch plan binding must use version 1")
+        binding_items = binding.get("items")
+        if not isinstance(binding_items, list) or not isinstance(
+            prepared_payload,
+            list,
+        ):
+            raise RuntimeError("contract batch plan entries must be arrays")
+        if (
+            len(binding_items) != len(normalized)
+            or len(prepared_payload) != len(normalized)
+        ):
+            raise RuntimeError("contract batch plan changed the entry count")
+
+        binding_digest_hex = body.get("binding_digest_hex")
+        if (
+            not isinstance(binding_digest_hex, str)
+            or re.fullmatch(r"[0-9a-f]{64}", binding_digest_hex) is None
+        ):
+            raise RuntimeError("contract batch binding digest is not canonical")
+        canonical_binding = json.dumps(
+            binding,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        expected_binding_digest = blake3(
+            _CONTRACT_CALL_BATCH_BINDING_DOMAIN_V1 + canonical_binding
+        ).hexdigest()
+        if binding_digest_hex != expected_binding_digest:
+            raise RuntimeError("contract batch binding digest does not match its plan")
+
+        prepared_entries: List[_PreparedContractCallBatchItem] = []
+        for index, (binding_item, prepared_item, requested) in enumerate(
+            zip(binding_items, prepared_payload, normalized)
+        ):
+            if not isinstance(binding_item, Mapping) or not isinstance(
+                prepared_item,
+                Mapping,
+            ):
+                raise RuntimeError(f"contract batch item {index} must be an object")
+            if (
+                binding_item.get("index") != index
+                or prepared_item.get("index") != index
+                or binding_item.get("kind") != prepared_item.get("kind")
+            ):
+                raise RuntimeError(f"contract batch item {index} changed order or kind")
+            kind = binding_item.get("kind")
+            if kind == "contract_call":
+                requested_call = requested.get("contract_call")
+                if not isinstance(requested_call, Mapping):
+                    raise RuntimeError(f"contract batch item {index} changed kind")
+                address = binding_item.get("contract_address")
+                code_hash = binding_item.get("code_hash_hex")
+                abi_hash = binding_item.get("abi_hash_hex")
+                entrypoint = binding_item.get("entrypoint")
+                for value, name in (
+                    (address, "contract_address"),
+                    (entrypoint, "entrypoint"),
+                ):
+                    if not isinstance(value, str) or not value:
+                        raise RuntimeError(
+                            f"contract batch item {index} omitted {name}"
+                        )
+                for value, name in (
+                    (code_hash, "code_hash_hex"),
+                    (abi_hash, "abi_hash_hex"),
+                ):
+                    if (
+                        not isinstance(value, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", value) is None
+                    ):
+                        raise RuntimeError(
+                            f"contract batch item {index} has invalid {name}"
+                        )
+                if prepared_item.get("contract_address") != address:
+                    raise RuntimeError(f"contract batch item {index} changed address")
+                if (
+                    prepared_item.get("code_hash_hex") != code_hash
+                    or prepared_item.get("abi_hash_hex") != abi_hash
+                    or prepared_item.get("entrypoint") != entrypoint
+                ):
+                    raise RuntimeError(f"contract batch item {index} changed call identity")
+                if requested_call.get("entrypoint") != entrypoint:
+                    raise RuntimeError(f"contract batch item {index} changed entrypoint")
+                requested_address = requested_call.get("contract_address")
+                expected_address = requested_call.get("expected_contract_address")
+                if requested_address is not None and requested_address != address:
+                    raise RuntimeError(f"contract batch item {index} changed address")
+                if expected_address is not None and expected_address != address:
+                    raise RuntimeError(
+                        f"contract batch item {index} violated address pin"
+                    )
+                if binding_item.get("contract_alias") != requested_call.get(
+                    "contract_alias"
+                ):
+                    raise RuntimeError(f"contract batch item {index} changed alias")
+                for requested_field, actual in (
+                    ("expected_code_hash_hex", code_hash),
+                    ("expected_abi_hash_hex", abi_hash),
+                ):
+                    pin = requested_call.get(requested_field)
+                    if pin is not None and pin != actual:
+                        raise RuntimeError(
+                            f"contract batch item {index} violated {requested_field}"
+                        )
+                arguments_b64 = prepared_item.get("arguments_b64")
+                if arguments_b64 is None:
+                    arguments = None
+                    arguments_digest = blake3(
+                        _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1 + b"\x00"
+                    ).hexdigest()
+                else:
+                    arguments = self._canonical_contract_batch_base64(
+                        arguments_b64,
+                        f"prepared_entries[{index}].arguments_b64",
+                    )
+                    arguments_digest = blake3(
+                        _CONTRACT_CALL_BATCH_ARGUMENTS_DOMAIN_V1
+                        + b"\x01"
+                        + arguments
+                    ).hexdigest()
+                if binding_item.get("arguments_digest_hex") != arguments_digest:
+                    raise RuntimeError(
+                        f"contract batch item {index} arguments digest mismatch"
+                    )
+                prepared_entries.append(
+                    _PreparedContractCallBatchItem(
+                        index=index,
+                        kind="contract_call",
+                        contract_address=address,
+                        code_hash_hex=code_hash,
+                        abi_hash_hex=abi_hash,
+                        entrypoint=entrypoint,
+                        arguments=arguments,
+                    )
+                )
+            elif kind == "instruction":
+                requested_b64 = requested.get("instruction_b64")
+                prepared_b64 = prepared_item.get("instruction_b64")
+                if requested_b64 != prepared_b64:
+                    raise RuntimeError(
+                        f"contract batch item {index} changed instruction bytes"
+                    )
+                instruction = self._canonical_contract_batch_base64(
+                    prepared_b64,
+                    f"prepared_entries[{index}].instruction_b64",
+                )
+                wire_id = binding_item.get("wire_id")
+                if (
+                    not isinstance(wire_id, str)
+                    or not wire_id
+                    or prepared_item.get("wire_id") != wire_id
+                ):
+                    raise RuntimeError(
+                        f"contract batch item {index} changed instruction identity"
+                    )
+                instruction_digest = blake3(
+                    _CONTRACT_CALL_BATCH_INSTRUCTION_DOMAIN_V1 + instruction
+                ).hexdigest()
+                if binding_item.get("instruction_digest_hex") != instruction_digest:
+                    raise RuntimeError(
+                        f"contract batch item {index} instruction digest mismatch"
+                    )
+                prepared_entries.append(
+                    _PreparedContractCallBatchItem(
+                        index=index,
+                        kind="instruction",
+                        wire_id=wire_id,
+                        instruction=instruction,
+                    )
+                )
+            else:
+                raise RuntimeError(f"contract batch item {index} has unknown kind")
+
+        return _ContractCallBatchPlan(
+            binding=binding,
+            binding_digest_hex=binding_digest_hex,
+            prepared_entries=tuple(prepared_entries),
+        )
+
+    def call_contract_batch_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        entries: Sequence[Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        creation_time_ms: Optional[int] = None,
+        ttl_ms: Optional[int] = 900_000,
+        wait: bool = True,
+        interval: float = 1.0,
+        timeout: Optional[float] = 120.0,
+        scope: str = "global",
+        success_statuses: Optional[Iterable[str]] = None,
+        failure_statuses: Optional[Iterable[str]] = None,
+    ) -> Mapping[str, Any]:
+        """Prepare, locally sign, and submit one ordered atomic batch."""
+
+        if (private_key is None) == (private_key_hex is None):
+            raise ValueError("provide exactly one of private_key or private_key_hex")
+        plan = self.prepare_contract_call_batch(entries)
+        signed_metadata = _normalize_contract_call_metadata(
+            metadata,
+            context="metadata",
+        )
+        signed_metadata["contract_batch_binding_v1"] = {
+            "binding": plan.binding,
+            "binding_digest_hex": plan.binding_digest_hex,
+        }
+
+        from .crypto import _NativeInstruction
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            fee_payment=fee_payment,
+            ttl_ms=ttl_ms,
+            metadata=signed_metadata,
+        ).use_executable_batch()
+        original_instructions: Dict[int, Any] = {
+            index: entry
+            for index, entry in enumerate(entries)
+            if isinstance(entry, _NativeInstruction)
+        }
+        for index, prepared in enumerate(plan.prepared_entries):
+            if prepared.kind == "contract_call":
+                if (
+                    prepared.contract_address is None
+                    or prepared.code_hash_hex is None
+                    or prepared.entrypoint is None
+                ):
+                    raise RuntimeError(f"prepared contract call {index} is incomplete")
+                draft.add_contract_call(
+                    prepared.contract_address,
+                    prepared.code_hash_hex,
+                    prepared.entrypoint,
+                    prepared.arguments,
+                )
+            elif prepared.kind == "instruction":
+                instruction = original_instructions.get(index)
+                if instruction is None:
+                    raise RuntimeError(
+                        f"prepared native instruction {index} has no local source"
+                    )
+                if (
+                    bytes(instruction.to_norito_bytes()) != prepared.instruction
+                    or instruction.wire_id() != prepared.wire_id
+                ):
+                    raise RuntimeError(
+                        f"prepared native instruction {index} changed identity"
+                    )
+                draft.add_instruction(instruction)
+            else:  # pragma: no cover - plan parser invariant
+                raise RuntimeError(f"prepared batch item {index} has unknown kind")
+
+        result = dict(
+            self._submit_transaction_draft_result(
+                draft,
+                private_key=private_key,
+                private_key_hex=private_key_hex,
+                wait=wait,
+                interval=interval,
+                timeout=timeout,
+                scope=scope,
+                success_statuses=success_statuses,
+                failure_statuses=failure_statuses,
+                creation_time_ms=creation_time_ms,
+            )
+        )
+        result["plan"] = {
+            "binding": plan.binding,
+            "binding_digest_hex": plan.binding_digest_hex,
+        }
+        result["tx_hash_hex"] = result["hash"]
+        if "terminal" in result:
+            result["terminal_kind"] = _extract_pipeline_status_kind(
+                result["terminal"]
+            )
+            result["r#final"] = result["terminal"]
+        return result
+
     def call_contract_and_wait(
         self,
         *,
+        chain_id: str,
         authority: str,
-        private_key: str,
-        fee_payment: Mapping[str, Any],
+        fee_payment: Optional[Mapping[str, Any]] = None,
         entrypoint: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         payload: Any = None,
+        expected_contract_address: Optional[str] = None,
+        expected_code_hash_hex: Optional[str] = None,
+        expected_abi_hash_hex: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        creation_time_ms: Optional[int] = None,
+        ttl_ms: Optional[int] = 900_000,
         wait: bool = True,
         timeout_ms: Optional[int] = 120_000,
         interval: float = 1.0,
@@ -17193,27 +18327,44 @@ class ToriiClient(_BaseToriiClient):
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
     ) -> Any:
-        """Call a contract and optionally wait for its submitted transaction."""
+        """Prepare one contract call, sign it locally, and submit it.
 
-        typed_response = self.call_contract(
-            authority=authority,
-            private_key=private_key,
+        This is the single-call convenience form of
+        :meth:`call_contract_batch_and_wait`; it therefore shares the same
+        manifest, ABI, address, code-hash, metadata, and local-signing checks.
+        """
+
+        intent = ContractCallIntent(
+            entrypoint,
             contract_address=contract_address,
             contract_alias=contract_alias,
-            entrypoint=entrypoint,
             payload=payload,
-            fee_payment=fee_payment,
+            expected_contract_address=expected_contract_address,
+            expected_code_hash_hex=expected_code_hash_hex,
+            expected_abi_hash_hex=expected_abi_hash_hex,
         )
-        if not wait:
-            return self._contract_response_payload(typed_response)
-        return self._wait_for_contract_response(
-            typed_response,
-            timeout_ms=timeout_ms,
-            interval=interval,
-            scope=scope,
-            success_statuses=success_statuses,
-            failure_statuses=failure_statuses,
+        result = dict(
+            self.call_contract_batch_and_wait(
+                chain_id=chain_id,
+                authority=authority,
+                fee_payment=fee_payment,
+                entries=[intent],
+                private_key=private_key,
+                private_key_hex=private_key_hex,
+                metadata=metadata,
+                creation_time_ms=creation_time_ms,
+                ttl_ms=ttl_ms,
+                wait=wait,
+                timeout=None if timeout_ms is None else timeout_ms / 1000.0,
+                interval=interval,
+                scope=scope,
+                success_statuses=success_statuses,
+                failure_statuses=failure_statuses,
+            )
         )
+        result["submit"] = result.get("submission")
+        result["tx_hashes"] = [result["hash"]]
+        return result
 
     def get_contract_manifest(self, code_hash_hex: str) -> Optional[Any]:
         response = self._request(

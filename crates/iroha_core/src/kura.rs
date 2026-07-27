@@ -66580,7 +66580,7 @@ mod tests {
             Hash::new(b"marker-bound direct application state"),
         ));
         let application_result =
-            TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
         let first_input = kura
             .read_lane_block_execution_input(lane_entry.lane_id, 1)
             .expect("read first execution input for preflight");
@@ -67564,7 +67564,7 @@ mod tests {
                     b"missing lane artifact direct application state",
                 )));
                 let result =
-                    TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+                    TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
                 worker_kura
                     .persist_lane_block_execution_preflight(&input, 7, state_hash, vec![result])
                     .map_err(|error| format!("persist execution preflight: {error:?}"))?;
@@ -67844,7 +67844,7 @@ mod tests {
             b"global marker-bound preflight state",
         )));
         let preflight_result =
-            TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
         kura.persist_lane_block_execution_preflight(
             &input,
             7,
@@ -67890,7 +67890,7 @@ mod tests {
                 &input,
                 7,
                 preflight_state_hash,
-                vec![TransactionResult(TransactionResultInner::Ok(
+                vec![TransactionResult::new(TransactionResultInner::Ok(
                     DataTriggerSequence::new(),
                 ))],
             )
@@ -68198,7 +68198,7 @@ mod tests {
         let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"direct application base state hash",
         )));
-        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
         kura.persist_lane_block_execution_preflight(&input, 7, state_hash, vec![result.clone()])
             .expect("persist clean lane execution preflight");
         let preflight = kura
@@ -68272,7 +68272,7 @@ mod tests {
         let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"rejected direct application base state hash",
         )));
-        let rejected = TransactionResult(TransactionResultInner::Err(
+        let rejected = TransactionResult::new(TransactionResultInner::Err(
             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(
                     "direct receipt rejected preflight".to_owned(),
@@ -68923,7 +68923,7 @@ mod tests {
         let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"preflight state hash",
         )));
-        let results = vec![TransactionResult(TransactionResultInner::Ok(
+        let results = vec![TransactionResult::new(TransactionResultInner::Ok(
             DataTriggerSequence::new(),
         ))];
 
@@ -69069,7 +69069,7 @@ mod tests {
         let input = kura
             .read_lane_block_execution_input(lane_id, lane_block_height)
             .expect("lane execution input");
-        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
         kura.persist_lane_block_execution_preflight(&input, 0, None, vec![result])
             .expect("persist clean lane execution preflight");
 
@@ -69203,7 +69203,7 @@ mod tests {
         let predecessor_input = kura
             .read_lane_block_execution_input(lane_id, 1)
             .expect("predecessor execution input");
-        let rejected = TransactionResult(TransactionResultInner::Err(
+        let rejected = TransactionResult::new(TransactionResultInner::Err(
             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(
                     "adversarial predecessor preflight mismatch".to_owned(),
@@ -69234,7 +69234,7 @@ mod tests {
         let successor_input = kura
             .read_lane_block_execution_input(lane_id, 2)
             .expect("successor execution input");
-        let ok = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        let ok = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
         kura.persist_lane_block_execution_preflight(&successor_input, 0, None, vec![ok])
             .expect("persist clean successor preflight");
 
@@ -69397,7 +69397,7 @@ mod tests {
         let input = kura
             .read_lane_block_execution_input(lane_id, lane_block_height)
             .expect("lane execution input");
-        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
         kura.persist_lane_block_execution_preflight(&input, 0, None, vec![result])
             .expect("persist lane execution preflight");
         let mut tampered = kura
@@ -69470,7 +69470,7 @@ mod tests {
         let input = kura
             .read_lane_block_execution_input(lane_id, lane_block_height)
             .expect("lane execution input");
-        let rejected = TransactionResult(TransactionResultInner::Err(
+        let rejected = TransactionResult::new(TransactionResultInner::Err(
             iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
                 iroha_data_model::ValidationFail::NotPermitted(
                     "adversarial lane preflight mismatch".to_owned(),
@@ -73354,7 +73354,8 @@ mod tests {
             let mut source_id = [0x5A; Hash::LENGTH];
             source_id[..u64::BITS as usize / u8::BITS as usize]
                 .copy_from_slice(&participant_height.to_le_bytes());
-            let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+            let result =
+                TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
             let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
                 proposal.descriptor.accepted_transaction_hashes[0],
             );
@@ -77778,8 +77779,9 @@ mod tests {
                     let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
                         Hash::new(state_hash_marker),
                     ));
-                    let result =
-                        TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+                    let result = TransactionResult::new(TransactionResultInner::Ok(
+                        DataTriggerSequence::new(),
+                    ));
                     kura.persist_lane_block_execution_preflight(
                         &input,
                         preflight_state_height,

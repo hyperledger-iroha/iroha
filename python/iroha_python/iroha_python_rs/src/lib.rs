@@ -52,13 +52,20 @@ use iroha_data_model::{
         CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
     },
     domain::prelude::{Domain, DomainId},
-    escrow::EscrowId,
+    escrow::{
+        AssetEscrowRecord, ConditionalEscrowCondition, ConditionalEscrowValue, EscrowId,
+        hash_conditional_escrow_evidence_digest,
+    },
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue, Revoke,
-        SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
-        SetAssetTransferFreeze, SetKeyValue, SetParameter, Transfer, Unregister,
-        escrow::{CancelAssetLock, DrawdownAssetLock, ExpireAssetLock, OpenAssetLock},
+        BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
+        Revoke, SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
+        SetAssetTransferFreeze, SetKeyValue, SetParameter, Transfer, TransferAssetBatch,
+        TransferAssetBatchEntry, Unregister,
+        escrow::{
+            AttestEscrowCondition, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
+            ExpireConditionalEscrow, OpenAssetLock, OpenConditionalEscrow,
+        },
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
@@ -84,6 +91,13 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    query::{
+        ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+        SingularQueryBox,
+        dsl::{CompoundPredicate, SelectorTuple},
+        escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
+        parameters::QueryParams,
+    },
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
@@ -14001,6 +14015,77 @@ fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
     Ok(EscrowId::new(Hash::new(text.as_bytes())))
 }
 
+fn json_object_string(fields: &mut json::Map, key: &str, context: &str) -> PyResult<String> {
+    let value = fields
+        .remove(key)
+        .ok_or_else(|| PyValueError::new_err(format!("{context} requires `{key}`")))?;
+    match value {
+        json::Value::String(value) if !value.is_empty() && value.trim() == value => Ok(value),
+        _ => Err(PyValueError::new_err(format!(
+            "{context}.{key} must be a non-empty unpadded string"
+        ))),
+    }
+}
+
+fn parse_transfer_asset_batch_entries(
+    raw: &str,
+    source: &AccountId,
+    asset_definition: &AssetDefinitionId,
+) -> PyResult<Vec<TransferAssetBatchEntry>> {
+    let value = json::from_str::<json::Value>(raw)
+        .map_err(|error| PyValueError::new_err(format!("invalid payments JSON: {error}")))?;
+    let json::Value::Array(values) = value else {
+        return Err(PyValueError::new_err("payments JSON must be an array"));
+    };
+    if values.is_empty() {
+        return Err(PyValueError::new_err(
+            "payments must contain at least one payment",
+        ));
+    }
+    let mut leg_ids = HashSet::new();
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let json::Value::Object(mut fields) = value else {
+                return Err(PyValueError::new_err(format!(
+                    "payments[{index}] must be an object"
+                )));
+            };
+            let context = format!("payments[{index}]");
+            let leg_id = json_object_string(&mut fields, "id", &context)?;
+            if !leg_ids.insert(leg_id.clone()) {
+                return Err(PyValueError::new_err(format!(
+                    "duplicate payment id `{leg_id}`"
+                )));
+            }
+            let destination = parse_account_id(&json_object_string(&mut fields, "to", &context)?)?;
+            ensure_ed25519_account(&destination)?;
+            let amount = parse_typed_quantity(
+                &json_object_string(&mut fields, "amount", &context)?,
+                "payment amount",
+            )?;
+            if amount.is_zero() {
+                return Err(PyValueError::new_err(format!(
+                    "{context}.amount must be positive"
+                )));
+            }
+            if !fields.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "{context} contains unknown fields"
+                )));
+            }
+            Ok(TransferAssetBatchEntry::with_leg_id(
+                leg_id,
+                source.clone(),
+                destination,
+                asset_definition.clone(),
+                amount,
+            ))
+        })
+        .collect()
+}
+
 fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyResult<Vec<Hash>> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -14010,6 +14095,42 @@ fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyR
     }
     py_fixed_array_list(value, context)
         .map(|items| items.into_iter().map(Hash::prehashed).collect())
+}
+
+fn conditional_escrow_evidence_hash_from_py(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<Hash> {
+    let raw_digest = py_fixed_array::<32>(value, context)?;
+    Ok(hash_conditional_escrow_evidence_digest(&raw_digest))
+}
+
+fn parse_optional_conditional_evidence_digest(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<Option<Hash>> {
+    value
+        .filter(|value| !value.is_none())
+        .map(|value| conditional_escrow_evidence_hash_from_py(value, context))
+        .transpose()
+}
+
+fn parse_optional_conditional_evidence_digests(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<Vec<Hash>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value.is_none() {
+        return Ok(Vec::new());
+    }
+    py_fixed_array_list(value, context).map(|digests| {
+        digests
+            .iter()
+            .map(hash_conditional_escrow_evidence_digest)
+            .collect()
+    })
 }
 
 fn quantity_from_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Quantity> {
@@ -14615,6 +14736,21 @@ impl Instruction {
         let value = loads.call1((json_str,))?;
         let dict: Py<PyDict> = value.extract()?;
         Ok(dict)
+    }
+
+    /// Return the canonical framed Norito `InstructionBox`.
+    fn to_norito_bytes<'py>(&self, py: Python<'py>) -> PyResult<Py<PyBytes>> {
+        let bytes = norito::to_bytes(&self.inner).map_err(|err| {
+            PyValueError::new_err(format!("failed to encode canonical InstructionBox: {err}"))
+        })?;
+        Ok(Py::from(PyBytes::new(py, &bytes)))
+    }
+
+    /// Return the stable registry identity used by canonical instruction framing.
+    fn wire_id(&self) -> PyResult<String> {
+        iroha_data_model::isi::instruction_wire_id(&self.inner)
+            .map(str::to_owned)
+            .ok_or_else(|| PyValueError::new_err("instruction is not registered"))
     }
 
     /// Create a new fail-closed fee sponsor program.
@@ -15318,6 +15454,38 @@ impl Instruction {
     }
 
     #[classmethod]
+    #[pyo3(signature = (source_account, asset_definition_id, payments_json, *, mode="Independent"))]
+    fn transfer_asset_batch(
+        _cls: &Bound<'_, PyType>,
+        source_account: &str,
+        asset_definition_id: &str,
+        payments_json: &str,
+        mode: &str,
+    ) -> PyResult<Self> {
+        let source = parse_account_id(source_account)?;
+        ensure_ed25519_account(&source)?;
+        let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {error}"
+            ))
+        })?;
+        let entries =
+            parse_transfer_asset_batch_entries(payments_json, &source, &asset_definition)?;
+        let mode = match mode {
+            "Atomic" | "atomic" => BatchMode::Atomic,
+            "Independent" | "independent" => BatchMode::Independent,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "batch mode must be Atomic or Independent",
+                ));
+            }
+        };
+        Ok(Instruction::new(
+            TransferAssetBatch::new(entries).with_mode(mode).into(),
+        ))
+    }
+
+    #[classmethod]
     #[pyo3(signature = (account_id, asset_definition_id, outgoing_frozen, *, reason=None))]
     fn set_asset_transfer_freeze(
         _cls: &Bound<'_, PyType>,
@@ -15452,6 +15620,100 @@ impl Instruction {
             evidence_hashes,
         );
         Ok(Instruction::new(instruction.into()))
+    }
+
+    /// Open an ordered, all-of conditional escrow with an immutable on-chain policy.
+    #[classmethod]
+    #[pyo3(signature = (escrow_id, asset_definition_id, beneficiary, amount, conditions, expires_at_ms, *, evidence_digests=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn open_conditional_escrow<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        escrow_id: &str,
+        asset_definition_id: &str,
+        beneficiary: &str,
+        amount: &str,
+        conditions: &Bound<'py, PyAny>,
+        expires_at_ms: u64,
+        evidence_digests: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        if expires_at_ms == 0 {
+            return Err(PyValueError::new_err(
+                "conditional escrow expires_at_ms must be greater than zero",
+            ));
+        }
+        let escrow_id = parse_escrow_id(escrow_id, "escrow_id")?;
+        let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let beneficiary = parse_account_id(beneficiary)?;
+        ensure_ed25519_account(&beneficiary)?;
+        let amount = parse_typed_quantity(amount, "conditional escrow amount")?;
+        if amount.is_zero() {
+            return Err(PyValueError::new_err(
+                "conditional escrow amount must be positive",
+            ));
+        }
+        let conditions: Vec<ConditionalEscrowCondition> =
+            py_to_json_model(py, conditions, "conditional escrow conditions")?;
+        if conditions.is_empty() {
+            return Err(PyValueError::new_err(
+                "conditional escrow conditions must not be empty",
+            ));
+        }
+        let evidence_hashes =
+            parse_optional_conditional_evidence_digests(evidence_digests, "evidence_digests")?;
+        let instruction = OpenConditionalEscrow::with_evidence_hashes(
+            escrow_id,
+            asset_definition,
+            beneficiary,
+            amount,
+            conditions,
+            expires_at_ms,
+            evidence_hashes,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    /// Attest the next ordered predicate in a native conditional escrow.
+    #[classmethod]
+    #[pyo3(signature = (escrow_id, condition_id, value, *, evidence_digest=None))]
+    fn attest_escrow_condition<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        escrow_id: &str,
+        condition_id: &str,
+        value: &Bound<'py, PyAny>,
+        evidence_digest: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let condition_id: Name = condition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid conditional escrow condition_id `{condition_id}`: {err}"
+            ))
+        })?;
+        let value: ConditionalEscrowValue =
+            py_to_json_model(py, value, "conditional escrow attestation value")?;
+        let evidence_hash =
+            parse_optional_conditional_evidence_digest(evidence_digest, "evidence_digest")?;
+        Ok(Instruction::new(
+            AttestEscrowCondition::new(
+                parse_escrow_id(escrow_id, "escrow_id")?,
+                condition_id,
+                value,
+                evidence_hash,
+            )
+            .into(),
+        ))
+    }
+
+    /// Expire and refund a native conditional escrow after its authoritative deadline.
+    #[classmethod]
+    fn expire_conditional_escrow(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
+        Ok(Instruction::new(
+            ExpireConditionalEscrow::new(parse_escrow_id(escrow_id, "escrow_id")?).into(),
+        ))
     }
 
     #[classmethod]
@@ -16934,6 +17196,107 @@ fn sign_py(
     let signature = Signature::try_new(&private_key, message)
         .map_err(|err| PyValueError::new_err(format!("failed to sign message: {err}")))?;
     Ok(Py::from(PyBytes::new(py, signature.payload())))
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_asset_escrow_query")]
+/// Build the exact versioned Norito signed query for one native escrow record.
+fn build_find_asset_escrow_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    escrow_id: &str,
+) -> PyResult<Py<PyBytes>> {
+    let authority = parse_account_id(authority)?;
+    ensure_ed25519_account(&authority)?;
+    let private = parse_private_key(private_key)?;
+    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
+        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
+    })?;
+    if key_pair.public_key() != authority.signatory() {
+        return Err(PyValueError::new_err(
+            "query private key does not match the authority account",
+        ));
+    }
+    let request = QueryRequest::Singular(SingularQueryBox::FindAssetEscrowById(
+        FindAssetEscrowById::new(parse_escrow_id(escrow_id, "escrow_id")?),
+    ));
+    let signed = request
+        .with_authority(authority)
+        .try_sign(&key_pair)
+        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
+    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+}
+
+fn build_find_asset_escrows_by_party_query(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    query_payload: Vec<u8>,
+) -> PyResult<Py<PyBytes>> {
+    let authority = parse_account_id(authority)?;
+    ensure_ed25519_account(&authority)?;
+    let private = parse_private_key(private_key)?;
+    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
+        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
+    })?;
+    if key_pair.public_key() != authority.signatory() {
+        return Err(PyValueError::new_err(
+            "query private key does not match the authority account",
+        ));
+    }
+    let erased = ErasedIterQuery::<AssetEscrowRecord>::new(
+        CompoundPredicate::PASS,
+        SelectorTuple::default(),
+        query_payload,
+    );
+    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let signed = request
+        .with_authority(authority)
+        .try_sign(&key_pair)
+        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
+    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_asset_escrows_by_seller_query")]
+/// Build a signed iterable query for native escrows funded by one account.
+fn build_find_asset_escrows_by_seller_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    seller: &str,
+) -> PyResult<Py<PyBytes>> {
+    let query = FindAssetEscrowsBySeller {
+        seller: parse_account_id(seller)?,
+    };
+    build_find_asset_escrows_by_party_query(
+        py,
+        authority,
+        private_key,
+        norito::codec::Encode::encode(&query),
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_asset_escrows_by_buyer_query")]
+/// Build a signed iterable query for native escrows benefiting one account.
+fn build_find_asset_escrows_by_buyer_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    buyer: &str,
+) -> PyResult<Py<PyBytes>> {
+    let query = FindAssetEscrowsByBuyer {
+        buyer: parse_account_id(buyer)?,
+    };
+    build_find_asset_escrows_by_party_query(
+        py,
+        authority,
+        private_key,
+        norito::codec::Encode::encode(&query),
+    )
 }
 
 #[pyfunction]
@@ -20260,6 +20623,15 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(derive_keypair_from_seed_py, module)?)?;
     module.add_function(wrap_pyfunction!(load_keypair_py, module)?)?;
     module.add_function(wrap_pyfunction!(sign_py, module)?)?;
+    module.add_function(wrap_pyfunction!(build_find_asset_escrow_query_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        build_find_asset_escrows_by_seller_query_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_find_asset_escrows_by_buyer_query_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(verify_py, module)?)?;
     module.add_function(wrap_pyfunction!(public_key_multihash_py, module)?)?;
     module.add_function(wrap_pyfunction!(private_key_multihash_py, module)?)?;

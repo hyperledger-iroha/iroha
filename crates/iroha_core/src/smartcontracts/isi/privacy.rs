@@ -10,7 +10,8 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         privacy::{
-            BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
+            BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
+            BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
             RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
             RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509TrustAnchorV1,
             RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
@@ -26,11 +27,12 @@ use iroha_data_model::{
         PRIVACY_ZK_ACE_MAX_POLICIES_V1, PrivacyConsensusPolicyTighteningV1,
         PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyProtocolIdV1,
         PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1,
-        PrivacyRootRoleV1, PrivacyStatementV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsActionV1,
-        PrivacyZkX509RecordLifecycleV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
-        ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
-        ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_zk_ace_policy_revocation_v1,
-        validate_zk_ace_policy_rotation_v1, validate_zk_x509_certificate_policy_revocation_v1,
+        PrivacyRootRoleV1, PrivacyStatementV1, PrivacyValueBalanceDirectionV1,
+        PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsActionV1, PrivacyZkX509RecordLifecycleV1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
+        ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
+        validate_zk_ace_policy_revocation_v1, validate_zk_ace_policy_rotation_v1,
+        validate_zk_x509_certificate_policy_revocation_v1,
         validate_zk_x509_certificate_policy_rotation_v1,
         validate_zk_x509_trust_anchor_revocation_v1, validate_zk_x509_trust_anchor_rotation_v1,
         zk_ams_issuer_policy_record_digest_v1, zk_ams_registry_record_digest_v1,
@@ -56,21 +58,23 @@ use crate::{
     privacy_profiles::validate_compiled_privacy_activation_v1,
     privacy_state::{
         PrivacyActivationKeyV1, PrivacyCommitmentKeyV1, PrivacyNullifierKeyV1,
-        PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1,
-        PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1, PrivacyRootHeadKeyV1,
-        PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
+        PrivacyOrchardPoolStateV1, PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1,
+        PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1,
+        PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
         PrivacyRootRetentionAnchorV1, PrivacyStateItemRecordV1,
-        compute_privacy_pgc_account_state_root_v1, load_privacy_pgc_pool_snapshot_v1,
-        load_privacy_zk_ace_policy_v1, load_privacy_zk_ams_registry_snapshot_v1,
-        load_privacy_zk_x509_authoritative_state_v1, load_privacy_zk_x509_certificate_policy_v1,
-        load_privacy_zk_x509_trust_anchor_v1, plan_privacy_root_history_update_v1,
-        privacy_zk_ace_policy_count_v1, privacy_zk_x509_governance_record_counts_v1,
-        validate_non_pgc_privacy_root_retention_v1, validate_privacy_zk_x509_statement_state_v1,
+        compute_privacy_pgc_account_state_root_v1, load_privacy_orchard_pool_snapshot_v1,
+        load_privacy_pgc_pool_snapshot_v1, load_privacy_zk_ace_policy_v1,
+        load_privacy_zk_ams_registry_snapshot_v1, load_privacy_zk_x509_authoritative_state_v1,
+        load_privacy_zk_x509_certificate_policy_v1, load_privacy_zk_x509_trust_anchor_v1,
+        plan_privacy_root_history_update_v1, privacy_zk_ace_policy_count_v1,
+        privacy_zk_x509_governance_record_counts_v1, validate_privacy_zk_x509_statement_state_v1,
+        validate_unanchored_privacy_root_retention_v1,
     },
     privacy_verifier::{
-        PrivacyAnonymousPgcStateFailureCodeV1, PrivacyPgcVerificationStateV1,
-        PrivacyVerificationContextFailureCodeV1, PrivacyVerificationContextV1,
-        PrivacyVerificationErrorV1, VerifiedPrivacyLedgerEffectsV1, verify_privacy_envelope_v1,
+        PrivacyAnonymousPgcStateFailureCodeV1, PrivacyOrchardStateFailureCodeV1,
+        PrivacyPgcVerificationStateV1, PrivacyVerificationContextFailureCodeV1,
+        PrivacyVerificationContextV1, PrivacyVerificationErrorV1, VerifiedPrivacyLedgerEffectsV1,
+        verify_privacy_envelope_v1,
     },
     state::{StateTransaction, WorldReadOnly},
 };
@@ -134,6 +138,11 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
                 | PrivacyAnonymousPgcStateFailureCodeV1::AccountTableMismatch
                 | PrivacyAnonymousPgcStateFailureCodeV1::NextRootMismatch
         ),
+        PrivacyVerificationErrorV1::OrchardState(detail) => matches!(
+            detail.code,
+            PrivacyOrchardStateFailureCodeV1::MissingTrustedState
+                | PrivacyOrchardStateFailureCodeV1::SuccessorDerivation
+        ),
         PrivacyVerificationErrorV1::Envelope(_)
         | PrivacyVerificationErrorV1::EngineUnavailable(_)
         | PrivacyVerificationErrorV1::NativeVeRange(_)
@@ -141,6 +150,7 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         | PrivacyVerificationErrorV1::NativeJindo(_)
         | PrivacyVerificationErrorV1::NativeZkAce(_)
         | PrivacyVerificationErrorV1::NativeZkAms(_)
+        | PrivacyVerificationErrorV1::NativeOrchard(_)
         | PrivacyVerificationErrorV1::NativeAnonymousPgc(_) => false,
     };
     if invariant {
@@ -214,7 +224,7 @@ impl Execute for SchedulePrivacyConsensusPolicyTighteningV1 {
                     "privacy consensus policy tightening rejected: {error}"
                 ))
             })?;
-        validate_non_pgc_privacy_root_retention_v1(
+        validate_unanchored_privacy_root_retention_v1(
             &state_transaction.world.privacy_roots,
             self.next_limits.retained_root_count,
         )
@@ -426,6 +436,11 @@ impl Execute for PublishPrivacyRootV1 {
                     "cannot publish a root for a retired privacy protocol",
                 ));
             }
+            if self.publication.role.management() == PrivacyRootManagementV1::ProofManaged {
+                return Err(invalid_privacy_parameter(
+                    "proof-managed privacy roots require their protocol-specific typed bootstrap and cannot be published generically",
+                ));
+            }
             None
         };
 
@@ -570,6 +585,179 @@ impl Execute for PublishPrivacyRootV1 {
             .world
             .privacy_root_heads
             .insert(head_key, next_head);
+        Ok(())
+    }
+}
+
+impl Execute for BootstrapPrivacyOrchardPoolV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation("Orchard pool bootstrap canonical encoding failed".into())
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        self.bootstrap.validate().map_err(|error| {
+            invalid_privacy_parameter(format!("Orchard pool bootstrap rejected: {error}"))
+        })?;
+
+        let current_height = state_transaction._curr_block.height().get();
+        let activation_key =
+            PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+        let activation = state_transaction
+            .world
+            .privacy_activations
+            .get(&activation_key)
+            .copied()
+            .ok_or_else(|| {
+                invalid_privacy_parameter("Orchard privacy protocol is not registered")
+            })?;
+        validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
+            Error::InvariantViolation(
+                format!("registered Orchard activation is not executable: {error}").into(),
+            )
+        })?;
+        activation.validate().map_err(|error| {
+            invalid_privacy_parameter(format!("registered Orchard activation is invalid: {error}"))
+        })?;
+        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
+            return Err(invalid_privacy_parameter(
+                "cannot bootstrap a pool before Orchard is active",
+            ));
+        };
+        if current_height < active.state_since_height {
+            return Err(invalid_privacy_parameter(format!(
+                "Orchard activation is not effective until block {}",
+                active.state_since_height
+            )));
+        }
+
+        state_transaction
+            .world
+            .asset_definition(&self.bootstrap.asset_definition_id)
+            .map_err(Error::from)?;
+        if state_transaction
+            .world
+            .accounts
+            .get(&self.bootstrap.reserve_account)
+            .is_none()
+        {
+            return Err(invalid_privacy_parameter(format!(
+                "Orchard reserve account `{}` does not exist",
+                self.bootstrap.reserve_account
+            )));
+        }
+
+        let namespace = self.bootstrap.namespace();
+        let state_key = PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
+            .map_err(invalid_privacy_parameter)?;
+        let head_key =
+            PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::NoteCommitmentAnchor)
+                .map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_root_heads
+            .get(&head_key)
+            .is_some()
+        {
+            return Err(invalid_privacy_parameter(
+                "Orchard pool is already initialized",
+            ));
+        }
+        if state_transaction
+            .world
+            .privacy_commitments
+            .get(&state_key)
+            .is_some()
+            || state_transaction
+                .world
+                .privacy_roots
+                .range(PrivacyRootKeyV1::history_range(
+                    namespace,
+                    PrivacyRootRoleV1::NoteCommitmentAnchor,
+                ))
+                .next()
+                .is_some()
+            || state_transaction
+                .world
+                .privacy_nullifiers
+                .range(PrivacyNullifierKeyV1::orchard_nullifier_range(namespace))
+                .next()
+                .is_some()
+        {
+            return Err(Error::InvariantViolation(
+                "Orchard pool state exists without a current typed head".into(),
+            ));
+        }
+
+        let bootstrap_digest = self.bootstrap.digest().map_err(|error| {
+            Error::InvariantViolation(
+                format!("Orchard pool bootstrap canonical encoding failed: {error}").into(),
+            )
+        })?;
+        let pool_state = PrivacyOrchardPoolStateV1::bootstrap(
+            bootstrap_digest,
+            self.bootstrap.asset_definition_id.clone(),
+            self.bootstrap.reserve_account.clone(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let state_record = PrivacyStateItemRecordV1::orchard_pool_state(pool_state.clone())
+            .map_err(invalid_privacy_parameter)?;
+        let root_provenance =
+            PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, current_height)
+                .map_err(invalid_privacy_parameter)?;
+        let root_key = PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            pool_state.epoch(),
+            pool_state.root(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let root_head = PrivacyRootHeadRecordV1::new(
+            pool_state.epoch(),
+            pool_state.root(),
+            root_provenance,
+            None,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let removals = plan_privacy_root_history_update_v1(
+            &state_transaction.world.privacy_roots,
+            &[root_key],
+            state_transaction
+                .world
+                .privacy_consensus_policy
+                .get()
+                .admission_retained_root_count(),
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!("Orchard bootstrap root rejected: {error}"))
+        })?;
+        if !removals.is_empty() {
+            return Err(Error::InvariantViolation(
+                "new Orchard root history unexpectedly requires pruning".into(),
+            ));
+        }
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(state_key, state_record);
+        state_transaction
+            .world
+            .privacy_roots
+            .insert(root_key, root_provenance);
+        state_transaction
+            .world
+            .privacy_root_heads
+            .insert(head_key, root_head);
         Ok(())
     }
 }
@@ -1950,6 +2138,93 @@ impl Execute for SubmitPrivacyProofV1 {
             } else {
                 None
             };
+        let orchard_snapshot = if self.envelope.protocol_id
+            == PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+        {
+            let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &self.envelope.statement
+            else {
+                return Err(invalid_privacy_parameter(
+                    "Orchard protocol envelope carries a different statement type",
+                ));
+            };
+            let namespace = PrivacyNamespaceV1::from_statement(&self.envelope.statement);
+            let snapshot = load_privacy_orchard_pool_snapshot_v1(
+                namespace,
+                state_transaction
+                    .world
+                    .privacy_consensus_policy
+                    .get()
+                    .admission_retained_root_count(),
+                &state_transaction.world.privacy_commitments,
+                &state_transaction.world.privacy_roots,
+                &state_transaction.world.privacy_root_heads,
+            )
+            .map_err(|error| {
+                Error::InvariantViolation(
+                    format!("trusted Orchard pool state failed validation: {error}").into(),
+                )
+            })?;
+            if snapshot.state().asset_definition_id() != &statement.asset_definition_id {
+                return Err(invalid_privacy_parameter(
+                    "Orchard statement asset differs from the governed pool asset",
+                ));
+            }
+            state_transaction
+                .world
+                .asset_definition(snapshot.state().asset_definition_id())
+                .map_err(Error::from)?;
+            if state_transaction
+                .world
+                .accounts
+                .get(snapshot.state().reserve_account())
+                .is_none()
+            {
+                return Err(Error::InvariantViolation(
+                    "Orchard governed reserve account no longer exists".into(),
+                ));
+            }
+            if authority == snapshot.state().reserve_account()
+                && statement.value_balance.direction != PrivacyValueBalanceDirectionV1::Balanced
+            {
+                return Err(invalid_privacy_parameter(
+                    "Orchard reserve account cannot submit a directional public bridge",
+                ));
+            }
+            for action in &statement.actions {
+                let nullifier_key =
+                    PrivacyNullifierKeyV1::orchard_nullifier(namespace, action.nullifier)
+                        .map_err(invalid_privacy_parameter)?;
+                if let Some(record) = state_transaction
+                    .world
+                    .privacy_nullifiers
+                    .get(&nullifier_key)
+                {
+                    record.validate().map_err(|error| {
+                        Error::InvariantViolation(
+                            format!("persisted Orchard nullifier provenance is invalid: {error}")
+                                .into(),
+                        )
+                    })?;
+                    if !matches!(
+                        record,
+                        PrivacyStateItemRecordV1::OrchardVerifiedNullifier {
+                            bootstrap_digest,
+                            ..
+                        } if *bootstrap_digest == snapshot.bootstrap_digest()
+                    ) {
+                        return Err(Error::InvariantViolation(
+                            "persisted Orchard nullifier has cross-bootstrap provenance".into(),
+                        ));
+                    }
+                    return Err(invalid_privacy_parameter(
+                        "Orchard nullifier was already consumed",
+                    ));
+                }
+            }
+            Some(snapshot)
+        } else {
+            None
+        };
         let zk_ams_snapshot = if self.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkAmsV1 {
             let PrivacyStatementV1::IrohaZkAmsV1(statement) = &self.envelope.statement else {
                 return Err(invalid_privacy_parameter(
@@ -2374,6 +2649,7 @@ impl Execute for SubmitPrivacyProofV1 {
                 expected_action_index,
                 block_timestamp_ms: state_transaction.block_unix_timestamp_ms(),
                 pgc_state: pgc_verification_state,
+                orchard_state: orchard_snapshot.as_ref(),
             },
         )
         .map_err(privacy_verification_error)?;
@@ -2391,6 +2667,215 @@ impl Execute for SubmitPrivacyProofV1 {
         match effects.into_ledger() {
             VerifiedPrivacyLedgerEffectsV1::None => state_transaction
                 .reserve_privacy_action(expected_action_index, encoded_action_bytes),
+            VerifiedPrivacyLedgerEffectsV1::OrchardActions(effect) => {
+                let snapshot = orchard_snapshot.as_ref().ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "native Orchard effect has no trusted pool snapshot".into(),
+                    )
+                })?;
+                let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &self.envelope.statement
+                else {
+                    return Err(Error::InvariantViolation(
+                        "native Orchard effect has a different statement type".into(),
+                    ));
+                };
+                let note_commitments = statement
+                    .actions
+                    .iter()
+                    .map(|action| action.note_commitment)
+                    .collect::<Vec<_>>();
+                let expected_successor =
+                    snapshot
+                        .derive_successor(&note_commitments)
+                        .map_err(|error| {
+                            Error::InvariantViolation(
+                            format!(
+                                "trusted Orchard frontier could not derive its successor: {error}"
+                            )
+                            .into(),
+                        )
+                        })?;
+                if effect.namespace() != snapshot.namespace()
+                    || effect.bootstrap_digest() != snapshot.bootstrap_digest()
+                    || effect.asset_definition_id() != snapshot.state().asset_definition_id()
+                    || effect.asset_definition_id() != &statement.asset_definition_id
+                    || effect.reserve_account() != snapshot.state().reserve_account()
+                    || effect.anchor() != statement.anchor
+                    || effect.anchor_epoch() != statement.anchor_epoch
+                    || !snapshot.contains_retained_anchor(effect.anchor_epoch(), effect.anchor())
+                    || effect.current_root() != snapshot.current_root()
+                    || effect.current_epoch() != snapshot.current_epoch()
+                    || effect.successor_state() != &expected_successor
+                    || effect.nullifiers().len() != statement.actions.len()
+                    || effect
+                        .nullifiers()
+                        .iter()
+                        .zip(&statement.actions)
+                        .any(|(nullifier, action)| *nullifier != action.nullifier)
+                    || effect.value_balance() != statement.value_balance
+                    || effect.fee() != statement.fee
+                    || effect.expiry_height() != statement.expiry_height
+                    || state_transaction.block_height() > effect.expiry_height()
+                {
+                    return Err(Error::InvariantViolation(
+                        "native Orchard effect is inconsistent with trusted state or its statement"
+                            .into(),
+                    ));
+                }
+                if authority == effect.reserve_account()
+                    && effect.value_balance().direction != PrivacyValueBalanceDirectionV1::Balanced
+                {
+                    return Err(invalid_privacy_parameter(
+                        "Orchard reserve account cannot submit a directional public bridge",
+                    ));
+                }
+
+                let mut seen_nullifiers = BTreeSet::new();
+                let mut nullifier_keys = Vec::with_capacity(effect.nullifiers().len());
+                for nullifier in effect.nullifiers() {
+                    let key =
+                        PrivacyNullifierKeyV1::orchard_nullifier(effect.namespace(), *nullifier)
+                            .map_err(|error| {
+                                Error::InvariantViolation(
+                                    format!("verified Orchard nullifier is invalid: {error}")
+                                        .into(),
+                                )
+                            })?;
+                    if !seen_nullifiers.insert(key) {
+                        return Err(Error::InvariantViolation(
+                            "native Orchard effect contains duplicate nullifier keys".into(),
+                        ));
+                    }
+                    if state_transaction
+                        .world
+                        .privacy_nullifiers
+                        .get(&key)
+                        .is_some()
+                    {
+                        return Err(invalid_privacy_parameter(
+                            "verified Orchard nullifier was already consumed",
+                        ));
+                    }
+                    nullifier_keys.push(key);
+                }
+                let nullifier_record = PrivacyStateItemRecordV1::orchard_verified_nullifier(
+                    effect.bootstrap_digest(),
+                    self.envelope.statement_digest,
+                    state_transaction.block_height(),
+                    expected_action_index,
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let state_key = PrivacyCommitmentKeyV1::orchard_pool_state(effect.namespace())
+                    .map_err(invalid_privacy_parameter)?;
+                let state_record =
+                    PrivacyStateItemRecordV1::orchard_pool_state(effect.successor_state().clone())
+                        .map_err(invalid_privacy_parameter)?;
+                let root_provenance = PrivacyRootProvenanceV1::orchard_pool_successor(
+                    effect.bootstrap_digest(),
+                    self.envelope.statement_digest,
+                    state_transaction.block_height(),
+                    expected_action_index,
+                    snapshot.current_epoch(),
+                    snapshot.current_root(),
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let root_key = PrivacyRootKeyV1::new(
+                    effect.namespace(),
+                    PrivacyRootRoleV1::NoteCommitmentAnchor,
+                    effect.successor_state().epoch(),
+                    effect.successor_state().root(),
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let head_key = PrivacyRootHeadKeyV1::new(
+                    effect.namespace(),
+                    PrivacyRootRoleV1::NoteCommitmentAnchor,
+                )
+                .map_err(invalid_privacy_parameter)?;
+                let removals = plan_privacy_root_history_update_v1(
+                    &state_transaction.world.privacy_roots,
+                    &[root_key],
+                    state_transaction
+                        .world
+                        .privacy_consensus_policy
+                        .get()
+                        .admission_retained_root_count(),
+                )
+                .map_err(|error| {
+                    invalid_privacy_parameter(format!("Orchard successor root rejected: {error}"))
+                })?;
+                let retention_anchor = removals
+                    .last()
+                    .map(|key| PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root()))
+                    .transpose()
+                    .map_err(invalid_privacy_parameter)?
+                    .or(snapshot.retention_anchor());
+                let root_head = PrivacyRootHeadRecordV1::new(
+                    effect.successor_state().epoch(),
+                    effect.successor_state().root(),
+                    root_provenance,
+                    retention_anchor,
+                )
+                .map_err(invalid_privacy_parameter)?;
+
+                state_transaction
+                    .reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+                let balance = effect.value_balance();
+                if balance.direction != PrivacyValueBalanceDirectionV1::Balanced {
+                    let amount = Quantity::from(balance.amount);
+                    match balance.direction {
+                        PrivacyValueBalanceDirectionV1::IntoPool => {
+                            let source_asset_id =
+                                crate::smartcontracts::world::isi::privacy_public_asset_id(
+                                    state_transaction,
+                                    effect.asset_definition_id(),
+                                    authority,
+                                )?;
+                            Transfer::asset_quantity(
+                                source_asset_id,
+                                amount,
+                                effect.reserve_account().clone(),
+                            )
+                            .execute(authority, state_transaction)?;
+                        }
+                        PrivacyValueBalanceDirectionV1::OutOfPool => {
+                            let source_asset_id =
+                                crate::smartcontracts::world::isi::privacy_public_asset_id(
+                                    state_transaction,
+                                    effect.asset_definition_id(),
+                                    effect.reserve_account(),
+                                )?;
+                            Transfer::asset_quantity(source_asset_id, amount, authority.clone())
+                                .execute(effect.reserve_account(), state_transaction)?;
+                        }
+                        PrivacyValueBalanceDirectionV1::Balanced => unreachable!(
+                            "directional Orchard bridge checked before transfer dispatch"
+                        ),
+                    }
+                }
+                let _bound_fee_without_second_charge = effect.fee();
+                for key in removals {
+                    state_transaction.world.privacy_roots.remove(key);
+                }
+                for key in nullifier_keys {
+                    state_transaction
+                        .world
+                        .privacy_nullifiers
+                        .insert(key, nullifier_record.clone());
+                }
+                state_transaction
+                    .world
+                    .privacy_commitments
+                    .insert(state_key, state_record);
+                state_transaction
+                    .world
+                    .privacy_roots
+                    .insert(root_key, root_provenance);
+                state_transaction
+                    .world
+                    .privacy_root_heads
+                    .insert(head_key, root_head);
+                Ok(())
+            }
             VerifiedPrivacyLedgerEffectsV1::ZkAceAuthorization(effect) => {
                 let policy = zk_ace_policy.as_ref().ok_or_else(|| {
                     Error::InvariantViolation(

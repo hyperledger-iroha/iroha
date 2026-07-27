@@ -14244,7 +14244,7 @@ mod tests {
             .expect("persist Native archive application block");
 
         let source_id = [0xA7; Hash::LENGTH];
-        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        let result = TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::new()));
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
             proposal.descriptor.accepted_transaction_hashes[0],
         );
@@ -14638,7 +14638,8 @@ mod tests {
         kura.store_block(Arc::clone(&genesis))
             .expect("store merge-applied retirement genesis");
 
-        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::default()));
+        let result =
+            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::default()));
         let settlement = LaneBlockCommitment {
             block_height: 1,
             lane_id,

@@ -116,7 +116,7 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
     )
     .build(&proposer);
     let assets = accounts.iter().cloned().map(|owner| {
-        let amount = if owner == bond_escrow { 0 } else { 500 };
+        let amount: u64 = if owner == bond_escrow { 0 } else { 500 };
         Asset::new(
             AssetId::new(voting_asset_id.clone(), owner),
             Quantity::from(amount),

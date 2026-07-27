@@ -23522,13 +23522,14 @@ signed ancestor-linked solid-block header proof,
 
 **Status:** external release evidence remains.
 
-- Archive immutable source, `Cargo.lock`, benchmark workload, and toolchain
-  provenance for the documented predecessor, then run the candidate and
-  predecessor on the same controlled runner. The documented predecessor lacks
-  `Cargo.lock`, and the available older lock is incompatible, so no
-  reproducible locked 5% comparison is claimed.
-- Run the Java and Kotlin SDK gates on a host with a usable Java runtime,
-  `kotlinc`, and Gradle; those toolchains are unavailable on the current host.
+- Recover the independently archived original `Cargo.lock` and toolchain
+  provenance for the source-evidenced predecessor
+  `a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`, authenticate them with its source
+  and 33-workload hash inventory, then run it and the candidate on the same
+  controlled runner. That Git revision has no lock, and the available older
+  lock is incompatible; do not reconstruct it from the candidate lock or
+  harness. Until the original archive is recovered, no reproducible locked 5%
+  comparison is claimed.
 - Run the C# SDK gate on a supported .NET 8 environment; `dotnet` is unavailable
   on the current host.
 

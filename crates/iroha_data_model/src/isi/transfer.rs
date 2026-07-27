@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, format, string::String};
 
 use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "json")]
@@ -223,6 +223,8 @@ impl TransferBox {
 isi! {
     /// Single entry within a [`TransferAssetBatch`] instruction.
     pub struct TransferAssetBatchEntry {
+        /// Caller-selected identifier used to correlate this leg with its receipt.
+        leg_id: String,
         /// Account sending the asset.
         from: AccountId,
         /// Account receiving the asset.
@@ -235,7 +237,10 @@ isi! {
 }
 
 impl TransferAssetBatchEntry {
-    /// Construct a new batch entry.
+    /// Construct a new batch entry with a deterministic identifier.
+    ///
+    /// Public SDKs should prefer [`Self::with_leg_id`] so business identifiers are
+    /// visible in the submitted payload and returned receipt.
     #[must_use]
     pub fn new(
         from: AccountId,
@@ -243,7 +248,28 @@ impl TransferAssetBatchEntry {
         asset_definition: AssetDefinitionId,
         amount: impl Into<Quantity>,
     ) -> Self {
+        let amount = amount.into();
+        let leg_id = format!("{from}>{to}:{asset_definition}:{amount}");
         Self {
+            leg_id,
+            from,
+            to,
+            asset_definition,
+            amount,
+        }
+    }
+
+    /// Construct a new batch entry with an explicit receipt correlation identifier.
+    #[must_use]
+    pub fn with_leg_id(
+        leg_id: impl Into<String>,
+        from: AccountId,
+        to: AccountId,
+        asset_definition: AssetDefinitionId,
+        amount: impl Into<Quantity>,
+    ) -> Self {
+        Self {
+            leg_id: leg_id.into(),
             from,
             to,
             asset_definition,
@@ -252,9 +278,43 @@ impl TransferAssetBatchEntry {
     }
 }
 
+/// Settlement semantics for [`TransferAssetBatch`].
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Decode,
+    norito::codec::Encode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
+#[repr(u8)]
+pub enum BatchMode {
+    /// Any rejected leg rejects the transaction and rolls back every leg.
+    #[default]
+    Atomic,
+    /// Leg-local admission or policy failures reject only that leg and execution continues.
+    ///
+    /// Batch structure remains transaction-fatal. Participant accounts must
+    /// already exist so a rejected independent leg cannot leak implicit
+    /// account-creation state or fees into a passing sibling leg.
+    Independent,
+}
+
 isi! {
     /// Deterministic batch transfer instruction covering multiple `Transfer::asset_quantity` calls.
     pub struct TransferAssetBatch {
+        /// Whether failures roll back the whole batch or only the affected leg.
+        mode: BatchMode,
         /// Ordered transfer entries executed sequentially.
         entries: Vec<TransferAssetBatchEntry>,
     }
@@ -267,7 +327,26 @@ impl TransferAssetBatch {
     /// Construct a new batch instruction.
     #[must_use]
     pub fn new(entries: Vec<TransferAssetBatchEntry>) -> Self {
-        Self { entries }
+        Self {
+            mode: BatchMode::Atomic,
+            entries,
+        }
+    }
+
+    /// Construct an independently settling batch instruction.
+    #[must_use]
+    pub fn independent(entries: Vec<TransferAssetBatchEntry>) -> Self {
+        Self {
+            mode: BatchMode::Independent,
+            entries,
+        }
+    }
+
+    /// Set explicit batch settlement semantics.
+    #[must_use]
+    pub fn with_mode(mut self, mode: BatchMode) -> Self {
+        self.mode = mode;
+        self
     }
 }
 
@@ -282,6 +361,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatchEntry {
         }
 
         let mut offset = 0usize;
+        let leg_id = super::decode_aos_canonical_field::<String>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let from = super::decode_aos_canonical_field::<AccountId>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -304,6 +387,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatchEntry {
         norito::core::note_payload_access(bytes, offset);
         Ok((
             Self {
+                leg_id,
                 from,
                 to,
                 asset_definition,
@@ -323,6 +407,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatch {
         }
 
         let mut offset = 0usize;
+        let mode = super::decode_aos_canonical_field::<BatchMode>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let entries = super::decode_aos_slice_field::<Vec<TransferAssetBatchEntry>>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -331,7 +419,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatch {
             return Err(norito::core::Error::LengthMismatch);
         }
         norito::core::note_payload_access(bytes, offset);
-        Ok((Self { entries }, offset))
+        Ok((Self { mode, entries }, offset))
     }
 }
 
@@ -366,6 +454,9 @@ where
 impl FastJsonWrite for TransferAssetBatchEntry {
     fn write_json(&self, out: &mut String) {
         out.push('{');
+        out.push_str("\"leg_id\":");
+        JsonSerialize::json_serialize(&self.leg_id, out);
+        out.push(',');
         out.push_str("\"from\":");
         JsonSerialize::json_serialize(&self.from, out);
         out.push_str(",\"to\":");
@@ -382,6 +473,9 @@ impl FastJsonWrite for TransferAssetBatchEntry {
 impl FastJsonWrite for TransferAssetBatch {
     fn write_json(&self, out: &mut String) {
         out.push('{');
+        out.push_str("\"mode\":");
+        JsonSerialize::json_serialize(&self.mode, out);
+        out.push(',');
         out.push_str("\"entries\":");
         JsonSerialize::json_serialize(&self.entries, out);
         out.push('}');
@@ -476,9 +570,15 @@ mod tests {
         let from = account(0x55);
         let to = account(0x66);
         let definition = asset_definition();
-        let batch = TransferAssetBatch::new(vec![
-            TransferAssetBatchEntry::new(from.clone(), to.clone(), definition.clone(), 1_u32),
-            TransferAssetBatchEntry::new(to, from, definition, 2_u32),
+        let batch = TransferAssetBatch::independent(vec![
+            TransferAssetBatchEntry::with_leg_id(
+                "invoice-1",
+                from.clone(),
+                to.clone(),
+                definition.clone(),
+                1_u32,
+            ),
+            TransferAssetBatchEntry::with_leg_id("invoice-2", to, from, definition, 2_u32),
         ]);
         let bytes = batch.encode();
 
@@ -486,6 +586,9 @@ mod tests {
 
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, batch);
+        assert_eq!(decoded.mode, BatchMode::Independent);
+        assert_eq!(decoded.entries[0].leg_id, "invoice-1");
+        assert_eq!(decoded.entries[1].leg_id, "invoice-2");
     }
 
     #[test]
