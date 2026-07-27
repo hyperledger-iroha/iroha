@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 import iroha_python._native as native_loader
 import iroha_python.connect as connect
+
+_STALE_LIBPYTHON_PATH = (
+    "target/kotodama-v1-uv-python/cpython-3.12.11-macos-aarch64-none/"
+    "lib/libpython3.12.dylib"
+)
 
 
 class FakeToriiConnectClient:
@@ -333,6 +340,31 @@ def test_connect_control_approve_from_dict_rejects_padded_algorithm(
         )
 
 
+def _mock_otool(
+    monkeypatch: pytest.MonkeyPatch,
+    output: str,
+) -> None:
+    monkeypatch.setattr(native_loader.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        native_loader.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["otool", "-L"],
+            returncode=0,
+            stdout=output,
+            stderr="",
+        ),
+    )
+
+
+def _otool_output(candidate, *dependencies: str) -> str:
+    linked = "\n".join(
+        f"\t{dependency} (compatibility version 3.12.0, current version 3.12.0)"
+        for dependency in dependencies
+    )
+    return f"{candidate}:\n{linked}\n"
+
+
 def test_native_loader_accepts_current_python_framework(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -343,11 +375,12 @@ def test_native_loader_accepts_current_python_framework(
         f"{native_loader.sys.version_info.major}."
         f"{native_loader.sys.version_info.minor}"
     )
-
-    monkeypatch.setattr(
-        native_loader,
-        "_linked_python_framework_versions",
-        lambda path: (current,),
+    _mock_otool(
+        monkeypatch,
+        _otool_output(
+            candidate,
+            f"/Library/Frameworks/Python.framework/Versions/{current}/Python",
+        ),
     )
 
     native_loader._assert_extension_compatible(candidate)
@@ -364,12 +397,183 @@ def test_native_loader_rejects_wrong_python_framework(
         f"{native_loader.sys.version_info.minor}"
     )
     wrong = "3.14" if current != "3.14" else "3.13"
-
-    monkeypatch.setattr(
-        native_loader,
-        "_linked_python_framework_versions",
-        lambda path: (wrong,),
+    _mock_otool(
+        monkeypatch,
+        _otool_output(
+            candidate,
+            f"/Library/Frameworks/Python.framework/Versions/{wrong}/Python",
+        ),
     )
 
     with pytest.raises(RuntimeError, match="links Python"):
+        native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_rejects_current_stale_direct_libpython_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    _mock_otool(
+        monkeypatch,
+        _otool_output(
+            candidate,
+            _STALE_LIBPYTHON_PATH,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="links directly to an alternate Python runtime"):
+        native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_rejects_direct_versioned_libpython_so(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    _mock_otool(
+        monkeypatch,
+        _otool_output(candidate, "@rpath/libpython3.12.so.1.0"),
+    )
+
+    with pytest.raises(RuntimeError, match="links directly to an alternate Python runtime"):
+        native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_rejects_direct_runtime_before_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    _mock_otool(monkeypatch, _otool_output(candidate, _STALE_LIBPYTHON_PATH))
+    spec = native_loader.importlib.machinery.ModuleSpec(
+        "iroha_python._crypto",
+        loader=None,
+        origin=str(candidate),
+    )
+    monkeypatch.delitem(native_loader.sys.modules, "iroha_python._crypto", raising=False)
+    monkeypatch.setattr(native_loader.importlib.util, "find_spec", lambda _name: spec)
+
+    def fail_import(_name: str) -> None:
+        pytest.fail("stale extension reached importlib before linkage rejection")
+
+    monkeypatch.setattr(native_loader.importlib, "import_module", fail_import)
+
+    with pytest.raises(RuntimeError, match="links directly to an alternate Python runtime"):
+        native_loader.load_crypto_extension()
+
+
+def test_native_loader_rejects_malformed_python_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    _mock_otool(
+        monkeypatch,
+        _otool_output(candidate, "@rpath/libpython.dylib"),
+    )
+
+    with pytest.raises(RuntimeError, match="unrecognized Python runtime dependency"):
+        native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_rejects_multiple_python_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    current = (
+        f"{native_loader.sys.version_info.major}."
+        f"{native_loader.sys.version_info.minor}"
+    )
+    _mock_otool(
+        monkeypatch,
+        _otool_output(
+            candidate,
+            f"/Library/Frameworks/Python.framework/Versions/{current}/Python",
+            f"@rpath/libpython{current}.dylib",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="links multiple Python runtimes"):
+        native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_accepts_extension_without_python_runtime_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    _mock_otool(
+        monkeypatch,
+        _otool_output(
+            candidate,
+            "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "/usr/lib/libSystem.B.dylib",
+        ),
+    )
+
+    native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_rejects_unrecognized_python_framework_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    _mock_otool(
+        monkeypatch,
+        _otool_output(
+            candidate,
+            "/Library/Frameworks/Python.framework/Versions/Current/Python",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="unrecognized Python runtime dependency"):
+        native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_rejects_failed_otool_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    monkeypatch.setattr(native_loader.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        native_loader.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["otool", "-L"],
+            returncode=1,
+            stdout="",
+            stderr="malformed object",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="otool exited with status 1"):
+        native_loader._assert_extension_compatible(candidate)
+
+
+def test_native_loader_rejects_unavailable_otool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    candidate = tmp_path / "_crypto.abi3.so"
+    candidate.write_bytes(b"")
+    monkeypatch.setattr(native_loader.sys, "platform", "darwin")
+
+    def fail_otool(*_args, **_kwargs):
+        raise OSError("otool unavailable")
+
+    monkeypatch.setattr(native_loader.subprocess, "run", fail_otool)
+
+    with pytest.raises(RuntimeError, match="could not inspect Python linkage"):
         native_loader._assert_extension_compatible(candidate)

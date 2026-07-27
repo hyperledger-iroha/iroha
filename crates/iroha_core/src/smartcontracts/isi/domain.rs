@@ -31,9 +31,7 @@ pub mod isi {
         asset::{AssetBalancePolicy, AssetBalanceScope},
         events::data::prelude::AssetChanged,
         governance::types::ProposalKind,
-        isi::error::{
-            InstructionExecutionError, InvalidParameterError, MathError, RepetitionError,
-        },
+        isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         metadata::Metadata,
         name::Name,
         nexus::{DataSpaceCatalog, DataSpaceId, LaneVisibility},
@@ -1393,6 +1391,32 @@ pub mod isi {
                 .into());
             }
 
+            let orchard_pool_references =
+                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+                    &state_transaction.world.privacy_commitments,
+                )
+                .map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister account {account_id}: persisted Orchard pool state is invalid: {message}"
+                        )
+                        .into(),
+                    )
+                })?;
+            if let Some(reference) = orchard_pool_references
+                .iter()
+                .find(|reference| reference.reserve_account() == &account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is the reserve account for governed Orchard pool {:?}",
+                        reference.namespace()
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
             if let Some(primary_label) = state_transaction.world.account(&account_id)?.label() {
                 ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
             }
@@ -2402,6 +2426,32 @@ pub mod isi {
                 .into());
             }
 
+            let orchard_pool_references =
+                crate::privacy_state::load_privacy_orchard_pool_references_v1(
+                    &state_transaction.world.privacy_commitments,
+                )
+                .map_err(|message| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "cannot unregister asset definition {asset_definition_id}: persisted Orchard pool state is invalid: {message}"
+                        )
+                        .into(),
+                    )
+                })?;
+            if let Some(reference) = orchard_pool_references
+                .iter()
+                .find(|reference| reference.asset_definition_id() == &asset_definition_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it backs governed Orchard pool {:?}",
+                        reference.namespace()
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
             if asset_definition_id == state_transaction.gov.voting_asset_id {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2780,6 +2830,10 @@ pub mod isi {
             })
             .collect::<Vec<_>>();
 
+        // Preflight the complete migration before removing any global bucket. In particular, a
+        // pre-existing scoped bucket must be checked against its full post-merge balance rather
+        // than only the amount moving out of the global bucket.
+        let mut migrations = Vec::with_capacity(global_asset_ids.len());
         for global_asset_id in global_asset_ids {
             let Some(source_value) = state_transaction
                 .world
@@ -2802,16 +2856,7 @@ pub mod isi {
                 .is_some();
             let merged_amount = state_transaction
                 .world
-                .assets
-                .get(&scoped_asset_id)
-                .map(|destination_value| {
-                    destination_value
-                        .clone()
-                        .into_inner()
-                        .checked_add(&source_amount)
-                        .map_err(|_| MathError::Overflow)
-                })
-                .transpose()?;
+                .precheck_numeric_asset_credit_exact(&scoped_asset_id, &source_amount)?;
 
             if state_transaction
                 .world
@@ -2830,22 +2875,40 @@ pub mod isi {
                     )
                     .into(),
                 )
-                .into());
+                    .into());
             }
 
-            state_transaction
-                .world
-                .assets
-                .remove(global_asset_id.clone());
+            migrations.push((
+                global_asset_id,
+                source_value,
+                source_amount,
+                scoped_asset_id,
+                destination_existed,
+                merged_amount,
+            ));
+        }
+
+        for (
+            global_asset_id,
+            source_value,
+            source_amount,
+            scoped_asset_id,
+            destination_existed,
+            merged_amount,
+        ) in migrations
+        {
             let source_metadata = state_transaction
                 .world
                 .asset_metadata
-                .remove(global_asset_id.clone());
-            state_transaction
+                .get(&global_asset_id)
+                .cloned();
+            let removed = state_transaction
                 .world
-                .untrack_asset_holder_if_empty(&global_asset_id);
+                .remove_asset_and_metadata(&global_asset_id)
+                .expect("preflighted global migration source must remain present");
+            debug_assert_eq!(removed, source_value);
 
-            if let Some(merged_amount) = merged_amount {
+            if destination_existed {
                 let destination_value = state_transaction
                     .world
                     .assets
@@ -2857,10 +2920,11 @@ pub mod isi {
                     .world
                     .assets
                     .insert(scoped_asset_id.clone(), source_value);
-            }
-            if !destination_existed {
                 state_transaction.world.track_asset_holder(&scoped_asset_id);
             }
+            state_transaction
+                .world
+                .refresh_nonzero_asset_holder(&scoped_asset_id);
             if let Some(source_metadata) = source_metadata {
                 state_transaction
                     .world
@@ -3794,8 +3858,8 @@ mod tests {
         },
         asset::definition::AssetConfidentialPolicy,
         asset::{
-            Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
-            NewAssetDefinition,
+            Asset, AssetBalanceScope, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId,
+            AssetId, Mintable, NewAssetDefinition,
         },
         block::BlockHeader,
         events::data::space_directory::{
@@ -3806,8 +3870,11 @@ mod tests {
             ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         isi::{
+            SetAssetHoldingLimit,
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
-            error::{InstructionExecutionError, InvalidParameterError},
+            error::{
+                AssetTransferAdmissionError, InstructionExecutionError, InvalidParameterError,
+            },
             governance::{CouncilDerivationKind, VotingMode},
         },
         metadata::Metadata,
@@ -10903,6 +10970,130 @@ mod tests {
                     |assets| assets.contains(&alice_scoped) && assets.contains(&bob_scoped)
                 )
         );
+    }
+
+    #[test]
+    fn balance_policy_migration_rejects_merged_bucket_above_holding_limit_atomically() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id =
+            DomainId::try_new("policy-limit-migration", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &ALICE_ID, &domain_id);
+
+        let definition_id = AssetDefinitionId::new(domain_id, "unit".parse().expect("name"));
+        let definition = NewAssetDefinition {
+            id: definition_id.clone(),
+            name: "Limited Private Unit".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
+            confidential_policy: AssetConfidentialPolicy::transparent(),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let paynet = DataSpaceId::new(7);
+        install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
+        Register::asset_definition(definition)
+            .execute(&authority, &mut tx)
+            .expect("register global definition");
+
+        let global_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+        Mint::asset_quantity(10_u32, global_asset.clone())
+            .execute(&authority, &mut tx)
+            .expect("mint global balance");
+        let scoped_asset = AssetId::with_scope(
+            definition_id.clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(paynet),
+        );
+        let (scoped_asset_id, scoped_value) =
+            Asset::new(scoped_asset.clone(), Quantity::from(2_u32)).into_key_value();
+        tx.world
+            .assets
+            .insert(scoped_asset_id.clone(), scoped_value);
+        tx.world.track_asset_holder(&scoped_asset_id);
+        tx.world.track_nonzero_asset_holder(&scoped_asset_id);
+        tx.world
+            .increase_asset_total_amount(&definition_id, &Quantity::from(2_u32))
+            .expect("fixture total includes the pre-existing scoped bucket");
+
+        let metadata_key: Name = "migration_note".parse().expect("metadata key");
+        let mut global_metadata = Metadata::default();
+        global_metadata.insert(
+            metadata_key,
+            Json::new("stay global on rejection".to_owned()),
+        );
+        tx.world
+            .asset_metadata
+            .insert(global_asset.clone(), global_metadata.clone());
+
+        SetAssetHoldingLimit::new(
+            ALICE_ID.clone(),
+            definition_id.clone(),
+            Some(Quantity::from(11_u32)),
+        )
+        .execute(&authority, &mut tx)
+        .expect("set a limit below the merged destination balance");
+        let total_before = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition exists")
+            .total_quantity()
+            .clone();
+        let external_events_before = tx.world.external_event_buf.len();
+        let internal_events_before = tx.world.internal_event_buf.len();
+
+        let error = SetAssetDefinitionBalancePolicy::new(
+            definition_id.clone(),
+            iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            Some(paynet),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("the merged scoped balance must respect the holding limit");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::HoldingLimitExceeded(_)
+            )
+        ));
+
+        assert_eq!(
+            tx.world
+                .assets
+                .get(&global_asset)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(10_u32))
+        );
+        assert_eq!(
+            tx.world
+                .assets
+                .get(&scoped_asset)
+                .map(|value| value.as_ref().clone()),
+            Some(Quantity::from(2_u32))
+        );
+        assert_eq!(
+            tx.world.asset_metadata.get(&global_asset),
+            Some(&global_metadata)
+        );
+        assert!(tx.world.asset_metadata.get(&scoped_asset).is_none());
+        let definition = tx
+            .world
+            .asset_definition(&definition_id)
+            .expect("definition remains");
+        assert_eq!(
+            definition.balance_scope_policy(),
+            iroha_data_model::asset::AssetBalancePolicy::Global
+        );
+        assert_eq!(definition.total_quantity(), &total_before);
+        assert_eq!(tx.world.external_event_buf.len(), external_events_before);
+        assert_eq!(tx.world.internal_event_buf.len(), internal_events_before);
     }
 
     #[test]

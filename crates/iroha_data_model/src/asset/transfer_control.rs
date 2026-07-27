@@ -108,11 +108,13 @@ pub struct AssetTransferControlRecord {
     /// Whether outbound transfers are blacklisted.
     #[norito(default)]
     pub blacklisted: bool,
-    /// Maximum post-credit balance for future transfers and mints.
+    /// Maximum post-credit balance for every future native credit.
     ///
     /// `None` means that no native holding limit is configured. A limit below the
     /// current balance leaves existing funds untouched and rejects further credit
-    /// until the balance is no greater than the limit.
+    /// until the balance is no greater than the limit. The configured limit is
+    /// evaluated independently for each concrete routed
+    /// [`crate::asset::AssetId`] balance bucket.
     #[norito(default)]
     pub holding_limit: Option<Quantity>,
     /// Configured transfer caps.

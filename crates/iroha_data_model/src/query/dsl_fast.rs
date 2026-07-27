@@ -1056,7 +1056,7 @@ mod codec_tests {
                 dm::ValidationFail::InternalError("x".into()),
             ))
         };
-        let result = signed::TransactionResult(result_inner);
+        let result = signed::TransactionResult::new(result_inner);
         let result_hash = transaction::TransactionResult::hash_from_inner(&result.0);
 
         query::CommittedTransaction {

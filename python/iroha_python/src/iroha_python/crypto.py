@@ -145,6 +145,9 @@ __all__ = [
     "ed25519_public_key_multihash",
     "ed25519_public_key_account_id",
     "build_signed_transaction",
+    "build_find_asset_escrow_query",
+    "build_find_asset_escrows_by_seller_query",
+    "build_find_asset_escrows_by_buyer_query",
     "hash_blake2b_32",
     "public_key_multihash",
     "private_key_multihash",
@@ -420,6 +423,50 @@ DomainId = _crypto.DomainId
 AccountId = _crypto.AccountId
 AssetDefinitionId = _crypto.AssetDefinitionId
 AssetId = _crypto.AssetId
+
+
+def build_find_asset_escrow_query(
+    authority: str,
+    private_key: bytes,
+    escrow_id: str,
+) -> bytes:
+    """Build a versioned Norito signed query for one native escrow."""
+
+    return bytes(_crypto.build_find_asset_escrow_query(authority, private_key, escrow_id))
+
+
+def build_find_asset_escrows_by_seller_query(
+    authority: str,
+    private_key: bytes,
+    seller: str,
+) -> bytes:
+    """Build a signed iterable query for escrows funded by ``seller``."""
+
+    return bytes(
+        _crypto.build_find_asset_escrows_by_seller_query(
+            authority,
+            private_key,
+            seller,
+        )
+    )
+
+
+def build_find_asset_escrows_by_buyer_query(
+    authority: str,
+    private_key: bytes,
+    buyer: str,
+) -> bytes:
+    """Build a signed iterable query for escrows benefiting ``buyer``."""
+
+    return bytes(
+        _crypto.build_find_asset_escrows_by_buyer_query(
+            authority,
+            private_key,
+            buyer,
+        )
+    )
+
+
 if not TYPE_CHECKING:
     SignedTransactionEnvelope.__doc__ = """Signed transaction envelope produced by the Python SDK."""
 

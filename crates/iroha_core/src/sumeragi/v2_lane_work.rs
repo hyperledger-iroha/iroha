@@ -18823,7 +18823,7 @@ pub(super) mod tests {
             )
             .expect("read exact execution input");
         let clean_result =
-            TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::default()));
+            TransactionResult::new(TransactionResultInner::Ok(DataTriggerSequence::default()));
         adapter
             .kura
             .persist_lane_block_execution_preflight(

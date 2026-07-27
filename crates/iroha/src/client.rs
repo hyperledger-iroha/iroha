@@ -11564,7 +11564,7 @@ mod evidence_http_tests {
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x25; Hash::LENGTH])),
             entrypoint_hash: entry_hash,
@@ -11786,7 +11786,7 @@ mod evidence_http_tests {
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
         ));
-        let result = TransactionResult(Err(reason.clone()));
+        let result = TransactionResult::new(Err(reason.clone()));
         let committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x33; Hash::LENGTH])),
             entrypoint_hash: entry_hash,
@@ -12395,7 +12395,7 @@ mod evidence_http_tests {
         let hash = tx.hash();
         let entry = TransactionEntrypoint::External(tx);
         let entry_hash = entry.hash();
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH])),
             entrypoint_hash: entry_hash,
@@ -23004,7 +23004,7 @@ mod tx_hash_tests {
             trigger::DataTriggerSequence,
         };
 
-        let ok_result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let ok_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         assert_eq!(
             super::tx_confirmation_status_from_committed_result(&ok_result),
             super::TxConfirmationStatus::Applied
@@ -23013,7 +23013,7 @@ mod tx_hash_tests {
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
         ));
-        let err_result = TransactionResult(Err(reason.clone()));
+        let err_result = TransactionResult::new(Err(reason.clone()));
         assert_eq!(
             super::tx_confirmation_status_from_committed_result(&err_result),
             super::TxConfirmationStatus::Rejected(Some(reason))
@@ -23085,7 +23085,7 @@ mod tx_hash_tests {
         .expect("external entrypoint fixture transaction should sign");
         let entry = TransactionEntrypoint::External(tx.clone());
         let entry_hash = entry.hash();
-        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH])),
             entrypoint_hash: entry_hash,
@@ -23114,7 +23114,7 @@ mod tx_hash_tests {
             authority,
         };
         let time_entry_hash = time_entry.hash_as_entrypoint();
-        let time_result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let time_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
         let time_committed = CommittedTransaction {
             block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
             entrypoint_hash: time_entry_hash,

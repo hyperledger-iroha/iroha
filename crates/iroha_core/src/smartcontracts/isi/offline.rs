@@ -47,7 +47,6 @@ use iroha_data_model::{
         offline_note_recursive_public_inputs_schema_hash,
     },
     proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
-    query::error::FindError,
     transaction::SignedTransaction,
     zk::{BackendTag, OpenVerifyEnvelope},
 };
@@ -1156,53 +1155,6 @@ fn kagemusha_escrow_asset_id(source_asset: &AssetId, escrow_account: AccountId) 
     )
 }
 
-fn withdraw_asset_quantity_exact(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    id: &AssetId,
-    amount: &Quantity,
-) -> Result<(), Error> {
-    let asset = state_transaction
-        .world
-        .assets
-        .get_mut(id)
-        .ok_or_else(|| FindError::Asset(id.clone().into()))?;
-    let quantity: &mut Quantity = &mut *asset;
-    let candidate = quantity
-        .checked_sub(amount)
-        .map_err(|_| MathError::NotEnoughQuantity)?;
-    *quantity = candidate;
-    if (**asset).is_zero() {
-        assert!(
-            state_transaction
-                .world
-                .remove_asset_and_metadata(id)
-                .is_some()
-        );
-    }
-    Ok(())
-}
-
-fn deposit_asset_quantity_exact(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    id: &AssetId,
-    amount: &Quantity,
-) -> Result<(), Error> {
-    let is_nonzero = {
-        let dst = state_transaction
-            .world
-            .asset_or_insert_exact(id, Quantity::zero())?;
-        let quantity: &mut Quantity = &mut *dst;
-        *quantity = quantity
-            .checked_add(amount)
-            .map_err(|_| MathError::Overflow)?;
-        !quantity.is_zero()
-    };
-    if is_nonzero {
-        state_transaction.world.track_nonzero_asset_holder(id);
-    }
-    Ok(())
-}
-
 fn reserve_kagemusha_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     asset: &AssetId,
@@ -1229,12 +1181,12 @@ fn reserve_kagemusha_escrow(
     )?;
     let source_asset = canonical_kagemusha_asset_id(state_transaction, asset)?;
     let escrow_asset = kagemusha_escrow_asset_id(&source_asset, escrow_account);
-    withdraw_asset_quantity_exact(state_transaction, &source_asset, amount)?;
-    if let Err(err) = deposit_asset_quantity_exact(state_transaction, &escrow_asset, amount) {
-        deposit_asset_quantity_exact(state_transaction, &source_asset, amount)
-            .expect("offline escrow reservation refund must succeed after failed deposit");
-        return Err(err);
-    }
+    crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
+        state_transaction,
+        &source_asset,
+        &escrow_asset,
+        amount,
+    )?;
     Ok(())
 }
 
@@ -1276,12 +1228,12 @@ fn credit_legacy_note_from_offline_escrow(
     )?;
 
     let escrow_asset = kagemusha_escrow_asset_id(&recipient_asset, escrow_account);
-    withdraw_asset_quantity_exact(state_transaction, &escrow_asset, &amount)?;
-    if let Err(error) = deposit_asset_quantity_exact(state_transaction, &recipient_asset, &amount) {
-        deposit_asset_quantity_exact(state_transaction, &escrow_asset, &amount)
-            .expect("legacy note escrow refund must succeed after failed recipient deposit");
-        return Err(error);
-    }
+    crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
+        state_transaction,
+        &escrow_asset,
+        &recipient_asset,
+        &amount,
+    )?;
     Ok(())
 }
 
@@ -5004,14 +4956,12 @@ pub mod isi {
 
     impl KagemushaV2EscrowCreditPlan {
         fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
-            withdraw_asset_quantity_exact(state_transaction, &self.escrow_asset, &self.amount)?;
-            if let Err(err) =
-                deposit_asset_quantity_exact(state_transaction, &self.recipient_asset, &self.amount)
-            {
-                deposit_asset_quantity_exact(state_transaction, &self.escrow_asset, &self.amount)
-                    .expect("prevalidated Kagemusha V2 escrow refund must succeed");
-                return Err(err);
-            }
+            crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
+                state_transaction,
+                &self.escrow_asset,
+                &self.recipient_asset,
+                &self.amount,
+            )?;
             Ok(())
         }
     }
@@ -5063,23 +5013,9 @@ pub mod isi {
             source_asset.scope().clone(),
         );
         let escrow_asset = kagemusha_escrow_asset_id(source_asset, escrow_account);
-        let escrow_balance = state_transaction
-            .world
-            .assets
-            .get(&escrow_asset)
-            .map(|asset| asset.as_ref().clone())
-            .ok_or_else(|| FindError::Asset(escrow_asset.clone().into()))?;
-        escrow_balance
-            .checked_sub(amount)
-            .map_err(|_| MathError::NotEnoughQuantity)?;
         state_transaction
             .world
-            .assets
-            .get(&recipient_asset)
-            .map(|asset| asset.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
-            .checked_add(amount)
-            .map_err(|_| MathError::Overflow)?;
+            .precheck_numeric_asset_transfer_delta_exact(&escrow_asset, &recipient_asset, amount)?;
 
         Ok(KagemushaV2EscrowCreditPlan {
             escrow_asset,
@@ -8809,9 +8745,13 @@ pub mod isi {
         use iroha_data_model::{
             Registrable,
             account::Account,
-            asset::{AssetDefinition, AssetDefinitionId},
+            asset::{Asset, AssetDefinition, AssetDefinitionId},
             block::BlockHeader,
-            domain::DomainId,
+            domain::{Domain, DomainId},
+            isi::{
+                SetAssetHoldingLimit,
+                error::{AssetTransferAdmissionError, InstructionExecutionError},
+            },
             offline::{
                 KagemushaAndroidKeyMintHardwareAssertionV1, KagemushaDevicePublicKeyV2,
                 KagemushaDeviceSignatureV2, KagemushaIosAppAttestHardwareAssertionV1,
@@ -8819,7 +8759,7 @@ pub mod isi {
             permission::Permission,
             role::{Role, RoleId},
         };
-        use iroha_primitives::json::Json;
+        use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         use p256::{
             ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _},
@@ -9032,6 +8972,199 @@ pub mod isi {
                 Kura::blank_kura_for_testing(),
                 LiveQueryStore::start_test(),
             )
+        }
+
+        fn offline_holding_limit_test_state(
+            escrow_balance: Option<u32>,
+        ) -> (State, AssetDefinitionId, AssetId, AccountId) {
+            let domain_id = DomainId::try_new("offline", "universal").expect("offline test domain");
+            let definition_id =
+                AssetDefinitionId::new(domain_id.clone(), "cash".parse().expect("asset name"));
+            let definition = AssetDefinition::numeric(definition_id.clone())
+                .with_name("Offline Cash".to_owned())
+                .build(&ALICE_ID);
+            let source_asset = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+            let escrow_key_pair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+                .expect("derive offline escrow test account");
+            let escrow_account = AccountId::new(escrow_key_pair.public_key().clone());
+            let escrow_asset = AssetId::new(definition_id.clone(), escrow_account.clone());
+            let mut assets = vec![Asset::new(source_asset.clone(), Quantity::from(10_u32))];
+            if let Some(balance) = escrow_balance {
+                assets.push(Asset::new(escrow_asset, Quantity::from(balance)));
+            }
+            let world = World::with_assets(
+                [Domain::new(domain_id).build(&ALICE_ID)],
+                [
+                    Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                    Account::new(BOB_ID.clone()).build(&ALICE_ID),
+                    Account::new(escrow_account.clone()).build(&ALICE_ID),
+                ],
+                [definition],
+                assets,
+                [],
+            );
+            let mut state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let mut settlement = iroha_config::parameters::actual::Settlement::default();
+            settlement
+                .offline
+                .escrow_accounts
+                .insert(definition_id.clone(), escrow_account.clone());
+            state.set_settlement(settlement);
+            (state, definition_id, source_asset, escrow_account)
+        }
+
+        fn set_offline_holding_limit(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            account: &AccountId,
+            definition_id: &AssetDefinitionId,
+            limit: u32,
+        ) {
+            state_transaction.tx_call_hash = Some(Hash::prehashed([0xA8; Hash::LENGTH]));
+            SetAssetHoldingLimit::new(
+                account.clone(),
+                definition_id.clone(),
+                Some(Quantity::from(limit)),
+            )
+            .execute(&ALICE_ID, state_transaction)
+            .expect("asset definition owner sets holding limit");
+        }
+
+        fn offline_asset_entries(
+            state_transaction: &StateTransaction<'_, '_>,
+        ) -> Vec<(AssetId, Quantity)> {
+            state_transaction
+                .world
+                .assets
+                .iter()
+                .map(|(id, asset)| (id.clone(), asset.as_ref().clone()))
+                .collect()
+        }
+
+        fn assert_holding_limit_exceeded(error: &Error) {
+            assert!(
+                matches!(
+                    error,
+                    InstructionExecutionError::AssetTransferAdmission(
+                        AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                    )
+                ),
+                "expected typed holding-limit rejection, got {error:?}",
+            );
+        }
+
+        #[test]
+        fn offline_escrow_reservation_holding_limit_failure_is_atomic() {
+            let (state, definition_id, source_asset, escrow_account) =
+                offline_holding_limit_test_state(None);
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            set_offline_holding_limit(&mut state_transaction, &escrow_account, &definition_id, 0);
+            let entries_before = offline_asset_entries(&state_transaction);
+            let events_before = state_transaction.world.internal_event_buf.len();
+
+            let error = reserve_kagemusha_escrow(
+                &mut state_transaction,
+                &source_asset,
+                &Quantity::from(1_u32),
+            )
+            .expect_err("escrow reservation above its holding limit must fail");
+
+            assert_holding_limit_exceeded(&error);
+            assert_eq!(offline_asset_entries(&state_transaction), entries_before);
+            assert_eq!(
+                state_transaction.world.internal_event_buf.len(),
+                events_before,
+                "rejected escrow reservation must not emit events",
+            );
+        }
+
+        #[test]
+        fn legacy_redemption_holding_limit_failure_is_atomic() {
+            let (state, definition_id, source_asset, _) =
+                offline_holding_limit_test_state(Some(10));
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 0);
+            let entries_before = offline_asset_entries(&state_transaction);
+            let events_before = state_transaction.world.internal_event_buf.len();
+
+            let error = credit_legacy_note_from_offline_escrow(
+                &mut state_transaction,
+                &source_asset,
+                &BOB_ID,
+                &Numeric::from(1_u32),
+            )
+            .expect_err("legacy redemption above the recipient holding limit must fail");
+
+            assert_holding_limit_exceeded(&error);
+            assert_eq!(offline_asset_entries(&state_transaction), entries_before);
+            assert_eq!(
+                state_transaction.world.internal_event_buf.len(),
+                events_before,
+                "rejected legacy redemption must not emit events",
+            );
+        }
+
+        #[test]
+        fn kagemusha_redemption_plan_rejects_holding_limit_without_mutation() {
+            let (state, definition_id, source_asset, _) =
+                offline_holding_limit_test_state(Some(10));
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 0);
+            let entries_before = offline_asset_entries(&state_transaction);
+            let events_before = state_transaction.world.internal_event_buf.len();
+
+            let error = plan_kagemusha_v2_escrow_credit(
+                &source_asset,
+                &BOB_ID,
+                &Quantity::from(1_u32),
+                &state_transaction,
+            )
+            .expect_err("Kagemusha redemption planning must enforce the recipient holding limit");
+
+            assert_holding_limit_exceeded(&error);
+            assert_eq!(offline_asset_entries(&state_transaction), entries_before);
+            assert_eq!(
+                state_transaction.world.internal_event_buf.len(),
+                events_before,
+                "rejected Kagemusha redemption planning must not emit events",
+            );
+        }
+
+        #[test]
+        fn kagemusha_redemption_commit_rechecks_holding_limit_atomically() {
+            let (state, definition_id, source_asset, _) =
+                offline_holding_limit_test_state(Some(10));
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 1);
+            let plan = plan_kagemusha_v2_escrow_credit(
+                &source_asset,
+                &BOB_ID,
+                &Quantity::from(1_u32),
+                &state_transaction,
+            )
+            .expect("credit at the current holding limit should plan");
+            set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 0);
+            let entries_before = offline_asset_entries(&state_transaction);
+            let events_before = state_transaction.world.internal_event_buf.len();
+
+            let error = plan
+                .commit(&mut state_transaction)
+                .expect_err("commit must recheck a holding limit changed after planning");
+
+            assert_holding_limit_exceeded(&error);
+            assert_eq!(offline_asset_entries(&state_transaction), entries_before);
+            assert_eq!(
+                state_transaction.world.internal_event_buf.len(),
+                events_before,
+                "rejected Kagemusha redemption commit must not emit events",
+            );
         }
 
         #[test]

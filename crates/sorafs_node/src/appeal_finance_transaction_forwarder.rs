@@ -2856,6 +2856,7 @@ mod tests {
             release_authority: Some(account(4)),
             expires_at_ms: Some(10_000),
             evidence_hashes: vec![Hash::new("appeal-evidence")],
+            conditions: Vec::new(),
             created_at_ms: 1,
             accepted_at_ms: None,
             payment_sent_at_ms: None,

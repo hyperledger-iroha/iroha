@@ -65,6 +65,8 @@ pub const TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1: u32 = 4 * 1024 * 1024;
 /// Successor proofs advance this epoch by exactly one. Keeping the origin
 /// fixed prevents governance or a caller from creating ambiguous histories.
 pub const PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1: u64 = 1;
+/// The sole initial epoch for a node-derived Orchard empty frontier.
+pub const PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1: u64 = 1;
 /// The only authorization epoch admitted for a new ZK-ACE policy.
 pub const PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1: u64 = 1;
 /// Maximum number of source accounts in one authoritative ZK-ACE policy.
@@ -1307,6 +1309,104 @@ pub enum PrivacyRootPublicationValidationError {
     /// Root is zero.
     #[error("privacy root publication root must be non-zero")]
     ZeroRoot,
+}
+
+/// Governance payload establishing one Orchard pool's immutable public bridge.
+///
+/// The payload deliberately contains neither an initial root nor an initial
+/// epoch. Core derives the pinned Orchard V3 empty-tree root and installs it at
+/// [`PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1`], so governance cannot choose an
+/// alternate accumulator origin.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyOrchardPoolBootstrapV1 {
+    /// Stable Orchard pool identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by this private pool.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Governed public reserve account used for deposits and withdrawals.
+    pub reserve_account: AccountId,
+}
+
+impl PrivacyOrchardPoolBootstrapV1 {
+    /// Construct and validate one canonical Orchard pool bootstrap.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero pool identifier.
+    pub fn new(
+        pool_id: PrivacyPoolIdV1,
+        asset_definition_id: AssetDefinitionId,
+        reserve_account: AccountId,
+    ) -> Result<Self, PrivacyOrchardPoolBootstrapValidationErrorV1> {
+        let bootstrap = Self {
+            pool_id,
+            asset_definition_id,
+            reserve_account,
+        };
+        bootstrap.validate()?;
+        Ok(bootstrap)
+    }
+
+    /// Return the sole protocol-scoped namespace for this pool.
+    #[must_use]
+    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: self.pool_id,
+            }),
+        )
+    }
+
+    /// Validate the closed Orchard namespace fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero pool identifier.
+    pub fn validate(&self) -> Result<(), PrivacyOrchardPoolBootstrapValidationErrorV1> {
+        if self.pool_id.is_zero() {
+            return Err(PrivacyOrchardPoolBootstrapValidationErrorV1::ZeroPoolId);
+        }
+        self.namespace()
+            .validate()
+            .map_err(PrivacyOrchardPoolBootstrapValidationErrorV1::Namespace)
+    }
+
+    /// Hash the exact canonical bootstrap in its own provenance domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if canonical encoding fails.
+    pub fn digest(&self) -> Result<PrivacyOrchardPoolBootstrapDigestV1, norito::Error> {
+        let encoded = norito::to_bytes(self)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_ORCHARD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1);
+        hasher.update(
+            &u64::try_from(encoded.len())
+                .expect("Norito output length always fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(&encoded);
+        Ok(PrivacyOrchardPoolBootstrapDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+}
+
+/// Structural failure for [`PrivacyOrchardPoolBootstrapV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
+    /// The stable pool identifier is all zero.
+    #[error("Orchard pool bootstrap pool id must be non-zero")]
+    ZeroPoolId,
+    /// The derived closed namespace is malformed.
+    #[error("Orchard pool bootstrap namespace is invalid: {0}")]
+    Namespace(PrivacyNamespaceValidationError),
 }
 
 /// One canonical encrypted account in a PGC account-state bootstrap.
@@ -10648,7 +10748,10 @@ mod tests {
                 assert!(!value.is_zero());
                 assert!($type::new([0; 32]).is_zero());
                 let encoded = value.encode();
-                assert_eq!(encoded.len(), 32);
+                // Bare Norito encodes a fixed byte-array field as one
+                // canonical compact-width prefix followed by exactly 32
+                // bytes. No variable-length payload is admitted.
+                assert_eq!(encoded.len(), 33);
                 assert_eq!(
                     $type::decode(&mut encoded.as_slice()).expect("decode fixed value"),
                     value
@@ -10662,6 +10765,7 @@ mod tests {
         check_type!(PrivacyEngineManifestDigestV1, 5);
         check_type!(PrivacyStatementDigestV1, 6);
         check_type!(PrivacyTransactionIntentDigestV1, 17);
+        check_type!(PrivacyOrchardPoolBootstrapDigestV1, 20);
         check_type!(PrivacyBootleLanternIssuerPolicyDigestV1, 18);
         check_type!(PrivacyNullifierV1, 7);
         check_type!(PrivacyCommitmentV1, 8);
@@ -10776,7 +10880,7 @@ mod tests {
     fn p256_wire_types_are_exact_width_and_closed() {
         let point = p256_point(9);
         let encoded = point.encode();
-        assert_eq!(encoded.len(), 33);
+        assert_eq!(encoded.len(), 34);
         assert_eq!(
             PrivacyP256PointV1::decode(&mut encoded.as_slice()).expect("decode exact point"),
             point
@@ -10801,7 +10905,7 @@ mod tests {
     fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
         let seed_key = zk_ams_seed_key(9);
         let encoded = seed_key.encode();
-        assert_eq!(encoded.len(), 32);
+        assert_eq!(encoded.len(), 33);
         assert_eq!(
             PrivacyZkAmsSeedPublicKeyV1::decode(&mut encoded.as_slice())
                 .expect("decode exact seed key"),
@@ -10811,7 +10915,7 @@ mod tests {
         assert!(PrivacyZkAmsSeedPublicKeyV1::decode(&mut [9; 33].as_slice()).is_err());
 
         let key_image = PrivacyZkAmsKeyImageV1::new(raw(10));
-        assert_eq!(key_image.encode().len(), 32);
+        assert_eq!(key_image.encode().len(), 33);
         assert!(PrivacyZkAmsKeyImageV1::decode(&mut key_image.encode().as_slice()).is_ok());
 
         for unknown in [2_u32, 3, u32::MAX] {
@@ -11347,6 +11451,53 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() {
+        let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
+            PrivacyPoolIdV1::new(raw(210)),
+            asset_definition_id(),
+            account(211),
+        )
+        .expect("canonical Orchard pool bootstrap");
+        bootstrap.validate().expect("valid Orchard pool bootstrap");
+        assert_eq!(
+            bootstrap.namespace().protocol_id(),
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1
+        );
+        let encoded = norito::to_bytes(&bootstrap).expect("frame Orchard bootstrap");
+        let decoded: PrivacyOrchardPoolBootstrapV1 =
+            norito::decode_from_bytes(&encoded).expect("decode Orchard bootstrap");
+        assert_eq!(decoded, bootstrap);
+
+        let digest = bootstrap.digest().expect("digest Orchard bootstrap");
+        assert!(!digest.is_zero());
+        let mut changed_asset = bootstrap.clone();
+        changed_asset.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("other").expect("asset name"),
+        );
+        assert_ne!(
+            changed_asset.digest().expect("digest changed asset"),
+            digest,
+            "the immutable public bridge asset must be provenance-bound"
+        );
+        let mut changed_reserve = bootstrap.clone();
+        changed_reserve.reserve_account = account(212);
+        assert_ne!(
+            changed_reserve.digest().expect("digest changed reserve"),
+            digest,
+            "the immutable reserve account must be provenance-bound"
+        );
+        assert_eq!(
+            PrivacyOrchardPoolBootstrapV1::new(
+                PrivacyPoolIdV1::new([0; 32]),
+                asset_definition_id(),
+                account(211),
+            ),
+            Err(PrivacyOrchardPoolBootstrapValidationErrorV1::ZeroPoolId)
+        );
     }
 
     #[test]

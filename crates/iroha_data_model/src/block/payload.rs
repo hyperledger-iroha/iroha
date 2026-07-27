@@ -12,7 +12,7 @@ use crate::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    events::trigger_completed::TriggerCompletedEvent,
+    events::{data::prelude::AssetBatchTransferOutcome, trigger_completed::TriggerCompletedEvent},
     fastpq::TransferTranscript,
     transaction::{
         error::TransactionRejectionReason,
@@ -625,6 +625,20 @@ impl SignedBlock {
         self.result
             .as_ref()
             .map(|result| result.trigger_completions.as_slice())
+    }
+
+    /// Durable independent-batch outcomes for one transaction entrypoint.
+    #[inline]
+    pub fn batch_transfer_outcomes_for(
+        &self,
+        entrypoint_hash: &HashOf<TransactionEntrypoint>,
+    ) -> &[AssetBatchTransferOutcome] {
+        self.entrypoint_hashes()
+            .zip(self.results())
+            .find_map(|(hash, result)| {
+                (hash == *entrypoint_hash).then(|| result.batch_transfer_outcomes())
+            })
+            .unwrap_or(&[])
     }
 
     /// AXT policy snapshot captured during execution (if any).

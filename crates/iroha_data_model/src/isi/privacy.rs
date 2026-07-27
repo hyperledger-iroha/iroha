@@ -6,12 +6,13 @@
 
 use super::*;
 use crate::privacy::{
-    PrivacyConsensusLimitsV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1,
-    PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
-    PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1,
-    PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1, PrivacyZkAmsRegistryBootstrapV1,
-    PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
-    PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
+    PrivacyConsensusLimitsV1, PrivacyOrchardPoolBootstrapV1, PrivacyPgcAccountBootstrapV1,
+    PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1,
+    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+    PrivacyRootPublicationV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
+    PrivacyZkAmsRegistryBootstrapV1, PrivacyZkX509CertificatePolicyRecordDigestV1,
+    PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
+    PrivacyZkX509TrustAnchorRecordV1,
 };
 
 isi! {
@@ -161,6 +162,31 @@ impl PublishPrivacyRootV1 {
     #[must_use]
     pub fn new(publication: PrivacyRootPublicationV1) -> Self {
         Self { publication }
+    }
+}
+
+isi! {
+    /// Bootstrap one governed Orchard V3 pool at the node-derived empty root.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct BootstrapPrivacyOrchardPoolV1 {
+        /// Immutable pool, public asset, and reserve-account binding.
+        pub bootstrap: PrivacyOrchardPoolBootstrapV1,
+    }
+}
+
+impl crate::seal::Instruction for BootstrapPrivacyOrchardPoolV1 {}
+
+impl BootstrapPrivacyOrchardPoolV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_orchard_pool.v1";
+
+    /// Construct a governed Orchard pool bootstrap.
+    #[must_use]
+    pub fn new(bootstrap: PrivacyOrchardPoolBootstrapV1) -> Self {
+        Self { bootstrap }
     }
 }
 
@@ -566,6 +592,9 @@ impl_privacy_decode_from_slice!(TransitionPrivacyProtocolLifecycleV1 {
 impl_privacy_decode_from_slice!(PublishPrivacyRootV1 {
     publication: PrivacyRootPublicationV1,
 });
+impl_privacy_decode_from_slice!(BootstrapPrivacyOrchardPoolV1 {
+    bootstrap: PrivacyOrchardPoolBootstrapV1,
+});
 impl_privacy_decode_from_slice!(BootstrapPrivacyPgcAccountsV1 {
     bootstrap: PrivacyPgcAccountBootstrapV1,
     proof: PrivacyPgcBootstrapProofBytesV1,
@@ -612,27 +641,55 @@ impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::core::DecodeFromSlice;
 
     use super::*;
     use crate::{
-        ChainId,
+        AssetDefinitionId, ChainId,
+        account::AccountId,
+        domain::DomainId,
+        name::Name,
         privacy::{
             IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IrohaJindoPolynomialCommitmentStatementV1,
             JindoActivationLimitsV1, PrivacyActiveLifecycleV1, PrivacyAssuranceV1,
             PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyJindoFieldElementV1,
             PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-            PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
-            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyRootRoleV1,
-            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-            PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+            PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+            PrivacyPgcAccountV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
+            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+            PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
+            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+            PrivacyVerifierDigestV1,
         },
     };
 
     fn digest(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    fn account(seed: u8) -> AccountId {
+        AccountId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("fixture seed derives an account")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn orchard_bootstrap() -> PrivacyOrchardPoolBootstrapV1 {
+        PrivacyOrchardPoolBootstrapV1::new(
+            PrivacyPoolIdV1::new(digest(23)),
+            AssetDefinitionId::new(
+                DomainId::try_new("privacy", "universal").expect("domain"),
+                Name::from_str("orchard").expect("asset name"),
+            ),
+            account(24),
+        )
+        .expect("canonical Orchard bootstrap")
     }
 
     fn activation() -> PrivacyProtocolActivationRecordV1 {
@@ -789,6 +846,7 @@ mod tests {
             }),
         ));
         assert_slice_roundtrip(PublishPrivacyRootV1::new(publication()));
+        assert_slice_roundtrip(BootstrapPrivacyOrchardPoolV1::new(orchard_bootstrap()));
         assert_slice_roundtrip(BootstrapPrivacyPgcAccountsV1::new(
             pgc_bootstrap(),
             PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5, 0x5A, 1]),
@@ -804,6 +862,21 @@ mod tests {
             RegisterPrivacyProtocolActivationV1::decode_from_slice(&trailing),
             Err(norito::core::Error::LengthMismatch)
         ));
+
+        let orchard = BootstrapPrivacyOrchardPoolV1::new(orchard_bootstrap()).encode();
+        for truncated_len in [0, 1, orchard.len() / 2, orchard.len() - 1] {
+            assert!(
+                BootstrapPrivacyOrchardPoolV1::decode_from_slice(&orchard[..truncated_len])
+                    .is_err(),
+                "Orchard bootstrap truncation at {truncated_len} bytes must fail closed"
+            );
+        }
+        let mut trailing_orchard = orchard;
+        trailing_orchard.push(0xC3);
+        assert!(
+            BootstrapPrivacyOrchardPoolV1::decode_from_slice(&trailing_orchard).is_err(),
+            "Orchard bootstrap trailing bytes must fail closed"
+        );
 
         let submit = SubmitPrivacyProofV1::new(envelope()).encode();
         for truncated_len in [0, 1, submit.len() / 2, submit.len() - 1] {
@@ -845,6 +918,7 @@ mod tests {
             SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
             TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
             PublishPrivacyRootV1::WIRE_ID,
+            BootstrapPrivacyOrchardPoolV1::WIRE_ID,
             BootstrapPrivacyPgcAccountsV1::WIRE_ID,
             BootstrapPrivacyZkAmsRegistryV1::WIRE_ID,
             RegisterPrivacyZkAcePolicyV1::WIRE_ID,
