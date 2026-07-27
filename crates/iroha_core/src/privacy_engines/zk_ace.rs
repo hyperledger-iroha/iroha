@@ -30,7 +30,7 @@ pub const ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1: &str = "iroha:privacy:zk-ace:trans
 pub const ZK_ACE_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:zk-ace:typed-statement+trusted-genesis:private-witness:masked-poseidon2-execution-trace:three-lane-fri:v1";
 /// Exact native proof wire description frozen into the compiled profile.
 pub const ZK_ACE_PROOF_WIRE_V1: &[u8] =
-    b"norito:zk-ace-stark-proof-v1:strict-exact:no-generic-envelope";
+    b"ZKA1:fixed-shape-big-endian:922214:strict-exact:no-lengths:no-generic-envelope";
 /// Exact low-level AIR relation schema frozen into the compiled profile.
 pub const ZK_ACE_AIR_RELATION_SCHEMA_V1: &[u8] = b"version:u16|identity_commitment:bytes32|tx_digest:bytes32|authorization_digest:bytes32|chain_id|fixed_domain|fixed_action|replay_nullifier:bytes32|policy_digest:bytes32|source|destination|asset_definition_id|amount:u128|fixed_verifier";
 /// Exact typed authorization projection frozen into the compiled profile.
@@ -42,8 +42,8 @@ pub const ZK_ACE_POSEIDON_MANIFEST_SHA256_V1: &str =
 pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
 /// Frozen digest of every compiled verifier-profile field below.
 pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0x28, 0x38, 0x55, 0x11, 0x4c, 0xc1, 0x85, 0x37, 0x5e, 0xf0, 0x6c, 0xb2, 0x1e, 0x03, 0xf2, 0x9d,
-    0x73, 0xe9, 0x77, 0x54, 0x9a, 0x13, 0xd5, 0xa9, 0xde, 0xb1, 0xca, 0x66, 0x8b, 0x51, 0x90, 0xb2,
+    0xb0, 0x7a, 0x87, 0x1c, 0xe7, 0x48, 0xe4, 0xe2, 0x1d, 0x02, 0x5e, 0xe0, 0xe8, 0xd8, 0x6a, 0x69,
+    0x41, 0x32, 0x2d, 0x9e, 0xd9, 0x50, 0x96, 0xf1, 0x32, 0x8a, 0x69, 0xde, 0xdc, 0xc6, 0x47, 0x86,
 ];
 
 /// Return the frozen digest of the exact compiled native verifier profile.

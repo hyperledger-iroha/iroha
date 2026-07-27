@@ -6,7 +6,7 @@ use std::{
     convert::TryInto,
     env,
     fmt::Write as FmtWrite,
-    fs::{self, File, Metadata, OpenOptions},
+    fs::{self, File, Metadata as FsMetadata, OpenOptions},
     io::{self, BufReader, BufWriter, Cursor, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -10904,7 +10904,7 @@ fn moderation_runner_current_executable_hash() -> Result<[u8; 32], String> {
 }
 
 #[cfg(unix)]
-fn moderation_file_identity(metadata: &Metadata) -> (u64, u64, u64, i64, i64) {
+fn moderation_file_identity(metadata: &FsMetadata) -> (u64, u64, u64, i64, i64) {
     (
         metadata.dev(),
         metadata.ino(),
@@ -10915,7 +10915,7 @@ fn moderation_file_identity(metadata: &Metadata) -> (u64, u64, u64, i64, i64) {
 }
 
 #[cfg(not(unix))]
-fn moderation_file_identity(metadata: &Metadata) -> (u64, Option<SystemTime>) {
+fn moderation_file_identity(metadata: &FsMetadata) -> (u64, Option<SystemTime>) {
     (metadata.len(), metadata.modified().ok())
 }
 
@@ -15817,6 +15817,27 @@ fn storage_prepare(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn manifest_root_cid_hex(manifest: &ManifestV1) -> Result<String, String> {
+    if manifest.root_cid.is_empty() {
+        return Err("manifest root_cid is empty".to_string());
+    }
+    Ok(hex_encode(&manifest.root_cid))
+}
+
+fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
+    Ok(ChunkProfile {
+        min_size: usize::try_from(manifest.chunking.min_size)
+            .map_err(|_| "manifest chunking.min_size exceeds host limits".to_string())?,
+        target_size: usize::try_from(manifest.chunking.target_size)
+            .map_err(|_| "manifest chunking.target_size exceeds host limits".to_string())?,
+        max_size: usize::try_from(manifest.chunking.max_size)
+            .map_err(|_| "manifest chunking.max_size exceeds host limits".to_string())?,
+        break_mask: u64::from(manifest.chunking.break_mask),
+    })
+}
+
+type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
+
 fn load_storage_pin_payload(
     input: &Path,
     manifest: &ManifestV1,
@@ -20425,6 +20446,8 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert",
         GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order",
+        GovernanceLogPayloadV1::PorChallengePublication(_) => "por_challenge_publication",
+        GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report",
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
         GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
@@ -21213,7 +21236,7 @@ mod tests {
 
     #[test]
     fn honey_audit_expected_catalog_digest_is_exact_lowercase_hex() {
-        let valid = "01".repeat(32);
+        let valid = "ab".repeat(32);
         let accepted = moderation_honey_audit(vec![format!("--expected-catalog-digest={valid}")])
             .expect_err("manifest is still required");
         assert!(accepted.contains("missing required `--manifest-id`"));
@@ -21368,7 +21391,8 @@ mod tests {
         pending.manifest.status = PinStatus::Pending;
         assert!(
             validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &pending)
-                .expect_err("pending record must fail")
+                .err()
+                .expect("pending record must fail")
                 .contains("Approved")
         );
 
@@ -21957,6 +21981,7 @@ mod tests {
         write_proof_stream_evidence(
             &evidence_dir,
             &manifest_path,
+            b"norito-data",
             "deadbeef",
             summary_json,
             "https://torii.sora",

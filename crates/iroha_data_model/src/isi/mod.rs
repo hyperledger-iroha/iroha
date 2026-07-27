@@ -260,6 +260,36 @@ impl From<crate::isi::privacy::RevokePrivacyZkAcePolicyV1> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::SubmitPrivacyProofV1> for InstructionBox {
     fn from(i: crate::isi::privacy::SubmitPrivacyProofV1) -> Self {
         InstructionBox(Box::new(i))
@@ -310,6 +340,11 @@ impl From<crate::isi::asset_transfer_control::SetAssetTransferControl> for Instr
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::asset_transfer_control::SetAssetHoldingLimit> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetHoldingLimit) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of ZK asset and voting instructions
 impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
@@ -319,21 +354,6 @@ impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
 }
 impl From<crate::isi::zk::RegisterAssetHiddenZkPool> for InstructionBox {
     fn from(i: crate::isi::zk::RegisterAssetHiddenZkPool) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RegisterZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RegisterZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RotateZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RotateZkAceIdentityCommitment) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::RevokeZkAceIdentityCommitment> for InstructionBox {
-    fn from(i: crate::isi::zk::RevokeZkAceIdentityCommitment) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -359,11 +379,6 @@ impl From<crate::isi::zk::ZkTransfer> for InstructionBox {
 }
 impl From<crate::isi::zk::AssetHiddenZkTransfer> for InstructionBox {
     fn from(i: crate::isi::zk::AssetHiddenZkTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::zk::SubmitZkAceAuthorizedTransfer> for InstructionBox {
-    fn from(i: crate::isi::zk::SubmitZkAceAuthorizedTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2232,6 +2247,7 @@ fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito
 #[cfg(feature = "json")]
 fn json_quantity_opt(
     value: Option<&norito::json::Value>,
+    field: &str,
 ) -> Result<Option<iroha_primitives::numeric::Quantity>, norito::json::Error> {
     use std::str::FromStr as _;
 
@@ -2246,9 +2262,9 @@ fn json_quantity_opt(
     }
     if let Some(value) = value.as_i64() {
         if value < 0 {
-            return Err(norito::json::Error::Message(
-                "asset transfer cap_amount must be non-negative".to_owned(),
-            ));
+            return Err(norito::json::Error::Message(format!(
+                "asset transfer {field} must be non-negative"
+            )));
         }
         return Ok(Some(iroha_primitives::numeric::Quantity::from(
             value.cast_unsigned(),
@@ -2259,9 +2275,9 @@ fn json_quantity_opt(
             .map_err(|err| norito::json::Error::Message(err.to_string()))?;
         return Ok(Some(parsed));
     }
-    Err(norito::json::Error::Message(
-        "asset transfer cap_amount must be a string, number, or null".to_owned(),
-    ))
+    Err(norito::json::Error::Message(format!(
+        "asset transfer {field} must be a string, number, or null"
+    )))
 }
 
 #[cfg(feature = "json")]
@@ -2294,6 +2310,25 @@ fn instruction_box_from_object(
                     asset_definition_id,
                     json_required_bool(params, "outgoing_frozen")?,
                     json_optional_string(params, "reason"),
+                )
+                .into(),
+            )
+        }
+        "SetAssetHoldingLimit" => {
+            let account_id = crate::account::AccountId::parse_encoded(
+                json_required_string(params, "account_id")?.as_str(),
+            )
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+                json_required_string(params, "asset_definition_id")?.as_str(),
+            )
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetHoldingLimit::new(
+                    account_id,
+                    asset_definition_id,
+                    json_quantity_opt(params.get("holding_limit"), "holding_limit")?,
                 )
                 .into(),
             )
@@ -2346,7 +2381,7 @@ fn instruction_box_from_object(
                     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
                     Ok(crate::asset::AssetTransferLimit {
                         window,
-                        cap_amount: json_quantity_opt(entry.get("cap_amount"))?,
+                        cap_amount: json_quantity_opt(entry.get("cap_amount"), "cap_amount")?,
                     })
                 })
                 .collect::<Result<Vec<_>, norito::json::Error>>()?;
@@ -4091,7 +4126,8 @@ pub mod prelude {
             RebindAccountAlias, RenewAliasLease,
         },
         asset_transfer_control::{
-            SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
+            SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
+            SetAssetTransferFreeze,
         },
         bridge::{
             ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,
@@ -4121,9 +4157,13 @@ pub mod prelude {
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         privacy::{
             BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
-            RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RegisterPrivacyProtocolActivationV1, RegisterPrivacyZkAcePolicyV1,
+            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RevokePrivacyZkX509TrustAnchorV1, RotatePrivacyZkAcePolicyV1,
+            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509TrustAnchorV1,
+            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
+            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
         },
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,

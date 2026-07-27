@@ -3283,6 +3283,7 @@ fn native_instruction_ds_effect_disposition(
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferFreeze);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferBlacklist);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferControl);
+    reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetHoldingLimit);
 
     // These families have native, state-derived balance/supply/custody effects that cannot be
     // represented faithfully as a signed transparent transfer coordinate. Keep them disabled

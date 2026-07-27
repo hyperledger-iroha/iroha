@@ -9460,6 +9460,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::RemoveAssetKeyValue,
         iroha_data_model::isi::SetAssetTransferFreeze,
         iroha_data_model::isi::SetAssetTransferControl,
+        iroha_data_model::isi::SetAssetHoldingLimit,
         iroha_data_model::isi::SetAssetTransferBlacklist,
         iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias,
         iroha_data_model::isi::asset_alias::SetAssetDefinitionBalancePolicy,

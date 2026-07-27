@@ -62,6 +62,43 @@ def _require_exact_non_empty_string(value: Any, context: str) -> str:
     return value
 
 
+def _normalize_asset_transfer_limits(
+    limits: Sequence[Mapping[str, Any]],
+) -> List[Dict[str, Optional[str]]]:
+    if isinstance(limits, (str, bytes, bytearray, Mapping)) or not isinstance(limits, Sequence):
+        raise TypeError("limits must be a sequence of window/cap_amount mappings")
+    if len(limits) > 3:
+        raise ValueError("limits may contain at most DAY, WEEK, and MONTH")
+
+    normalized: List[Dict[str, Optional[str]]] = []
+    windows: set[str] = set()
+    for index, limit in enumerate(limits):
+        if not isinstance(limit, Mapping):
+            raise TypeError(f"limits[{index}] must be a mapping")
+        unknown = set(limit).difference({"window", "cap_amount"})
+        if unknown:
+            names = ", ".join(sorted(str(name) for name in unknown))
+            raise ValueError(f"limits[{index}] contains unknown fields: {names}")
+        if "window" not in limit:
+            raise ValueError(f"limits[{index}].window is required")
+        if "cap_amount" not in limit:
+            raise ValueError(f"limits[{index}].cap_amount is required")
+        window = _require_exact_non_empty_string(limit["window"], f"limits[{index}].window").upper()
+        if window not in {"DAY", "WEEK", "MONTH"}:
+            raise ValueError(f"limits[{index}].window must be DAY, WEEK, or MONTH")
+        if window in windows:
+            raise ValueError(f"limits[{index}].window duplicates an earlier window")
+        windows.add(window)
+        cap = limit["cap_amount"]
+        normalized.append(
+            {
+                "window": window,
+                "cap_amount": _normalize_quantity(cap) if cap is not None else None,
+            }
+        )
+    return normalized
+
+
 def _normalize_positive_u128_literal(quantity: Any, context: str) -> str:
     if isinstance(quantity, bool):
         raise ValueError(f"{context} must be a positive decimal u128 string")
@@ -136,13 +173,9 @@ def _fee_charge_limits(charge_limits: Sequence[Mapping[str, Any]]) -> List[Dict[
         kind_literal = raw.get("kind")
         kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
         if kind < 0:
-            raise ValueError(
-                f"charge_limits[{index}].kind must be nexus or pipeline_gas"
-            )
+            raise ValueError(f"charge_limits[{index}].kind must be nexus or pipeline_gas")
         if kind <= previous_kind:
-            raise ValueError(
-                "charge_limits must be unique and ordered nexus before pipeline_gas"
-            )
+            raise ValueError("charge_limits must be unique and ordered nexus before pipeline_gas")
         previous_kind = kind
         asset_definition_id = _require_exact_non_empty_string(
             raw.get("asset_definition_id"),
@@ -248,9 +281,7 @@ def _normalize_rwa_quantity_fields(
                 raise TypeError(f"{context}.parents[{index}] must be a mapping")
             normalized_parent = dict(parent)
             if "quantity" in normalized_parent:
-                normalized_parent["quantity"] = _normalize_quantity(
-                    normalized_parent["quantity"]
-                )
+                normalized_parent["quantity"] = _normalize_quantity(normalized_parent["quantity"])
             normalized_parents.append(normalized_parent)
         normalized_input["parents"] = normalized_parents
 
@@ -814,6 +845,85 @@ class TransactionDraft:
         )
         return self
 
+    def set_asset_transfer_freeze(
+        self,
+        account_id: str,
+        asset_definition_id: str,
+        outgoing_frozen: bool,
+        *,
+        reason: Optional[str] = None,
+    ) -> TransactionDraft:
+        """Freeze or unfreeze outbound transfers for one account and asset."""
+
+        if not isinstance(outgoing_frozen, bool):
+            raise TypeError("outgoing_frozen must be a bool")
+        self.add_instruction(
+            Instruction.set_asset_transfer_freeze(
+                _require_exact_non_empty_string(account_id, "account_id"),
+                _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
+                outgoing_frozen,
+                reason=(
+                    _require_exact_non_empty_string(reason, "reason")
+                    if reason is not None
+                    else None
+                ),
+            )
+        )
+        return self
+
+    def set_asset_transfer_blacklist(
+        self,
+        account_id: str,
+        asset_definition_id: str,
+        blacklisted: bool,
+    ) -> TransactionDraft:
+        """Blacklist or restore outbound transfers for one account and asset."""
+
+        if not isinstance(blacklisted, bool):
+            raise TypeError("blacklisted must be a bool")
+        self.add_instruction(
+            Instruction.set_asset_transfer_blacklist(
+                _require_exact_non_empty_string(account_id, "account_id"),
+                _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
+                blacklisted,
+            )
+        )
+        return self
+
+    def set_asset_transfer_control(
+        self,
+        account_id: str,
+        asset_definition_id: str,
+        limits: Sequence[Mapping[str, Any]],
+    ) -> TransactionDraft:
+        """Replace native DAY/WEEK/MONTH outbound caps for one account and asset."""
+
+        self.add_instruction(
+            Instruction.set_asset_transfer_control(
+                _require_exact_non_empty_string(account_id, "account_id"),
+                _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
+                _normalize_asset_transfer_limits(limits),
+            )
+        )
+        return self
+
+    def set_asset_holding_limit(
+        self,
+        account_id: str,
+        asset_definition_id: str,
+        holding_limit: Optional[QuantityLike],
+    ) -> TransactionDraft:
+        """Set or clear the maximum balance an account may hold for one asset."""
+
+        self.add_instruction(
+            Instruction.set_asset_holding_limit(
+                _require_exact_non_empty_string(account_id, "account_id"),
+                _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
+                (_normalize_quantity(holding_limit) if holding_limit is not None else None),
+            )
+        )
+        return self
+
     def open_asset_lock(
         self,
         escrow_id: str,
@@ -886,9 +996,7 @@ class TransactionDraft:
         """Append an `ExpireAssetLock` instruction."""
 
         self.add_instruction(
-            Instruction.expire_asset_lock(
-                _require_non_empty_string(escrow_id, "escrow_id")
-            )
+            Instruction.expire_asset_lock(_require_non_empty_string(escrow_id, "escrow_id"))
         )
         return self
 
@@ -1222,9 +1330,7 @@ class TransactionDraft:
         """Append a delivery-versus-payment settlement instruction."""
 
         effective_plan = plan or SettlementPlan()
-        metadata_payload = (
-            _normalize_metadata(metadata) if metadata is not None else None
-        )
+        metadata_payload = _normalize_metadata(metadata) if metadata is not None else None
         instruction = Instruction.settlement_dvp(
             settlement_id,
             delivery_leg.to_payload(),
@@ -1248,9 +1354,7 @@ class TransactionDraft:
         """Append a payment-versus-payment settlement instruction."""
 
         effective_plan = plan or SettlementPlan()
-        metadata_payload = (
-            _normalize_metadata(metadata) if metadata is not None else None
-        )
+        metadata_payload = _normalize_metadata(metadata) if metadata is not None else None
         instruction = Instruction.settlement_pvp(
             settlement_id,
             primary_leg.to_payload(),
@@ -1492,9 +1596,7 @@ class TransactionDraft:
                         "contract_address": entry.contract_address,
                         "expected_code_hash": entry.expected_code_hash_hex,
                         "entrypoint": entry.entrypoint,
-                        "arguments": None
-                        if entry.arguments is None
-                        else list(entry.arguments),
+                        "arguments": None if entry.arguments is None else list(entry.arguments),
                     }
                 }
                 if isinstance(entry, ContractCall)

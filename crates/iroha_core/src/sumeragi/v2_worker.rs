@@ -706,8 +706,7 @@ struct V2IoCommandQueueState {
     commands: VecDeque<V2IoCommand>,
     work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
     serves: BTreeMap<CertifiedServeLifecycleId, V2IoTrackedServe>,
-    serve_by_request:
-        BTreeMap<HashOf<wire::CertifiedBodyRequest>, CertifiedServeLifecycleId>,
+    serve_by_request: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CertifiedServeLifecycleId>,
     /// One monotone high-watermark/lifecycle slot per signed requester and
     /// certified phase.
     ///
@@ -719,8 +718,7 @@ struct V2IoCommandQueueState {
     /// Its ordinal is therefore trivially the least outstanding ordinal.
     serve_barrier: Option<CertifiedServeLifecycleId>,
     /// Authenticated command payload retained while the future slot waits.
-    pending_serve_requests:
-        BTreeMap<CertifiedServeLifecycleId, AuthenticatedCertifiedBodyRequest>,
+    pending_serve_requests: BTreeMap<CertifiedServeLifecycleId, AuthenticatedCertifiedBodyRequest>,
     /// Terminal high-watermark displaced transactionally by a new lifecycle.
     serve_replacements:
         BTreeMap<CertifiedServeLifecycleId, (CertifiedServeLifecycleId, V2IoTrackedServe)>,
@@ -880,9 +878,10 @@ impl V2IoCommandQueue {
         let Some(lifecycle_id) = state.serve_barrier else {
             return Ok(None);
         };
-        let tracked = state.serves.get(&lifecycle_id).ok_or_else(|| {
-            "Sumeragi v2 Serve barrier lost its lifecycle owner".to_owned()
-        })?;
+        let tracked = state
+            .serves
+            .get(&lifecycle_id)
+            .ok_or_else(|| "Sumeragi v2 Serve barrier lost its lifecycle owner".to_owned())?;
         if !matches!(
             tracked.state,
             V2IoServeState::PendingCapacity | V2IoServeState::Reserved
@@ -951,9 +950,7 @@ impl V2IoCommandQueue {
                 ));
             }
             return match tracked.state {
-                V2IoServeState::PendingCapacity => {
-                    Err(CertifiedServePrepareError::Backpressure)
-                }
+                V2IoServeState::PendingCapacity => Err(CertifiedServePrepareError::Backpressure),
                 V2IoServeState::Reserved => Ok(CertifiedServeAdmission {
                     lifecycle_id,
                     kind: CertifiedServeAdmissionKind::New,
@@ -990,8 +987,7 @@ impl V2IoCommandQueue {
                     "Sumeragi v2 Serve family index changed semantic identity".to_owned(),
                 ));
             }
-            if tracked.round.context_id != round.context_id
-                || tracked.round.height != round.height
+            if tracked.round.context_id != round.context_id || tracked.round.height != round.height
             {
                 return Err(CertifiedServePrepareError::Service(
                     "Sumeragi v2 Serve requester crossed immutable height context".to_owned(),
@@ -1047,8 +1043,7 @@ impl V2IoCommandQueue {
                     let already_charged = used.contains(&recipient);
                     if !already_charged && used.len() >= self.roster_serve_capacity {
                         return Err(CertifiedServePrepareError::Rejected(
-                            "Sumeragi v2 exhausted its frozen roster Serve owner slots"
-                                .to_owned(),
+                            "Sumeragi v2 exhausted its frozen roster Serve owner slots".to_owned(),
                         ));
                     }
                 }
@@ -1143,13 +1138,9 @@ impl V2IoCommandQueue {
             },
         );
         debug_assert!(replaced.is_none());
-        let replaced = state
-            .serve_by_request
-            .insert(request_hash, lifecycle_id);
+        let replaced = state.serve_by_request.insert(request_hash, lifecycle_id);
         debug_assert!(replaced.is_none());
-        let replaced = state
-            .serve_by_family
-            .insert(family, lifecycle_id);
+        let replaced = state.serve_by_family.insert(family, lifecycle_id);
         debug_assert!(replaced.is_none());
         state.serve_barrier = Some(lifecycle_id);
         if let Some(replaced_terminal) = replaced_terminal {
@@ -1239,9 +1230,7 @@ impl V2IoCommandQueue {
             let receipt = route_candidate
                 .merge_observed_with_receipt(&reply_routes)
                 .map_err(|error| {
-                    format!(
-                        "invalid authenticated route on exact Sumeragi v2 Serve retry: {error}"
-                    )
+                    format!("invalid authenticated route on exact Sumeragi v2 Serve retry: {error}")
                 })?;
             let mut ownership_candidate = retained_ownership.clone();
             let merged_routes = ownership_candidate
@@ -1255,9 +1244,7 @@ impl V2IoCommandQueue {
             tracked.reply_routes = Some(reply_routes);
             tracked.ingress_ownership = Some(ingress_ownership);
         } else {
-            return Err(
-                "Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned(),
-            );
+            return Err("Sumeragi v2 Serve lifecycle split route and ingress ownership".to_owned());
         }
 
         let committed = match tracked.state {
@@ -1271,9 +1258,9 @@ impl V2IoCommandQueue {
                 tracked.state = V2IoServeState::Queued;
                 CertifiedServeCommit::Queued
             }
-            V2IoServeState::Queued
-            | V2IoServeState::Active
-            | V2IoServeState::CompletionPending => CertifiedServeCommit::Coalesced,
+            V2IoServeState::Queued | V2IoServeState::Active | V2IoServeState::CompletionPending => {
+                CertifiedServeCommit::Coalesced
+            }
             V2IoServeState::Terminal => {
                 let reply_routes = tracked
                     .reply_routes
@@ -1336,9 +1323,7 @@ impl V2IoCommandQueue {
             .iter()
             .position(|command| command.serve_lifecycle_id() == Some(admission.lifecycle_id))
             .and_then(|index| state.commands.remove(index));
-        let _ = state
-            .pending_serve_requests
-            .remove(&admission.lifecycle_id);
+        let _ = state.pending_serve_requests.remove(&admission.lifecycle_id);
         debug_assert!(
             placeholder.is_some()
                 || !state.receiver_open
@@ -1378,9 +1363,7 @@ impl V2IoCommandQueue {
                 None
             );
             assert_eq!(
-                state
-                    .serve_by_family
-                    .insert(previous_family, previous_id),
+                state.serve_by_family.insert(previous_family, previous_id),
                 None
             );
         }
@@ -1396,18 +1379,12 @@ impl V2IoCommandQueue {
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
-    ) -> Result<
-        (
-            PeerId,
-            NetworkReplyRoutes,
-            FairV2IngressOwnershipEvidence,
-        ),
-        String,
-    > {
+    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
         let state = self.lock();
-        let tracked = state.serves.get(&lifecycle_id).ok_or_else(|| {
-            "certified-body completion lost its Serve lifecycle owner".to_owned()
-        })?;
+        let tracked = state
+            .serves
+            .get(&lifecycle_id)
+            .ok_or_else(|| "certified-body completion lost its Serve lifecycle owner".to_owned())?;
         if tracked.state != V2IoServeState::CompletionPending {
             return Err(
                 "certified-body completion crossed a non-pending Serve lifecycle".to_owned(),
@@ -1709,9 +1686,7 @@ impl V2IoCommandQueue {
             );
             let _ = state.pending_serve_requests.remove(&lifecycle_id);
             state.serve_barrier = None;
-            if let Some((previous_id, previous)) =
-                state.serve_replacements.remove(&lifecycle_id)
-            {
+            if let Some((previous_id, previous)) = state.serve_replacements.remove(&lifecycle_id) {
                 let previous_family = CertifiedServeFamilyKey {
                     requester: previous.recipient.clone(),
                     phase: previous.phase,
@@ -1724,9 +1699,7 @@ impl V2IoCommandQueue {
                     None
                 );
                 assert_eq!(
-                    state
-                        .serve_by_family
-                        .insert(previous_family, previous_id),
+                    state.serve_by_family.insert(previous_family, previous_id),
                     None
                 );
             }
@@ -1808,14 +1781,7 @@ impl V2IoCommandSender {
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
-    ) -> Result<
-        (
-            PeerId,
-            NetworkReplyRoutes,
-            FairV2IngressOwnershipEvidence,
-        ),
-        String,
-    > {
+    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
         self.queue.serve_completion_ownership(lifecycle_id)
     }
 
@@ -1989,15 +1955,11 @@ impl V2IoCompletion {
             Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => {
                 V2IoCompletionAcknowledgement::Work(*work_id)
             }
-            Self::Stored(completion) => {
-                V2IoCompletionAcknowledgement::Work(completion.work_id())
-            }
+            Self::Stored(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
             Self::Validated(completion) => {
                 V2IoCompletionAcknowledgement::Work(completion.work_id())
             }
-            Self::Applied(completion) => {
-                V2IoCompletionAcknowledgement::Work(completion.work_id())
-            }
+            Self::Applied(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
             Self::CertifiedResponse {
                 lifecycle_id,
                 response,
@@ -2005,9 +1967,7 @@ impl V2IoCompletion {
                 lifecycle_id: *lifecycle_id,
                 terminal: V2IoServeTerminal::Response(response.clone()),
             },
-            Self::CertifiedRequestFailed { .. } => {
-                V2IoCompletionAcknowledgement::Untracked
-            }
+            Self::CertifiedRequestFailed { .. } => V2IoCompletionAcknowledgement::Untracked,
             Self::CandidateLoaded(_)
             | Self::CandidateLoadUnavailable { .. }
             | Self::CandidateLoadFailed { .. }
@@ -2429,16 +2389,8 @@ impl V2IoHandle {
     fn serve_completion_ownership(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
-    ) -> Result<
-        (
-            PeerId,
-            NetworkReplyRoutes,
-            FairV2IngressOwnershipEvidence,
-        ),
-        String,
-    > {
-        self.command_tx
-            .serve_completion_ownership(lifecycle_id)
+    ) -> Result<(PeerId, NetworkReplyRoutes, FairV2IngressOwnershipEvidence), String> {
+        self.command_tx.serve_completion_ownership(lifecycle_id)
     }
 
     fn cancel(
@@ -8771,9 +8723,9 @@ impl ProductionV2Services {
     pub(crate) fn certified_serve_barrier_request_hash(
         &self,
     ) -> Result<Option<HashOf<wire::CertifiedBodyRequest>>, String> {
-        self.io.as_ref().map_or(Ok(None), |io| {
-            io.serve_barrier_request_hash()
-        })
+        self.io
+            .as_ref()
+            .map_or(Ok(None), |io| io.serve_barrier_request_hash())
     }
 
     pub(crate) fn prepare_certified_request(
@@ -8804,9 +8756,7 @@ impl ProductionV2Services {
             )
         })?;
         let io = self.io.as_ref().ok_or_else(|| {
-            CertifiedServePrepareError::Service(
-                "Sumeragi v2 I/O worker is unavailable".to_owned(),
-            )
+            CertifiedServePrepareError::Service("Sumeragi v2 I/O worker is unavailable".to_owned())
         })?;
         let requester = request.request().requester.clone();
         let owner = if self
@@ -9524,10 +9474,8 @@ impl ProductionV2Services {
                     } => {
                         let ownership = self.io.as_ref().map_or_else(
                             || {
-                                Err(
-                                    "certified-body completion lost its I/O service owner"
-                                        .to_owned(),
-                                )
+                                Err("certified-body completion lost its I/O service owner"
+                                    .to_owned())
                             },
                             |io| io.serve_completion_ownership(lifecycle_id),
                         );
@@ -20943,12 +20891,8 @@ pub(super) mod tests {
             },
         )
         .expect("retain runtime-producing completion");
-        try_send_tracked_completion(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::AuxiliaryNoop,
-        )
-        .expect("retain auxiliary completion behind runtime work");
+        try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
+            .expect("retain auxiliary completion behind runtime work");
         try_send_tracked_completion(
             &completion_tx,
             &admission,
@@ -21092,12 +21036,8 @@ pub(super) mod tests {
             Arc::clone(&admission),
         );
         let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
-        try_send_tracked_completion(
-            &completion_tx,
-            &admission,
-            V2IoCompletion::AuxiliaryNoop,
-        )
-        .expect("retain auxiliary completion");
+        try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
+            .expect("retain auxiliary completion");
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
@@ -21151,12 +21091,8 @@ pub(super) mod tests {
         );
         let (completion_tx, completion_rx) = mpsc::sync_channel(channel_capacity);
         for _ in 0..=MAX_COMPLETION_DRAIN_BATCH {
-            try_send_tracked_completion(
-                &completion_tx,
-                &admission,
-                V2IoCompletion::AuxiliaryNoop,
-            )
-            .expect("retain bounded auxiliary burst");
+            try_send_tracked_completion(&completion_tx, &admission, V2IoCompletion::AuxiliaryNoop)
+                .expect("retain bounded auxiliary burst");
         }
         service.io = Some(V2IoHandle {
             command_tx,
@@ -22394,10 +22330,7 @@ pub(super) mod tests {
                     Ok(V2IoCompletion::AuxiliaryNoop)
                 })
                 .expect("model successful I/O operation");
-                assert!(matches!(
-                    completion,
-                    V2IoCompletion::AuxiliaryNoop
-                ));
+                assert!(matches!(completion, V2IoCompletion::AuxiliaryNoop));
                 panic!("model panic before completion delivery");
             }
         });
