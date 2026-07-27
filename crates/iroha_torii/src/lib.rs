@@ -13664,18 +13664,24 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_authenticates_exact_release_without_global_backend_flag() {
         let source = include_str!("lib.rs");
+        let snapshot_start = source
+            .find("fn offline_kagemusha_readiness_snapshot")
+            .expect("offline readiness snapshot");
         let handler_start = source
             .find("async fn handler_offline_readiness")
             .expect("offline readiness handler");
         let tests_start = source
             .find("mod offline_kagemusha_readiness_tests")
             .expect("offline readiness tests");
+        let snapshot = &source[snapshot_start..handler_start];
         let handler = &source[handler_start..tests_start];
         assert!(
             !handler.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
             "readiness must authenticate a concrete release instead of treating compile capability as runtime readiness",
         );
-        assert!(handler.contains("offline_kagemusha_readiness_capability_flags"));
+        assert!(handler.contains("offline_kagemusha_readiness_snapshot"));
+        assert!(snapshot.contains("resolve_kagemusha_recursive_readiness_v4"));
+        assert!(snapshot.contains("offline_kagemusha_readiness_capability_flags"));
     }
 
     #[test]

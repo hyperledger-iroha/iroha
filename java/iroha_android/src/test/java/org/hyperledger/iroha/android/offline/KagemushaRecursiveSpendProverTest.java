@@ -845,6 +845,8 @@ public final class KagemushaRecursiveSpendProverTest {
         artifactSet,
         true);
 
+    assert readiness.peerId().equals(
+        "ea01308683839424703437C5C8701F3A92D76E228337D2327602B8C0CED667A6ED7F8AD6360948B24FC21849E77411A0975B6D");
     assert readiness.allVerifiersActive();
     assert readiness.chainArtifactSetReady();
     assert !readiness.offlineReady();
