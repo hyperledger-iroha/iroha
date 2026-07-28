@@ -3974,7 +3974,9 @@ pub mod contracts_and_verification_keys {
     }
 
     const fn app_unprojected_get(id: &'static str, path: &'static str) -> RouteDescriptor {
-        app_get(id, path).with_projections(RouteProjections::NONE)
+        app_get(id, path)
+            .with_authentication(AuthenticationPolicy::Unauthenticated)
+            .with_projections(RouteProjections::NONE)
     }
 
     const fn app_unprojected_static_asset_get(
@@ -4051,6 +4053,7 @@ pub mod contracts_and_verification_keys {
         CONTRACTS_DEPLOYMENT_STATE_POST => app_signed_post("contracts.contracts_deployment_state_post", "/v1/contracts/deployment-state");
         ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
+        CONTRACTS_CALL_BATCH_PREPARE_POST => app_post("contracts.contracts_call_batch_prepare_post", "/v1/contracts/call/batch/prepare");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
         BRIDGE_PROOFS_SUBMIT_POST => app_post("contracts.bridge_proofs_submit_post", "/v1/bridge/proofs/submit");
         BRIDGE_MESSAGES_POST => app_post("contracts.bridge_messages_post", "/v1/bridge/messages");
@@ -4804,6 +4807,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
     contracts_and_verification_keys::ASSETS_TRANSFER_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_POST,
+    contracts_and_verification_keys::CONTRACTS_CALL_BATCH_PREPARE_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
     contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
     contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
@@ -5573,6 +5577,20 @@ mod tests {
                 "{}",
                 route.stable_route_id()
             );
+        }
+
+        for route in [
+            contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
+            contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
+        ] {
+            assert_eq!(route.surface(), ApiSurface::Public);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::Unauthenticated
+            );
+            assert_eq!(route.projections(), RouteProjections::NONE);
+            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
         }
 
         for route in [

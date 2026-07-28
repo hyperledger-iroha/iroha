@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
 import math
 import re
@@ -25,6 +26,11 @@ from typing import Mapping, Sequence
 SCHEMA = "kotodama-perf-baseline-v1"
 MAX_REGRESSION = 0.05
 LIST_SUGAR_MAX_SLOWDOWN = 0.0
+# `2ca45d754d0a993009dc45fc33d4e1976b39d087` introduced the reset
+# performance policy and describes its selected comparison parent. Its second
+# parent is this revision, whose native benchmark sources contain exactly the
+# 33 comparable identities below and none of the 13 candidate-only identities.
+PREDECESSOR_SHA = "a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab"
 LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
 LIST_MANUAL_BENCHMARK = "kotodama_list_manual_runtime_64"
 DECIMAL_BENCHMARKS = (
@@ -137,10 +143,338 @@ REGRESSION_BENCHMARKS = tuple(
     for name in REPRESENTATIVE_BENCHMARKS
     if name not in CANDIDATE_ONLY_BENCHMARKS
 )
+QUANTITY_ROUND_BENCHMARKS = (
+    "kotodama_quantity_div_round_floor",
+    "kotodama_quantity_div_round_ceil",
+    "kotodama_quantity_div_round_nearest_even",
+)
+TYPED_QUERY_BENCHMARKS = (
+    "typed_core_query_accounts_page_64",
+    "typed_core_query_assets_page_64",
+    "typed_core_query_asset_definitions_page_64",
+    "typed_core_query_domains_page_64",
+    "typed_core_query_nfts_page_64",
+)
+STATIC_REGRESSION_BENCHMARKS = tuple(
+    name
+    for name in REGRESSION_BENCHMARKS
+    if name not in {*QUANTITY_ROUND_BENCHMARKS, *TYPED_QUERY_BENCHMARKS}
+)
+
+# Filled from the normalized native timed closures at `PREDECESSOR_SHA`.
+# Shared Criterion loops deliberately have one closure hash per identity; their
+# identity-to-mode/family declaration is prepended before hashing so a mapping
+# mutation cannot hide behind an unchanged shared closure.
+PREDECESSOR_TIMED_BODY_SHA256: Mapping[str, str] = {
+    "kotodama_phase_parse": "1f21f2b13cba3c59d78948343b967ed357760132264301db6f47cdb289625cc9",
+    "kotodama_phase_resolved_hir": "5bd4e90133ef1a7b2ee4e08b048c54272ed84d59dbefcf51e15f3317d2eb3185",
+    "kotodama_phase_semantic": "fa4e992084b581d1d76425ac014c629594efe384998fe9d838643b0a56131bbf",
+    "kotodama_phase_typed_effect_hir": "fa4e992084b581d1d76425ac014c629594efe384998fe9d838643b0a56131bbf",
+    "kotodama_phase_ir_lower": "49823939b2bc7afbeca3c3c70b1c25cacfd03b852a11838307ad5fb2efb94333",
+    "kotodama_phase_ssa_construct": "6fc353843dd5811ff7df6d0afd5492f220da1ff86cc5bc0de2a56e4f47c76d82",
+    "kotodama_phase_ssa_optimize": "a37af101575badaad00ca416d3bfc4313c7787453b1664602f7061ad8d612931",
+    "kotodama_phase_de_ssa": "b83dcf4a7eccc91d3bd659a4612174b4decf45915e4c868696c974da7ff47af4",
+    "kotodama_phase_codegen": "baf7ec764d7a0b3de7d74f2f5aebf586dff938a6b86fe543143d03aeb8c240de",
+    "kotodama_phase_codegen_end_to_end": "e10b492a1820c45cceb4417ec059607653955e8a63bea20b652e5a833795d739",
+    "kotodama_list_semantic_64": "f7bb53b11a83d906cfe2c7faa34f6bb83977076d810377ffc5b2fb73134c6573",
+    "kotodama_list_lower_64": "6384fb1d5bdd0a597809c7b153ba95f1b9a5aa743c1f40c46b3b43dee32cd44e",
+    "kotodama_list_get_64": "f7efc1c532101095b0a80d67d4ff82a38b1de67d1765363c8bfa5710e81660b7",
+    "kotodama_list_try_set_64": "772f8320285048c9086ba517c56f3513888bee7d525a235cd112c3750814aacc",
+    "kotodama_list_try_push_pop_64": "0922c995c21233249536cc334fb0e761f299e5597e603450133770551f31aee4",
+    "kotodama_list_contains_64": "32a48738d4f3a91ff147581318c2e1cc52e5150e3788ad44c79571e2f10c082a",
+    "kotodama_list_comprehension_runtime_64": "64a700e36677badbb24a133fc4fc0ea84efc8a40c07fdac8bc830691bbcbbcc0",
+    "kotodama_list_manual_runtime_64": "30775489dd3505aceaf7befd7257538f5a0f39f651e2036bebc2770a24e9b39d",
+    "kotodama_quantity_add": "1d1ae9909eaa6ef0ff3268579c25f6738a3a324b11d688a453fc88c8d71d9e6a",
+    "kotodama_quantity_sub": "b9891496bafd7854c9a112b427115b97933decf2df47c28e56003c03536393b8",
+    "kotodama_quantity_mul_decimal": "af006a6f20faae2139f1a5b154d1c69f5bdc2c02904810360028fd63e13249af",
+    "kotodama_quantity_div_decimal_exact": "37b47aef001ccd89e3bd4a16b311fdec0301778b8cffc24a9a90625613dfa3f0",
+    "kotodama_quantity_div_round_floor": "03555a08de20e9c43e666fdda9fdbf155b9adc3b4f7b2e6940a86ee592fc9bdc",
+    "kotodama_quantity_div_round_ceil": "088992b8211a234df39bac9bad5d59dd3204f22d794be49f02ca122d53f4a3da",
+    "kotodama_quantity_div_round_nearest_even": "878d48f01a6a45799599936592f9188d7dda8a2155638371bd0be12bd68f83e8",
+    "typed_core_query_accounts_page_64": "7ed21c1ff54a4bedea4a076088757bfd636963f059959b0b54180a5a3eba4b64",
+    "typed_core_query_assets_page_64": "c785e42d815962065f34d75861b7b6e192e3754f6ee36128bb6978a9576a9455",
+    "typed_core_query_asset_definitions_page_64": "057da321707eac734857d824215d3dd2b98efc8cd3382a4b821d31e76c80040b",
+    "typed_core_query_domains_page_64": "942d43e4fefbdf768bd1dc67693ecd7078643f26a021879b2f6cfaba0d83e57b",
+    "typed_core_query_nfts_page_64": "7271bd2da13604645ec09add36611290fa93646a432d551337b4cec5b1f28496",
+    "kotodama_runtime_cold_add": "effde7658da204115d374e68fa2e445962920ee412b56fcb37f97a64ba3ee365",
+    "kotodama_runtime_warm_add": "ef0b880de04e2d9bf0ffa528688e2721aab6791f7b776b2f943787f28f212776",
+    "kotodama_core_runtime_warm_add": "33bec4effbbaac3bdcf312506b3c031737af9d9dad1d8ad9a2446f9b53bc4fa9",
+}
 
 
 class GateError(RuntimeError):
     """Raised when performance evidence is absent or invalid."""
+
+
+_OPEN_DELIMITERS = {"(": ")", "[": "]", "{": "}"}
+_CLOSE_DELIMITERS = {value: key for key, value in _OPEN_DELIMITERS.items()}
+
+
+def _skip_rust_non_code(text: str, index: int) -> int | None:
+    """Return the first index after a Rust comment or literal, if one starts here."""
+
+    if text.startswith("//", index):
+        newline = text.find("\n", index + 2)
+        return len(text) if newline < 0 else newline + 1
+    if text.startswith("/*", index):
+        depth = 1
+        cursor = index + 2
+        while cursor < len(text):
+            if text.startswith("/*", cursor):
+                depth += 1
+                cursor += 2
+            elif text.startswith("*/", cursor):
+                depth -= 1
+                cursor += 2
+                if depth == 0:
+                    return cursor
+            else:
+                cursor += 1
+        return len(text)
+
+    raw_prefix = None
+    for prefix in ("br", "r"):
+        if text.startswith(prefix, index):
+            cursor = index + len(prefix)
+            while cursor < len(text) and text[cursor] == "#":
+                cursor += 1
+            if cursor < len(text) and text[cursor] == '"':
+                raw_prefix = text[index:cursor]
+                break
+    if raw_prefix is not None:
+        hashes = raw_prefix.count("#")
+        terminator = '"' + ("#" * hashes)
+        end = text.find(terminator, index + len(raw_prefix) + 1)
+        return len(text) if end < 0 else end + len(terminator)
+
+    if text[index] not in {'"', "'"}:
+        return None
+    quote = text[index]
+    cursor = index + 1
+    while cursor < len(text):
+        if text[cursor] == "\\":
+            cursor += 2
+            continue
+        if text[cursor] == quote:
+            return cursor + 1
+        cursor += 1
+    return len(text)
+
+
+def _matching_rust_delimiter(
+    text: str, open_index: int, revision: str, context: str
+) -> int:
+    """Find a balanced Rust delimiter while ignoring comments and literals."""
+
+    opener = text[open_index]
+    if opener not in _OPEN_DELIMITERS:
+        raise GateError(f"{revision} {context} has no opening delimiter")
+    stack = [_OPEN_DELIMITERS[opener]]
+    cursor = open_index + 1
+    while cursor < len(text):
+        skipped = _skip_rust_non_code(text, cursor)
+        if skipped is not None:
+            cursor = skipped
+            continue
+        char = text[cursor]
+        if char in _OPEN_DELIMITERS:
+            stack.append(_OPEN_DELIMITERS[char])
+        elif char in _CLOSE_DELIMITERS:
+            if not stack or char != stack.pop():
+                raise GateError(f"{revision} {context} has mismatched delimiters")
+            if not stack:
+                return cursor
+        cursor += 1
+    raise GateError(f"{revision} {context} has an unterminated delimiter")
+
+
+def _top_level_rust_arguments(
+    text: str, open_index: int, close_index: int, revision: str, context: str
+) -> list[str]:
+    """Split one Rust call's arguments without parsing nested expressions."""
+
+    starts = [open_index + 1]
+    stack: list[str] = []
+    cursor = open_index + 1
+    while cursor < close_index:
+        skipped = _skip_rust_non_code(text, cursor)
+        if skipped is not None:
+            cursor = skipped
+            continue
+        char = text[cursor]
+        if char in _OPEN_DELIMITERS:
+            stack.append(_OPEN_DELIMITERS[char])
+        elif char in _CLOSE_DELIMITERS:
+            if not stack or char != stack.pop():
+                raise GateError(f"{revision} {context} has mismatched arguments")
+        elif char == "," and not stack:
+            starts.append(cursor + 1)
+        cursor += 1
+    if stack:
+        raise GateError(f"{revision} {context} has unterminated arguments")
+
+    boundaries = [start - 1 for start in starts[1:]] + [close_index]
+    return [
+        text[start:end].strip() for start, end in zip(starts, boundaries, strict=True)
+    ]
+
+
+def _criterion_invocation(
+    text: str, marker: str, revision: str, context: str, start: int = 0
+) -> str:
+    marker_index = text.find(marker, start)
+    if marker_index < 0:
+        raise GateError(f"{revision} {context} Criterion declaration is missing")
+    invocation_open = text.find("(", marker_index + len("c.bench_function"))
+    if invocation_open < 0:
+        raise GateError(f"{revision} {context} Criterion call is malformed")
+    invocation_close = _matching_rust_delimiter(
+        text, invocation_open, revision, f"{context} Criterion call"
+    )
+    return text[marker_index : invocation_close + 1]
+
+
+def _criterion_timed_closure(invocation: str, revision: str, context: str) -> str:
+    batched_marker = "b.iter_batched("
+    iter_marker = "b.iter("
+    if batched_marker in invocation:
+        marker = batched_marker
+        argument_index = 1
+    elif iter_marker in invocation:
+        marker = iter_marker
+        argument_index = 0
+    else:
+        raise GateError(f"{revision} {context} has no Criterion timed iterator")
+    if invocation.count(marker) != 1:
+        raise GateError(f"{revision} {context} timed iterator must be unique")
+    call_start = invocation.index(marker)
+    call_open = call_start + len(marker) - 1
+    call_close = _matching_rust_delimiter(
+        invocation, call_open, revision, f"{context} timed iterator"
+    )
+    arguments = _top_level_rust_arguments(
+        invocation,
+        call_open,
+        call_close,
+        revision,
+        f"{context} timed iterator",
+    )
+    if argument_index >= len(arguments):
+        raise GateError(f"{revision} {context} timed closure is missing")
+    return " ".join(arguments[argument_index].split())
+
+
+def _quoted_identity_binding(text: str, name: str, revision: str) -> str:
+    marker = f'"{name}"'
+    if text.count(marker) != 1:
+        raise GateError(f"{revision} {name} identity binding must be unique")
+    identity = text.index(marker)
+    tuple_open = text.rfind("(", 0, identity)
+    if tuple_open < 0:
+        raise GateError(f"{revision} {name} identity tuple is missing")
+    tuple_close = _matching_rust_delimiter(
+        text, tuple_open, revision, f"{name} identity tuple"
+    )
+    if tuple_close < identity:
+        raise GateError(f"{revision} {name} identity tuple is malformed")
+    return " ".join(text[tuple_open : tuple_close + 1].split())
+
+
+def _typed_query_identity_binding(text: str, name: str, revision: str) -> str:
+    marker = f'"{name}"'
+    if text.count(marker) != 1:
+        raise GateError(f"{revision} {name} typed-query binding must be unique")
+    identity = text.index(marker)
+    declaration = text.rfind("TypedCoreQueryFamily {", 0, identity)
+    if declaration < 0:
+        raise GateError(f"{revision} {name} typed-query declaration is missing")
+    declaration_open = text.index("{", declaration)
+    declaration_close = _matching_rust_delimiter(
+        text, declaration_open, revision, f"{name} typed-query declaration"
+    )
+    if declaration_close < identity:
+        raise GateError(f"{revision} {name} typed-query declaration is malformed")
+    return " ".join(text[declaration : declaration_close + 1].split())
+
+
+def _benchmark_timed_bodies_from_text(text: str, revision: str) -> dict[str, str]:
+    """Extract every predecessor-comparable native Criterion timed closure."""
+
+    bodies = {}
+    for name in STATIC_REGRESSION_BENCHMARKS:
+        marker = f'c.bench_function("{name}",'
+        if text.count(marker) != 1:
+            raise GateError(
+                f"{revision} {name} Criterion declaration must be unique"
+            )
+        invocation = _criterion_invocation(text, marker, revision, name)
+        bodies[name] = _criterion_timed_closure(invocation, revision, name)
+
+    quantity_anchor = text.index(f'"{QUANTITY_ROUND_BENCHMARKS[0]}"')
+    quantity_invocation = _criterion_invocation(
+        text,
+        "c.bench_function(name,",
+        revision,
+        "rounded Quantity",
+        quantity_anchor,
+    )
+    quantity_body = _criterion_timed_closure(
+        quantity_invocation, revision, "rounded Quantity"
+    )
+    for name in QUANTITY_ROUND_BENCHMARKS:
+        binding = _quoted_identity_binding(text, name, revision)
+        bodies[name] = f"{binding} => {quantity_body}"
+
+    typed_invocation = _criterion_invocation(
+        text,
+        TYPED_QUERY_BENCHMARK_MARKER,
+        revision,
+        "typed-query family",
+    )
+    typed_body = _criterion_timed_closure(
+        typed_invocation, revision, "typed-query family"
+    )
+    for name in TYPED_QUERY_BENCHMARKS:
+        binding = _typed_query_identity_binding(text, name, revision)
+        bodies[name] = f"{binding} => {typed_body}"
+
+    if set(bodies) != set(REGRESSION_BENCHMARKS):
+        missing = sorted(set(REGRESSION_BENCHMARKS) - set(bodies))
+        extra = sorted(set(bodies) - set(REGRESSION_BENCHMARKS))
+        raise GateError(
+            f"{revision} timed-body coverage mismatch "
+            f"(missing: {', '.join(missing)}; unexpected: {', '.join(extra)})"
+        )
+    return bodies
+
+
+def _benchmark_timed_bodies(
+    sources: Sequence[Path], revision: str
+) -> dict[str, str]:
+    return _benchmark_timed_bodies_from_text(_read_sources(sources, revision), revision)
+
+
+def validate_comparable_timed_bodies(
+    sources: Sequence[Path], revision: str
+) -> dict[str, str]:
+    """Bind every comparable identity to the selected predecessor workload."""
+
+    bodies = _benchmark_timed_bodies(sources, revision)
+    expected_names = set(REGRESSION_BENCHMARKS)
+    if set(PREDECESSOR_TIMED_BODY_SHA256) != expected_names:
+        raise GateError("predecessor timed-body policy coverage is incomplete")
+    failures = []
+    for name in REGRESSION_BENCHMARKS:
+        actual = hashlib.sha256(bodies[name].encode("utf-8")).hexdigest()
+        expected = PREDECESSOR_TIMED_BODY_SHA256[name]
+        if actual != expected:
+            failures.append(f"{name}: expected {expected}, got {actual}")
+    if failures:
+        raise GateError(
+            f"{revision} comparable timed-body drift from {PREDECESSOR_SHA}:\n  "
+            + "\n  ".join(failures)
+        )
+    return bodies
 
 
 def _read_sources(sources: Sequence[Path], revision: str) -> str:
@@ -205,7 +539,9 @@ def _typed_query_timed_body(sources: Sequence[Path], revision: str) -> str:
     return body
 
 
-def validate_benchmark_policy(sources: Sequence[Path] = BENCHMARK_SOURCES) -> None:
+def validate_benchmark_policy(
+    sources: Sequence[Path] = BENCHMARK_SOURCES,
+) -> dict[str, str]:
     """Reject duplicate, incomplete, stale, or misclassified benchmark coverage."""
 
     representative = set(REPRESENTATIVE_BENCHMARKS)
@@ -257,6 +593,7 @@ def validate_benchmark_policy(sources: Sequence[Path] = BENCHMARK_SOURCES) -> No
             "candidate-only benchmark coverage drift (" + "; ".join(details) + ")"
         )
     _typed_query_timed_body(sources, "candidate")
+    return validate_comparable_timed_bodies(sources, "candidate")
 
 
 def validate_revision_inventories(
@@ -265,7 +602,7 @@ def validate_revision_inventories(
 ) -> None:
     """Require native base/candidate sources to match the provenance policy."""
 
-    validate_benchmark_policy(candidate_sources)
+    candidate_bodies = validate_benchmark_policy(candidate_sources)
     base_text = _read_sources(base_sources, "base")
     _require_identity_counts(
         _identity_counts(base_text, REGRESSION_BENCHMARKS), 1, "base"
@@ -282,6 +619,16 @@ def validate_revision_inventories(
             "candidate-only benchmarks are present in the base revision and "
             "must be reclassified: "
             + ", ".join(invented)
+        )
+    base_bodies = validate_comparable_timed_bodies(base_sources, "base")
+    if candidate_bodies != base_bodies:
+        drifted = sorted(
+            name
+            for name in REGRESSION_BENCHMARKS
+            if candidate_bodies[name] != base_bodies[name]
+        )
+        raise GateError(
+            "comparable timed-body equality drift: " + ", ".join(drifted)
         )
     base_timed_body = _typed_query_timed_body(base_sources, "base")
     candidate_timed_body = _typed_query_timed_body(

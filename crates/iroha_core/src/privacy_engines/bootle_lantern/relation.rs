@@ -469,11 +469,12 @@ pub enum RelationErrorV1 {
 mod tests {
     use iroha_data_model::privacy::{
         BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
-        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPublicMatrixV1,
-        BootleLanternPolynomialV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-        PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+        BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
+        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
+        PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
 
     use super::*;
@@ -513,8 +514,9 @@ mod tests {
             issuer_id: PrivacyIssuerIdV1::new(raw(11)),
             policy_id: PrivacyPolicyIdV1::new(raw(12)),
             epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
             issuer_parameter_id: PrivacyParameterIdV1::new(raw(13)),
-            issuer_parameter_digest: PrivacyParameterDigestV1::new(raw(14)),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
             issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 { entries },
             required_disclosure_bitmap: 0b0000_0010,
             allowed_values: (0..ATTRIBUTE_POLYNOMIALS_V1)
@@ -528,6 +530,9 @@ mod tests {
                 .collect(),
             record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
         };
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("issuer parameter digest");
         policy.record_digest = policy.computed_record_digest().expect("policy digest");
         policy.validate().expect("valid policy");
         policy

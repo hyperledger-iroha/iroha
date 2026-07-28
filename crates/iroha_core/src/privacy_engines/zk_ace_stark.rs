@@ -36,6 +36,14 @@ use rand::TryRngCore;
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
+use super::transparent_stark::{
+    ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F,
+    TransparentStarkErrorV1, append_u16_v1 as append_u16, append_u32_v1 as append_u32,
+    append_u64_v1 as append_u64, fri_fold_pair_v1, fri_fold_pair_with_inverse_x_v1,
+    goldilocks_batch_invert_v1, goldilocks_evaluate_coset_v1, goldilocks_fft_v1,
+    goldilocks_ifft_v1, goldilocks_primitive_root_v1, masked_trace_lde_column_v1,
+};
+
 #[cfg(test)]
 static PROOF_TEST_MUTEX: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
 
@@ -47,10 +55,8 @@ pub(crate) fn proof_test_guard() -> std::sync::MutexGuard<'static, ()> {
         .expect("ZK-ACE proof test mutex must not be poisoned")
 }
 
-const FIELD_MODULUS: u64 = 0xffff_ffff_0000_0001;
-const FIELD_MODULUS_U128: u128 = FIELD_MODULUS as u128;
-const FIELD_GENERATOR: u64 = 7;
-const TWO_ADICITY: u32 = 32;
+const FIELD_MODULUS: u64 = GOLDILOCKS_MODULUS_V1;
+const FIELD_GENERATOR: u64 = GOLDILOCKS_GENERATOR_V1;
 
 /// Base execution trace has exactly 4,096 rows.
 pub(crate) const TRACE_LOG2: u8 = 12;
@@ -130,54 +136,6 @@ const TRACE_LEAF_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:trace-leaf:v1";
 const COMPOSITION_LEAF_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:composition-leaf:v1";
 const FRI_LEAF_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:fri-leaf:v1";
 const MERKLE_NODE_DOMAIN: &[u8] = b"iroha:privacy:zk-ace:merkle-node:v1";
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct F(u64);
-
-impl F {
-    const ZERO: Self = Self(0);
-    const ONE: Self = Self(1);
-
-    fn canonical(value: u64) -> Option<Self> {
-        (value < FIELD_MODULUS).then_some(Self(value))
-    }
-
-    fn reduce(value: u128) -> Self {
-        Self((value % FIELD_MODULUS_U128) as u64)
-    }
-
-    fn add(self, rhs: Self) -> Self {
-        Self::reduce(u128::from(self.0) + u128::from(rhs.0))
-    }
-
-    fn sub(self, rhs: Self) -> Self {
-        if self.0 >= rhs.0 {
-            Self(self.0 - rhs.0)
-        } else {
-            Self(FIELD_MODULUS - (rhs.0 - self.0))
-        }
-    }
-
-    fn mul(self, rhs: Self) -> Self {
-        Self::reduce(u128::from(self.0) * u128::from(rhs.0))
-    }
-
-    fn pow(mut self, mut exponent: u128) -> Self {
-        let mut result = Self::ONE;
-        while exponent != 0 {
-            if exponent & 1 == 1 {
-                result = result.mul(self);
-            }
-            self = self.mul(self);
-            exponent >>= 1;
-        }
-        result
-    }
-
-    fn inv(self) -> Option<Self> {
-        (self != Self::ZERO).then(|| self.pow(u128::from(FIELD_MODULUS - 2)))
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 enum MessageWord {
@@ -351,40 +309,38 @@ fn exact_vec<T>(capacity: usize) -> Result<Vec<T>, ZkAceStarkError> {
 }
 
 struct ProofReaderV1<'a> {
-    bytes: &'a [u8],
-    offset: usize,
+    inner: ExactProofReaderV1<'a>,
 }
 
 impl<'a> ProofReaderV1<'a> {
     const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, offset: 0 }
+        Self {
+            inner: ExactProofReaderV1::new(bytes),
+        }
     }
 
     fn take<const N: usize>(&mut self) -> Result<[u8; N], ZkAceStarkError> {
-        let end = self
-            .offset
-            .checked_add(N)
-            .ok_or(ZkAceStarkError::MalformedProof)?;
-        let bytes = self
-            .bytes
-            .get(self.offset..end)
-            .ok_or(ZkAceStarkError::MalformedProof)?;
-        self.offset = end;
-        bytes
-            .try_into()
+        self.inner
+            .take()
             .map_err(|_| ZkAceStarkError::MalformedProof)
     }
 
     fn u16(&mut self) -> Result<u16, ZkAceStarkError> {
-        self.take().map(u16::from_be_bytes)
+        self.inner
+            .u16()
+            .map_err(|_| ZkAceStarkError::MalformedProof)
     }
 
     fn u32(&mut self) -> Result<u32, ZkAceStarkError> {
-        self.take().map(u32::from_be_bytes)
+        self.inner
+            .u32()
+            .map_err(|_| ZkAceStarkError::MalformedProof)
     }
 
     fn u64(&mut self) -> Result<u64, ZkAceStarkError> {
-        self.take().map(u64::from_be_bytes)
+        self.inner
+            .u64()
+            .map_err(|_| ZkAceStarkError::MalformedProof)
     }
 
     fn hashes(&mut self, count: usize) -> Result<Vec<[u8; 32]>, ZkAceStarkError> {
@@ -404,24 +360,10 @@ impl<'a> ProofReaderV1<'a> {
     }
 
     fn finish(self) -> Result<(), ZkAceStarkError> {
-        if self.offset == self.bytes.len() {
-            Ok(())
-        } else {
-            Err(ZkAceStarkError::MalformedProof)
-        }
+        self.inner
+            .finish()
+            .map_err(|_| ZkAceStarkError::MalformedProof)
     }
-}
-
-fn append_u16(bytes: &mut Vec<u8>, value: u16) {
-    bytes.extend_from_slice(&value.to_be_bytes());
-}
-
-fn append_u32(bytes: &mut Vec<u8>, value: u32) {
-    bytes.extend_from_slice(&value.to_be_bytes());
-}
-
-fn append_u64(bytes: &mut Vec<u8>, value: u64) {
-    bytes.extend_from_slice(&value.to_be_bytes());
 }
 
 fn append_hashes(bytes: &mut Vec<u8>, hashes: &[[u8; 32]]) {
@@ -601,75 +543,25 @@ fn verify_merkle_path(
 }
 
 fn primitive_root(log_size: u8) -> Result<F, ZkAceStarkError> {
-    if u32::from(log_size) > TWO_ADICITY {
-        return Err(ZkAceStarkError::InternalInvariant(
-            "requested FFT domain exceeds Goldilocks two-adicity",
-        ));
-    }
-    let order = 1_u128 << log_size;
-    let root = F(FIELD_GENERATOR).pow((u128::from(FIELD_MODULUS) - 1) / order);
-    if root.pow(order) != F::ONE || (order > 1 && root.pow(order / 2) == F::ONE) {
-        return Err(ZkAceStarkError::InternalInvariant(
-            "Goldilocks generator produced a non-primitive root",
-        ));
-    }
-    Ok(root)
+    goldilocks_primitive_root_v1(log_size).map_err(|_| {
+        ZkAceStarkError::InternalInvariant(
+            "requested FFT domain must have a primitive Goldilocks root",
+        )
+    })
 }
 
 fn fft(values: &mut [F], root: F) -> Result<(), ZkAceStarkError> {
-    let n = values.len();
-    if n == 0 || !n.is_power_of_two() {
-        return Err(ZkAceStarkError::InternalInvariant(
-            "FFT length must be a non-zero power of two",
-        ));
-    }
-    let mut j = 0usize;
-    for i in 1..n {
-        let mut bit = n >> 1;
-        while j & bit != 0 {
-            j ^= bit;
-            bit >>= 1;
-        }
-        j ^= bit;
-        if i < j {
-            values.swap(i, j);
-        }
-    }
-    let mut len = 2usize;
-    while len <= n {
-        let step = root.pow((n / len) as u128);
-        for chunk in values.chunks_exact_mut(len) {
-            let mut twiddle = F::ONE;
-            let (left, right) = chunk.split_at_mut(len / 2);
-            for (a, b) in left.iter_mut().zip(right.iter_mut()) {
-                let odd = (*b).mul(twiddle);
-                let even = *a;
-                *a = even.add(odd);
-                *b = even.sub(odd);
-                twiddle = twiddle.mul(step);
-            }
-        }
-        len <<= 1;
-    }
-    Ok(())
+    goldilocks_fft_v1(values, root).map_err(|_| {
+        ZkAceStarkError::InternalInvariant("FFT requires an exact power-of-two Goldilocks domain")
+    })
 }
 
 fn ifft(values: &mut [F], root: F) -> Result<(), ZkAceStarkError> {
-    fft(
-        values,
-        root.inv().ok_or(ZkAceStarkError::InternalInvariant(
-            "FFT root must be invertible",
-        ))?,
-    )?;
-    let inv_n = F::reduce(values.len() as u128)
-        .inv()
-        .ok_or(ZkAceStarkError::InternalInvariant(
-            "FFT length must be invertible",
-        ))?;
-    for value in values {
-        *value = value.mul(inv_n);
-    }
-    Ok(())
+    goldilocks_ifft_v1(values, root).map_err(|_| {
+        ZkAceStarkError::InternalInvariant(
+            "inverse FFT requires an exact power-of-two Goldilocks domain",
+        )
+    })
 }
 
 fn evaluate_coefficients_on_coset(
@@ -678,19 +570,9 @@ fn evaluate_coefficients_on_coset(
     root: F,
     shift: F,
 ) -> Result<Vec<F>, ZkAceStarkError> {
-    if coefficients.len() > size || !size.is_power_of_two() {
-        return Err(ZkAceStarkError::InternalInvariant(
-            "invalid coefficient/coset evaluation shape",
-        ));
-    }
-    let mut evaluations = vec![F::ZERO; size];
-    let mut shift_power = F::ONE;
-    for (target, coefficient) in evaluations.iter_mut().zip(coefficients.iter().copied()) {
-        *target = coefficient.mul(shift_power);
-        shift_power = shift_power.mul(shift);
-    }
-    fft(&mut evaluations, root)?;
-    Ok(evaluations)
+    goldilocks_evaluate_coset_v1(coefficients, size, root, shift).map_err(|_| {
+        ZkAceStarkError::InternalInvariant("invalid coefficient/coset evaluation shape")
+    })
 }
 
 fn transpose_rows(rows: &[Vec<F>], width: usize) -> Result<Vec<Vec<F>>, ZkAceStarkError> {
@@ -1038,48 +920,26 @@ fn build_trace_material(
     })
 }
 
-fn random_field<R: TryRngCore>(rng: &mut R) -> Result<F, ZkAceStarkError> {
-    for _ in 0..16 {
-        let mut bytes = [0u8; 8];
-        rng.try_fill_bytes(&mut bytes)
-            .map_err(|_| ZkAceStarkError::RandomnessUnavailable)?;
-        if let Some(value) = F::canonical(u64::from_le_bytes(bytes)) {
-            return Ok(value);
-        }
-    }
-    Err(ZkAceStarkError::RandomnessUnavailable)
-}
-
 fn masked_lde_columns<R: TryRngCore>(
     base_columns: &[Vec<F>],
     rng: &mut R,
 ) -> Result<Vec<Vec<F>>, ZkAceStarkError> {
-    let trace_root = primitive_root(TRACE_LOG2)?;
-    let lde_root = primitive_root(LDE_LOG2)?;
-    let coset_shift = F(FIELD_GENERATOR);
-    if coset_shift.pow(LDE_SIZE as u128) == F::ONE || coset_shift.pow(TRACE_SIZE as u128) == F::ONE
-    {
-        return Err(ZkAceStarkError::InternalInvariant(
-            "compiled LDE shift lies in an evaluation subgroup",
-        ));
-    }
     base_columns
         .iter()
         .map(|column| {
-            if column.len() != TRACE_SIZE {
-                return Err(ZkAceStarkError::InternalInvariant(
-                    "base trace column length mismatch",
-                ));
-            }
-            let mut coefficients = column.clone();
-            ifft(&mut coefficients, trace_root)?;
-            coefficients.resize(LDE_SIZE, F::ZERO);
-            for degree in 0..=MASK_DEGREE {
-                let random = random_field(rng)?;
-                coefficients[degree] = coefficients[degree].sub(random);
-                coefficients[TRACE_SIZE + degree] = coefficients[TRACE_SIZE + degree].add(random);
-            }
-            evaluate_coefficients_on_coset(&coefficients, LDE_SIZE, lde_root, coset_shift)
+            masked_trace_lde_column_v1(column, TRACE_LOG2, LDE_LOG2, MASK_DEGREE, rng).map_err(
+                |error| match error {
+                    TransparentStarkErrorV1::RandomnessUnavailable => {
+                        ZkAceStarkError::RandomnessUnavailable
+                    }
+                    TransparentStarkErrorV1::AllocationFailure => {
+                        ZkAceStarkError::ProofAllocationUnavailable
+                    }
+                    _ => ZkAceStarkError::InternalInvariant(
+                        "compiled trace-masking LDE shape is invalid",
+                    ),
+                },
+            )
         })
         .collect()
 }
@@ -1104,26 +964,10 @@ fn fixed_lde_columns(base_columns: &[Vec<F>]) -> Result<Vec<Vec<F>>, ZkAceStarkE
 }
 
 fn batch_invert(values: &mut [F]) -> Result<(), ZkAceStarkError> {
-    let mut prefixes = Vec::with_capacity(values.len());
-    let mut product = F::ONE;
-    for value in values.iter().copied() {
-        if value == F::ZERO {
-            return Err(ZkAceStarkError::InternalInvariant(
-                "batch inversion input must be non-zero",
-            ));
-        }
-        prefixes.push(product);
-        product = product.mul(value);
-    }
-    let mut inverse = product.inv().ok_or(ZkAceStarkError::InternalInvariant(
-        "batch inversion product must be non-zero",
-    ))?;
-    for index in (0..values.len()).rev() {
-        let value = values[index];
-        values[index] = inverse.mul(prefixes[index]);
-        inverse = inverse.mul(value);
-    }
-    Ok(())
+    goldilocks_batch_invert_v1(values).map_err(|error| match error {
+        TransparentStarkErrorV1::AllocationFailure => ZkAceStarkError::ProofAllocationUnavailable,
+        _ => ZkAceStarkError::InternalInvariant("batch inversion input must be non-zero"),
+    })
 }
 
 fn accumulate_fixed_row(result: &mut [F], schedule_row: ScheduleRow, weight: F) {
@@ -1612,10 +1456,8 @@ fn mix_fri_base(
 }
 
 fn fri_fold_pair(low: F, high: F, beta: F, x: F) -> Result<F, ZkAceStarkError> {
-    let inverse_x = x.inv().ok_or(ZkAceStarkError::InternalInvariant(
-        "FRI domain point must be invertible",
-    ))?;
-    fri_fold_pair_with_inverse_x(low, high, beta, inverse_x)
+    fri_fold_pair_v1(low, high, beta, x)
+        .map_err(|_| ZkAceStarkError::InternalInvariant("FRI domain point must be invertible"))
 }
 
 fn fri_fold_pair_with_inverse_x(
@@ -1624,12 +1466,8 @@ fn fri_fold_pair_with_inverse_x(
     beta: F,
     inverse_x: F,
 ) -> Result<F, ZkAceStarkError> {
-    let two_inverse = F(2).inv().ok_or(ZkAceStarkError::InternalInvariant(
-        "two must be invertible in Goldilocks",
-    ))?;
-    let even = low.add(high).mul(two_inverse);
-    let odd = low.sub(high).mul(two_inverse).mul(inverse_x);
-    Ok(even.add(beta.mul(odd)))
+    fri_fold_pair_with_inverse_x_v1(low, high, beta, inverse_x)
+        .map_err(|_| ZkAceStarkError::InternalInvariant("two must be invertible in Goldilocks"))
 }
 
 fn build_fri_lane(

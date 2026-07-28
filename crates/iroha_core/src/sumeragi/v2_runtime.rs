@@ -26,10 +26,9 @@ use super::v2_core::{
     EFFECTIVE_LOCK_TRACE_SERVICE, EffectiveLockTraceProjection, EventTag,
     ExactBodyCompletionOwnership, ProductionIngressIdentityAndClassTraceProjection,
     SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS,
-    ScheduleState, ScheduledWork, classify_exact_body_completion_ownership,
-    production_body_service_refines_async_fairness_kernel,
-    production_ingress_identity_and_class_trace_refines_protected_ownership_kernel,
-    select_bounded_service_class,
+    ScheduleState, ScheduledWork, check_production_ingress_transition,
+    classify_exact_body_completion_ownership,
+    production_body_service_refines_async_fairness_kernel, select_bounded_service_class,
 };
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode as _, Encode as _};
@@ -1045,36 +1044,34 @@ impl<C> BoundedIngress<C> {
         mut command: TaggedCommand<C>,
     ) -> Result<(), EnqueueError> {
         self.check_capacity(command.class)?;
-        command.admission_ordinal = Some(self.claim_admission_ordinal()?);
+        let (first_ordinal, ordinal_successor) = self.plan_admission_ordinal_range(1)?;
+        command.admission_ordinal = first_ordinal;
         let incoming_tag = command.tag;
         let incoming_class = command.class.service_code();
         let queue_len_before = u64::try_from(self.commands.len())
             .expect("bounded runtime ingress length is representable as u64");
-        self.commands.push_back(command);
-        let stored = self
-            .commands
-            .back()
-            .expect("successful runtime ingress retains the admitted command");
+        let queue_len_after = queue_len_before
+            .checked_add(1)
+            .ok_or(EnqueueError::FailClosed)?;
         let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
             incoming_height: incoming_tag.height(),
             incoming_view: incoming_tag.view(),
             incoming_generation: incoming_tag.generation().get(),
             incoming_class,
-            stored_height: stored.tag.height(),
-            stored_view: stored.tag.view(),
-            stored_generation: stored.tag.generation().get(),
-            stored_class: stored.class.service_code(),
+            stored_height: command.tag.height(),
+            stored_view: command.tag.view(),
+            stored_generation: command.tag.generation().get(),
+            stored_class: command.class.service_code(),
             queue_len_before,
-            queue_len_after: u64::try_from(self.commands.len())
-                .expect("bounded runtime ingress length is representable as u64"),
+            queue_len_after,
             queue_capacity: u64::try_from(self.config.capacity)
                 .expect("bounded runtime ingress capacity is representable as u64"),
         };
-        if !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
-            ingress_trace,
-        ) {
-            panic!("Sumeragi v2 ingress changed command identity or service class");
-        }
+        let checked_transition =
+            check_production_ingress_transition(ingress_trace).ok_or(EnqueueError::FailClosed)?;
+        let _authorized_transition = checked_transition.into_projection();
+        self.next_admission_ordinal = ordinal_successor;
+        self.commands.push_back(command);
         Ok(())
     }
 
@@ -1091,7 +1088,8 @@ impl<C> BoundedIngress<C> {
         if commands.len() > self.remaining_capacity() {
             return Err(EnqueueError::Full);
         }
-        let first_ordinal = self.claim_admission_ordinal_range(commands.len())?;
+        let (first_ordinal, ordinal_successor) =
+            self.plan_admission_ordinal_range(commands.len())?;
         if let Some(first_ordinal) = first_ordinal {
             for (offset, command) in commands.iter_mut().enumerate() {
                 let offset = u128::try_from(offset)
@@ -1103,51 +1101,51 @@ impl<C> BoundedIngress<C> {
                 );
             }
         }
-        for command in commands {
+        let queue_len_at_start = u64::try_from(self.commands.len())
+            .expect("bounded runtime ingress length is representable as u64");
+        let mut checked_transitions = Vec::with_capacity(commands.len());
+        for (offset, command) in commands.iter().enumerate() {
             let incoming_tag = command.tag;
             let incoming_class = command.class.service_code();
-            let queue_len_before = u64::try_from(self.commands.len())
-                .expect("bounded runtime ingress length is representable as u64");
-            self.commands.push_back(command);
-            let stored = self
-                .commands
-                .back()
-                .expect("successful runtime batch ingress retains the admitted command");
+            let offset = u64::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
+            let queue_len_before = queue_len_at_start
+                .checked_add(offset)
+                .ok_or(EnqueueError::FailClosed)?;
+            let queue_len_after = queue_len_before
+                .checked_add(1)
+                .ok_or(EnqueueError::FailClosed)?;
             let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
                 incoming_height: incoming_tag.height(),
                 incoming_view: incoming_tag.view(),
                 incoming_generation: incoming_tag.generation().get(),
                 incoming_class,
-                stored_height: stored.tag.height(),
-                stored_view: stored.tag.view(),
-                stored_generation: stored.tag.generation().get(),
-                stored_class: stored.class.service_code(),
+                stored_height: command.tag.height(),
+                stored_view: command.tag.view(),
+                stored_generation: command.tag.generation().get(),
+                stored_class: command.class.service_code(),
                 queue_len_before,
-                queue_len_after: u64::try_from(self.commands.len())
-                    .expect("bounded runtime ingress length is representable as u64"),
+                queue_len_after,
                 queue_capacity: u64::try_from(self.config.capacity)
                     .expect("bounded runtime ingress capacity is representable as u64"),
             };
-            if !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
-                ingress_trace,
-            ) {
-                panic!("Sumeragi v2 batch ingress changed command identity or service class");
-            }
+            checked_transitions.push(
+                check_production_ingress_transition(ingress_trace)
+                    .ok_or(EnqueueError::FailClosed)?
+                    .into_projection(),
+            );
         }
+        self.next_admission_ordinal = ordinal_successor;
+        self.commands.extend(commands);
+        drop(checked_transitions);
         Ok(())
     }
 
-    fn claim_admission_ordinal(&mut self) -> Result<u128, EnqueueError> {
-        self.claim_admission_ordinal_range(1)?
-            .ok_or(EnqueueError::FailClosed)
-    }
-
-    fn claim_admission_ordinal_range(
-        &mut self,
+    fn plan_admission_ordinal_range(
+        &self,
         count: usize,
-    ) -> Result<Option<u128>, EnqueueError> {
+    ) -> Result<(Option<u128>, Option<u128>), EnqueueError> {
         if count == 0 {
-            return Ok(None);
+            return Ok((None, self.next_admission_ordinal));
         }
         let first = self
             .next_admission_ordinal
@@ -1155,8 +1153,7 @@ impl<C> BoundedIngress<C> {
         let offset = u128::try_from(count - 1).map_err(|_| EnqueueError::FailClosed)?;
         let last = first.checked_add(offset).ok_or(EnqueueError::FailClosed)?;
         let successor = last.checked_add(1).ok_or(EnqueueError::FailClosed)?;
-        self.next_admission_ordinal = Some(successor);
-        Ok(Some(first))
+        Ok((Some(first), Some(successor)))
     }
 
     fn check_capacity(&self, class: CommandClass) -> Result<(), EnqueueError> {
@@ -2128,12 +2125,36 @@ impl BoundedIngress<AdapterCommand> {
         if occupied_after_commit > self.config.capacity {
             return Err(EnqueueError::Full);
         }
-        let admission_ordinal = self.claim_admission_ordinal()?;
+        let (first_ordinal, ordinal_successor) = self.plan_admission_ordinal_range(1)?;
+        let admission_ordinal = first_ordinal.ok_or(EnqueueError::FailClosed)?;
+        let queue_len_before = u64::try_from(self.commands.len().saturating_sub(conflicting))
+            .map_err(|_| EnqueueError::FailClosed)?;
+        let queue_len_after = queue_len_before
+            .checked_add(1)
+            .ok_or(EnqueueError::FailClosed)?;
+        let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
+            incoming_height: tag.height(),
+            incoming_view: tag.view(),
+            incoming_generation: tag.generation().get(),
+            incoming_class: CommandClass::Completion.service_code(),
+            stored_height: tag.height(),
+            stored_view: tag.view(),
+            stored_generation: tag.generation().get(),
+            stored_class: CommandClass::Completion.service_code(),
+            queue_len_before,
+            queue_len_after,
+            queue_capacity: u64::try_from(self.config.capacity)
+                .map_err(|_| EnqueueError::FailClosed)?,
+        };
+        let checked_transition =
+            check_production_ingress_transition(ingress_trace).ok_or(EnqueueError::FailClosed)?;
+        let _authorized_transition = checked_transition.into_projection();
         let reservation = BodyAvailableReservation::reserved_with_admission_ordinal(
             tag,
             manifest,
             admission_ordinal,
         );
+        self.next_admission_ordinal = ordinal_successor;
         self.reserved_body_available = Some(reservation.clone());
         Ok(reservation)
     }
@@ -2145,46 +2166,51 @@ impl BoundedIngress<AdapterCommand> {
         if self.reserved_body_available.as_ref() != Some(&reservation) {
             return;
         }
-        self.reserved_body_available = None;
-        self.discard_proposals_conflicting_with(reservation.manifest());
         let mut command = TaggedCommand::new(
             reservation.tag(),
             CommandClass::Completion,
             AdapterCommand::BodyAvailable {
-                manifest: reservation.manifest,
+                manifest: reservation.manifest.clone(),
             },
             Instant::now(),
         );
         command.admission_ordinal = reservation.admission_ordinal;
         let incoming_tag = command.tag;
         let incoming_class = command.class.service_code();
-        let queue_len_before = u64::try_from(self.commands.len())
-            .expect("bounded runtime ingress length is representable as u64");
-        self.commands.push_back(command);
-        let stored = self
+        let retained_len = self
             .commands
-            .back()
-            .expect("canonical body commit retains the admitted completion");
+            .iter()
+            .filter(|queued| {
+                !queued
+                    .command
+                    .is_authenticated_proposal_conflicting_with(reservation.manifest())
+            })
+            .count();
+        let queue_len_before = u64::try_from(retained_len)
+            .expect("bounded runtime ingress length is representable as u64");
+        let queue_len_after = queue_len_before
+            .checked_add(1)
+            .expect("bounded runtime ingress length cannot overflow u64");
         let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
             incoming_height: incoming_tag.height(),
             incoming_view: incoming_tag.view(),
             incoming_generation: incoming_tag.generation().get(),
             incoming_class,
-            stored_height: stored.tag.height(),
-            stored_view: stored.tag.view(),
-            stored_generation: stored.tag.generation().get(),
-            stored_class: stored.class.service_code(),
+            stored_height: command.tag.height(),
+            stored_view: command.tag.view(),
+            stored_generation: command.tag.generation().get(),
+            stored_class: command.class.service_code(),
             queue_len_before,
-            queue_len_after: u64::try_from(self.commands.len())
-                .expect("bounded runtime ingress length is representable as u64"),
+            queue_len_after,
             queue_capacity: u64::try_from(self.config.capacity)
                 .expect("bounded runtime ingress capacity is representable as u64"),
         };
-        if !production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
-            ingress_trace,
-        ) {
-            panic!("Sumeragi v2 canonical body ingress changed completion identity or class");
-        }
+        let checked_transition = check_production_ingress_transition(ingress_trace)
+            .expect("Sumeragi v2 canonical body prospective ingress must pass its gate");
+        let _authorized_transition = checked_transition.into_projection();
+        self.reserved_body_available = None;
+        self.discard_proposals_conflicting_with(reservation.manifest());
+        self.commands.push_back(command);
     }
 
     fn abort_canonical_body_available(&mut self, reservation: BodyAvailableReservation) {

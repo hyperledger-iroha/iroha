@@ -4364,21 +4364,65 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
         }
         Expr::Bool(b) => json::Value::Bool(*b),
         Expr::Ident(ident) if ident == "null" => json::Value::Null,
-        Expr::Call { name, args, .. } if name == "json" => {
-            let raw = args
-                .first()
-                .and_then(|argument| match argument.kind() {
-                    Expr::String(raw) if args.len() == 1 => Some(raw),
-                    Expr::Source { .. } | Expr::Resolved { .. } => {
-                        unreachable!("kind() strips provenance wrappers")
-                    }
-                    _ => None,
-                })
-                .ok_or_else(|| SemanticError {
+        Expr::Call {
+            name,
+            args,
+            argument_names,
+            implicit_receiver,
+        } if name == "Json::parse" => {
+            if *implicit_receiver {
+                return Err(SemanticError {
+                    code: "E_MALFORMED_CALL",
+                    message: "Json::parse is a static constructor and has no receiver".into(),
+                });
+            }
+            if args.is_empty() {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "Json::parse expects one argument".into(),
+                });
+            }
+            let builtin = Builtin::PointerConstructor(PointerConstructor::Json);
+            let signature = builtin.signature();
+            let parameter_names = signature
+                .parameter_names
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>();
+            let required = signature
+                .parameters
+                .iter()
+                .map(|parameter| !parameter.ends_with('?'))
+                .collect::<Vec<_>>();
+            let plan = reorder_call_arguments(
+                name,
+                args,
+                argument_names.as_deref(),
+                false,
+                &parameter_names,
+                &required,
+                builtin_named_only_reason(builtin, false),
+            )?;
+            if plan.ordered.len() != 1 {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "Json::parse expects one argument".into(),
+                });
+            }
+            let Expr::String(raw) = plan.ordered[0].kind() else {
+                return Err(SemanticError {
                     code: "E_TRIGGER_METADATA_VALUE",
                     message: "Json::parse(...) metadata values must be a string literal".into(),
-                })?;
+                });
+            };
             parse_json_literal(raw)?
+        }
+        Expr::Call { name, .. } if name == "json" => {
+            return Err(SemanticError {
+                code: "E_NON_CANONICAL_BUILTIN",
+                message: "legacy or non-canonical builtin spelling `json` is not supported; use `Json::parse`"
+                    .into(),
+            });
         }
         _ => {
             return Err(SemanticError {
@@ -6057,6 +6101,7 @@ fn analyze_block(
         if let Some(expected) = expected_tail
             && let Err(mut error) = ensure_assignable_and_coerce(expected, &mut typed)
         {
+            context.capture_expression_diagnostic(expression, None);
             error.code = "E_TAIL_TYPE_MISMATCH";
             error.message = format!("block tail type mismatch: {}", error.message);
             return Err(error);
@@ -19384,6 +19429,59 @@ seiyaku UnshieldAmount {{
             "#,
         );
         assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
+    }
+
+    #[test]
+    fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
+        let trigger_source = |value: &str| {
+            format!(
+                r#"
+                seiyaku C {{
+                    kotoage fn run() authorize("RunTrigger") {{}}
+                    trigger wake -> run {{
+                        on time pre_commit;
+                        metadata {{ payload: {value}; }}
+                    }}
+                }}
+                "#,
+            )
+        };
+
+        for value in [r#"Json::parse("{}")"#, r#"Json::parse(value: "{}")"#] {
+            let source = trigger_source(value);
+            let program = parse(&source).expect("canonical Json::parse metadata should parse");
+            analyze(&program).unwrap_or_else(|error| {
+                panic!("canonical trigger metadata `{value}` failed: {error:?}")
+            });
+        }
+
+        for (value, code, message) in [
+            (
+                r#"Json::parse(raw: "{}")"#,
+                "E_UNKNOWN_NAMED_ARGUMENT",
+                "call `Json::parse` has no parameter named `raw`",
+            ),
+            ("Json::parse()", "K2003", "Json::parse expects one argument"),
+            (
+                r#"Json::parse("{}", "{}")"#,
+                "K2003",
+                "Json::parse expects one argument",
+            ),
+            (
+                "Json::parse(value: dynamic)",
+                "E_TRIGGER_METADATA_VALUE",
+                "Json::parse(...) metadata values must be a string literal",
+            ),
+            (
+                r#"json("{}")"#,
+                "E_NON_CANONICAL_BUILTIN",
+                "legacy or non-canonical builtin spelling `json` is not supported; use `Json::parse`",
+            ),
+        ] {
+            let error = analyze_error(&trigger_source(value));
+            assert_eq!(error.code, code, "{value}: {error:?}");
+            assert_eq!(error.message, message, "{value}: {error:?}");
+        }
     }
 
     #[test]

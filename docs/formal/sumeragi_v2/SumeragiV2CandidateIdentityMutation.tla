@@ -21,7 +21,7 @@ NoAsyncItem == "NoAsyncItem"
 AsyncCandidateWithIdentity(
     commandClass, kind, node, blockHeight, roundView, subject, item,
     consumerContext, consumerView, consumerGeneration, evidence,
-    bodyIdentity, manifestIdentity, commitmentIdentity) ==
+    bodyIdentity, manifestIdentity, commitmentIdentity, causalOrigin) ==
   [class |-> commandClass, kind |-> kind, node |-> node,
    height |-> blockHeight, view |-> roundView, subject |-> subject,
    item |-> item, consumerContext |-> consumerContext,
@@ -29,52 +29,56 @@ AsyncCandidateWithIdentity(
    consumerGeneration |-> consumerGeneration,
    evidence |-> evidence, bodyIdentity |-> bodyIdentity,
    manifestIdentity |-> manifestIdentity,
-   commitmentIdentity |-> commitmentIdentity]
+   commitmentIdentity |-> commitmentIdentity,
+   causalOrigin |-> causalOrigin]
 
 CandidateAt(consumerContext, consumerView, consumerGeneration, item,
             evidence, roundView, bodyIdentity, manifestIdentity,
-            commitmentIdentity) ==
+            commitmentIdentity, causalOrigin) ==
   AsyncCandidateWithIdentity(
     "Completion", "SignVote", 1, 7, roundView, "subject-a", item,
     consumerContext, consumerView, consumerGeneration, evidence,
-    bodyIdentity, manifestIdentity, commitmentIdentity)
+    bodyIdentity, manifestIdentity, commitmentIdentity, causalOrigin)
 
 BaseCandidate ==
   CandidateAt(BaseConsumerContext, 4, 0, "payload-0", "evidence-0", 4,
-              "body-0", "manifest-0", "commitment-0")
+              "body-0", "manifest-0", "commitment-0", "origin-0")
 
 OfferedCandidate ==
   CASE Difference = "Identical" -> BaseCandidate
     [] Difference = "ConsumerContext" ->
          CandidateAt(OtherConsumerContext, 4, 0, "payload-0", "evidence-0",
-                     4, "body-0", "manifest-0", "commitment-0")
+                     4, "body-0", "manifest-0", "commitment-0", "origin-0")
     [] Difference = "ConsumerView" ->
          CandidateAt(BaseConsumerContext, 5, 0, "payload-0", "evidence-0",
-                     4, "body-0", "manifest-0", "commitment-0")
+                     4, "body-0", "manifest-0", "commitment-0", "origin-0")
     [] Difference = "Generation" ->
          CandidateAt(BaseConsumerContext, 4, 1, "payload-0", "evidence-0",
-                     4, "body-0", "manifest-0", "commitment-0")
+                     4, "body-0", "manifest-0", "commitment-0", "origin-0")
     [] Difference = "Payload" ->
          CandidateAt(BaseConsumerContext, 4, 0, "payload-1", "evidence-0",
-                     4, "body-0", "manifest-0", "commitment-0")
+                     4, "body-0", "manifest-0", "commitment-0", "origin-0")
     [] Difference = "Evidence" ->
          CandidateAt(BaseConsumerContext, 4, 0, "payload-0", "evidence-1",
-                     4, "body-0", "manifest-0", "commitment-0")
+                     4, "body-0", "manifest-0", "commitment-0", "origin-0")
     [] Difference = "Work" ->
          CandidateAt(BaseConsumerContext, 4, 0, "payload-0", "evidence-0",
-                     5, "body-0", "manifest-0", "commitment-0")
+                     5, "body-0", "manifest-0", "commitment-0", "origin-0")
     [] Difference = "Body" ->
          CandidateAt(BaseConsumerContext, 4, 0, "payload-0", "evidence-0",
-                     4, "body-1", "manifest-0", "commitment-0")
+                     4, "body-1", "manifest-0", "commitment-0", "origin-0")
     [] Difference = "Manifest" ->
          CandidateAt(BaseConsumerContext, 4, 0, "payload-0", "evidence-0",
-                     4, "body-0", "manifest-1", "commitment-0")
+                     4, "body-0", "manifest-1", "commitment-0", "origin-0")
     [] Difference = "Commitment" ->
          CandidateAt(BaseConsumerContext, 4, 0, "payload-0", "evidence-0",
-                     4, "body-0", "manifest-0", "commitment-1")
+                     4, "body-0", "manifest-0", "commitment-1", "origin-0")
+    [] Difference = "CausalOrigin" ->
+         CandidateAt(BaseConsumerContext, 4, 0, "payload-0", "evidence-0",
+                     4, "body-0", "manifest-0", "commitment-0", "origin-1")
     [] OTHER ->
          CandidateAt(OtherConsumerContext, 5, 1, "payload-1", "evidence-1",
-                     5, "body-1", "manifest-1", "commitment-1")
+                     5, "body-1", "manifest-1", "commitment-1", "origin-1")
 
 AsyncConsumerEventTag(candidate) ==
   [context |-> candidate.consumerContext,
@@ -92,6 +96,7 @@ ExactAsyncCandidateIdentity(candidate) ==
   [consumer |-> AsyncConsumerEventTag(candidate),
    payload |-> candidate.item,
    evidence |-> candidate.evidence,
+   causalOrigin |-> candidate.causalOrigin,
    work |-> AsyncWorkIdentity(candidate),
    body |-> candidate.bodyIdentity,
    manifest |-> candidate.manifestIdentity,
@@ -155,6 +160,9 @@ ChangedPayloadNotCoalesced ==
 
 ChangedEvidenceNotCoalesced ==
   handled => resident.evidence = OfferedCandidate.evidence
+
+ChangedCausalOriginNotCoalesced ==
+  handled => resident.causalOrigin = OfferedCandidate.causalOrigin
 
 ChangedWorkNotCoalesced ==
   handled =>

@@ -14,8 +14,10 @@ import {
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
+import { parsePrivacyCapabilitySnapshotV1 } from "./privacyCapabilities.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
+const PRIVACY_CAPABILITIES_JSON_MAX_BYTES = 256 * 1024;
 const PIPELINE_SUCCESS_STATUS = "Applied";
 const PIPELINE_STATUS_VALUES = new Set([
   "Queued",
@@ -913,6 +915,96 @@ async function responseText(response) {
   return "";
 }
 
+function requireExactJsonContentType(contentType, context) {
+  const mediaType = typeof contentType === "string"
+    ? contentType.split(";", 1)[0].trim()
+    : "";
+  if (mediaType.toLowerCase() !== "application/json") {
+    throw new TypeError(`${context} must use the application/json media type`);
+  }
+}
+
+async function readBoundedResponseText(response, maximumBodyBytes, context) {
+  if (!Number.isSafeInteger(maximumBodyBytes) || maximumBodyBytes < 0) {
+    throw new TypeError(`${context} response byte-size bound is invalid`);
+  }
+  const rawContentLength = response?.headers?.get?.("content-length");
+  if (rawContentLength !== null && rawContentLength !== undefined) {
+    if (
+      typeof rawContentLength !== "string"
+      || !/^(?:0|[1-9][0-9]*)$/u.test(rawContentLength)
+    ) {
+      throw new TypeError(
+        `${context} Content-Length must be a canonical unsigned decimal integer`,
+      );
+    }
+    const declaredLength = Number(rawContentLength);
+    if (
+      !Number.isSafeInteger(declaredLength)
+      || declaredLength > maximumBodyBytes
+    ) {
+      throw new RangeError(
+        `${context} exceeds its ${maximumBodyBytes}-byte response limit`,
+      );
+    }
+  }
+  if (typeof response?.body?.getReader !== "function") {
+    throw new TypeError(
+      `${context} requires a byte-stream response body so its size can be bounded`,
+    );
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  let complete = false;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (!result || typeof result.done !== "boolean") {
+        throw new TypeError(`${context} returned an invalid response stream result`);
+      }
+      if (result.done) {
+        complete = true;
+        break;
+      }
+      if (!(result.value instanceof Uint8Array)) {
+        throw new TypeError(`${context} returned a non-byte response stream chunk`);
+      }
+      if (result.value.byteLength > maximumBodyBytes - totalBytes) {
+        throw new RangeError(
+          `${context} exceeds its ${maximumBodyBytes}-byte response limit`,
+        );
+      }
+      totalBytes += result.value.byteLength;
+      chunks.push(result.value);
+    }
+  } catch (error) {
+    if (!complete && typeof reader.cancel === "function") {
+      try {
+        await reader.cancel(error);
+      } catch {
+        // Preserve the deterministic validation failure.
+      }
+    }
+    throw error;
+  } finally {
+    if (typeof reader.releaseLock === "function") reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new TypeError(`${context} must be valid UTF-8`, { cause: error });
+  }
+}
+
 export class ToriiBrowserHttpError extends Error {
   constructor(response, bodyText, status = responseStatus(response)) {
     super(`Torii request failed with status ${status}`);
@@ -1192,7 +1284,13 @@ export class ToriiBrowserClient {
       }
       return response.json();
     }
-    const text = await response.text();
+    const text = normalizedOptions.maximumBodyBytes === undefined
+      ? await response.text()
+      : await readBoundedResponseText(
+        response,
+        normalizedOptions.maximumBodyBytes,
+        `${method} ${path}`,
+      );
     return text ? jsonParser(text) : null;
   }
 
@@ -1441,6 +1539,22 @@ export class ToriiBrowserClient {
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200],
     });
+  }
+
+  /** Fetch and fail-closed validate the committed privacy capability snapshot. */
+  async getPrivacyCapabilitiesV1(options = {}) {
+    const opts = requireObject(options, "getPrivacyCapabilitiesV1 options");
+    const payload = await this._json("GET", "/v1/privacy/capabilities", {
+      headers: { ...(opts.headers ?? {}), Accept: "application/json" },
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200],
+      maximumBodyBytes: PRIVACY_CAPABILITIES_JSON_MAX_BYTES,
+      responseObserver: (response) => requireExactJsonContentType(
+        response.headers?.get?.("content-type"),
+        "privacy capabilities response",
+      ),
+    });
+    return parsePrivacyCapabilitySnapshotV1(payload);
   }
 
   /** Resolve a contract alias; caller-supplied canonical signing headers are preserved. */

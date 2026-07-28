@@ -151,25 +151,13 @@ class PrivacyConfidentialWitnessV1(
 object PrivacyConfidentialWitnessCodecs {
     const val SCHEMA_PRIVACY_CONFIDENTIAL_WITNESS_V1: String =
         "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV1"
-    const val SCHEMA_PRIVACY_PROOF_REQUEST_V1: String =
-        "connect_norito_bridge::PrivacyProofRequestV1"
-    const val CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID: String = "confidential-transfer-v2"
-    const val CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT: String = "buildConfidentialTransferProofV2"
-    const val CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF: String =
-        "halo2-ipa-pasta:confidential_transfer_v2"
-    const val CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID: String = "unshield"
-    const val CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT: String = "buildConfidentialUnshieldProofV3"
-    const val CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF: String =
-        "halo2-ipa-pasta:confidential_unshield_v3"
     const val CONFIDENTIAL_TREE_CAPACITY_V2: Int = 1 shl 16
     const val CONFIDENTIAL_MAX_INPUTS_V2: Int = 2
     const val CONFIDENTIAL_MAX_TRANSFER_OUTPUTS_V2: Int = 2
     const val CONFIDENTIAL_MAX_UNSHIELD_CHANGE_OUTPUTS_V3: Int = 1
 
-    private const val CONFIDENTIAL_PROOF_MAX_BYTES: Int = 32 * 1024 * 1024
     private const val NORITO_HEADER_BYTES: Int = 40
     private const val REQUEST_FLAGS: Int = NoritoHeader.COMPACT_LEN
-    private const val PRIVACY_REQUEST_SCHEMA_BYTE: Int = 0x52
     private const val WITNESS_HEADER_PADDING_BYTES: Int = 8
     private val TRANSFER_PUBLIC_INPUTS_SCHEMA: ByteArray =
         (
@@ -214,76 +202,6 @@ object PrivacyConfidentialWitnessCodecs {
         return encodeWitness(witness)
     }
 
-    @JvmStatic
-    @JvmOverloads
-    fun buildConfidentialTransferProofRequestV1(
-        witness: PrivacyConfidentialWitnessV1,
-        vkRef: String = CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
-    ): ByteArray {
-        validateVkRef(vkRef, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF)
-        return encodePrivacyProofRequest(
-            algorithmId = CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
-            entrypoint = CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT,
-            vkRef = vkRef,
-            publicInputs = TRANSFER_PUBLIC_INPUTS_SCHEMA,
-            witness = encodeTransferWitness(witness),
-            proof = ByteArray(0),
-        )
-    }
-
-    @JvmStatic
-    @JvmOverloads
-    fun buildConfidentialUnshieldProofRequestV1(
-        witness: PrivacyConfidentialWitnessV1,
-        vkRef: String = CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
-    ): ByteArray {
-        validateVkRef(vkRef, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF)
-        return encodePrivacyProofRequest(
-            algorithmId = CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID,
-            entrypoint = CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT,
-            vkRef = vkRef,
-            publicInputs = UNSHIELD_PUBLIC_INPUTS_SCHEMA,
-            witness = encodeUnshieldWitness(witness),
-            proof = ByteArray(0),
-        )
-    }
-
-    @JvmStatic
-    @JvmOverloads
-    fun buildConfidentialTransferVerifyRequestV1(
-        proof: ByteArray,
-        vkRef: String = CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF,
-    ): ByteArray {
-        validateVkRef(vkRef, CONFIDENTIAL_TRANSFER_V2_VERIFIER_REF)
-        val proofBytes = copyNonEmptyProof(proof)
-        return encodePrivacyProofRequest(
-            algorithmId = CONFIDENTIAL_TRANSFER_V2_ALGORITHM_ID,
-            entrypoint = CONFIDENTIAL_TRANSFER_V2_ENTRYPOINT,
-            vkRef = vkRef,
-            publicInputs = TRANSFER_PUBLIC_INPUTS_SCHEMA,
-            witness = ByteArray(0),
-            proof = proofBytes,
-        )
-    }
-
-    @JvmStatic
-    @JvmOverloads
-    fun buildConfidentialUnshieldVerifyRequestV1(
-        proof: ByteArray,
-        vkRef: String = CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF,
-    ): ByteArray {
-        validateVkRef(vkRef, CONFIDENTIAL_UNSHIELD_V3_VERIFIER_REF)
-        val proofBytes = copyNonEmptyProof(proof)
-        return encodePrivacyProofRequest(
-            algorithmId = CONFIDENTIAL_UNSHIELD_V3_ALGORITHM_ID,
-            entrypoint = CONFIDENTIAL_UNSHIELD_V3_ENTRYPOINT,
-            vkRef = vkRef,
-            publicInputs = UNSHIELD_PUBLIC_INPUTS_SCHEMA,
-            witness = ByteArray(0),
-            proof = proofBytes,
-        )
-    }
-
     private fun validateTransferWitness(witness: PrivacyConfidentialWitnessV1) {
         require(witness.publicAmount == "0") {
             "confidential transfer witness must not include publicAmount"
@@ -305,40 +223,6 @@ object PrivacyConfidentialWitnessCodecs {
         }
     }
 
-    private fun copyNonEmptyProof(value: ByteArray): ByteArray {
-        val bytes = value.copyOf()
-        require(bytes.isNotEmpty()) { "proof must not be empty" }
-        require(bytes.size <= CONFIDENTIAL_PROOF_MAX_BYTES) {
-            "proof must not exceed $CONFIDENTIAL_PROOF_MAX_BYTES bytes"
-        }
-        return bytes
-    }
-
-    private fun encodePrivacyProofRequest(
-        algorithmId: String,
-        entrypoint: String,
-        vkRef: String,
-        publicInputs: ByteArray,
-        witness: ByteArray,
-        proof: ByteArray,
-    ): ByteArray {
-        val archive = NoritoCodec.encode(
-            PrivacyProofRequestPayload(
-                algorithmId = privacyRequestText(algorithmId, "algorithmId"),
-                entrypoint = privacyRequestText(entrypoint, "entrypoint"),
-                vkRef = privacyRequestText(vkRef, "vkRef"),
-                publicInputs = publicInputs.copyOf(),
-                witness = witness.copyOf(),
-                proof = proof.copyOf(),
-            ),
-            SCHEMA_PRIVACY_PROOF_REQUEST_V1,
-            PrivacyProofRequestAdapter,
-            REQUEST_FLAGS,
-        )
-        archive.fill(PRIVACY_REQUEST_SCHEMA_BYTE.toByte(), 6, 22)
-        return archive
-    }
-
     private fun addNoritoHeaderPadding(archive: ByteArray, paddingBytes: Int): ByteArray {
         require(archive.size >= NORITO_HEADER_BYTES) { "Norito archive is missing a header" }
         if (paddingBytes == 0) {
@@ -349,29 +233,6 @@ object PrivacyConfidentialWitnessCodecs {
         archive.copyInto(out, destinationOffset = NORITO_HEADER_BYTES + paddingBytes, startIndex = NORITO_HEADER_BYTES)
         return out
     }
-}
-
-private data class PrivacyProofRequestPayload(
-    val algorithmId: String,
-    val entrypoint: String,
-    val vkRef: String,
-    val publicInputs: ByteArray,
-    val witness: ByteArray,
-    val proof: ByteArray,
-)
-
-private object PrivacyProofRequestAdapter : TypeAdapter<PrivacyProofRequestPayload> {
-    override fun encode(encoder: NoritoEncoder, value: PrivacyProofRequestPayload) {
-        writeField(encoder) { writeString(it, value.algorithmId) }
-        writeField(encoder) { writeString(it, value.entrypoint) }
-        writeField(encoder) { writeString(it, value.vkRef) }
-        writeField(encoder) { writeBytesVec(it, value.publicInputs) }
-        writeField(encoder) { writeBytesVec(it, value.witness) }
-        writeField(encoder) { writeBytesVec(it, value.proof) }
-    }
-
-    override fun decode(decoder: NoritoDecoder): PrivacyProofRequestPayload =
-        throw UnsupportedOperationException("privacy proof requests are encode-only")
 }
 
 private object PrivacyConfidentialWitnessAdapter : TypeAdapter<PrivacyConfidentialWitnessV1> {
@@ -493,23 +354,6 @@ private fun privacyCanonicalText(value: String, name: String): String {
     require(trimmed == value) { "$name must not contain surrounding whitespace" }
     require(trimmed.indexOf('\u0000') < 0) { "$name must not contain NUL" }
     return trimmed
-}
-
-private fun privacyRequestText(value: String, name: String): String {
-    val text = privacyCanonicalText(value, name)
-    require(text.length <= 1024) { "$name must not exceed 1024 characters" }
-    require(text.all { it.code in 0x21..0x7e }) {
-        "$name must be printable ASCII without whitespace"
-    }
-    require(text.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' || it == ':' }) {
-        "$name must use portable privacy request characters"
-    }
-    return text
-}
-
-private fun validateVkRef(value: String, expected: String) {
-    val text = privacyRequestText(value, "vkRef")
-    require(text == expected) { "vkRef must be $expected" }
 }
 
 private fun privacyFixed32(value: ByteArray, name: String): ByteArray {

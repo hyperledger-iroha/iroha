@@ -4,7 +4,9 @@
 use iroha_data_model::{
     asset::definition::ConfidentialPolicyMode,
     fastpq::{TransferDeltaTranscript, TransferSmtWitness, normalized_numeric_to_u64},
-    isi::error::{InstructionExecutionError, MathError, Mismatch, TypeError},
+    isi::error::{
+        AssetTransferAdmissionError, InstructionExecutionError, MathError, Mismatch, TypeError,
+    },
     prelude::*,
     query::error::FindError,
 };
@@ -29,7 +31,11 @@ pub mod isi {
             AssetTransferLimit, AssetTransferUsageBucket, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         },
-        events::data::prelude::{AccountEvent, AssetEvent, MetadataChanged},
+        events::data::prelude::{
+            AccountEvent, AssetBatchTransferLegStatus, AssetBatchTransferOutcome,
+            AssetBatchTransferRejection, AssetBatchTransferRejectionCode, AssetEvent,
+            MetadataChanged,
+        },
         isi::{
             RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue, SetAssetTransferBlacklist,
             SetAssetTransferControl, SetAssetTransferFreeze, error::MintabilityError,
@@ -83,7 +89,10 @@ pub mod isi {
             Ok(())
         }
 
-        fn precheck_numeric_asset_transfer_delta_exact(
+        /// Validate an exact-id numeric transfer and compute its complete balance transcript.
+        ///
+        /// This is read-only; both ids must already be canonicalized for their intended scopes.
+        pub(crate) fn precheck_numeric_asset_transfer_delta_exact(
             &self,
             source_id: &AssetId,
             destination_id: &AssetId,
@@ -191,37 +200,88 @@ pub mod isi {
             Ok(())
         }
 
+        /// Validate a numeric credit after canonicalizing the balance id for the current scope.
+        ///
+        /// Returns the canonical balance id and its post-credit value without mutating state.
+        pub(crate) fn precheck_numeric_asset_credit(
+            &self,
+            id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<(AssetId, Quantity), Error> {
+            let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
+            let candidate = self.precheck_numeric_asset_credit_exact(&resolved_id, amount)?;
+            Ok((resolved_id, candidate))
+        }
+
+        /// Validate a numeric credit for an already-canonicalized exact balance id.
+        ///
+        /// Returns the post-credit value without mutating state. Callers using this exact-id
+        /// variant must preserve the balance scope selected by the path that produced `id`.
+        pub(crate) fn precheck_numeric_asset_credit_exact(
+            &self,
+            id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<Quantity, Error> {
+            self.account(id.account())?;
+            let spec = self.asset_definition(id.definition())?.spec();
+            assert_numeric_spec_with(amount.as_numeric(), spec)?;
+            let current = self
+                .assets
+                .get(id)
+                .map(|value| value.as_ref().clone())
+                .unwrap_or_else(Quantity::zero);
+            assert_numeric_spec_with(current.as_numeric(), spec)?;
+            let candidate = current
+                .checked_add(amount)
+                .map_err(|_| MathError::Overflow)?;
+            assert_numeric_spec_with(candidate.as_numeric(), spec)?;
+            self.ensure_numeric_asset_holding_limit(id, &candidate)?;
+            Ok(candidate)
+        }
+
+        fn apply_prechecked_numeric_asset_credit_exact(
+            &mut self,
+            id: &AssetId,
+            candidate: Quantity,
+        ) -> Result<(), Error> {
+            let is_nonzero = {
+                let dst = self.asset_or_insert_exact(id, Quantity::zero())?;
+                let quantity: &mut Quantity = &mut *dst;
+                *quantity = candidate;
+                !quantity.is_zero()
+            };
+            if is_nonzero {
+                self.track_nonzero_asset_holder(id);
+            }
+            Ok(())
+        }
+
+        /// Increase an already-canonicalized exact numeric balance, creating it if missing.
+        ///
+        /// This validates the complete post-credit balance before mutation and assigns that
+        /// precomputed value. It does not emit an `Added` event; callers remain responsible for
+        /// balance-change event emission.
+        pub(crate) fn deposit_numeric_asset_exact(
+            &mut self,
+            id: &AssetId,
+            amount: &Quantity,
+        ) -> Result<(), Error> {
+            let candidate = self.precheck_numeric_asset_credit_exact(id, amount)?;
+            self.apply_prechecked_numeric_asset_credit_exact(id, candidate)
+        }
+
         /// Increase a numeric asset balance, creating it if missing.
-        /// Does not emit events; callers remain responsible for event emission.
+        ///
+        /// The balance id is canonicalized for the current scope before applying the exact
+        /// checked credit. This does not emit an `Added` event; callers remain responsible for
+        /// balance-change event emission.
         pub(crate) fn deposit_numeric_asset(
             &mut self,
             id: &AssetId,
             amount: &Quantity,
         ) -> Result<(), Error> {
-            let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
-            let spec = self.asset_definition(resolved_id.definition())?.spec();
-            assert_numeric_spec_with(amount.as_numeric(), spec)?;
-            let current = self
-                .assets
-                .get(&resolved_id)
-                .map(|value| value.as_ref().clone())
-                .unwrap_or_else(Quantity::zero);
-            let candidate = current
-                .checked_add(amount)
-                .map_err(|_| MathError::Overflow)?;
-            self.ensure_numeric_asset_holding_limit(&resolved_id, &candidate)?;
-            let is_nonzero = {
-                let dst = self.asset_or_insert(&resolved_id, Quantity::zero())?;
-                let q: &mut Quantity = &mut *dst;
-                assert_numeric_spec_with(q.as_numeric(), spec)?;
-                *q = q.checked_add(amount).map_err(|_| MathError::Overflow)?;
-                assert_numeric_spec_with(q.as_numeric(), spec)?;
-                !q.is_zero()
-            };
-            if is_nonzero {
-                self.track_nonzero_asset_holder(&resolved_id);
-            }
-            Ok(())
+            let (resolved_id, candidate) = self.precheck_numeric_asset_credit(id, amount)?;
+            self.apply_prechecked_numeric_asset_credit_exact(&resolved_id, candidate)
         }
 
         /// Atomically move an exact numeric amount without emitting transfer events.
@@ -269,15 +329,17 @@ pub mod isi {
                 return Ok(());
             };
             if candidate > limit {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "HoldingLimitExceeded: account {} balance for {} would be {}, above {}",
-                        asset_id.account(),
-                        asset_id.definition(),
-                        candidate,
-                        limit
-                    )
-                    .into(),
+                return Err(InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded(
+                        format!(
+                            "account {} balance for {} would be {}, above {}",
+                            asset_id.account(),
+                            asset_id.definition(),
+                            candidate,
+                            limit
+                        )
+                        .into(),
+                    ),
                 ));
             }
             Ok(())
@@ -630,23 +692,27 @@ pub mod isi {
         };
 
         if record.outgoing_frozen {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "outbound transfers for account {} are frozen on asset definition {}",
-                    source_id.account(),
-                    source_id.definition()
-                )
-                .into(),
+            return Err(InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::Frozen(
+                    format!(
+                        "account {} on asset definition {}",
+                        source_id.account(),
+                        source_id.definition()
+                    )
+                    .into(),
+                ),
             ));
         }
         if record.blacklisted {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "account {} is blacklisted for outbound transfers on asset definition {}",
-                    source_id.account(),
-                    source_id.definition()
-                )
-                .into(),
+            return Err(InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::Blacklisted(
+                    format!(
+                        "account {} on asset definition {}",
+                        source_id.account(),
+                        source_id.definition()
+                    )
+                    .into(),
+                ),
             ));
         }
 
@@ -675,17 +741,19 @@ pub mod isi {
                 .checked_add(amount)
                 .map_err(|_| MathError::Overflow)?;
             if spent_after > cap_amount {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "outbound transfer cap exceeded for {} on {} {} bucket: {} + {} > {}",
-                        source_id.account(),
-                        source_id.definition(),
-                        window.as_str(),
-                        spent_before,
-                        amount,
-                        cap_amount
-                    )
-                    .into(),
+                return Err(InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::PolicyRejected(
+                        format!(
+                            "outbound transfer cap exceeded for {} on {} {} bucket: {} + {} > {}",
+                            source_id.account(),
+                            source_id.definition(),
+                            window.as_str(),
+                            spent_before,
+                            amount,
+                            cap_amount
+                        )
+                        .into(),
+                    ),
                 ));
             }
             next_usages.push(AssetTransferUsageBucket {
@@ -2386,20 +2454,88 @@ pub mod isi {
                     "transfer asset batch requires at least one entry".into(),
                 ));
             }
-            let mut deltas = Vec::with_capacity(self.entries().len());
+            let mut leg_ids = BTreeSet::new();
             for entry in self.entries() {
+                if entry.leg_id().trim().is_empty() || entry.leg_id().trim() != entry.leg_id() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "transfer asset batch leg_id must be non-empty and unpadded".into(),
+                    ));
+                }
+                if !leg_ids.insert(entry.leg_id()) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "transfer asset batch contains duplicate leg_id `{}`",
+                            entry.leg_id()
+                        )
+                        .into(),
+                    ));
+                }
+                if entry.amount().is_zero() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "transfer asset batch leg `{}` amount must be non-zero",
+                            entry.leg_id()
+                        )
+                        .into(),
+                    ));
+                }
+            }
+
+            let mut deltas = Vec::with_capacity(self.entries().len());
+            for (index, entry) in self.entries().iter().enumerate() {
                 let source_id =
                     AssetId::new(entry.asset_definition().clone(), entry.from().clone());
                 let destination_id =
                     AssetId::new(entry.asset_definition().clone(), entry.to().clone());
                 let amount = entry.amount().clone();
-                let plan = PreparedNumericTransferPlan::prepare_user(
-                    state_transaction,
-                    authority,
-                    source_id,
-                    destination_id,
-                    amount,
-                )?;
+                let plan = (|| -> Result<PreparedNumericTransferPlan, Error> {
+                    if self.mode() == &BatchMode::Independent {
+                        // Independent settlement captures participant and asset
+                        // admission as a leg-local outcome. Requiring both
+                        // accounts up front also ensures a failed leg cannot
+                        // stage implicit-account creation or its fee before the
+                        // failure is isolated.
+                        state_transaction.world.account(entry.from())?;
+                        state_transaction.world.account(entry.to())?;
+                        state_transaction
+                            .world
+                            .asset_definition(entry.asset_definition())?;
+                    }
+                    PreparedNumericTransferPlan::prepare_user(
+                        state_transaction,
+                        authority,
+                        source_id.clone(),
+                        destination_id,
+                        amount.clone(),
+                    )
+                })();
+                let plan = match plan {
+                    Ok(plan) => plan,
+                    Err(error) if self.mode() == &BatchMode::Independent => {
+                        let message = error.to_string();
+                        let code = batch_transfer_rejection_code(&error);
+                        let outcome = AssetBatchTransferOutcome {
+                            leg_index: u32::try_from(index).map_err(|_| {
+                                InstructionExecutionError::InvariantViolation(
+                                    "transfer asset batch contains too many legs".into(),
+                                )
+                            })?,
+                            leg_id: entry.leg_id().clone(),
+                            asset: source_id,
+                            destination: entry.to().clone(),
+                            amount,
+                            status: AssetBatchTransferLegStatus::Rejected(
+                                AssetBatchTransferRejection { code, message },
+                            ),
+                        };
+                        state_transaction.record_batch_transfer_outcome(outcome.clone());
+                        state_transaction
+                            .world
+                            .emit_events(Some(AssetEvent::BatchTransferOutcome(outcome)));
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let applied = plan.apply(state_transaction)?;
                 deltas.push(applied.delta);
                 #[allow(clippy::float_arithmetic)]
@@ -2418,9 +2554,48 @@ pub mod isi {
                         amount,
                     }),
                 ]);
+                let outcome = AssetBatchTransferOutcome {
+                    leg_index: u32::try_from(index).map_err(|_| {
+                        InstructionExecutionError::InvariantViolation(
+                            "transfer asset batch contains too many legs".into(),
+                        )
+                    })?,
+                    leg_id: entry.leg_id().clone(),
+                    asset: source_id,
+                    destination: entry.to().clone(),
+                    amount: entry.amount().clone(),
+                    status: AssetBatchTransferLegStatus::Applied,
+                };
+                state_transaction.record_batch_transfer_outcome(outcome.clone());
+                state_transaction
+                    .world
+                    .emit_events(Some(AssetEvent::BatchTransferOutcome(outcome)));
             }
             state_transaction.record_transfer_transcripts(authority, deltas)?;
             Ok(())
+        }
+    }
+
+    fn batch_transfer_rejection_code(
+        error: &InstructionExecutionError,
+    ) -> AssetBatchTransferRejectionCode {
+        match error {
+            InstructionExecutionError::Math(MathError::NotEnoughQuantity) => {
+                AssetBatchTransferRejectionCode::InsufficientFunds
+            }
+            InstructionExecutionError::AssetTransferAdmission(admission) => match admission {
+                AssetTransferAdmissionError::HoldingLimitExceeded(_) => {
+                    AssetBatchTransferRejectionCode::HoldingLimitExceeded
+                }
+                AssetTransferAdmissionError::Frozen(_) => AssetBatchTransferRejectionCode::Frozen,
+                AssetTransferAdmissionError::Blacklisted(_) => {
+                    AssetBatchTransferRejectionCode::Blacklisted
+                }
+                AssetTransferAdmissionError::PolicyRejected(_) => {
+                    AssetBatchTransferRejectionCode::PolicyRejected
+                }
+            },
+            _ => AssetBatchTransferRejectionCode::PolicyRejected,
         }
     }
 
@@ -4705,18 +4880,22 @@ pub mod query {
                 Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                     .execute(&ALICE_ID, &mut stx)
                     .expect_err("transfer above holding limit must fail");
-            assert!(
-                transfer_error.to_string().contains("HoldingLimitExceeded"),
-                "unexpected error: {transfer_error}"
-            );
+            assert!(matches!(
+                transfer_error,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                )
+            ));
 
             let mint_error = Mint::asset_quantity(1_u32, destination_asset_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("mint above holding limit must fail");
-            assert!(
-                mint_error.to_string().contains("HoldingLimitExceeded"),
-                "unexpected error: {mint_error}"
-            );
+            assert!(matches!(
+                mint_error,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                )
+            ));
             assert_eq!(
                 asset_balance_or_zero(&stx, &source_asset_id),
                 Quantity::from(5_u32)
@@ -4744,10 +4923,81 @@ pub mod query {
                 Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                     .execute(&ALICE_ID, &mut stx)
                     .expect_err("zero holding limit must reject further inbound credit");
-            assert!(
-                closed_error.to_string().contains("HoldingLimitExceeded"),
-                "unexpected error: {closed_error}"
+            assert!(matches!(
+                closed_error,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                )
+            ));
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::from(5_u32)
             );
+        }
+
+        #[test]
+        fn exact_numeric_credit_precheck_enforces_holding_limit_without_mutation() {
+            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetHoldingLimit::new(
+                BOB_ID.clone(),
+                asset_definition_id.clone(),
+                Some(Quantity::from(5_u32)),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("asset owner sets destination holding limit");
+
+            let (resolved_id, candidate) = stx
+                .world
+                .precheck_numeric_asset_credit(&destination_asset_id, &Quantity::from(5_u32))
+                .expect("credit exactly at the holding limit must precheck");
+            assert_eq!(resolved_id, destination_asset_id);
+            assert_eq!(candidate, Quantity::from(5_u32));
+            assert!(
+                stx.world.assets.get(&destination_asset_id).is_none(),
+                "read-only credit precheck must not create a balance"
+            );
+
+            stx.world
+                .deposit_numeric_asset_exact(&resolved_id, &Quantity::from(5_u32))
+                .expect("checked exact credit at the holding limit must apply");
+            let error = stx
+                .world
+                .precheck_numeric_asset_credit_exact(&resolved_id, &Quantity::one())
+                .expect_err("exact credit above the holding limit must fail");
+            assert!(matches!(
+                error,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                )
+            ));
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Quantity::from(5_u32),
+                "rejected exact credit must leave the balance unchanged"
+            );
+
+            SetAssetHoldingLimit::new(
+                BOB_ID.clone(),
+                asset_definition_id,
+                Some(Quantity::from(4_u32)),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("asset owner may lower the limit below the current balance");
+            let error = stx
+                .world
+                .deposit_numeric_asset(&destination_asset_id, &Quantity::one())
+                .expect_err("a balance already above its limit must reject further credit");
+            assert!(matches!(
+                error,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded(_)
+                )
+            ));
             assert_eq!(
                 asset_balance_or_zero(&stx, &destination_asset_id),
                 Quantity::from(5_u32)

@@ -12,9 +12,11 @@ the lower dependency chain.
 The authenticated CertifiedResponse authority used below is route-neutral:
 the response retains the exact signed-request hash and authenticated sent
 occurrence, its archive server owns the response signature, and its cited
-responder belongs to the frozen QC signer set.  Request recipients remain a
-routing concern in the imported request-owner predicate; no theorem below
-uses a response archive server's membership in the request route set.
+responder is an authenticated frozen-roster archive identity.  The CommitQC
+authorizes the exact subject; it does not restrict service to its signer set.
+Request recipients remain a routing concern in the imported request-owner
+predicate; no theorem below uses a response archive server's membership in
+the request route set.
 
 No production action is redefined.  FinalWitnessMonotoneCarrierFrame is a
 proof-only summary of append-only authentication/request history and
@@ -28,6 +30,69 @@ FinalWitnessSourceRetentionInvariant ==
 FinalProgressWitnessClosureInvariant ==
   /\ FinalWitnessSourceRetentionInvariant
   /\ ResponsiveReplayLockedBodyLineagedCarrierInvariant
+
+(***************************************************************************
+Applied archive body retention.
+
+An application can enter the current one-height instance only through
+`ApplyDecision`, whose exact authority requires the corresponding durable
+body.  Durable bodies survive crash/restart and every other Core action only
+retains or adds records.  This safety fact is kept separate from the final
+progress-witness invariant because it is archive-source availability, not
+Decision-stage lineage.
+***************************************************************************)
+
+CurrentAppliedArchiveBodyRetentionInvariant ==
+  \A application \in applied:
+    (/\ application.qc.context = context
+     /\ application.qc.phase = "Commit")
+      => BodyHeldBy(durableBodies, application.node,
+                    application.qc.context,
+                    application.qc.view, application.qc.subject)
+
+THEOREM AsyncInitEstablishesCurrentAppliedArchiveBodyRetention ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => CurrentAppliedArchiveBodyRetentionInvariant
+BY IsaT(300)
+   DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
+       CurrentAppliedArchiveBodyRetentionInvariant,
+       BootstrapParentDecision, BootstrapParentDecisionNode,
+       BootstrapParentCommitQC, BootstrapParentContext,
+       BodyHeldBy
+
+THEOREM CoreBracketPreservesCurrentAppliedArchiveBodyRetention ==
+  /\ CurrentAppliedArchiveBodyRetentionInvariant
+  /\ [Next]_vars
+  => CurrentAppliedArchiveBodyRetentionInvariant'
+BY IsaM("blast")
+   DEF CurrentAppliedArchiveBodyRetentionInvariant,
+       Next, SetGST, AssembleLocalBody, BeginLocalProposal,
+       PersistProposal, CompleteProposalSignature,
+       ByzantineBroadcastProposal, DeliverProposal,
+       FetchBody, RebindRetainedBody, StoreBody,
+       ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
+       BeginPrepare, PersistPrepare,
+       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
+       FormPrepareQC, ImportAuthenticatedCommitCertificate, DeliverQC,
+       BeginObservePrepare, PersistObservePrepare,
+       BeginLockCommit, PersistLockCommit, FormCommitQC,
+       BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
+       CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC,
+       BeginInstallTC, PersistInstallTC,
+       FetchCertifiedBody, AcceptCertifiedResponseCapability,
+       InstallCertifiedBodyEffect, ApplyDecision,
+       Crash, Restart, ResumeProposal, ResumeVote, ResumeTimeout,
+       DropProposal, BodyHeldBy, vars
+
+THEOREM AsyncBracketPreservesCurrentAppliedArchiveBodyRetention ==
+  /\ CurrentAppliedArchiveBodyRetentionInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => CurrentAppliedArchiveBodyRetentionInvariant'
+BY AsyncStepRefinementObligation,
+   CoreBracketPreservesCurrentAppliedArchiveBodyRetention, Isa
+   DEF AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars, vars
 
 (***************************************************************************
 Projection to the lower open kernel.

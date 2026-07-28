@@ -10922,6 +10922,7 @@ pub(crate) mod valid {
             let fastpq_transcripts =
                 state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
+            let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
             let trigger_completions = state_block.world.trigger_completions();
             block
@@ -10935,6 +10936,9 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
+            block
+                .set_batch_transfer_outcomes(batch_transfer_outcomes)
+                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             if sccp_root_validation == SccpRootValidation::Enforce {
                 Self::validate_sccp_commitment_root(block)?;
             }
@@ -15127,6 +15131,7 @@ pub(crate) mod valid {
             }
             let axt_start = timings.as_ref().map(|_| Instant::now());
             let axt_envelopes = state_block.drain_axt_envelopes();
+            let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
             let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
             let trigger_completions = state_block.world.trigger_completions();
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
@@ -15144,6 +15149,9 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
+            block
+                .set_batch_transfer_outcomes(batch_transfer_outcomes)
+                .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             if sccp_root_validation == SccpRootValidation::Enforce {
                 Self::validate_sccp_commitment_root(block)?;
             }

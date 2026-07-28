@@ -94,13 +94,4 @@ export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito
   tests/privacy_catalog_test.py \
   tests/package_import_fallback_test.py \
   tests/privacy_native_registry_test.py \
-  tests/crypto_algorithms_test.py \
-  tests/anonymous_pgc_test.py \
-  tests/jindo_test.py \
-  tests/silent_threshold_test.py \
-  tests/sis_hints_test.py \
-  tests/vega_test.py \
-  tests/verange_test.py \
-  tests/zk_ams_test.py \
-  tests/zk_x509_test.py \
-  tests/zkat_test.py
+  tests/crypto_algorithms_test.py

@@ -5,7 +5,7 @@ use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use crate::{account::AccountId, escrow::AssetEscrowRecord};
+use crate::{account::AccountId, escrow::AssetEscrowRecord, name::Name};
 
 /// Native escrow lifecycle events.
 #[derive(
@@ -38,6 +38,8 @@ pub enum EscrowEvent {
     Cancelled(AssetEscrowRecord),
     /// Generic lock expired and refunded remaining custody.
     Expired(AssetEscrowRecord),
+    /// One ordered conditional-escrow predicate was attested on-chain.
+    Attested(ConditionalEscrowAttested),
     /// Dispute opened for court moderation.
     Disputed(AssetEscrowDisputed),
     /// Court resolved a disputed escrow.
@@ -56,9 +58,27 @@ impl EscrowEvent {
             | Self::Cancelled(escrow)
             | Self::Expired(escrow) => escrow,
             Self::Disputed(payload) => &payload.escrow,
+            Self::Attested(payload) => &payload.escrow,
             Self::Resolved(payload) => &payload.escrow,
         }
     }
+}
+
+/// Conditional-escrow attestation event.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ConditionalEscrowAttested {
+    /// Full query-visible record after applying the attestation.
+    pub escrow: AssetEscrowRecord,
+    /// Exact immutable condition identifier.
+    pub condition_id: Name,
+    /// Account that authorized the attestation.
+    pub attestor: AccountId,
+    /// Whether this attestation atomically released all remaining custody.
+    pub automatically_released: bool,
 }
 
 /// Dispute opening event.
@@ -95,6 +115,9 @@ pub struct AssetEscrowResolved {
 
 /// Prelude exports for native escrow events.
 pub mod prelude {
-    pub use super::{AssetEscrowDisputed, AssetEscrowResolved, EscrowEvent, EscrowEventSet};
+    pub use super::{
+        AssetEscrowDisputed, AssetEscrowResolved, ConditionalEscrowAttested, EscrowEvent,
+        EscrowEventSet,
+    };
     pub use crate::escrow::{AssetEscrowRecord, EscrowId};
 }

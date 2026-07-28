@@ -160,6 +160,16 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_publish_privacy_root_v1(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<crate::isi::privacy::BootstrapPrivacyOrchardPoolV1>()
+    {
+        visitor.visit_bootstrap_privacy_orchard_pool_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1>()
+    {
+        visitor.visit_bootstrap_privacy_proof_managed_pool_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1>()
     {
         visitor.visit_bootstrap_privacy_pgc_accounts_v1(v);
@@ -183,6 +193,66 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         .downcast_ref::<crate::isi::privacy::RevokePrivacyZkAcePolicyV1>()
     {
         visitor.visit_revoke_privacy_zk_ace_policy_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>()
+    {
+        visitor.visit_register_privacy_bootle_lantern_issuer_policy_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1>()
+    {
+        visitor.visit_rotate_privacy_bootle_lantern_issuer_policy_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1>()
+    {
+        visitor.visit_revoke_privacy_bootle_lantern_issuer_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1>()
+    {
+        visitor.visit_register_privacy_zk_x509_trust_anchor_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1>()
+    {
+        visitor.visit_rotate_privacy_zk_x509_trust_anchor_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1>()
+    {
+        visitor.visit_revoke_privacy_zk_x509_trust_anchor_v1(v);
+    } else if let Some(v) =
+        isi.as_any()
+            .downcast_ref::<crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1>()
+    {
+        visitor.visit_register_privacy_zk_x509_certificate_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1>()
+    {
+        visitor.visit_rotate_privacy_zk_x509_certificate_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1>()
+    {
+        visitor.visit_revoke_privacy_zk_x509_certificate_policy_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyZkX509CrlV1>()
+    {
+        visitor.visit_register_privacy_zk_x509_crl_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RotatePrivacyZkX509CrlV1>()
+    {
+        visitor.visit_rotate_privacy_zk_x509_crl_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RevokePrivacyZkX509CrlV1>()
+    {
+        visitor.visit_revoke_privacy_zk_x509_crl_v1(v);
     } else if let Some(v) = isi
         .as_any()
         .downcast_ref::<crate::isi::privacy::SubmitPrivacyProofV1>()
@@ -633,6 +703,12 @@ macro_rules! instruction_visitors {
                 &$crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1
             ),
             visit_publish_privacy_root_v1(&$crate::isi::privacy::PublishPrivacyRootV1),
+            visit_bootstrap_privacy_orchard_pool_v1(
+                &$crate::isi::privacy::BootstrapPrivacyOrchardPoolV1
+            ),
+            visit_bootstrap_privacy_proof_managed_pool_v1(
+                &$crate::isi::privacy::BootstrapPrivacyProofManagedPoolV1
+            ),
             visit_bootstrap_privacy_pgc_accounts_v1(
                 &$crate::isi::privacy::BootstrapPrivacyPgcAccountsV1
             ),
@@ -647,6 +723,42 @@ macro_rules! instruction_visitors {
             ),
             visit_revoke_privacy_zk_ace_policy_v1(
                 &$crate::isi::privacy::RevokePrivacyZkAcePolicyV1
+            ),
+            visit_register_privacy_bootle_lantern_issuer_policy_v1(
+                &$crate::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1
+            ),
+            visit_rotate_privacy_bootle_lantern_issuer_policy_v1(
+                &$crate::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1
+            ),
+            visit_revoke_privacy_bootle_lantern_issuer_policy_v1(
+                &$crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1
+            ),
+            visit_register_privacy_zk_x509_trust_anchor_v1(
+                &$crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1
+            ),
+            visit_rotate_privacy_zk_x509_trust_anchor_v1(
+                &$crate::isi::privacy::RotatePrivacyZkX509TrustAnchorV1
+            ),
+            visit_revoke_privacy_zk_x509_trust_anchor_v1(
+                &$crate::isi::privacy::RevokePrivacyZkX509TrustAnchorV1
+            ),
+            visit_register_privacy_zk_x509_certificate_policy_v1(
+                &$crate::isi::privacy::RegisterPrivacyZkX509CertificatePolicyV1
+            ),
+            visit_rotate_privacy_zk_x509_certificate_policy_v1(
+                &$crate::isi::privacy::RotatePrivacyZkX509CertificatePolicyV1
+            ),
+            visit_revoke_privacy_zk_x509_certificate_policy_v1(
+                &$crate::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1
+            ),
+            visit_register_privacy_zk_x509_crl_v1(
+                &$crate::isi::privacy::RegisterPrivacyZkX509CrlV1
+            ),
+            visit_rotate_privacy_zk_x509_crl_v1(
+                &$crate::isi::privacy::RotatePrivacyZkX509CrlV1
+            ),
+            visit_revoke_privacy_zk_x509_crl_v1(
+                &$crate::isi::privacy::RevokePrivacyZkX509CrlV1
             ),
             visit_submit_privacy_proof_v1(&$crate::isi::privacy::SubmitPrivacyProofV1),
             visit_publish_pedersen_params(&PublishPedersenParams),
@@ -742,7 +854,29 @@ instruction_visitors!(define_instruction_visitors);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prelude::*;
+    use crate::{
+        isi::privacy::{
+            RegisterPrivacyBootleLanternIssuerPolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
+            RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
+            RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
+            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
+        },
+        prelude::*,
+        privacy::{
+            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
+            BOOTLE_LANTERN_RING_DEGREE_V1, BootleLanternAllowedAttributeValuesV1,
+            BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
+            BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+            PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
+            PrivacyParameterIdV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyRootV1,
+            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
+            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
+            PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
+        },
+    };
     use iroha_crypto::{Algorithm, KeyPair};
 
     struct CountingVisitor {
@@ -753,6 +887,48 @@ mod tests {
         fn visit_log(&mut self, _: &Log) {
             self.logs += 1;
         }
+    }
+
+    fn redigest_bootle_visitor_policy(policy: &mut BootleLanternIssuerPolicyV1) {
+        policy.issuer_parameter_digest = policy
+            .computed_issuer_parameter_digest()
+            .expect("visitor issuer parameter encodes");
+        policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
+        policy.record_digest = policy
+            .computed_record_digest()
+            .expect("visitor issuer policy encodes");
+    }
+
+    fn bootle_visitor_policy() -> BootleLanternIssuerPolicyV1 {
+        let polynomial = BootleLanternPolynomialV1 {
+            coefficients: vec![1; BOOTLE_LANTERN_RING_DEGREE_V1],
+        };
+        let mut policy = BootleLanternIssuerPolicyV1 {
+            issuer_id: PrivacyIssuerIdV1::new([0x21; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0x22; 32]),
+            epoch: 1,
+            lifecycle: BootleLanternIssuerPolicyLifecycleV1::Active,
+            issuer_parameter_id: PrivacyParameterIdV1::new([0x23; 32]),
+            issuer_parameter_digest: PrivacyParameterDigestV1::new([0; 32]),
+            issuer_public_matrix: BootleLanternIssuerPublicMatrixV1 {
+                entries: vec![
+                    polynomial;
+                    BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
+                        * BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1
+                ],
+            },
+            required_disclosure_bitmap: 0,
+            allowed_values: vec![
+                BootleLanternAllowedAttributeValuesV1 { values: Vec::new() };
+                BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1
+            ],
+            record_digest: PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]),
+        };
+        redigest_bootle_visitor_policy(&mut policy);
+        policy
+            .validate_initial()
+            .expect("canonical Bootle/Lantern visitor fixture");
+        policy
     }
 
     #[test]
@@ -828,5 +1004,205 @@ mod tests {
         let mut visitor = RebindVisitor { called: false };
         visit_instruction(&mut visitor, &isi);
         assert!(visitor.called);
+    }
+
+    #[test]
+    fn visit_all_bootle_lantern_governance_instructions_dispatches_from_boxes() {
+        struct BootleVisitor {
+            calls: Vec<&'static str>,
+        }
+
+        impl Visit for BootleVisitor {
+            fn visit_register_privacy_bootle_lantern_issuer_policy_v1(
+                &mut self,
+                _: &RegisterPrivacyBootleLanternIssuerPolicyV1,
+            ) {
+                self.calls.push("register");
+            }
+
+            fn visit_rotate_privacy_bootle_lantern_issuer_policy_v1(
+                &mut self,
+                _: &RotatePrivacyBootleLanternIssuerPolicyV1,
+            ) {
+                self.calls.push("rotate");
+            }
+
+            fn visit_revoke_privacy_bootle_lantern_issuer_policy_v1(
+                &mut self,
+                _: &RevokePrivacyBootleLanternIssuerPolicyV1,
+            ) {
+                self.calls.push("revoke");
+            }
+        }
+
+        let current = bootle_visitor_policy();
+        let mut rotated = current.clone();
+        rotated.epoch += 1;
+        rotated.issuer_public_matrix.entries[0].coefficients[0] = 2;
+        redigest_bootle_visitor_policy(&mut rotated);
+        rotated
+            .validate_rotation_successor(&current)
+            .expect("canonical Bootle/Lantern rotation visitor fixture");
+
+        let mut revoked = current.clone();
+        revoked.epoch += 1;
+        revoked.lifecycle = BootleLanternIssuerPolicyLifecycleV1::Revoked;
+        redigest_bootle_visitor_policy(&mut revoked);
+        revoked
+            .validate_revocation_successor(&current)
+            .expect("canonical Bootle/Lantern revocation visitor fixture");
+
+        let instructions: Vec<InstructionBox> = vec![
+            RegisterPrivacyBootleLanternIssuerPolicyV1::new(current.clone()).into(),
+            RotatePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, rotated).into(),
+            RevokePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, revoked).into(),
+        ];
+
+        let mut visitor = BootleVisitor { calls: Vec::new() };
+        for instruction in &instructions {
+            visit_instruction(&mut visitor, instruction);
+        }
+        assert_eq!(visitor.calls, ["register", "rotate", "revoke"]);
+    }
+
+    #[test]
+    fn visit_all_x509_governance_instructions_dispatches_from_boxes() {
+        struct X509Visitor {
+            calls: Vec<&'static str>,
+        }
+
+        impl Visit for X509Visitor {
+            fn visit_register_privacy_zk_x509_trust_anchor_v1(
+                &mut self,
+                _: &RegisterPrivacyZkX509TrustAnchorV1,
+            ) {
+                self.calls.push("register-trust-anchor");
+            }
+
+            fn visit_rotate_privacy_zk_x509_trust_anchor_v1(
+                &mut self,
+                _: &RotatePrivacyZkX509TrustAnchorV1,
+            ) {
+                self.calls.push("rotate-trust-anchor");
+            }
+
+            fn visit_revoke_privacy_zk_x509_trust_anchor_v1(
+                &mut self,
+                _: &RevokePrivacyZkX509TrustAnchorV1,
+            ) {
+                self.calls.push("revoke-trust-anchor");
+            }
+
+            fn visit_register_privacy_zk_x509_certificate_policy_v1(
+                &mut self,
+                _: &RegisterPrivacyZkX509CertificatePolicyV1,
+            ) {
+                self.calls.push("register-certificate-policy");
+            }
+
+            fn visit_rotate_privacy_zk_x509_certificate_policy_v1(
+                &mut self,
+                _: &RotatePrivacyZkX509CertificatePolicyV1,
+            ) {
+                self.calls.push("rotate-certificate-policy");
+            }
+
+            fn visit_revoke_privacy_zk_x509_certificate_policy_v1(
+                &mut self,
+                _: &RevokePrivacyZkX509CertificatePolicyV1,
+            ) {
+                self.calls.push("revoke-certificate-policy");
+            }
+
+            fn visit_register_privacy_zk_x509_crl_v1(&mut self, _: &RegisterPrivacyZkX509CrlV1) {
+                self.calls.push("register-crl");
+            }
+
+            fn visit_rotate_privacy_zk_x509_crl_v1(&mut self, _: &RotatePrivacyZkX509CrlV1) {
+                self.calls.push("rotate-crl");
+            }
+
+            fn visit_revoke_privacy_zk_x509_crl_v1(&mut self, _: &RevokePrivacyZkX509CrlV1) {
+                self.calls.push("revoke-crl");
+            }
+        }
+
+        let trust_anchor_id = PrivacyIssuerIdV1::new([0x11; 32]);
+        let policy_id = PrivacyPolicyIdV1::new([0x12; 32]);
+        let trust_anchor = PrivacyZkX509TrustAnchorRecordV1::new(
+            trust_anchor_id,
+            1,
+            PrivacyX509TrustStoreDigestV1::new([0x13; 32]),
+            PrivacyRootV1::new([0x14; 32]),
+            1,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("valid X.509 trust-anchor visitor fixture");
+        let policy = PrivacyZkX509CertificatePolicyRecordV1::new(
+            trust_anchor_id,
+            policy_id,
+            1,
+            PrivacyPolicyDigestV1::new([0x15; 32]),
+            PrivacyX509KeyUsageV1 {
+                digital_signature: true,
+                content_commitment: false,
+                key_encipherment: false,
+                key_agreement: false,
+            },
+            vec![PrivacyX509ExtendedKeyUsageV1::ClientAuthentication],
+            vec![0],
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("valid X.509 certificate-policy visitor fixture");
+        let crl = PrivacyZkX509CrlRecordV1::new(
+            trust_anchor_id,
+            policy_id,
+            1,
+            1,
+            PrivacyX509CrlDerDigestV1::digest_exact_der(b"visitor CRL DER fixture"),
+            PrivacyX509CrlIssuerSpkiDigestV1::digest_exact_der(b"visitor SPKI DER fixture"),
+            1_000,
+            1_300,
+            PrivacyRootV1::new([0x16; 32]),
+            1,
+            None,
+            PrivacyZkX509RecordLifecycleV1::Active,
+        )
+        .expect("valid X.509 CRL visitor fixture");
+
+        let instructions: Vec<InstructionBox> = vec![
+            RegisterPrivacyZkX509TrustAnchorV1::new(trust_anchor).into(),
+            RotatePrivacyZkX509TrustAnchorV1::new(trust_anchor.record_digest, trust_anchor).into(),
+            RevokePrivacyZkX509TrustAnchorV1::new(trust_anchor.record_digest, trust_anchor).into(),
+            RegisterPrivacyZkX509CertificatePolicyV1::new(policy.clone()).into(),
+            RotatePrivacyZkX509CertificatePolicyV1::new(policy.record_digest, policy.clone())
+                .into(),
+            RevokePrivacyZkX509CertificatePolicyV1::new(policy.record_digest, policy).into(),
+            RegisterPrivacyZkX509CrlV1::new(crl).into(),
+            RotatePrivacyZkX509CrlV1::new(crl.record_digest, crl).into(),
+            RevokePrivacyZkX509CrlV1::new(crl.record_digest, crl).into(),
+        ];
+
+        let mut visitor = X509Visitor { calls: Vec::new() };
+        for instruction in &instructions {
+            visit_instruction(&mut visitor, instruction);
+        }
+
+        assert_eq!(
+            visitor.calls,
+            [
+                "register-trust-anchor",
+                "rotate-trust-anchor",
+                "revoke-trust-anchor",
+                "register-certificate-policy",
+                "rotate-certificate-policy",
+                "revoke-certificate-policy",
+                "register-crl",
+                "rotate-crl",
+                "revoke-crl",
+            ]
+        );
     }
 }

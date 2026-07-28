@@ -19,12 +19,41 @@ use super::{
 };
 
 const MATRIX_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.matrix.v1";
+/// Nothing-up-my-sleeve domain for the fixed transparent public-parameter seed.
+pub const PUBLIC_PARAMETER_SEED_DOMAIN_V1: &[u8] =
+    b"iroha.privacy.bootle-lantern.public-parameter-seed.v1";
 const PRESENTATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.presentation-challenge.v1";
 const PRESENTATION_STAGE_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.presentation-stage.v1";
 const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: u32 = 4_096;
 const APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 const PROOF_ACCEPTANCE_LIMIT_V1: u64 = 70_931_694_131_122_923;
+
+/// Derive the fixed transparent public-parameter seed from the pinned source
+/// profile.
+///
+/// This seed is not secret setup material. It is independently recomputed by
+/// provers and verifiers and is included in the compiled engine manifest.
+#[must_use]
+pub fn public_parameter_seed_v1() -> [u8; 32] {
+    let mut state = Shake256::default();
+    absorb_frame(&mut state, PUBLIC_PARAMETER_SEED_DOMAIN_V1);
+    absorb_frame(&mut state, super::params::SOURCE_PROFILE_V1);
+    let mut reader = state.finalize_xof();
+    let mut output = [0_u8; 32];
+    reader.read(&mut output);
+    output
+}
+
+/// Construct the unique transparent matrix seed for one compiled parameter
+/// digest.
+///
+/// # Errors
+///
+/// Rejects the all-zero compiled parameter digest.
+pub fn matrix_seed_v1(parameter_digest: [u8; 32]) -> Result<MatrixSeedV1, TranscriptErrorV1> {
+    MatrixSeedV1::new(parameter_digest, public_parameter_seed_v1())
+}
 
 /// Closed transparent-matrix roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,6 +427,8 @@ fn candidate_bytes<const N: usize>(
 pub struct PresentationChallengeBindingV1 {
     /// Governed parameter-manifest digest.
     pub parameter_digest: [u8; 32],
+    /// Exact chain genesis hash selected by consensus.
+    pub genesis_hash: [u8; 32],
     /// Canonical statement digest.
     pub statement_digest: [u8; 32],
     /// Trusted current issuer-policy-record digest.
@@ -410,6 +441,7 @@ impl PresentationChallengeBindingV1 {
     fn validate(self) -> Result<(), TranscriptErrorV1> {
         for (field, digest) in [
             ("parameter_digest", self.parameter_digest),
+            ("genesis_hash", self.genesis_hash),
             ("statement_digest", self.statement_digest),
             (
                 "issuer_policy_record_digest",
@@ -430,9 +462,10 @@ impl PresentationChallengeBindingV1 {
 /// The canonical statement digest binds chain id, action index, transaction
 /// intent, compiled profile, verifier, schema, manifest, issuer identity,
 /// policy identity, policy epoch, issuer parameters, the committed policy
-/// digest, and disclosures.  The extra relation digest commits the exact
-/// verifier-compiled matrix and public offset, while `matrix_seed` commits the
-/// transparent CRS seed used to expand all matrices.
+/// digest, and disclosures. The separately supplied genesis hash prevents
+/// replay between chains that reuse a chain id. The extra relation digest
+/// commits the exact verifier-compiled matrix and public offset, while
+/// `matrix_seed` commits the transparent CRS seed used to expand all matrices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PresentationTranscriptV1 {
     binding: PresentationChallengeBindingV1,
@@ -504,6 +537,7 @@ impl PresentationTranscriptV1 {
         absorb_frame_checked(&mut state, PRESENTATION_STAGE_DOMAIN_V1)?;
         absorb_frame_checked(&mut state, stage)?;
         absorb_frame_checked(&mut state, &self.binding.parameter_digest)?;
+        absorb_frame_checked(&mut state, &self.binding.genesis_hash)?;
         absorb_frame_checked(&mut state, &self.binding.statement_digest)?;
         absorb_frame_checked(&mut state, &self.binding.issuer_policy_record_digest)?;
         absorb_frame_checked(&mut state, &self.binding.transaction_intent_digest)?;
@@ -547,11 +581,17 @@ impl PresentationTranscriptV1 {
         let mut reader = state.finalize_xof();
         let mut output = Vec::with_capacity(columns);
         while output.len() < columns {
-            let mut byte = [0_u8; 1];
-            reader.read(&mut byte);
-            if byte[0] < 255 {
-                output.push(i8::try_from(byte[0] % 3).expect("ternary residue fits i8") - 1);
+            let mut accepted = None;
+            for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
+                let mut byte = [0_u8; 1];
+                reader.read(&mut byte);
+                if byte[0] < 255 {
+                    accepted =
+                        Some(i8::try_from(byte[0] % 3).expect("ternary residue fits i8") - 1);
+                    break;
+                }
             }
+            output.push(accepted.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?);
         }
         Ok(output)
     }
@@ -672,6 +712,7 @@ fn absorb_stage_prefix(
     absorb_frame_checked(state, PRESENTATION_STAGE_DOMAIN_V1)?;
     absorb_frame_checked(state, stage)?;
     absorb_frame_checked(state, &transcript.binding.parameter_digest)?;
+    absorb_frame_checked(state, &transcript.binding.genesis_hash)?;
     absorb_frame_checked(state, &transcript.binding.statement_digest)?;
     absorb_frame_checked(state, &transcript.binding.issuer_policy_record_digest)?;
     absorb_frame_checked(state, &transcript.binding.transaction_intent_digest)?;
@@ -710,6 +751,7 @@ pub fn derive_presentation_challenge_v1(
     let mut state = Shake256::default();
     absorb_frame_checked(&mut state, PRESENTATION_CHALLENGE_DOMAIN_V1)?;
     absorb_frame_checked(&mut state, &binding.parameter_digest)?;
+    absorb_frame_checked(&mut state, &binding.genesis_hash)?;
     absorb_frame_checked(&mut state, &binding.statement_digest)?;
     absorb_frame_checked(&mut state, &binding.issuer_policy_record_digest)?;
     absorb_frame_checked(&mut state, &binding.transaction_intent_digest)?;
@@ -718,13 +760,16 @@ pub fn derive_presentation_challenge_v1(
 
     let mut challenge = [0_u64; APPLICATION_RING_DEGREE_V1];
     for coefficient in &mut challenge[..32] {
-        let candidate = loop {
+        let mut candidate = None;
+        for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
             let mut byte = [0_u8; 1];
             reader.read(&mut byte);
             if byte[0] < 255 {
-                break i16::from(byte[0] % 17) - 8;
+                candidate = Some(i16::from(byte[0] % 17) - 8);
+                break;
             }
-        };
+        }
+        let candidate = candidate.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?;
         *coefficient = if candidate < 0 {
             PROOF_MODULUS_V1 - u64::try_from(-candidate).expect("challenge magnitude fits u64")
         } else {
@@ -825,9 +870,28 @@ mod tests {
         MatrixSeedV1::new([0x31; 32], [0x72; 32]).expect("nonzero seed")
     }
 
+    #[test]
+    fn public_parameter_seed_is_a_pinned_nothing_up_my_sleeve_value() {
+        assert_eq!(
+            public_parameter_seed_v1(),
+            [
+                0x1f, 0x89, 0x07, 0x53, 0xc8, 0x1e, 0x53, 0xcf, 0x9b, 0x9c, 0x4e, 0xcc, 0xa5, 0x75,
+                0xd8, 0xc8, 0x85, 0x81, 0xe8, 0xff, 0x3c, 0x46, 0xff, 0xce, 0xe1, 0x62, 0x83, 0xc8,
+                0xb9, 0xf6, 0xb2, 0x19,
+            ]
+        );
+        assert_eq!(
+            matrix_seed_v1([0x31; 32])
+                .expect("non-zero compiled digest")
+                .public_parameter_seed(),
+            &public_parameter_seed_v1()
+        );
+    }
+
     fn binding() -> PresentationChallengeBindingV1 {
         PresentationChallengeBindingV1 {
             parameter_digest: [0x11; 32],
+            genesis_hash: [0x12; 32],
             statement_digest: [0x22; 32],
             issuer_policy_record_digest: [0x33; 32],
             transaction_intent_digest: [0x44; 32],
@@ -1024,6 +1088,9 @@ mod tests {
         changed.parameter_digest[0] ^= 1;
         mutations.push(changed);
         changed = base;
+        changed.genesis_hash[0] ^= 1;
+        mutations.push(changed);
+        changed = base;
         changed.statement_digest[0] ^= 1;
         mutations.push(changed);
         changed = base;
@@ -1049,13 +1116,14 @@ mod tests {
     #[test]
     fn challenge_rejects_every_zero_binding_and_empty_commitments() {
         let base = binding();
-        for field in 0..4 {
+        for field in 0..5 {
             let mut changed = base;
             match field {
                 0 => changed.parameter_digest = [0; 32],
-                1 => changed.statement_digest = [0; 32],
-                2 => changed.issuer_policy_record_digest = [0; 32],
-                3 => changed.transaction_intent_digest = [0; 32],
+                1 => changed.genesis_hash = [0; 32],
+                2 => changed.statement_digest = [0; 32],
+                3 => changed.issuer_policy_record_digest = [0; 32],
+                4 => changed.transaction_intent_digest = [0; 32],
                 _ => unreachable!(),
             }
             assert!(matches!(

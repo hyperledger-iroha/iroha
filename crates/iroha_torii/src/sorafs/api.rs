@@ -35130,6 +35130,7 @@ mod advert_tests {
             release_authority,
             expires_at_ms: Some(1_800_086_400_000),
             evidence_hashes: vec![Hash::new("appeal deposit status evidence")],
+            conditions: Vec::new(),
             created_at_ms: 1_800_000_001_000,
             accepted_at_ms: None,
             payment_sent_at_ms: None,

@@ -96,6 +96,26 @@ for module in \
 done
 echo "[sany] reply-writer deadline models parsed with frozen Java 21.0.12"
 
+readonly DORMANT_CLOCK_MODULE="SumeragiV2DormantReplyClockMutation"
+(
+  cd "$FORMAL_DIR"
+  "$JAVA_BIN" "-DTLA-Library=${TLAPM_STDLIB}" \
+    -cp "$TLA2TOOLS_JAR" tla2sany.SANY "${DORMANT_CLOCK_MODULE}.tla"
+) >"${run_dir}/${DORMANT_CLOCK_MODULE}.sany.log" 2>&1
+dormant_clock_sany_last_nonblank="$(
+  awk 'NF { line = $0 } END { print line }' \
+    "${run_dir}/${DORMANT_CLOCK_MODULE}.sany.log"
+)"
+dormant_clock_expected_marker=\
+"Semantic processing of module ${DORMANT_CLOCK_MODULE}"
+[[ "$dormant_clock_sany_last_nonblank" == \
+     "$dormant_clock_expected_marker" ]] || {
+  echo "${DORMANT_CLOCK_MODULE}: SANY did not end at the expected marker" >&2
+  cat "${run_dir}/${DORMANT_CLOCK_MODULE}.sany.log" >&2
+  exit 1
+}
+echo "[sany] dormant exact-reply clock mutation parsed with frozen Java 21.0.12"
+
 common=(
   "$JAVA_BIN" -XX:+UseParallelGC "-DTLA-Library=${TLAPM_STDLIB}"
   -cp "$TLA2TOOLS_JAR" tlc2.TLC
@@ -182,4 +202,16 @@ for case_spec in "${mutation_cases[@]}"; do
     "$violation_marker" "$state_marker" "$depth_marker"
 done
 
+run_case dormant-reply-clock-fixed \
+  SumeragiV2DormantReplyClockMutation.tla \
+  dormant_reply_clock_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case all-due-reply-clock-freeze \
+  SumeragiV2DormantReplyClockMutation.tla \
+  dormant_reply_clock_all_due_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "Stuttering"
+
 echo "[tlc] reply-writer deadline mutation matrix passed"
+echo "[tlc] dormant exact-reply packets stay retained without freezing the next-view clock"

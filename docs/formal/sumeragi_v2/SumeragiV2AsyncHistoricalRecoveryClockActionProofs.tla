@@ -393,7 +393,9 @@ BY NonOverdueShadowAdmissionRemovesExactShadow, Isa
        PostGstAdmitHistoricalRecoveryPacket,
        AdmitIngressPacket, AdmitHiddenPacket,
        CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
-       OverdueResponsivePackets,
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+       AsyncServeTransportAdmissionGateAllows,
+       AsyncServeRequestAuthorized, AsyncServeRequestServiceable,
        AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
        AsyncResponsiveAppliedArchiveServers,
        AsyncResponsiveOnlineArchiveServers,
@@ -409,14 +411,13 @@ THEOREM HistoricalDiscoverySelectedNonOverdueShadowStrictlyDescends ==
     /\ AdmitNonOverdueShadowFor(packet)
     => <<HistoricalDiscoveryPacketDependencyRank(packet)',
           HistoricalDiscoveryPacketDependencyRank(packet)>>
-         \in IngressBoundaryDependencyOrdering
+         \in HistoricalDiscoveryPacketDependencyOrdering
 BY HistoricalDiscoveryNonOverdueShadowRetainsOverduePacket,
    NonOverdueShadowAdmissionRemovesExactShadow,
    HistoricalDiscoveryPacketDependencyRankInCarrier, Isa
    DEF HistoricalDiscoveryPacketDependencyRank,
-       IngressBoundaryDependencyRank,
-       IngressBoundaryDependencyOrdering,
-       IngressCapacityTailOrdering,
+       HistoricalDiscoveryPacketDependencyOrdering,
+       HistoricalDiscoveryCapacityTailOrdering,
        LexPairOrdering, OpToRel
 
 (***************************************************************************

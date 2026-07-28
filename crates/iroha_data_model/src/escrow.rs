@@ -1,5 +1,7 @@
 //! Generic asset escrow records and identifiers.
 
+use core::num::{NonZeroU32, NonZeroU64};
+
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -9,6 +11,16 @@ use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
 
 /// Domain-separation prefix for escrow ids derived from Kotodama escrow names.
 pub const KOTODAMA_ESCROW_ID_PREFIX: &str = "kotodama-native-escrow:";
+
+/// Domain separator used to bind an external 32-byte conditional-escrow evidence digest.
+pub const CONDITIONAL_ESCROW_EVIDENCE_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:conditional-escrow-evidence:v1\0";
+
+/// Bind an external 32-byte evidence digest to a domain-separated Iroha hash.
+#[must_use]
+pub fn hash_conditional_escrow_evidence_digest(raw_digest: &[u8; Hash::LENGTH]) -> Hash {
+    Hash::new_from_chunks(&[CONDITIONAL_ESCROW_EVIDENCE_DIGEST_DOMAIN_V1, raw_digest])
+}
 
 /// Stable identifier for a native asset escrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -98,6 +110,125 @@ pub enum AssetEscrowKind {
     Marketplace,
     /// Generic conditional custody lock with optional release authority and expiry.
     Lock,
+    /// Ordered, attestor-bound conditional custody that releases when every predicate passes.
+    Conditional,
+}
+
+/// Typed value supplied by an attestor for a conditional escrow predicate.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum ConditionalEscrowValue {
+    /// Boolean value, such as whether an event occurred.
+    Bool(bool),
+    /// Exact UTF-8 text.
+    Text(String),
+    /// Non-negative numeric value.
+    Quantity(Quantity),
+}
+
+/// Predicate evaluated by the ledger against a typed conditional-escrow attestation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum ConditionalEscrowPredicate {
+    /// Require exact typed equality.
+    Equals(ConditionalEscrowValue),
+    /// Require a numeric value no greater than this bound.
+    QuantityAtMost(Quantity),
+}
+
+/// Attestor-bound predicate in an ordered conditional-escrow release policy.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ConditionalEscrowOracleCondition {
+    /// Caller-selected canonical condition identifier.
+    pub id: Name,
+    /// Account exclusively authorized to attest this condition.
+    pub attestor: AccountId,
+    /// Predicate evaluated against the attested value.
+    pub predicate: ConditionalEscrowPredicate,
+    /// One-based attestation sequence. Every lower sequence must pass first.
+    pub sequence: NonZeroU32,
+}
+
+/// Ledger-time window that bounds all attestations for one conditional escrow.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ConditionalEscrowWithinCondition {
+    /// Caller-selected canonical condition identifier.
+    pub id: Name,
+    /// Maximum duration from committed escrow creation time.
+    pub duration_ms: NonZeroU64,
+}
+
+/// One immutable first-class condition in a conditional escrow.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum ConditionalEscrowCondition {
+    /// Attestor-signed predicate.
+    Oracle(ConditionalEscrowOracleCondition),
+    /// Ledger-time window applying to all oracle predicates.
+    Within(ConditionalEscrowWithinCondition),
+}
+
+impl ConditionalEscrowCondition {
+    /// Return the immutable condition identifier.
+    #[must_use]
+    pub const fn id(&self) -> &Name {
+        match self {
+            Self::Oracle(condition) => &condition.id,
+            Self::Within(condition) => &condition.id,
+        }
+    }
+}
+
+/// Consensus-bound evidence for one satisfied oracle condition.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ConditionalEscrowAttestation {
+    /// Exact account that authorized the attestation transaction.
+    pub attestor: AccountId,
+    /// Typed value evaluated on-chain.
+    pub value: ConditionalEscrowValue,
+    /// Optional external evidence digest.
+    pub evidence_hash: Option<Hash>,
+    /// Committed ledger timestamp in milliseconds.
+    pub committed_at_ms: u64,
+}
+
+/// Query-visible satisfaction state for one conditional-escrow condition.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ConditionalEscrowConditionState {
+    /// Immutable condition definition.
+    pub condition: ConditionalEscrowCondition,
+    /// Attestor evidence, present only after an oracle predicate passes.
+    pub attestation: Option<ConditionalEscrowAttestation>,
+    /// Ledger timestamp at which this condition became satisfied.
+    pub satisfied_at_ms: Option<u64>,
 }
 
 /// Court resolution details for a disputed escrow.
@@ -153,6 +284,10 @@ pub struct AssetEscrowRecord {
     pub expires_at_ms: Option<u64>,
     /// Evidence hashes attached by the parties.
     pub evidence_hashes: Vec<Hash>,
+    /// Immutable conditional release policy and its consensus satisfaction state.
+    ///
+    /// This is non-empty exactly when `kind` is [`AssetEscrowKind::Conditional`].
+    pub conditions: Vec<ConditionalEscrowConditionState>,
     /// Unix timestamp (milliseconds) when the escrow was opened.
     pub created_at_ms: u64,
     /// Unix timestamp (milliseconds) when a buyer accepted.
@@ -294,7 +429,11 @@ pub mod prelude {
     pub use super::{
         AnonymousAssetEscrowProofRecord, AnonymousAssetEscrowRecord,
         AnonymousAssetEscrowResolution, AssetEscrowKind, AssetEscrowRecord, AssetEscrowResolution,
-        AssetEscrowStatus, EscrowId, KOTODAMA_ESCROW_ID_PREFIX,
+        AssetEscrowStatus, CONDITIONAL_ESCROW_EVIDENCE_DIGEST_DOMAIN_V1,
+        ConditionalEscrowAttestation, ConditionalEscrowCondition, ConditionalEscrowConditionState,
+        ConditionalEscrowOracleCondition, ConditionalEscrowPredicate, ConditionalEscrowValue,
+        ConditionalEscrowWithinCondition, EscrowId, KOTODAMA_ESCROW_ID_PREFIX,
+        hash_conditional_escrow_evidence_digest,
     };
 }
 
@@ -319,6 +458,7 @@ mod tests {
         release_authority: Option<AccountId>,
         expires_at_ms: Option<u64>,
         evidence_hashes: Vec<Hash>,
+        conditions: Vec<ConditionalEscrowConditionState>,
         created_at_ms: u64,
         accepted_at_ms: Option<u64>,
         payment_sent_at_ms: Option<u64>,
@@ -354,6 +494,7 @@ mod tests {
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("evidence")],
+            conditions: Vec::new(),
             created_at_ms: 1,
             accepted_at_ms: Some(2),
             payment_sent_at_ms: Some(3),
@@ -386,6 +527,7 @@ mod tests {
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: Vec::new(),
+            conditions: Vec::new(),
             created_at_ms: 1,
             accepted_at_ms: None,
             payment_sent_at_ms: None,

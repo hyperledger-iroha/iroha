@@ -10918,6 +10918,9 @@ pub struct StateBlock<'state> {
     fastpq_witness_context: Option<crate::fastpq::FastpqWitnessContext>,
     /// AXT envelope records captured while executing this block.
     axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Durable native independent-batch leg outcomes keyed by entrypoint hash.
+    batch_transfer_outcomes:
+        BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,
     /// Verified lane relay records captured while executing this block.
     verified_lane_relay_records: Vec<VerifiedLaneRelayRecord>,
     /// Captured execution witness for the block (SBV‑AM).
@@ -11114,7 +11117,7 @@ impl<'state> StateBlock<'state> {
             return;
         }
 
-        crate::privacy_state::validate_non_pgc_privacy_root_retention_v1(
+        crate::privacy_state::validate_unanchored_privacy_root_retention_v1(
             &self.world.privacy_roots,
             pending.next_limits.retained_root_count,
         )
@@ -11124,17 +11127,23 @@ impl<'state> StateBlock<'state> {
                  {incoming_height}: {error}"
             )
         });
-        let plans = crate::privacy_state::plan_privacy_root_retention_reduction_v1(
-            &self.world.privacy_roots,
-            iroha_data_model::privacy::PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            pending.next_limits.retained_root_count,
-        )
-        .unwrap_or_else(|error| {
-            panic!(
-                "scheduled Anonymous PGC retention tightening failed at incoming block height \
-                 {incoming_height}: {error}"
-            )
-        });
+        let mut plans = Vec::new();
+        for protocol_id in crate::privacy_state::PRIVACY_ROOT_RETENTION_ANCHORED_PROTOCOLS_V1 {
+            plans.extend(
+                crate::privacy_state::plan_privacy_root_retention_reduction_v1(
+                    &self.world.privacy_roots,
+                    protocol_id,
+                    pending.next_limits.retained_root_count,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "scheduled typed privacy retention tightening for {protocol_id:?} failed at \
+                         incoming block height {incoming_height}: {error}"
+                    )
+                }),
+            );
+        }
+        plans.sort_unstable_by_key(|plan| plan.head_key);
         let mut head_updates = Vec::with_capacity(plans.len());
         for plan in &plans {
             let head = self
@@ -11144,8 +11153,10 @@ impl<'state> StateBlock<'state> {
                 .copied()
                 .unwrap_or_else(|| {
                     panic!(
-                        "Anonymous PGC retention plan has no head at incoming block height \
-                         {incoming_height}"
+                        "typed privacy retention plan for {:?}/{:?} has no head at incoming block \
+                         height {incoming_height}",
+                        plan.head_key.namespace(),
+                        plan.head_key.role(),
                     )
                 });
             let next_head = crate::privacy_state::PrivacyRootHeadRecordV1::new(
@@ -11156,8 +11167,10 @@ impl<'state> StateBlock<'state> {
             )
             .unwrap_or_else(|error| {
                 panic!(
-                    "Anonymous PGC retention anchor is invalid at incoming block height \
-                     {incoming_height}: {error}"
+                    "typed privacy retention anchor for {:?}/{:?} is invalid at incoming block \
+                     height {incoming_height}: {error}",
+                    plan.head_key.namespace(),
+                    plan.head_key.role(),
                 )
             });
             head_updates.push((plan.head_key, next_head));
@@ -11328,6 +11341,14 @@ impl<'state> StateBlock<'state> {
     #[must_use]
     pub fn drain_axt_envelopes(&mut self) -> Vec<AxtEnvelopeRecord> {
         core::mem::take(&mut self.axt_envelopes)
+    }
+
+    /// Drain durable native independent-batch outcomes captured during this block.
+    #[must_use]
+    pub fn drain_batch_transfer_outcomes(
+        &mut self,
+    ) -> BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>> {
+        core::mem::take(&mut self.batch_transfer_outcomes)
     }
 
     fn prune_axt_replay_ledger(&mut self, current_slot: u64, retention_slots: u64) {
@@ -11738,6 +11759,14 @@ pub struct StateTransaction<'block, 'state> {
     block_axt_envelopes: &'block mut Vec<AxtEnvelopeRecord>,
     /// Pending AXT envelopes captured during this transaction execution.
     pending_axt_envelopes: Vec<AxtEnvelopeRecord>,
+    /// Block-level accumulator for durable native independent-batch outcomes.
+    block_batch_transfer_outcomes: &'block mut BTreeMap<
+        HashOf<TransactionEntrypoint>,
+        Vec<data_pre::AssetBatchTransferOutcome>,
+    >,
+    /// Independent-batch outcomes staged until this transaction commits.
+    pending_batch_transfer_outcomes:
+        BTreeMap<HashOf<TransactionEntrypoint>, Vec<data_pre::AssetBatchTransferOutcome>>,
     /// Block-level accumulator for verified lane relay records that should
     /// hydrate the runtime relay cache after the block commits.
     block_verified_lane_relay_records: &'block mut Vec<VerifiedLaneRelayRecord>,
@@ -17271,7 +17300,13 @@ impl DetachedStateTransactionDelta {
             stx.world.current_dataspace_id = Some(dataspace_id);
         }
         let result: Result<(), iroha_data_model::ValidationFail> = (|| {
-            let asset_adds = aggregate_quantities(&self.asset_add_ids, &self.asset_add_qtys)?;
+            let resolved_asset_add_ids = self
+                .asset_add_ids
+                .iter()
+                .map(|id| stx.world.resolve_asset_id_for_current_scope(id))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
+            let asset_adds = aggregate_quantities(&resolved_asset_add_ids, &self.asset_add_qtys)?;
             let asset_subs = aggregate_quantities(&self.asset_sub_ids, &self.asset_sub_qtys)?;
             let asset_def_adds =
                 aggregate_quantities(&self.asset_def_add_ids, &self.asset_def_add_qtys)?;
@@ -17304,17 +17339,6 @@ impl DetachedStateTransactionDelta {
             );
             let asset_def_kv_dels =
                 gather_set_keyed(&self.asset_def_kv_del_ids, &self.asset_def_kv_del_key_ids);
-            // Validate numeric specs for all changes prior to mutating state (aggregated).
-            for (id, qty) in &asset_adds {
-                let def = stx.world.asset_definition(id.definition())?;
-                let spec = def.spec();
-                ensure_asset_quantity_value(qty, spec)
-                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-                if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_quantity_value(value.as_ref(), spec)
-                        .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-                }
-            }
             for (id, qty) in &asset_subs {
                 let def = stx.world.asset_definition(id.definition())?;
                 let spec = def.spec();
@@ -17403,27 +17427,28 @@ impl DetachedStateTransactionDelta {
                     let _ = stx.world.remove_asset_and_metadata(id);
                 }
             }
-            // Apply asset additions (aggregated per id) and defer event emission until totals update.
+            // Apply asset additions (aggregated per id) through the checked credit primitive and
+            // defer event emission until totals update. Checking at this mutation boundary
+            // accounts for transfers and subtractions applied earlier in the detached delta. The
+            // enclosing state transaction is discarded on error, so a rejected credit cannot
+            // commit any preceding mutations.
             for (id, qty) in &asset_adds {
-                let is_nonzero = {
-                    let dst = stx.world.asset_or_insert(id, Quantity::zero())?;
-                    let qref: &mut Quantity = &mut *dst;
-                    // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    let updated = qref.checked_add(qty).map_err(|_| {
-                        iroha_data_model::ValidationFail::NotPermitted(
-                            "numeric overflow".to_owned(),
-                        )
-                    })?;
-                    *qref = updated;
-                    let is_nonzero = !qref.is_zero();
-                    // Witness: record post-value
-                    crate::sumeragi::witness::record_write_asset(id, qref);
-                    is_nonzero
-                };
-                if is_nonzero {
-                    stx.world.track_nonzero_asset_holder(id);
-                }
+                let previous = stx
+                    .world
+                    .assets
+                    .get(id)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap_or_else(Quantity::zero);
+                crate::sumeragi::witness::record_read_asset(id, Some(&previous));
+                stx.world
+                    .deposit_numeric_asset_exact(id, qty)
+                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
+                let updated = stx
+                    .world
+                    .assets
+                    .get(id)
+                    .expect("checked exact deposit must leave the destination balance present");
+                crate::sumeragi::witness::record_write_asset(id, updated.as_ref());
             }
             // Update asset definition totals
             for (def, qty) in &asset_def_adds {
@@ -24046,32 +24071,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.resolve_asset_id_for_scope_hint(id, None)
     }
 
-    /// Get asset or inserts new with `default_asset_value`.
-    ///
-    /// # Errors
-    /// - There is no account with such name.
-    /// - The default or existing asset balance violates the definition's numeric spec.
-    #[allow(clippy::missing_panics_doc)]
-    pub fn asset_or_insert(
-        &mut self,
-        asset_id: &AssetId,
-        default_asset_value: impl Into<Quantity>,
-    ) -> Result<&mut AssetValue, Error> {
-        let resolved_id = self.resolve_asset_id_for_current_scope(asset_id)?;
-        self.asset_or_insert_exact(&resolved_id, default_asset_value)
-    }
-
-    /// Get asset or inserts new with `default_asset_value` using the exact provided [`AssetId`].
+    /// Get an asset or initialize it with `default_asset_value` using the exact provided
+    /// [`AssetId`].
     ///
     /// Callers must only use this with a balance id that has already been canonicalized for the
     /// intended scope. This is required for transfer destinations whose bound account dataspace
-    /// differs from the current execution dataspace.
+    /// differs from the current execution dataspace. This low-level helper does not enforce
+    /// transfer-control holding limits and is restricted to independently validated
+    /// initialization; production credit paths must use the checked exact deposit helper.
     ///
     /// # Errors
     /// - There is no account with such name.
     /// - The default or existing asset balance violates the definition's numeric spec.
     #[allow(clippy::missing_panics_doc)]
-    pub fn asset_or_insert_exact(
+    pub(crate) fn asset_or_insert_exact(
         &mut self,
         asset_id: &AssetId,
         default_asset_value: impl Into<Quantity>,
@@ -28293,6 +28306,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             pending_da_commitments: None,
@@ -29131,6 +29145,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             pending_da_commitments: None,
@@ -29240,6 +29255,7 @@ impl State {
             fastpq_entry_dataspaces: BTreeMap::new(),
             fastpq_witness_context: None,
             axt_envelopes: Vec::new(),
+            batch_transfer_outcomes: BTreeMap::new(),
             verified_lane_relay_records: Vec::new(),
             touched_lanes: BTreeSet::new(),
             pending_da_commitments: None,
@@ -32887,7 +32903,7 @@ impl State {
             }
             let results = raw_results
                 .into_iter()
-                .map(|(_, _, result)| TransactionResult(result))
+                .map(|(_, _, result)| TransactionResult::new(result))
                 .collect::<Vec<_>>();
             let result_hashes = results
                 .iter()
@@ -48318,6 +48334,8 @@ impl<'state> StateBlock<'state> {
             pending_transfer_transcripts: Vec::new(),
             block_axt_envelopes: &mut self.axt_envelopes,
             pending_axt_envelopes: Vec::new(),
+            block_batch_transfer_outcomes: &mut self.batch_transfer_outcomes,
+            pending_batch_transfer_outcomes: BTreeMap::new(),
             block_verified_lane_relay_records: &mut self.verified_lane_relay_records,
             pending_verified_lane_relay_records: Vec::new(),
             perm_cache: PermissionCheckCache::default(),
@@ -61695,6 +61713,22 @@ impl StateTransaction<'_, '_> {
         self.pending_axt_envelopes.push(record);
     }
 
+    /// Stage one correlated native independent-batch leg outcome for block persistence.
+    ///
+    /// Ad-hoc instruction execution used by low-level tests has no transaction
+    /// entrypoint identity; it still emits the live event but cannot produce a
+    /// durable transaction receipt row.
+    pub fn record_batch_transfer_outcome(&mut self, outcome: data_pre::AssetBatchTransferOutcome) {
+        let Some(call_hash) = self.tx_call_hash else {
+            return;
+        };
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(call_hash);
+        self.pending_batch_transfer_outcomes
+            .entry(entrypoint_hash)
+            .or_default()
+            .push(outcome);
+    }
+
     /// Stage a verified lane relay record so the committed block can hydrate
     /// the runtime relay cache after its contract-visible state is durable.
     pub(crate) fn stage_verified_lane_relay_record(&mut self, record: VerifiedLaneRelayRecord) {
@@ -61866,6 +61900,8 @@ impl StateTransaction<'_, '_> {
             mut pending_transfer_transcripts,
             block_axt_envelopes,
             mut pending_axt_envelopes,
+            block_batch_transfer_outcomes,
+            pending_batch_transfer_outcomes,
             block_verified_lane_relay_records,
             mut pending_verified_lane_relay_records,
             implicit_account_creations_in_block,
@@ -61960,6 +61996,12 @@ impl StateTransaction<'_, '_> {
         }
         if !pending_axt_envelopes.is_empty() {
             block_axt_envelopes.append(&mut pending_axt_envelopes);
+        }
+        for (entrypoint_hash, mut outcomes) in pending_batch_transfer_outcomes {
+            block_batch_transfer_outcomes
+                .entry(entrypoint_hash)
+                .or_default()
+                .append(&mut outcomes);
         }
         if !pending_verified_lane_relay_records.is_empty() {
             block_verified_lane_relay_records.append(&mut pending_verified_lane_relay_records);
@@ -65160,6 +65202,15 @@ pub(crate) mod deserialize {
             field: "world.privacy_state".to_owned(),
             message,
         })?;
+        crate::privacy_state::validate_privacy_orchard_public_dependencies_v1(
+            &privacy_commitments.view(),
+            &accounts.view(),
+            &asset_definitions.view(),
+        )
+        .map_err(|message| json::Error::InvalidField {
+            field: "world.privacy_state".to_owned(),
+            message,
+        })?;
         let proofs = take_optional_default(&mut map, "proofs")?;
         let proof_tags = take_optional_default(&mut map, "proof_tags")?;
         let proofs_by_tag = take_optional_default(&mut map, "proofs_by_tag")?;
@@ -66264,8 +66315,8 @@ mod tests {
             time::{ExecutionTime, Schedule, TimeEventFilter},
         },
         isi::{
-            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetKeyValue, SetKeyValue, Transfer,
-            Unregister, error::InstructionExecutionError,
+            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue,
+            SetKeyValue, Transfer, Unregister, error::InstructionExecutionError,
         },
         merge::MergeQuorumCertificate,
         name::Name,
@@ -68131,6 +68182,149 @@ seiyaku SequentialNfts {
         (state, definition_id, asset_id)
     }
 
+    fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
+        use iroha_data_model::privacy::{
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyActiveLifecycleV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+            PrivacyProtocolLifecycleV1, PrivacyRootRoleV1,
+        };
+
+        let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let owner = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let reserve_account = BOB_ID.clone();
+        let reserve = Account::new(reserve_account.clone()).build(&ALICE_ID);
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+        let definition = AssetDefinition::new(asset_definition_id.clone(), NumericSpec::integer())
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+        let mut world = World::with_assets([domain], [owner, reserve], [definition], [], []);
+
+        let namespace = PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: PrivacyPoolIdV1::new([0xA1; 32]),
+            }),
+        );
+        let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new([0xA2; 32]);
+        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
+            bootstrap_digest,
+            asset_definition_id.clone(),
+            reserve_account.clone(),
+        )
+        .expect("canonical Orchard pool state");
+        let root = pool_state.root();
+        let provenance = crate::privacy_state::PrivacyRootProvenanceV1::orchard_pool_bootstrap(
+            bootstrap_digest,
+            1,
+        )
+        .expect("canonical Orchard bootstrap provenance");
+        let root_key = crate::privacy_state::PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+            root,
+        )
+        .expect("canonical Orchard bootstrap root key");
+        let head_key = crate::privacy_state::PrivacyRootHeadKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::NoteCommitmentAnchor,
+        )
+        .expect("canonical Orchard root-head key");
+        let state_key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
+            .expect("canonical Orchard pool-state key");
+        let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        )
+        .expect("compiled Orchard profile");
+        world.privacy_activations.insert(
+            crate::privacy_state::PrivacyActivationKeyV1::new(
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            ),
+            profile.activation_record(PrivacyProtocolLifecycleV1::Active(
+                PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1,
+                    activated_at_height: 2,
+                    state_since_height: 2,
+                },
+            )),
+        );
+        world.privacy_commitments.insert(
+            state_key,
+            crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
+                .expect("canonical Orchard pool-state record"),
+        );
+        world.privacy_roots.insert(root_key, provenance);
+        world.privacy_root_heads.insert(
+            head_key,
+            crate::privacy_state::PrivacyRootHeadRecordV1::new(
+                PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+                root,
+                provenance,
+                None,
+            )
+            .expect("canonical Orchard root head"),
+        );
+        (
+            State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            ),
+            reserve_account,
+            asset_definition_id,
+        )
+    }
+
+    #[test]
+    fn state_snapshot_rejects_dangling_orchard_public_dependencies() {
+        let (valid_state, _, _) = snapshot_state_with_orchard_pool();
+        let valid_value =
+            norito::json::to_value(&valid_state).expect("serialize valid Orchard snapshot");
+        deserialize_state_snapshot_value(valid_value)
+            .expect("complete Orchard public dependencies restore");
+
+        let (missing_reserve, reserve_account, _) = snapshot_state_with_orchard_pool();
+        let mut accounts = missing_reserve.world.accounts.block();
+        assert!(accounts.remove(reserve_account.clone()).is_some());
+        accounts.commit();
+        let value =
+            norito::json::to_value(&missing_reserve).expect("serialize missing-reserve snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("missing Orchard reserve account must fail closed");
+        let error = error.to_string();
+        assert!(error.contains("world.privacy_state"), "{error}");
+        assert!(
+            error.contains("references missing reserve account"),
+            "{error}"
+        );
+        assert!(error.contains(&reserve_account.to_string()), "{error}");
+
+        let (missing_definition, _, asset_definition_id) = snapshot_state_with_orchard_pool();
+        let mut asset_definitions = missing_definition.world.asset_definitions.block();
+        assert!(
+            asset_definitions
+                .remove(asset_definition_id.clone())
+                .is_some()
+        );
+        asset_definitions.commit();
+        let value = norito::json::to_value(&missing_definition)
+            .expect("serialize missing-definition snapshot");
+        let error = deserialize_state_snapshot_value(value)
+            .err()
+            .expect("missing Orchard asset definition must fail closed");
+        let error = error.to_string();
+        assert!(error.contains("world.privacy_state"), "{error}");
+        assert!(
+            error.contains("references missing asset definition"),
+            "{error}"
+        );
+        assert!(error.contains(&asset_definition_id.to_string()), "{error}");
+    }
+
     #[test]
     fn quantity_rejects_negative_initial_balance() {
         let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
@@ -69621,6 +69815,7 @@ seiyaku SequentialNfts {
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("public-evidence")],
+            conditions: Vec::new(),
             created_at_ms: 1,
             accepted_at_ms: Some(2),
             payment_sent_at_ms: Some(3),
@@ -116135,7 +116330,7 @@ seiyaku SequentialNfts {
         let alice_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
         stx.world
-            .asset_or_insert(&asset_id, 1_u32)
+            .deposit_numeric_asset(&asset_id, &Quantity::from(1_u32))
             .expect("insert asset through helper");
         assert!(
             stx.world
@@ -125269,6 +125464,81 @@ seiyaku IdentitylessRawCallback {
         assert!(
             state_block.world.external_event_buf.is_empty(),
             "failed aggregation must not emit events"
+        );
+    }
+
+    #[test]
+    fn detached_asset_credit_over_holding_limit_is_atomic() {
+        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut setup = state_block.transaction();
+            SetAssetHoldingLimit::new(
+                ALICE_ID.clone(),
+                definition_id.clone(),
+                Some(Quantity::from(5_u32)),
+            )
+            .execute(&ALICE_ID, &mut setup)
+            .expect("asset owner sets a holding limit at the current balance");
+            setup.apply();
+        }
+        let _ = state_block.world.take_external_events();
+
+        let initial_balance = state_block
+            .world
+            .assets
+            .get(&asset_id)
+            .expect("asset exists")
+            .as_ref()
+            .clone();
+        let initial_total = state_block
+            .world
+            .asset_definition(&definition_id)
+            .expect("asset definition exists")
+            .total_quantity()
+            .clone();
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.add_asset_add(asset_id.clone(), Quantity::one());
+        delta.add_total_add(definition_id.clone(), Quantity::one());
+
+        let error = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect_err("detached credit above the holding limit must fail");
+        assert!(matches!(
+            error,
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::InstructionFailed(
+                    InstructionExecutionError::AssetTransferAdmission(
+                        iroha_data_model::isi::error::AssetTransferAdmissionError::HoldingLimitExceeded(
+                            _
+                        )
+                    )
+                )
+            )
+        ));
+        assert_eq!(
+            state_block
+                .world
+                .assets
+                .get(&asset_id)
+                .expect("asset remains")
+                .as_ref(),
+            &initial_balance,
+            "rejected detached credit must not mutate the balance"
+        );
+        assert_eq!(
+            state_block
+                .world
+                .asset_definition(&definition_id)
+                .expect("asset definition remains")
+                .total_quantity(),
+            &initial_total,
+            "rejected detached credit must not mutate total supply"
+        );
+        assert!(
+            state_block.world.external_event_buf.is_empty(),
+            "rejected detached credit must not emit events"
         );
     }
 

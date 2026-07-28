@@ -34,15 +34,8 @@ const RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT = new Map([
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
-export const PRIVACY_FFI_VERSION_V1 = 1;
 export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 7;
 export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
-export const PRIVACY_FFI_STATUS_ERROR = 1;
-export const PRIVACY_FFI_ERROR_NULL_POINTER = 1;
-export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
-export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
-export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
-export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
 const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
 const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
@@ -62,17 +55,8 @@ const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
 const PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
 const PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
 const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE = 0x50;
-const PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE = 0x42;
-const PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE = 0x56;
-const PRIVACY_REQUEST_SCHEMA_BYTE = 0x52;
 const PRIVACY_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
 const PRIVACY_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
-const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE = (() => {
-  const archive = Buffer.alloc(PRIVACY_NORITO_HEADER_BYTES);
-  archive.write("NRT0", 0, "ascii");
-  archive.fill(PRIVACY_REQUEST_SCHEMA_BYTE, 6, 22);
-  return archive;
-})();
 const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
 const PRIVACY_CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -909,72 +893,26 @@ function hasPrivacyNativeSurface(native) {
     native &&
     Number.isInteger(abiVersion) &&
     abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION &&
-    typeof native.privacyCapabilitiesV1 === "function" &&
-    typeof native.privacyProofRequestV1 === "function" &&
-    typeof native.privacyBuildProofV1 === "function" &&
-    typeof native.privacyVerifyProofV1 === "function"
+    typeof native.privacyCapabilitiesV1 === "function"
   );
-}
-
-function privacyNativeProbeReturnsBytes(native, operation, requestArchive = undefined) {
-  let request;
-  try {
-    const result =
-      requestArchive === undefined
-        ? native[operation]()
-        : native[operation]((request = Buffer.from(requestArchive)));
-    privacyNativeOutputToBuffer(result, operation, { clearSource: true });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (request) {
-      request.fill(0);
-    }
-  }
-}
-
-function privacyNativeProofRequestProbeReturnsBytes(native) {
-  let publicInputs;
-  try {
-    publicInputs = Buffer.from("privacy-native-availability-public-input-v1", "utf8");
-    const result = native.privacyProofRequestV1(
-      ZK_ACE_ALGORITHM_ID,
-      ZK_ACE_PRODUCTION_ENTRYPOINT,
-      ZK_ACE_PRODUCTION_VK_REF,
-      publicInputs,
-      Buffer.alloc(0),
-      Buffer.alloc(0),
-    );
-    privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1", {
-      clearSource: true,
-    });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    if (publicInputs) {
-      publicInputs.fill(0);
-    }
-  }
 }
 
 function hasPrivacyNative(native) {
   return (
     hasPrivacyNativeSurface(native) &&
-    privacyNativeProbeReturnsBytes(native, "privacyCapabilitiesV1") &&
-    privacyNativeProofRequestProbeReturnsBytes(native) &&
-    privacyNativeProbeReturnsBytes(
-      native,
-      "privacyBuildProofV1",
-      PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
-    ) &&
-    privacyNativeProbeReturnsBytes(
-      native,
-      "privacyVerifyProofV1",
-      PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
-    )
+    privacyNativeProbeReturnsBytes(native, "privacyCapabilitiesV1")
   );
+}
+
+function privacyNativeProbeReturnsBytes(native, operation) {
+  let result;
+  try {
+    result = native[operation]();
+    privacyNativeOutputToBuffer(result, operation, { clearSource: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function privacyBridgeAbiVersion(native) {
@@ -1024,53 +962,6 @@ function toPrivacyArchiveBuffer(value, name) {
   );
 }
 
-function toPrivacyRequestArchiveBuffer(value, name) {
-  const request = toPrivacyArchiveBuffer(value, name);
-  if (request.length === 0) {
-    throw new Error(`${name} must not be empty`);
-  }
-  if (request.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-    throw new Error(`${name} must not exceed ${PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes`);
-  }
-  assertPrivacyNoritoArchive(request, name, "request", PRIVACY_REQUEST_SCHEMA_BYTE);
-  return Buffer.from(request);
-}
-
-function toPrivacyRequestComponentBuffer(value, name, { allowEmpty = true } = {}) {
-  if (typeof value === "string") {
-    throw new TypeError(`${name} must be bytes-like, not a string`);
-  }
-  let bytes;
-  if (Buffer.isBuffer(value)) {
-    bytes = value;
-  } else if (value instanceof Uint8Array || value instanceof DataView) {
-    if (!(value.buffer instanceof ArrayBuffer)) {
-      throw new TypeError(`${name} must not use shared memory`);
-    }
-    bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-  } else if (value instanceof ArrayBuffer) {
-    bytes = Buffer.from(value);
-  } else {
-    throw new TypeError(
-      `${name} must be bytes-like as a Buffer, Uint8Array, DataView, or ArrayBuffer`,
-    );
-  }
-  if (!allowEmpty && bytes.length === 0) {
-    throw new Error(`${name} must not be empty`);
-  }
-  if (bytes.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-    throw new Error(`${name} must not exceed ${PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes`);
-  }
-  return Buffer.from(bytes);
-}
-
-function requirePrivacyRequestText(value, name) {
-  if (typeof value !== "string") {
-    throw new TypeError(`${name} must be a string`);
-  }
-  return value;
-}
-
 function privacyNativeOutputToBuffer(result, operation, options = {}) {
   let output;
   if (result === undefined || result === null) {
@@ -1092,36 +983,6 @@ function privacyNativeOutputToBuffer(result, operation, options = {}) {
       operation,
       "native",
       privacyExpectedResultSchemaByte(operation),
-    );
-    return Buffer.from(output);
-  } finally {
-    if (options.clearSource === true && output) {
-      output.fill(0);
-    }
-  }
-}
-
-function privacyRequestNativeOutputToBuffer(result, operation, options = {}) {
-  let output;
-  if (result === undefined || result === null) {
-    throw new Error(`native ${operation} returned no output`);
-  }
-  if (typeof result === "string") {
-    throw new Error(`native ${operation} returned text instead of Norito V1 bytes`);
-  }
-  try {
-    output = toPrivacyArchiveBuffer(result, `native ${operation} output`);
-    if (output.length === 0) {
-      throw new Error(`native ${operation} returned empty output`);
-    }
-    if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-      throw new Error(`native ${operation} returned oversized output`);
-    }
-    assertPrivacyNoritoArchive(
-      output,
-      operation,
-      "request",
-      PRIVACY_REQUEST_SCHEMA_BYTE,
     );
     return Buffer.from(output);
   } finally {
@@ -1222,16 +1083,10 @@ function assertPrivacyNoritoArchive(
 }
 
 function privacyExpectedResultSchemaByte(operation) {
-  switch (operation) {
-    case "privacyCapabilitiesV1":
-      return PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE;
-    case "privacyBuildProofV1":
-      return PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE;
-    case "privacyVerifyProofV1":
-      return PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE;
-    default:
-      throw new Error(`native ${operation} is not a supported privacy native operation`);
+  if (operation !== "privacyCapabilitiesV1") {
+    throw new Error(`native ${operation} is not a supported privacy capability operation`);
   }
+  return PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE;
 }
 
 function invokePrivacyNative(native, operation, ...args) {
@@ -1239,17 +1094,6 @@ function invokePrivacyNative(native, operation, ...args) {
     return native[operation](...args);
   } catch {
     throw new Error(`native ${operation} failed`);
-  }
-}
-
-function callPrivacyNative(operation, requestArchive) {
-  const request = toPrivacyRequestArchiveBuffer(requestArchive, "requestArchive");
-  try {
-    const native = ensurePrivacyNative(resolveNativeBinding(), operation);
-    const result = invokePrivacyNative(native, operation, request);
-    return privacyNativeOutputToBuffer(result, operation);
-  } finally {
-    request.fill(0);
   }
 }
 
@@ -1267,55 +1111,8 @@ export function privacyCapabilitiesV1() {
   return privacyNativeOutputToBuffer(result, "privacyCapabilitiesV1");
 }
 
-export function privacyProofRequestV1(input) {
-  if (!input || typeof input !== "object") {
-    throw new TypeError("privacyProofRequestV1 input must be an object");
-  }
-  const {
-    algorithmId,
-    entrypoint,
-    vkRef,
-    publicInputs,
-    witness = Buffer.alloc(0),
-    proof = Buffer.alloc(0),
-  } = input;
-  const algorithmIdText = requirePrivacyRequestText(algorithmId, "algorithmId");
-  const entrypointText = requirePrivacyRequestText(entrypoint, "entrypoint");
-  const vkRefText = requirePrivacyRequestText(vkRef, "vkRef");
-  const publicInputsBuffer = toPrivacyRequestComponentBuffer(publicInputs, "publicInputs", {
-    allowEmpty: false,
-  });
-  const witnessBuffer = toPrivacyRequestComponentBuffer(witness, "witness");
-  const proofBuffer = toPrivacyRequestComponentBuffer(proof, "proof");
-  try {
-    const native = ensurePrivacyNative(resolveNativeBinding(), "privacyProofRequestV1");
-    const result = invokePrivacyNative(
-      native,
-      "privacyProofRequestV1",
-      algorithmIdText,
-      entrypointText,
-      vkRefText,
-      publicInputsBuffer,
-      witnessBuffer,
-      proofBuffer,
-    );
-    return privacyRequestNativeOutputToBuffer(result, "privacyProofRequestV1");
-  } finally {
-    publicInputsBuffer.fill(0);
-    witnessBuffer.fill(0);
-    proofBuffer.fill(0);
-  }
-}
-
-export function privacyBuildProofV1(requestArchive) {
-  return callPrivacyNative("privacyBuildProofV1", requestArchive);
-}
-
-export function privacyVerifyProofV1(requestArchive) {
-  return callPrivacyNative("privacyVerifyProofV1", requestArchive);
-}
-
 /**
+ * Return the canonical SM2 signing fixture values/**
  * Return the canonical SM2 signing fixture values for the given seed and message.
  * @param {string} distid
  * @param {ArrayBufferView | ArrayBuffer | Buffer | string} seed

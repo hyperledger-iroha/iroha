@@ -1,1415 +1,267 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace Hyperledger.Iroha.Privacy;
 
-internal static class PrivacyArchiveBytes
+/// <summary>Closed first-release privacy protocol identity in canonical Norito order.</summary>
+public enum PrivacyProtocolIdV1
 {
-    internal static byte[] Copy(
-        byte[] noritoBytes,
-        string parameterName,
-        params byte[] expectedSchemaBytes)
-    {
-        if (noritoBytes is null)
-        {
-            throw new ArgumentNullException(parameterName);
-        }
-
-        if (noritoBytes.Length == 0)
-        {
-            throw new ArgumentException("Norito V1 archive must not be empty.", parameterName);
-        }
-
-        if (noritoBytes.Length > PrivacyNative.PrivacyNativeArchiveMaxBytes)
-        {
-            throw new ArgumentException(
-                $"Norito V1 archive must not exceed {PrivacyNative.PrivacyNativeArchiveMaxBytes} bytes.",
-                parameterName);
-        }
-
-        if (!PrivacyNative.IsNoritoV1Archive(noritoBytes))
-        {
-            throw new ArgumentException(
-                "Norito V1 archive must be a valid Norito V1 archive.",
-                parameterName);
-        }
-
-        if (!PrivacyNative.HasNonEmptyPrivacyNoritoPayload(noritoBytes))
-        {
-            throw new ArgumentException(
-                "Norito V1 archive must contain a non-empty privacy result payload.",
-                parameterName);
-        }
-
-        if (!PrivacyNative.HasNoritoSchema(noritoBytes, expectedSchemaBytes))
-        {
-            throw new ArgumentException(
-                "Norito V1 archive must use the expected privacy result schema.",
-                parameterName);
-        }
-
-        return (byte[])noritoBytes.Clone();
-    }
+    ZkAcePqAuthorizationV0,
+    AnonymousPgcKOutOfNV1,
+    VeRangeTransparentRangeV1,
+    IrohaZkAmsV1,
+    VegaExistingCredentialZkV0,
+    IrohaZkX509StarkP256V0,
+    IrohaJindoPolynomialCommitmentV0,
+    IrohaBootleLanternAnoncredV1,
+    OrchardHalo2ActionsV1,
+    MoneroFcmpPlusPlusV1,
+    IrohaIvmPrivateNoteStarkV1,
+    PqMaspStarkV0,
 }
 
+public static class PrivacyProtocolsV1
+{
+    private static readonly IReadOnlyList<PrivacyProtocolIdV1> Protocols =
+        new ReadOnlyCollection<PrivacyProtocolIdV1>(
+            Enum.GetValues<PrivacyProtocolIdV1>());
+
+    /// <summary>All twelve identities in exact wire order.</summary>
+    public static IReadOnlyList<PrivacyProtocolIdV1> All => Protocols;
+
+    public static string CanonicalLabel(this PrivacyProtocolIdV1 protocol) =>
+        protocol switch
+        {
+            PrivacyProtocolIdV1.ZkAcePqAuthorizationV0 => "zk-ace-pq-authorization-v0",
+            PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1 => "anonymous-pgc-k-out-of-n-v1",
+            PrivacyProtocolIdV1.VeRangeTransparentRangeV1 => "verange-transparent-range-v1",
+            PrivacyProtocolIdV1.IrohaZkAmsV1 => "iroha-zk-ams-v1",
+            PrivacyProtocolIdV1.VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
+            PrivacyProtocolIdV1.IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
+            PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0 =>
+                "iroha-jindo-polynomial-commitment-v0",
+            PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1 =>
+                "iroha-bootle-lantern-anoncred-v1",
+            PrivacyProtocolIdV1.OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
+            PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
+            PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1 =>
+                "iroha-ivm-private-note-stark-v1",
+            PrivacyProtocolIdV1.PqMaspStarkV0 => "pq-masp-stark-v0",
+            _ => throw new ArgumentOutOfRangeException(nameof(protocol)),
+        };
+
+    /// <summary>
+    /// Parse one exact canonical label. Aliases, retired identifiers, whitespace, and case changes
+    /// are rejected.
+    /// </summary>
+    public static PrivacyProtocolIdV1 ParseCanonicalLabel(string label) =>
+        label switch
+        {
+            "zk-ace-pq-authorization-v0" => PrivacyProtocolIdV1.ZkAcePqAuthorizationV0,
+            "anonymous-pgc-k-out-of-n-v1" => PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1,
+            "verange-transparent-range-v1" => PrivacyProtocolIdV1.VeRangeTransparentRangeV1,
+            "iroha-zk-ams-v1" => PrivacyProtocolIdV1.IrohaZkAmsV1,
+            "vega-existing-credential-zk-v0" => PrivacyProtocolIdV1.VegaExistingCredentialZkV0,
+            "iroha-zk-x509-stark-p256-v0" => PrivacyProtocolIdV1.IrohaZkX509StarkP256V0,
+            "iroha-jindo-polynomial-commitment-v0" =>
+                PrivacyProtocolIdV1.IrohaJindoPolynomialCommitmentV0,
+            "iroha-bootle-lantern-anoncred-v1" =>
+                PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1,
+            "orchard-halo2-actions-v1" => PrivacyProtocolIdV1.OrchardHalo2ActionsV1,
+            "monero-fcmp-plus-plus-v1" => PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1,
+            "iroha-ivm-private-note-stark-v1" => PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1,
+            "pq-masp-stark-v0" => PrivacyProtocolIdV1.PqMaspStarkV0,
+            _ => throw new ArgumentException(
+                "Unknown canonical privacy protocol id.",
+                nameof(label)),
+        };
+}
+
+/// <summary>Validated canonical <c>PrivacyCapabilitySnapshotV1</c> Norito archive.</summary>
 public sealed class PrivacyCapabilitiesArchive
 {
-    private readonly byte[] noritoBytes;
+    internal const byte SchemaByte = 0x50;
+    private const int HeaderBytes = 40;
+    private const int MaximumHeaderPaddingBytes = 64;
+    private const byte SupportedFlagsMask = 0x27;
+    private const byte FieldBitsetFlag = 0x20;
+    private const byte FieldBitsetRequiredFlags = 0x06;
+    private const ulong Crc64ReflectedPolynomial = 0xC96C5795D7870F42UL;
+
+    private readonly byte[] _noritoBytes;
 
     public PrivacyCapabilitiesArchive(byte[] noritoBytes)
     {
-        this.noritoBytes = PrivacyArchiveBytes.Copy(
-            noritoBytes,
-            nameof(noritoBytes),
-            PrivacyNative.PrivacyCapabilitiesResultSchemaByte);
-    }
-
-    public byte[] NoritoBytes => PrivacyArchiveBytes.Copy(
-        noritoBytes,
-        nameof(NoritoBytes),
-        PrivacyNative.PrivacyCapabilitiesResultSchemaByte);
-}
-
-public sealed class PrivacyProofResultArchive
-{
-    private readonly byte[] noritoBytes;
-
-    public PrivacyProofResultArchive(byte[] noritoBytes)
-    {
-        this.noritoBytes = PrivacyArchiveBytes.Copy(
-            noritoBytes,
-            nameof(noritoBytes),
-            PrivacyNative.PrivacyBuildProofResultSchemaByte,
-            PrivacyNative.PrivacyVerifyProofResultSchemaByte);
-    }
-
-    public byte[] NoritoBytes => PrivacyArchiveBytes.Copy(
-        noritoBytes,
-        nameof(NoritoBytes),
-        PrivacyNative.PrivacyBuildProofResultSchemaByte,
-        PrivacyNative.PrivacyVerifyProofResultSchemaByte);
-}
-
-public sealed class PrivacyProofRequestArchive
-{
-    private readonly byte[] noritoBytes;
-
-    public PrivacyProofRequestArchive(byte[] noritoBytes)
-    {
-        this.noritoBytes = PrivacyArchiveBytes.Copy(
-            noritoBytes,
-            nameof(noritoBytes),
-            PrivacyNative.PrivacyRequestSchemaByte);
-    }
-
-    public byte[] NoritoBytes => PrivacyArchiveBytes.Copy(
-        noritoBytes,
-        nameof(NoritoBytes),
-        PrivacyNative.PrivacyRequestSchemaByte);
-}
-
-public sealed class PrivacyCapabilities
-{
-    private PrivacyCapabilities(
-        bool cSharpSdkAvailable,
-        bool bridgeAvailable,
-        bool productionReady,
-        PrivacyProductionGate productionGate)
-    {
-        CSharpSdkAvailable = cSharpSdkAvailable;
-        BridgeAvailable = bridgeAvailable;
-        ProductionReady = productionReady;
-        ProductionGate = productionGate;
-    }
-
-    public bool CSharpSdkAvailable { get; }
-
-    public bool BridgeAvailable { get; }
-
-    public bool ProductionReady { get; }
-
-    public PrivacyProductionGate ProductionGate { get; }
-
-    internal static PrivacyCapabilities FailClosed(bool bridgeAvailable)
-    {
-        return new PrivacyCapabilities(
-            cSharpSdkAvailable: true,
-            bridgeAvailable: bridgeAvailable,
-            productionReady: false,
-            productionGate: PrivacyProductionGate.FailClosed());
-    }
-}
-
-public sealed class PrivacyProductionGate
-{
-    private static readonly IReadOnlyList<string> EmptyAuditReferences =
-        Array.AsReadOnly(Array.Empty<string>());
-
-    private PrivacyProductionGate(
-        string version,
-        bool ready,
-        bool realProving,
-        bool realVerification,
-        bool chainAdmission,
-        bool sdkParity,
-        bool walletState,
-        bool witnessPrivacyChecks,
-        bool deterministicTests,
-        bool negativeAdversarialTests,
-        bool replayNullifierTests,
-        bool fuzzing,
-        bool parserFuzzing,
-        bool verifierFuzzing,
-        bool performanceGates,
-        bool externalAudit,
-        IReadOnlyList<string> requiredGates,
-        IReadOnlyList<string> missing,
-        IReadOnlyList<string> auditReferences)
-    {
-        Version = version;
-        Ready = ready;
-        RealProving = realProving;
-        RealVerification = realVerification;
-        ChainAdmission = chainAdmission;
-        SdkParity = sdkParity;
-        WalletState = walletState;
-        WitnessPrivacyChecks = witnessPrivacyChecks;
-        DeterministicTests = deterministicTests;
-        NegativeAdversarialTests = negativeAdversarialTests;
-        ReplayNullifierTests = replayNullifierTests;
-        Fuzzing = fuzzing;
-        ParserFuzzing = parserFuzzing;
-        VerifierFuzzing = verifierFuzzing;
-        PerformanceGates = performanceGates;
-        ExternalAudit = externalAudit;
-        RequiredGates = requiredGates;
-        Missing = missing;
-        AuditReferences = auditReferences;
-    }
-
-    public static IReadOnlyList<string> RequiredGateKeys { get; } =
-        Array.AsReadOnly(new[]
+        ArgumentNullException.ThrowIfNull(noritoBytes);
+        if (!IsCanonicalArchive(noritoBytes))
         {
-            "real_proving",
-            "real_verification",
-            "chain_admission",
-            "sdk_parity",
-            "wallet_state",
-            "witness_privacy_checks",
-            "deterministic_tests",
-            "negative_adversarial_tests",
-            "replay_nullifier_tests",
-            "fuzzing",
-            "parser_fuzzing",
-            "verifier_fuzzing",
-            "performance_gates",
-            "external_audit",
-        });
-
-    public static IReadOnlyList<string> MissingReasons { get; } =
-        Array.AsReadOnly(new[]
-        {
-            "real proving engine is not registered",
-            "real verifier is not registered",
-            "chain admission path is not enabled",
-            "cross-SDK parity is incomplete",
-            "wallet/state support is incomplete",
-            "witness privacy checks are incomplete",
-            "deterministic tests are incomplete",
-            "negative/adversarial tests are incomplete",
-            "replay/nullifier rejection tests are incomplete",
-            "fuzzing gate is incomplete",
-            "parser fuzzing gate is incomplete",
-            "verifier fuzzing gate is incomplete",
-            "performance gate is incomplete",
-            "internal cryptographic review signoff is missing",
-            "implementation stage is not production-hardened",
-            "planned SDK entrypoints remain",
-            "dev fixture entrypoints are not production entrypoints",
-            "Iroha production allowlist is not enabled for this audited row",
-        });
-
-    public string Version { get; }
-
-    public bool Ready { get; }
-
-    public bool RealProving { get; }
-
-    public bool RealVerification { get; }
-
-    public bool ChainAdmission { get; }
-
-    public bool SdkParity { get; }
-
-    public bool WalletState { get; }
-
-    public bool WitnessPrivacyChecks { get; }
-
-    public bool DeterministicTests { get; }
-
-    public bool NegativeAdversarialTests { get; }
-
-    public bool ReplayNullifierTests { get; }
-
-    public bool Fuzzing { get; }
-
-    public bool ParserFuzzing { get; }
-
-    public bool VerifierFuzzing { get; }
-
-    public bool PerformanceGates { get; }
-
-    public bool ExternalAudit { get; }
-
-    public IReadOnlyList<string> RequiredGates { get; }
-
-    public IReadOnlyList<string> Missing { get; }
-
-    public IReadOnlyList<string> AuditReferences { get; }
-
-    internal static PrivacyProductionGate FailClosed()
-    {
-        return new PrivacyProductionGate(
-            version: PrivacyNative.ProductionGateVersion,
-            ready: false,
-            realProving: false,
-            realVerification: false,
-            chainAdmission: false,
-            sdkParity: false,
-            walletState: false,
-            witnessPrivacyChecks: false,
-            deterministicTests: false,
-            negativeAdversarialTests: false,
-            replayNullifierTests: false,
-            fuzzing: false,
-            parserFuzzing: false,
-            verifierFuzzing: false,
-            performanceGates: false,
-            externalAudit: false,
-            requiredGates: RequiredGateKeys,
-            missing: MissingReasons,
-            auditReferences: EmptyAuditReferences);
-    }
-}
-
-public static class PrivacyNative
-{
-    public const uint RequiredBridgeAbiVersion = 7;
-    public const uint FfiVersionV1 = 1;
-    public const string ProductionGateVersion = "privacy-production-gate-v1";
-    public const uint StatusError = 1;
-    public const uint ErrorNullPointer = 1;
-    public const uint ErrorMalformedNorito = 2;
-    public const uint ErrorUnsupportedAlgorithm = 3;
-    public const uint ErrorProductionDisabled = 4;
-    public const uint ErrorInvalidRequest = 5;
-    public const int PrivacyNativeArchiveMaxBytes = 64 * 1024 * 1024;
-
-    private const int PrivacyNoritoHeaderBytes = 40;
-    private const int PrivacyNoritoMaxHeaderPaddingBytes = 64;
-    private const byte PrivacyNoritoSupportedFlagsMask = 0x27;
-    private const byte PrivacyNoritoFieldBitsetFlag = 0x20;
-    private const byte PrivacyNoritoFieldBitsetRequiredFlags = 0x06;
-    private const ulong PrivacyCrc64ReflectedPoly = 0xC96C_5795_D787_0F42UL;
-    private const int PrivacyRequestTextFieldMaxBytes = 1024;
-    private const int PrivacyRequestPublicInputsMaxBytes = 1024 * 1024;
-    private const int PrivacyRequestWitnessMaxBytes = PrivacyNativeArchiveMaxBytes / 2;
-    private const int PrivacyRequestProofMaxBytes = PrivacyNativeArchiveMaxBytes / 2;
-    internal const byte PrivacyRequestSchemaByte = 0x52;
-    internal const byte PrivacyCapabilitiesResultSchemaByte = 0x50;
-    internal const byte PrivacyBuildProofResultSchemaByte = 0x42;
-    internal const byte PrivacyVerifyProofResultSchemaByte = 0x56;
-    private const string LibraryName = "connect_norito_bridge";
-    private static readonly byte[] PrivacyNoritoMagic = Encoding.ASCII.GetBytes("NRT0");
-    private static readonly ulong[] PrivacyCrc64Table = BuildPrivacyCrc64Table();
-    private static readonly byte[] ZeroClearChunk = new byte[4096];
-    private static readonly byte[] PrivacyNativeAvailabilityProbeArchiveBytes =
-        BuildPrivacyNativeAvailabilityProbeArchive();
-
-    public static bool IsAvailable()
-    {
-        return IsAvailable(
-            () => TryGetAbiVersion(out var version) ? version : null,
-            TryProbeRequiredSymbols);
-    }
-
-    internal static bool IsAvailable(Func<uint?> abiVersionProbe, Func<bool> requiredSymbolsProbe)
-    {
-        try
-        {
-            var version = abiVersionProbe();
-            return version is not null
-                && version.Value >= RequiredBridgeAbiVersion
-                && requiredSymbolsProbe();
+            throw new ArgumentException(
+                "Expected a canonical PrivacyCapabilitySnapshotV1 Norito archive.",
+                nameof(noritoBytes));
         }
-        catch (Exception)
+        _noritoBytes = (byte[])noritoBytes.Clone();
+    }
+
+    /// <summary>Returns a defensive copy of the typed Norito archive.</summary>
+    public byte[] NoritoBytes => (byte[])_noritoBytes.Clone();
+
+    internal static bool IsCanonicalArchive(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < HeaderBytes || bytes.Length > PrivacyNative.PrivacyNativeArchiveMaxBytes)
         {
             return false;
         }
+        if (!bytes[..4].SequenceEqual("NRT0"u8)
+            || bytes[4] != 0
+            || bytes[5] != 0
+            || bytes[22] != 0)
+        {
+            return false;
+        }
+        for (var index = 6; index < 22; index++)
+        {
+            if (bytes[index] != SchemaByte)
+            {
+                return false;
+            }
+        }
+        var flags = bytes[39];
+        if ((flags & ~SupportedFlagsMask) != 0
+            || ((flags & FieldBitsetFlag) != 0
+                && (flags & FieldBitsetRequiredFlags) != FieldBitsetRequiredFlags))
+        {
+            return false;
+        }
+        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(23, 8));
+        if (payloadLength == 0 || payloadLength > int.MaxValue)
+        {
+            return false;
+        }
+        var minimumLength = HeaderBytes + (int)payloadLength;
+        if (minimumLength > bytes.Length)
+        {
+            return false;
+        }
+        var paddingLength = bytes.Length - minimumLength;
+        if (paddingLength > MaximumHeaderPaddingBytes
+            || bytes.Slice(HeaderBytes, paddingLength).ContainsAnyExcept((byte)0))
+        {
+            return false;
+        }
+        var payload = bytes[(HeaderBytes + paddingLength)..];
+        var expectedCrc = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(31, 8));
+        return Crc64(payload) == expectedCrc;
     }
 
-    public static PrivacyCapabilities GetPrivacyCapabilities()
+    internal static ulong Crc64(ReadOnlySpan<byte> payload)
     {
-        return GetPrivacyCapabilities(IsAvailable());
+        var crc = ulong.MaxValue;
+        foreach (var value in payload)
+        {
+            crc ^= value;
+            for (var bit = 0; bit < 8; bit++)
+            {
+                crc = (crc & 1UL) != 0
+                    ? (crc >> 1) ^ Crc64ReflectedPolynomial
+                    : crc >> 1;
+            }
+        }
+        return crc ^ ulong.MaxValue;
     }
+}
 
-    internal static PrivacyCapabilities GetPrivacyCapabilities(bool bridgeAvailable)
+/// <summary>
+/// Capability-only native privacy surface. Generic proof request/build/verify dispatch is
+/// deliberately absent; proof protocols expose typed APIs.
+/// </summary>
+public static class PrivacyNative
+{
+    internal const int PrivacyNativeArchiveMaxBytes = 64 * 1024 * 1024;
+    public const uint RequiredBridgeAbiVersion = 21;
+    private const string LibraryName = "connect_norito_bridge";
+    private static readonly bool Available = DetectAvailability();
+
+    public static bool IsAvailable() => Available;
+
+    private static bool DetectAvailability()
     {
-        return PrivacyCapabilities.FailClosed(bridgeAvailable);
+        IntPtr handle = IntPtr.Zero;
+        try
+        {
+            return NativeLibrary.TryLoad(LibraryName, out handle)
+                && NativeLibrary.TryGetExport(handle, "iroha_privacy_capabilities_v1", out _)
+                && NativeLibrary.TryGetExport(handle, "iroha_privacy_free_buffer", out _)
+                && NativeBridgeAbiVersion() == RequiredBridgeAbiVersion;
+        }
+        catch (Exception error) when (
+            error is DllNotFoundException
+            or EntryPointNotFoundException
+            or BadImageFormatException)
+        {
+            return false;
+        }
+        finally
+        {
+            if (handle != IntPtr.Zero)
+            {
+                NativeLibrary.Free(handle);
+            }
+        }
     }
 
     public static PrivacyCapabilitiesArchive CapabilitiesV1()
     {
-        return new PrivacyCapabilitiesArchive(CallCapabilities(
-            "iroha_privacy_capabilities_v1",
-            NativeCapabilities));
-    }
-
-    public static PrivacyProofRequestArchive privacyProofRequestV1(
-        string algorithmId,
-        string entrypoint,
-        string vkRef,
-        ReadOnlySpan<byte> publicInputs)
-    {
-        return PrivacyProofRequestV1(
-            algorithmId,
-            entrypoint,
-            vkRef,
-            publicInputs,
-            ReadOnlySpan<byte>.Empty,
-            ReadOnlySpan<byte>.Empty);
-    }
-
-    public static PrivacyProofRequestArchive privacyProofRequestV1(
-        string algorithmId,
-        string entrypoint,
-        string vkRef,
-        ReadOnlySpan<byte> publicInputs,
-        ReadOnlySpan<byte> witness,
-        ReadOnlySpan<byte> proof)
-    {
-        return PrivacyProofRequestV1(algorithmId, entrypoint, vkRef, publicInputs, witness, proof);
-    }
-
-    public static PrivacyProofRequestArchive PrivacyProofRequestV1(
-        string algorithmId,
-        string entrypoint,
-        string vkRef,
-        ReadOnlySpan<byte> publicInputs)
-    {
-        return PrivacyProofRequestV1(
-            algorithmId,
-            entrypoint,
-            vkRef,
-            publicInputs,
-            ReadOnlySpan<byte>.Empty,
-            ReadOnlySpan<byte>.Empty);
-    }
-
-    public static PrivacyProofRequestArchive PrivacyProofRequestV1(
-        string algorithmId,
-        string entrypoint,
-        string vkRef,
-        ReadOnlySpan<byte> publicInputs,
-        ReadOnlySpan<byte> witness,
-        ReadOnlySpan<byte> proof)
-    {
-        return new PrivacyProofRequestArchive(CallProofRequest(
-            algorithmId,
-            entrypoint,
-            vkRef,
-            publicInputs,
-            witness,
-            proof,
-            NativeProofRequest));
-    }
-
-    public static PrivacyProofResultArchive BuildProofV1(ReadOnlySpan<byte> requestArchive)
-    {
-        return new PrivacyProofResultArchive(CallProof(
-            requestArchive,
-            "iroha_privacy_build_proof_v1",
-            NativeBuildProof));
-    }
-
-    public static PrivacyProofResultArchive buildConfidentialTransferProofV2(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildConfidentialTransferProofV2(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildConfidentialTransferProofV2(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildConfidentialUnshieldProofV3(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildConfidentialUnshieldProofV3(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildConfidentialUnshieldProofV3(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildZkAceAuthorizationProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildZkAceAuthorizationProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildZkAceAuthorizationProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildVeRangeProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildVeRangeProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildVeRangeProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildJindoLatticeProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildJindoLatticeProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildJindoLatticeProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildSisHintsAnonymousCredentialProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildSisHintsAnonymousCredentialProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildSisHintsAnonymousCredentialProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildVegaCredentialPredicateProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildVegaCredentialPredicateProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildVegaCredentialPredicateProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive buildZkAmsAdmissionBatchProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildZkAmsAdmissionBatchProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive BuildZkAmsAdmissionBatchProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return BuildProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifyProofV1(ReadOnlySpan<byte> requestArchive)
-    {
-        return new PrivacyProofResultArchive(CallProof(
-            requestArchive,
-            "iroha_privacy_verify_proof_v1",
-            NativeVerifyProof));
-    }
-
-    public static PrivacyProofResultArchive verifyJindoPolynomialCommitmentV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyJindoPolynomialCommitmentV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifyJindoPolynomialCommitmentV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive verifySisHintsAnonymousCredentialProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifySisHintsAnonymousCredentialProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifySisHintsAnonymousCredentialProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive verifyVegaCredentialPredicateProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyVegaCredentialPredicateProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifyVegaCredentialPredicateProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive verifyZkAmsAdmissionBatchProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyZkAmsAdmissionBatchProofV0(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifyZkAmsAdmissionBatchProofV0(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive verifyVeRangeProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyVeRangeProofV1(requestArchive);
-    }
-
-    public static PrivacyProofResultArchive VerifyVeRangeProofV1(
-        ReadOnlySpan<byte> requestArchive)
-    {
-        return VerifyProofV1(requestArchive);
-    }
-
-    internal delegate int NativeCapabilitiesCall(out IntPtr outPtr, out UIntPtr outLen);
-
-    internal delegate int NativeProofRequestCall(
-        byte[] algorithmIdPtr,
-        UIntPtr algorithmIdLen,
-        byte[] entrypointPtr,
-        UIntPtr entrypointLen,
-        byte[] vkRefPtr,
-        UIntPtr vkRefLen,
-        byte[] publicInputsPtr,
-        UIntPtr publicInputsLen,
-        byte[] witnessPtr,
-        UIntPtr witnessLen,
-        byte[] proofPtr,
-        UIntPtr proofLen,
-        out IntPtr outPtr,
-        out UIntPtr outLen);
-
-    internal delegate int NativeProofCall(
-        byte[] requestPtr,
-        UIntPtr requestLen,
-        out IntPtr outPtr,
-        out UIntPtr outLen);
-
-    internal static byte[] CallCapabilities(
-        string symbol,
-        NativeCapabilitiesCall nativeCall,
-        bool requireAbi = true)
-    {
-        if (requireAbi)
+        if (!IsAvailable())
         {
-            RequireAbi();
+            throw new InvalidOperationException("Native privacy capability bridge is unavailable.");
         }
 
-        var expectedSchemas = RequireKnownPrivacyResultSymbol(symbol);
-
-        int code;
-        IntPtr outPtr;
-        UIntPtr outLen;
+        IntPtr pointer = IntPtr.Zero;
+        UIntPtr length = UIntPtr.Zero;
+        var status = NativeCapabilities(out pointer, out length);
         try
         {
-            code = nativeCall(out outPtr, out outLen);
-        }
-        catch (Exception)
-        {
-            throw new InvalidOperationException($"{symbol} failed.");
-        }
-        return ReadPrivacyOutput(symbol, code, outPtr, outLen, expectedSchemas);
-    }
-
-    internal static byte[] CallProofRequest(
-        string algorithmId,
-        string entrypoint,
-        string vkRef,
-        ReadOnlySpan<byte> publicInputs,
-        ReadOnlySpan<byte> witness,
-        ReadOnlySpan<byte> proof,
-        NativeProofRequestCall nativeCall,
-        bool requireAbi = true)
-    {
-        return CallProofRequest(
-            algorithmId,
-            entrypoint,
-            vkRef,
-            publicInputs,
-            witness,
-            proof,
-            nativeCall,
-            requireAbi,
-            NativeFree);
-    }
-
-    internal static byte[] CallProofRequest(
-        string algorithmId,
-        string entrypoint,
-        string vkRef,
-        ReadOnlySpan<byte> publicInputs,
-        ReadOnlySpan<byte> witness,
-        ReadOnlySpan<byte> proof,
-        NativeProofRequestCall nativeCall,
-        bool requireAbi,
-        Action<IntPtr> free)
-    {
-        byte[]? algorithmIdBytes = null;
-        byte[]? entrypointBytes = null;
-        byte[]? vkRefBytes = null;
-        byte[]? publicInputsBytes = null;
-        byte[]? witnessBytes = null;
-        byte[]? proofBytes = null;
-        try
-        {
-            var algorithmIdCopy = algorithmIdBytes = PrivacyRequestTextBytes(algorithmId, nameof(algorithmId));
-            var entrypointCopy = entrypointBytes = PrivacyRequestTextBytes(entrypoint, nameof(entrypoint));
-            var vkRefCopy = vkRefBytes = PrivacyRequestTextBytes(vkRef, nameof(vkRef));
-            var publicInputsCopy = publicInputsBytes = PrivacyRequestComponentBytes(
-                publicInputs,
-                nameof(publicInputs),
-                PrivacyRequestPublicInputsMaxBytes,
-                allowEmpty: false);
-            var witnessCopy = witnessBytes = PrivacyRequestComponentBytes(
-                witness,
-                nameof(witness),
-                PrivacyRequestWitnessMaxBytes,
-                allowEmpty: true);
-            var proofCopy = proofBytes = PrivacyRequestComponentBytes(
-                proof,
-                nameof(proof),
-                PrivacyRequestProofMaxBytes,
-                allowEmpty: true);
-
-            if (requireAbi)
+            if (status != 0 || pointer == IntPtr.Zero)
             {
-                RequireAbi();
+                throw new InvalidOperationException("Native privacy capability query failed.");
             }
-
-            const string symbol = "iroha_privacy_proof_request_v1";
-            var expectedSchemas = RequireKnownPrivacyResultSymbol(symbol);
-
-            int code;
-            IntPtr outPtr;
-            UIntPtr outLen;
-            try
+            var count = checked((int)length.ToUInt64());
+            if (count <= 0 || count > PrivacyNativeArchiveMaxBytes)
             {
-                code = nativeCall(
-                    algorithmIdCopy,
-                    (UIntPtr)algorithmIdCopy.Length,
-                    entrypointCopy,
-                    (UIntPtr)entrypointCopy.Length,
-                    vkRefCopy,
-                    (UIntPtr)vkRefCopy.Length,
-                    publicInputsCopy,
-                    (UIntPtr)publicInputsCopy.Length,
-                    witnessCopy,
-                    (UIntPtr)witnessCopy.Length,
-                    proofCopy,
-                    (UIntPtr)proofCopy.Length,
-                    out outPtr,
-                    out outLen);
+                throw new InvalidOperationException("Native privacy capability archive is invalid.");
             }
-            catch (Exception)
-            {
-                throw new InvalidOperationException($"{symbol} failed.");
-            }
-            return ReadPrivacyOutput(symbol, code, outPtr, outLen, free, expectedSchemas);
+            var bytes = new byte[count];
+            Marshal.Copy(pointer, bytes, 0, count);
+            return new PrivacyCapabilitiesArchive(bytes);
         }
         finally
         {
-            Clear(algorithmIdBytes);
-            Clear(entrypointBytes);
-            Clear(vkRefBytes);
-            Clear(publicInputsBytes);
-            Clear(witnessBytes);
-            Clear(proofBytes);
-        }
-    }
-
-    internal static byte[] CallProof(
-        ReadOnlySpan<byte> requestArchive,
-        string symbol,
-        NativeProofCall nativeCall,
-        bool requireAbi = true)
-    {
-        return CallProof(requestArchive, symbol, nativeCall, requireAbi, NativeFree);
-    }
-
-    internal static byte[] CallProof(
-        ReadOnlySpan<byte> requestArchive,
-        string symbol,
-        NativeProofCall nativeCall,
-        bool requireAbi,
-        Action<IntPtr> free)
-    {
-        if (requestArchive.IsEmpty)
-        {
-            throw new ArgumentException("Request archive must not be empty.", nameof(requestArchive));
-        }
-
-        if (requestArchive.Length > PrivacyNativeArchiveMaxBytes)
-        {
-            throw new ArgumentException(
-                $"Request archive must not exceed {PrivacyNativeArchiveMaxBytes} bytes.",
-                nameof(requestArchive));
-        }
-
-        var request = requestArchive.ToArray();
-        try
-        {
-            if (!IsNoritoV1Archive(request))
+            if (pointer != IntPtr.Zero)
             {
-                throw new ArgumentException(
-                    "Request archive must be a valid Norito V1 archive.",
-                    nameof(requestArchive));
-            }
-            if (!HasNoritoSchema(request, PrivacyRequestSchemaByte))
-            {
-                throw new ArgumentException(
-                    "Request archive must use the privacy request schema.",
-                    nameof(requestArchive));
-            }
-            if (!HasNonEmptyPrivacyNoritoPayload(request))
-            {
-                throw new ArgumentException(
-                    "Request archive must contain a non-empty privacy request payload.",
-                    nameof(requestArchive));
-            }
-
-            if (requireAbi)
-            {
-                RequireAbi();
-            }
-
-            var expectedSchemas = RequireKnownPrivacyResultSymbol(symbol);
-
-            int code;
-            IntPtr outPtr;
-            UIntPtr outLen;
-            try
-            {
-                code = nativeCall(request, (UIntPtr)request.Length, out outPtr, out outLen);
-            }
-            catch (Exception)
-            {
-                throw new InvalidOperationException($"{symbol} failed.");
-            }
-            return ReadPrivacyOutput(symbol, code, outPtr, outLen, free, expectedSchemas);
-        }
-        finally
-        {
-            Array.Clear(request, 0, request.Length);
-        }
-    }
-
-    private static void RequireAbi()
-    {
-        if (!TryGetAbiVersion(out var version))
-        {
-            throw new InvalidOperationException(
-                $"{LibraryName} is unavailable; install the native bridge before using privacy FFI.");
-        }
-
-        if (version < RequiredBridgeAbiVersion)
-        {
-            throw new InvalidOperationException(
-                $"{LibraryName} ABI v{RequiredBridgeAbiVersion} is required for privacy FFI, found v{version}.");
-        }
-
-        if (!TryProbeRequiredSymbols())
-        {
-            throw new InvalidOperationException(
-                $"{LibraryName} ABI v{RequiredBridgeAbiVersion} privacy FFI surface is incomplete.");
-        }
-    }
-
-    internal static byte[] ReadPrivacyOutput(
-        string symbol,
-        int code,
-        IntPtr outPtr,
-        UIntPtr outLen,
-        params byte[] expectedSchemaBytes)
-    {
-        return ReadPrivacyOutput(symbol, code, outPtr, outLen, NativeFree, expectedSchemaBytes);
-    }
-
-    internal static byte[] ReadPrivacyOutput(
-        string symbol,
-        int code,
-        IntPtr outPtr,
-        UIntPtr outLen,
-        Action<IntPtr> free,
-        params byte[] expectedSchemaBytes)
-    {
-        try
-        {
-            if (code != 0)
-            {
-                throw new InvalidOperationException($"{symbol} failed with bridge error code {code}.");
-            }
-
-            var schemas = RequireExplicitPrivacyResultSchemas(symbol, expectedSchemaBytes);
-
-            if (outPtr == IntPtr.Zero)
-            {
-                throw new InvalidOperationException($"{symbol} returned a null output pointer.");
-            }
-
-            var length = CheckedArchiveLength(symbol, outLen);
-            var result = new byte[length];
-            try
-            {
-                Marshal.Copy(outPtr, result, 0, length);
-                if (!IsNoritoV1Archive(result))
-                {
-                    throw new InvalidOperationException($"{symbol} returned invalid Norito V1 archive.");
-                }
-                if (!HasNonEmptyPrivacyNoritoPayload(result))
-                {
-                    throw new InvalidOperationException(
-                        $"{symbol} returned empty privacy result payload.");
-                }
-                if (!HasNoritoSchema(result, schemas))
-                {
-                    throw new InvalidOperationException(
-                        $"{symbol} returned unexpected privacy result schema.");
-                }
-                return result;
-            }
-            catch
-            {
-                Clear(result);
-                throw;
-            }
-        }
-        finally
-        {
-            if (outPtr != IntPtr.Zero)
-            {
-                ClearNativeBuffer(outPtr, outLen);
-                free(outPtr);
+                NativeFree(pointer);
             }
         }
     }
 
-    private static int CheckedArchiveLength(string symbol, UIntPtr outLen)
-    {
-        var length = outLen.ToUInt64();
-        if (length == 0)
-        {
-            throw new InvalidOperationException($"{symbol} returned empty output.");
-        }
+    [DllImport(
+        LibraryName,
+        EntryPoint = "connect_norito_bridge_abi_version",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint NativeBridgeAbiVersion();
 
-        if (length > PrivacyNativeArchiveMaxBytes)
-        {
-            throw new InvalidOperationException($"{symbol} returned oversized output.");
-        }
+    [DllImport(
+        LibraryName,
+        EntryPoint = "iroha_privacy_capabilities_v1",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeCapabilities(out IntPtr output, out UIntPtr outputLength);
 
-        return (int)length;
-    }
-
-    internal static bool IsValidProbeResult(
-        int code,
-        IntPtr outPtr,
-        UIntPtr outLen,
-        params byte[] expectedSchemaBytes)
-    {
-        var length = outLen.ToUInt64();
-        if (code != 0
-            || outPtr == IntPtr.Zero
-            || length == 0
-            || length > PrivacyNativeArchiveMaxBytes)
-        {
-            return false;
-        }
-
-        var output = new byte[(int)length];
-        try
-        {
-            if (expectedSchemaBytes.Length == 0)
-            {
-                return false;
-            }
-            Marshal.Copy(outPtr, output, 0, output.Length);
-            return IsNoritoV1Archive(output)
-                && HasNonEmptyPrivacyNoritoPayload(output)
-                && HasNoritoSchema(output, expectedSchemaBytes);
-        }
-        finally
-        {
-            Clear(output);
-            ClearNativeBuffer(outPtr, outLen);
-        }
-    }
-
-    internal static bool IsNoritoV1Archive(byte[] archive)
-    {
-        if (archive.Length < PrivacyNoritoHeaderBytes
-            || archive.Length > PrivacyNativeArchiveMaxBytes)
-        {
-            return false;
-        }
-
-        for (var index = 0; index < PrivacyNoritoMagic.Length; index++)
-        {
-            if (archive[index] != PrivacyNoritoMagic[index])
-            {
-                return false;
-            }
-        }
-
-        if (archive[4] != 0 || archive[5] != 0 || archive[22] != 0)
-        {
-            return false;
-        }
-
-        var flags = archive[39];
-        if ((flags & ~PrivacyNoritoSupportedFlagsMask) != 0)
-        {
-            return false;
-        }
-
-        if ((flags & PrivacyNoritoFieldBitsetFlag) != 0
-            && (flags & PrivacyNoritoFieldBitsetRequiredFlags) != PrivacyNoritoFieldBitsetRequiredFlags)
-        {
-            return false;
-        }
-
-        var payloadLength = ReadUInt64LittleEndian(archive, 23);
-        if (payloadLength > int.MaxValue - PrivacyNoritoHeaderBytes)
-        {
-            return false;
-        }
-
-        var minimumLength = PrivacyNoritoHeaderBytes + (int)payloadLength;
-        if (archive.Length < minimumLength)
-        {
-            return false;
-        }
-
-        var paddingLength = archive.Length - minimumLength;
-        if (paddingLength > PrivacyNoritoMaxHeaderPaddingBytes)
-        {
-            return false;
-        }
-
-        for (var index = PrivacyNoritoHeaderBytes;
-             index < PrivacyNoritoHeaderBytes + paddingLength;
-             index++)
-        {
-            if (archive[index] != 0)
-            {
-                return false;
-            }
-        }
-
-        var payloadOffset = PrivacyNoritoHeaderBytes + paddingLength;
-        var expectedCrc = ReadUInt64LittleEndian(archive, 31);
-        return PrivacyCrc64(archive, payloadOffset, archive.Length - payloadOffset) == expectedCrc;
-    }
-
-    internal static bool HasNonEmptyPrivacyNoritoPayload(byte[] archive)
-    {
-        return IsNoritoV1Archive(archive) && ReadUInt64LittleEndian(archive, 23) > 0;
-    }
-
-    internal static bool HasNoritoSchema(byte[] archive, params byte[] expectedSchemaBytes)
-    {
-        if (expectedSchemaBytes.Length == 0)
-        {
-            return false;
-        }
-
-        if (archive.Length < 22)
-        {
-            return false;
-        }
-
-        foreach (var expectedSchemaByte in expectedSchemaBytes)
-        {
-            var matches = true;
-            for (var index = 6; index < 22; index++)
-            {
-                if (archive[index] != expectedSchemaByte)
-                {
-                    matches = false;
-                    break;
-                }
-            }
-
-            if (matches)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static byte[] PrivacyRequestTextBytes(string value, string parameterName)
-    {
-        if (value is null)
-        {
-            throw new ArgumentNullException(parameterName);
-        }
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException(
-                "Privacy request text field must not be empty or whitespace.",
-                parameterName);
-        }
-        foreach (var character in value)
-        {
-            if (char.IsWhiteSpace(character))
-            {
-                throw new ArgumentException(
-                    "Privacy request text field must not contain whitespace.",
-                    parameterName);
-            }
-            if (char.IsControl(character))
-            {
-                throw new ArgumentException(
-                    "Privacy request text field must not contain control characters.",
-                    parameterName);
-            }
-        }
-        var bytes = Encoding.UTF8.GetBytes(value);
-        if (bytes.Length > PrivacyRequestTextFieldMaxBytes)
-        {
-            throw new ArgumentException(
-                $"Privacy request text field must not exceed {PrivacyRequestTextFieldMaxBytes} bytes.",
-                parameterName);
-        }
-        return bytes;
-    }
-
-    private static byte[] PrivacyRequestComponentBytes(
-        ReadOnlySpan<byte> value,
-        string parameterName,
-        int maxBytes,
-        bool allowEmpty)
-    {
-        if (!allowEmpty && value.IsEmpty)
-        {
-            throw new ArgumentException($"{parameterName} must not be empty.", parameterName);
-        }
-        if (value.Length > maxBytes)
-        {
-            throw new ArgumentException(
-                $"{parameterName} must not exceed {maxBytes} bytes.",
-                parameterName);
-        }
-        return value.ToArray();
-    }
-
-    private static byte[] ExpectedPrivacyResultSchemas(string symbol)
-    {
-        return symbol switch
-        {
-            "iroha_privacy_capabilities_v1" => new[] { PrivacyCapabilitiesResultSchemaByte },
-            "iroha_privacy_proof_request_v1" => new[] { PrivacyRequestSchemaByte },
-            "iroha_privacy_build_proof_v1" => new[] { PrivacyBuildProofResultSchemaByte },
-            "iroha_privacy_verify_proof_v1" => new[] { PrivacyVerifyProofResultSchemaByte },
-            _ => Array.Empty<byte>(),
-        };
-    }
-
-    private static byte[] RequireKnownPrivacyResultSymbol(string symbol)
-    {
-        var schemas = ExpectedPrivacyResultSchemas(symbol);
-        if (schemas.Length == 0)
-        {
-            throw new InvalidOperationException(
-                $"{symbol} is not a supported privacy native operation.");
-        }
-        return schemas;
-    }
-
-    private static byte[] RequireExplicitPrivacyResultSchemas(
-        string symbol,
-        byte[]? expectedSchemaBytes)
-    {
-        var schemas = RequireKnownPrivacyResultSymbol(symbol);
-        if (expectedSchemaBytes is null || expectedSchemaBytes.Length == 0)
-        {
-            throw new InvalidOperationException(
-                $"{symbol} requires explicit privacy result schemas.");
-        }
-        if (!PrivacyResultSchemasEqual(expectedSchemaBytes, schemas))
-        {
-            throw new InvalidOperationException(
-                $"{symbol} expected privacy result schemas do not match the supported operation.");
-        }
-        return expectedSchemaBytes;
-    }
-
-    private static bool PrivacyResultSchemasEqual(byte[] left, byte[] right)
-    {
-        if (left.Length != right.Length)
-        {
-            return false;
-        }
-
-        for (var index = 0; index < left.Length; index++)
-        {
-            if (left[index] != right[index])
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static ulong[] BuildPrivacyCrc64Table()
-    {
-        var table = new ulong[256];
-        for (var index = 0; index < table.Length; index++)
-        {
-            var crc = (ulong)index;
-            for (var bit = 0; bit < 8; bit++)
-            {
-                crc = (crc & 1UL) != 0
-                    ? (crc >> 1) ^ PrivacyCrc64ReflectedPoly
-                    : crc >> 1;
-            }
-            table[index] = crc;
-        }
-        return table;
-    }
-
-    private static byte[] BuildPrivacyNativeAvailabilityProbeArchive()
-    {
-        var archive = new byte[PrivacyNoritoHeaderBytes];
-        PrivacyNoritoMagic.CopyTo(archive, 0);
-        Array.Fill(archive, PrivacyRequestSchemaByte, 6, 16);
-        return archive;
-    }
-
-    private static ulong PrivacyCrc64(byte[] archive, int offset, int length)
-    {
-        var crc = ulong.MaxValue;
-        for (var index = offset; index < offset + length; index++)
-        {
-            crc = PrivacyCrc64Table[(byte)(crc ^ archive[index])] ^ (crc >> 8);
-        }
-        return crc ^ ulong.MaxValue;
-    }
-
-    private static ulong ReadUInt64LittleEndian(byte[] archive, int offset)
-    {
-        ulong value = 0;
-        for (var index = 0; index < 8; index++)
-        {
-            value |= (ulong)archive[offset + index] << (8 * index);
-        }
-        return value;
-    }
-
-    internal static byte[] PrivacyNativeAvailabilityProbeArchive()
-    {
-        return (byte[])PrivacyNativeAvailabilityProbeArchiveBytes.Clone();
-    }
-
-    private static bool TryProbeRequiredSymbols()
-    {
-        try
-        {
-            if (!Probe(NativeCapabilities, PrivacyCapabilitiesResultSchemaByte)
-                || !Probe(NativeProofRequest, PrivacyRequestSchemaByte)
-                || !Probe(NativeBuildProof, PrivacyBuildProofResultSchemaByte)
-                || !Probe(NativeVerifyProof, PrivacyVerifyProofResultSchemaByte))
-            {
-                return false;
-            }
-            NativeFree(IntPtr.Zero);
-            return true;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    private static bool Probe(NativeCapabilitiesCall nativeCall, byte expectedSchemaByte)
-    {
-        var code = nativeCall(out var outPtr, out var outLen);
-        return ConsumeProbeResult(code, outPtr, outLen, expectedSchemaByte);
-    }
-
-    private static bool Probe(NativeProofRequestCall nativeCall, byte expectedSchemaByte)
-    {
-        var algorithmId = Encoding.UTF8.GetBytes("verange-transparent-range-v1");
-        var entrypoint = Encoding.UTF8.GetBytes("buildVeRangeProofV1");
-        var vkRef = Encoding.UTF8.GetBytes("bulletproofs:verange_transparent_range_v1");
-        var publicInputs = Encoding.UTF8.GetBytes("public-inputs");
-        var witness = Array.Empty<byte>();
-        var proof = Array.Empty<byte>();
-        try
-        {
-            var code = nativeCall(
-                algorithmId,
-                (UIntPtr)algorithmId.Length,
-                entrypoint,
-                (UIntPtr)entrypoint.Length,
-                vkRef,
-                (UIntPtr)vkRef.Length,
-                publicInputs,
-                (UIntPtr)publicInputs.Length,
-                witness,
-                UIntPtr.Zero,
-                proof,
-                UIntPtr.Zero,
-                out var outPtr,
-                out var outLen);
-            return ConsumeProbeResult(code, outPtr, outLen, expectedSchemaByte);
-        }
-        finally
-        {
-            Clear(algorithmId);
-            Clear(entrypoint);
-            Clear(vkRef);
-            Clear(publicInputs);
-        }
-    }
-
-    private static bool Probe(NativeProofCall nativeCall, byte expectedSchemaByte)
-    {
-        var request = PrivacyNativeAvailabilityProbeArchive();
-        try
-        {
-            var code = nativeCall(request, (UIntPtr)request.Length, out var outPtr, out var outLen);
-            return ConsumeProbeResult(code, outPtr, outLen, expectedSchemaByte);
-        }
-        finally
-        {
-            Clear(request);
-        }
-    }
-
-    private static void Clear(byte[]? buffer)
-    {
-        if (buffer is not null)
-        {
-            CryptographicOperations.ZeroMemory(buffer);
-        }
-    }
-
-    private static bool ConsumeProbeResult(
-        int code,
-        IntPtr outPtr,
-        UIntPtr outLen,
-        byte expectedSchemaByte)
-    {
-        try
-        {
-            return IsValidProbeResult(code, outPtr, outLen, expectedSchemaByte);
-        }
-        finally
-        {
-            if (outPtr != IntPtr.Zero)
-            {
-                ClearNativeBuffer(outPtr, outLen);
-                NativeFree(outPtr);
-            }
-        }
-    }
-
-    private static void ClearNativeBuffer(IntPtr ptr, UIntPtr outLen)
-    {
-        if (ptr == IntPtr.Zero)
-        {
-            return;
-        }
-
-        var length = outLen.ToUInt64();
-        if (length == 0 || length > PrivacyNativeArchiveMaxBytes)
-        {
-            return;
-        }
-
-        var remaining = (int)length;
-        var offset = 0;
-        while (remaining > 0)
-        {
-            var chunk = Math.Min(remaining, ZeroClearChunk.Length);
-            Marshal.Copy(ZeroClearChunk, 0, IntPtr.Add(ptr, offset), chunk);
-            remaining -= chunk;
-            offset += chunk;
-        }
-    }
-
-    private static bool TryGetAbiVersion(out uint version)
-    {
-        try
-        {
-            version = NativeAbiVersion();
-            return true;
-        }
-        catch (Exception)
-        {
-            version = 0;
-            return false;
-        }
-    }
-
-    [DllImport(LibraryName, EntryPoint = "connect_norito_bridge_abi_version", CallingConvention = CallingConvention.Cdecl)]
-    private static extern uint NativeAbiVersion();
-
-    [DllImport(LibraryName, EntryPoint = "iroha_privacy_capabilities_v1", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int NativeCapabilities(out IntPtr outPtr, out UIntPtr outLen);
-
-    [DllImport(LibraryName, EntryPoint = "iroha_privacy_proof_request_v1", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int NativeProofRequest(
-        byte[] algorithmIdPtr,
-        UIntPtr algorithmIdLen,
-        byte[] entrypointPtr,
-        UIntPtr entrypointLen,
-        byte[] vkRefPtr,
-        UIntPtr vkRefLen,
-        byte[] publicInputsPtr,
-        UIntPtr publicInputsLen,
-        byte[] witnessPtr,
-        UIntPtr witnessLen,
-        byte[] proofPtr,
-        UIntPtr proofLen,
-        out IntPtr outPtr,
-        out UIntPtr outLen);
-
-    [DllImport(LibraryName, EntryPoint = "iroha_privacy_build_proof_v1", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int NativeBuildProof(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);
-
-    [DllImport(LibraryName, EntryPoint = "iroha_privacy_verify_proof_v1", CallingConvention = CallingConvention.Cdecl)]
-    private static extern int NativeVerifyProof(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);
-
-    [DllImport(LibraryName, EntryPoint = "iroha_privacy_free_buffer", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void NativeFree(IntPtr ptr);
+    [DllImport(
+        LibraryName,
+        EntryPoint = "iroha_privacy_free_buffer",
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern void NativeFree(IntPtr pointer);
 }

@@ -199,6 +199,15 @@ class KotodamaPerfGateTests(unittest.TestCase):
                 PERF.REGRESSION_BENCHMARKS
             )
         )
+        self.assertEqual(33, len(PERF.REGRESSION_BENCHMARKS))
+        self.assertEqual(
+            set(PERF.REGRESSION_BENCHMARKS),
+            set(PERF.PREDECESSOR_TIMED_BODY_SHA256),
+        )
+        self.assertEqual(
+            "a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab",
+            PERF.PREDECESSOR_SHA,
+        )
 
         populate(self.root, "base")
         populate(self.root, "new")
@@ -274,7 +283,138 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertIn("resolve_function_signatures", interface)
         self.assertNotIn(".type_effect()", interface)
 
+    def test_all_comparable_workload_classes_reject_timed_body_drift(self) -> None:
+        def mutate_after(
+            source: str, anchor: str, old: str, new: str
+        ) -> str:
+            anchor_index = source.index(anchor)
+            old_index = source.find(old, anchor_index)
+            self.assertGreaterEqual(old_index, 0, f"{old!r} after {anchor!r}")
+            return source[:old_index] + new + source[old_index + len(old) :]
+
+        mutations = (
+            (
+                "parse",
+                0,
+                '"kotodama_phase_parse"',
+                ".parse()",
+                ".resolve()",
+            ),
+            (
+                "semantic",
+                0,
+                '"kotodama_phase_semantic"',
+                ".type_effect()",
+                ".lower_ir()",
+            ),
+            (
+                "lowering",
+                0,
+                '"kotodama_phase_ir_lower"',
+                ".lower_ir()",
+                ".construct_ssa()",
+            ),
+            (
+                "list-native",
+                0,
+                '"kotodama_list_get_64"',
+                "get_words(&vm, handle, layout, 62)",
+                "get_words(&vm, handle, layout, 61)",
+            ),
+            (
+                "list-sugar",
+                0,
+                '"kotodama_list_comprehension_runtime_64"',
+                "sugar_vm.register(10)",
+                "sugar_vm.register(11)",
+            ),
+            (
+                "quantity-direct",
+                0,
+                '"kotodama_quantity_add"',
+                ".checked_add(&add_rhs)",
+                ".checked_sub(&add_rhs)",
+            ),
+            (
+                "quantity-shared",
+                0,
+                '"kotodama_quantity_div_round_floor"',
+                ".try_div_decimal_round(",
+                ".try_div_decimal_exact(",
+            ),
+            (
+                "quantity-mode-binding",
+                0,
+                '"kotodama_quantity_div_round_floor"',
+                "RoundingMode::Floor",
+                "RoundingMode::Ceil",
+            ),
+            (
+                "typed-query",
+                2,
+                PERF.TYPED_QUERY_BENCHMARK_MARKER,
+                "host.reset_core_query_page_metrics();",
+                "std::hint::black_box(0); host.reset_core_query_page_metrics();",
+            ),
+            (
+                "typed-query-family-binding",
+                2,
+                '"typed_core_query_accounts_page_64"',
+                "CoreQueryEntityTagV1::Account",
+                "CoreQueryEntityTagV1::Domain",
+            ),
+            (
+                "ivm-runtime",
+                0,
+                '"kotodama_runtime_warm_add"',
+                "std::hint::black_box(vm.register(10));",
+                "std::hint::black_box(vm.register(11));",
+            ),
+            (
+                "core-runtime",
+                1,
+                '"kotodama_core_runtime_warm_add"',
+                "std::hint::black_box(runtime.register(10));",
+                "std::hint::black_box(runtime.register(11));",
+            ),
+        )
+
+        for label, source_index, anchor, old, new in mutations:
+            with self.subTest(workload_class=label):
+                sources = list(PERF.BENCHMARK_SOURCES)
+                original = sources[source_index].read_text(encoding="utf-8")
+                mutated = self.root / f"{label}.rs"
+                mutated.write_text(
+                    mutate_after(original, anchor, old, new),
+                    encoding="utf-8",
+                )
+                sources[source_index] = mutated
+                with self.assertRaisesRegex(
+                    PERF.GateError, "comparable timed-body drift"
+                ):
+                    PERF.validate_benchmark_policy(tuple(sources))
+
+    def test_timed_body_policy_rejects_missing_or_unpinned_coverage(self) -> None:
+        PERF.validate_benchmark_policy()
+        self.assertEqual(
+            set(PERF.REGRESSION_BENCHMARKS),
+            set(PERF._benchmark_timed_bodies(PERF.BENCHMARK_SOURCES, "candidate")),
+        )
+
+        missing = dict(PERF.PREDECESSOR_TIMED_BODY_SHA256)
+        missing.pop(PERF.REGRESSION_BENCHMARKS[0])
+        with mock.patch.object(PERF, "PREDECESSOR_TIMED_BODY_SHA256", missing):
+            with self.assertRaisesRegex(PERF.GateError, "coverage is incomplete"):
+                PERF.validate_benchmark_policy()
+
     def test_revision_inventory_rejects_missing_duplicate_and_misclassified_ids(self) -> None:
+        timed_body_policy = mock.patch.object(
+            PERF,
+            "validate_comparable_timed_bodies",
+            return_value={name: name for name in PERF.REGRESSION_BENCHMARKS},
+        )
+        timed_body_policy.start()
+        self.addCleanup(timed_body_policy.stop)
         base = self.root / "base.rs"
         candidate = self.root / "candidate.rs"
 
@@ -431,6 +571,57 @@ class KotodamaPerfGateTests(unittest.TestCase):
             "  representative-regression:\n", 1
         )[1]
         self.assertIn('      RUSTUP_TOOLCHAIN: "1.93.1"', representative_job)
+
+        comparison_marker = "      - name: Check out comparison base\n"
+        self.assertEqual(representative_job.count(comparison_marker), 1)
+        comparison_step = representative_job.split(
+            comparison_marker, 1
+        )[1].split("\n      - name:", 1)[0]
+        self.assertIn(
+            f"          ref: {PERF.PREDECESSOR_SHA}", comparison_step
+        )
+        self.assertNotIn("github.event.pull_request.base.sha", comparison_step)
+        self.assertNotIn(
+            "github.event.repository.default_branch", comparison_step
+        )
+
+        lock_marker = "      - name: Require regular revision lockfiles\n"
+        self.assertEqual(representative_job.count(lock_marker), 1)
+        lock_step = representative_job.split(lock_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            "for lock in candidate/Cargo.lock baseline/Cargo.lock; do",
+            lock_step,
+        )
+        self.assertIn(
+            'if [[ ! -f "$lock" || -L "$lock" ]]; then', lock_step
+        )
+        self.assertIn("exit 1", lock_step)
+        self.assertNotIn("|| true", lock_step)
+        self.assertNotIn("continue", lock_step)
+        self.assertNotRegex(
+            lock_step,
+            r"(?m)^\s*(?:cargo|cp|curl|install|ln|mv|python|rsync|touch|wget)\b",
+        )
+
+        python_marker = "      - name: Install Python 3.12\n"
+        self.assertEqual(representative_job.count(python_marker), 1)
+        python_step = representative_job.split(python_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            "uses: actions/setup-python@"
+            "a26af69be951a213d495a4c3e4e4022e16d87065",
+            python_step,
+        )
+        self.assertIn('          python-version: "3.12"', python_step)
+        regression_test_marker = "      - name: Test regression checker\n"
+        self.assertLess(
+            representative_job.index(python_marker),
+            representative_job.index(regression_test_marker),
+        )
+
         toolchain_marker = "      - name: Install Rust toolchain\n"
         self.assertEqual(representative_job.count(toolchain_marker), 1)
         toolchain_step = representative_job.split(toolchain_marker, 1)[1].split(
@@ -466,6 +657,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertLess(
             workflow.index(inventory_marker), workflow.index(base_marker)
         )
+        self.assertLess(workflow.index(lock_marker), workflow.index(base_marker))
         base_step = workflow.split(base_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
@@ -483,6 +675,9 @@ class KotodamaPerfGateTests(unittest.TestCase):
 
         candidate_marker = "      - name: Measure candidate revision\n"
         self.assertEqual(workflow.count(candidate_marker), 1)
+        self.assertLess(
+            workflow.index(lock_marker), workflow.index(candidate_marker)
+        )
         candidate_step = workflow.split(candidate_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]

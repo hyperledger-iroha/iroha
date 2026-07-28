@@ -1092,10 +1092,13 @@ one exact runner regression. Two cross-platform lifecycle V3 crash regressions
 cover state replacement before directory sync and root replacement before
 predecessor cleanup. Rejecting a matching CommitQC from a foreign height
 context before Apply schedules work adds one exact `v2_effects` regression.
-The current source-bound inventory therefore contains 733 exact tests across
+Five exact-Serve lifecycle regressions cover Pending/Reserved rollback,
+shutdown rollback, route-neutral tombstone replay, and cached replay after the
+singular future-slot barrier.
+The current source-bound inventory therefore contains 738 exact tests across
 38 modules and 81 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66`.
+`667de672926523b356e785a3d11ca1a31875b4cbb7057a0a03c5943a3867bb1f`.
 Nine of those legs execute the separate 277-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `dc6e4c3eece63441e9ba5ffdf6b603665e21cf6086a3a6a1307b45829a678510`.
@@ -1343,7 +1346,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 733-test inventory is a mechanically checked
+The current 738-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1528,7 +1531,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 733 exact production
+Before those longer scenarios, the PR gate inventories 738 exact production
 liveness tests and executes all 38 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 277-test
 focus inventory. The
@@ -1658,8 +1661,9 @@ closure adds 26 exact regressions and retires eight obsolete route-free/V2
 selectors, producing the 723-test checkpoint across 38 modules and 81 legs.
 The replay-safe locked-proposal authorization regression produces the 724-test
 checkpoint. The exact runner replay-owner regression produces the 732-test
-checkpoint. The foreign-context CommitQC Apply rejection brings the current
-inventory to 733 tests without adding a module or leg. The rollover
+checkpoint. The foreign-context CommitQC Apply rejection produces the
+733-test checkpoint. Five exact-Serve lifecycle regressions bring the current
+inventory to 738 tests without adding a module or leg. The rollover
 slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1931,7 +1935,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 81 pre-network corridor legs and
-their exact 733-test production inventory, the separate 277-test G-UNIT
+their exact 738-test production inventory, the separate 277-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

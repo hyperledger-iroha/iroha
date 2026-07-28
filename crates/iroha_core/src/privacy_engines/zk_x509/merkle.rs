@@ -44,6 +44,12 @@ pub(crate) enum ZkX509MerkleErrorV1 {
     /// An unsigned serial is zero, negative-looking, non-minimal, or oversized.
     #[error("zk-X509 certificate serial is not canonical")]
     InvalidSerial,
+    /// A complete sparse input contains the same derived key more than once.
+    #[error("zk-X509 complete sparse accumulator contains duplicate keys")]
+    DuplicateKey,
+    /// A requested CA member does not occur in the complete trust-store input.
+    #[error("zk-X509 requested CA member is absent from the complete trust store")]
+    MissingMember,
     /// The supplied sibling count differs from the fixed tree depth.
     #[error("zk-X509 {tree} path has {actual} siblings; expected {expected}")]
     InvalidPathLength {
@@ -138,6 +144,78 @@ pub(crate) fn crl_leaf_v1(
 pub(crate) fn crl_empty_leaf_v1() -> ZkX509MerkleDigestV1 {
     hash_frame_v1(ZK_X509_CRL_EMPTY_LEAF_DOMAIN_V1, &[])
         .expect("fixed empty CRL leaf frame is representable")
+}
+
+/// Reconstruct the complete issuer-scoped CRL sparse-tree root.
+///
+/// `serials` must contain every revoked serial in the signed base CRL.  The
+/// function derives all 256-bit keys, rejects duplicates, and fills every
+/// absent subtree with the unique recursively derived empty root.  Runtime is
+/// `O(n log n + 256n)` for at most the profile's bounded CRL entry count; it
+/// never allocates the exponentially large logical tree.
+pub(crate) fn crl_root_from_complete_serials_v1(
+    issuer_spki_der: &[u8],
+    serials: &[&[u8]],
+) -> Result<ZkX509MerkleDigestV1, ZkX509MerkleErrorV1> {
+    require_nonempty("issuer_spki_der", issuer_spki_der)?;
+
+    let mut entries = Vec::with_capacity(serials.len());
+    for serial in serials {
+        let key = crl_key_v1(issuer_spki_der, serial)?;
+        let leaf = crl_leaf_v1(issuer_spki_der, serial)?;
+        entries.push((key, leaf));
+    }
+    entries.sort_unstable_by_key(|entry| entry.0);
+    if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(ZkX509MerkleErrorV1::DuplicateKey);
+    }
+
+    let empty_roots = crl_empty_subtree_roots_v1()?;
+    crl_sparse_subtree_root_v1(&entries, 0, &empty_roots)
+}
+
+/// Reconstruct a CA sparse-tree root from the complete governed SPKI set.
+///
+/// Ordering is irrelevant, while duplicate derived keys are rejected.  This
+/// is the authoritative publisher-side counterpart to
+/// [`verify_ca_membership_v1`].
+pub(crate) fn ca_root_from_complete_spkis_v1(
+    root_spkis_der: &[&[u8]],
+) -> Result<ZkX509MerkleDigestV1, ZkX509MerkleErrorV1> {
+    let entries = ca_entries_from_complete_spkis_v1(root_spkis_der)?;
+    let empty_roots = ca_empty_subtree_roots_v1()?;
+    ca_sparse_subtree_root_v1(&entries, 0, &empty_roots)
+}
+
+/// Construct the sole canonical membership path for one governed root SPKI.
+pub(crate) fn ca_membership_path_from_complete_spkis_v1(
+    root_spkis_der: &[&[u8]],
+    member_spki_der: &[u8],
+) -> Result<ZkX509CaMembershipPathV1, ZkX509MerkleErrorV1> {
+    let entries = ca_entries_from_complete_spkis_v1(root_spkis_der)?;
+    let member_key = ca_key_v1(member_spki_der)?;
+    let member_leaf = ca_leaf_v1(member_spki_der)?;
+    if entries
+        .binary_search_by_key(&member_key, |entry| entry.0)
+        .ok()
+        .and_then(|index| entries.get(index))
+        .is_none_or(|entry| entry.1 != member_leaf)
+    {
+        return Err(ZkX509MerkleErrorV1::MissingMember);
+    }
+    let empty_roots = ca_empty_subtree_roots_v1()?;
+    let mut siblings_root_to_leaf = Vec::with_capacity(ZK_X509_CA_TREE_DEPTH_V1);
+    collect_ca_siblings_v1(
+        &entries,
+        &member_key,
+        0,
+        &empty_roots,
+        &mut siblings_root_to_leaf,
+    )?;
+    siblings_root_to_leaf.reverse();
+    Ok(ZkX509CaMembershipPathV1 {
+        siblings: siblings_root_to_leaf,
+    })
 }
 
 /// Compute the root selected by a CA membership witness.
@@ -248,6 +326,138 @@ fn fold_path_v1(
         current = hash_frame_v1(node_domain, &[&height, left, right])?;
     }
     Ok(current)
+}
+
+fn crl_empty_subtree_roots_v1()
+-> Result<[ZkX509MerkleDigestV1; ZK_X509_CRL_TREE_DEPTH_V1 + 1], ZkX509MerkleErrorV1> {
+    let mut roots = [[0_u8; 32]; ZK_X509_CRL_TREE_DEPTH_V1 + 1];
+    roots[0] = crl_empty_leaf_v1();
+    for height in 1..=ZK_X509_CRL_TREE_DEPTH_V1 {
+        let encoded_height = u16::try_from(height)
+            .map_err(|_| ZkX509MerkleErrorV1::FrameLengthOverflow)?
+            .to_be_bytes();
+        roots[height] = hash_frame_v1(
+            ZK_X509_CRL_NODE_DOMAIN_V1,
+            &[&encoded_height, &roots[height - 1], &roots[height - 1]],
+        )?;
+    }
+    Ok(roots)
+}
+
+fn ca_entries_from_complete_spkis_v1(
+    root_spkis_der: &[&[u8]],
+) -> Result<Vec<(ZkX509MerkleDigestV1, ZkX509MerkleDigestV1)>, ZkX509MerkleErrorV1> {
+    let mut entries = Vec::with_capacity(root_spkis_der.len());
+    for spki in root_spkis_der {
+        entries.push((ca_key_v1(spki)?, ca_leaf_v1(spki)?));
+    }
+    entries.sort_unstable_by_key(|entry| entry.0);
+    if entries.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err(ZkX509MerkleErrorV1::DuplicateKey);
+    }
+    Ok(entries)
+}
+
+fn ca_empty_subtree_roots_v1()
+-> Result<[ZkX509MerkleDigestV1; ZK_X509_CA_TREE_DEPTH_V1 + 1], ZkX509MerkleErrorV1> {
+    let mut roots = [[0_u8; 32]; ZK_X509_CA_TREE_DEPTH_V1 + 1];
+    roots[0] = ca_empty_leaf_v1();
+    for height in 1..=ZK_X509_CA_TREE_DEPTH_V1 {
+        let encoded_height = u16::try_from(height)
+            .map_err(|_| ZkX509MerkleErrorV1::FrameLengthOverflow)?
+            .to_be_bytes();
+        roots[height] = hash_frame_v1(
+            ZK_X509_CA_NODE_DOMAIN_V1,
+            &[&encoded_height, &roots[height - 1], &roots[height - 1]],
+        )?;
+    }
+    Ok(roots)
+}
+
+fn ca_sparse_subtree_root_v1(
+    entries: &[(ZkX509MerkleDigestV1, ZkX509MerkleDigestV1)],
+    depth: usize,
+    empty_roots: &[ZkX509MerkleDigestV1; ZK_X509_CA_TREE_DEPTH_V1 + 1],
+) -> Result<ZkX509MerkleDigestV1, ZkX509MerkleErrorV1> {
+    let remaining_height = ZK_X509_CA_TREE_DEPTH_V1
+        .checked_sub(depth)
+        .ok_or(ZkX509MerkleErrorV1::FrameLengthOverflow)?;
+    if entries.is_empty() {
+        return Ok(empty_roots[remaining_height]);
+    }
+    if depth == ZK_X509_CA_TREE_DEPTH_V1 {
+        debug_assert_eq!(entries.len(), 1);
+        return Ok(entries[0].1);
+    }
+    let first_right = entries.partition_point(|entry| !key_bit_from_msb(&entry.0, depth));
+    let left = ca_sparse_subtree_root_v1(&entries[..first_right], depth + 1, empty_roots)?;
+    let right = ca_sparse_subtree_root_v1(&entries[first_right..], depth + 1, empty_roots)?;
+    let encoded_height = u16::try_from(remaining_height)
+        .map_err(|_| ZkX509MerkleErrorV1::FrameLengthOverflow)?
+        .to_be_bytes();
+    hash_frame_v1(ZK_X509_CA_NODE_DOMAIN_V1, &[&encoded_height, &left, &right])
+}
+
+fn collect_ca_siblings_v1(
+    entries: &[(ZkX509MerkleDigestV1, ZkX509MerkleDigestV1)],
+    member_key: &ZkX509MerkleDigestV1,
+    depth: usize,
+    empty_roots: &[ZkX509MerkleDigestV1; ZK_X509_CA_TREE_DEPTH_V1 + 1],
+    siblings_root_to_leaf: &mut Vec<ZkX509MerkleDigestV1>,
+) -> Result<(), ZkX509MerkleErrorV1> {
+    if depth == ZK_X509_CA_TREE_DEPTH_V1 {
+        return if entries.len() == 1 && entries[0].0 == *member_key {
+            Ok(())
+        } else {
+            Err(ZkX509MerkleErrorV1::MissingMember)
+        };
+    }
+    let first_right = entries.partition_point(|entry| !key_bit_from_msb(&entry.0, depth));
+    let (member_entries, sibling_entries) = if key_bit_from_msb(member_key, depth) {
+        (&entries[first_right..], &entries[..first_right])
+    } else {
+        (&entries[..first_right], &entries[first_right..])
+    };
+    siblings_root_to_leaf.push(ca_sparse_subtree_root_v1(
+        sibling_entries,
+        depth + 1,
+        empty_roots,
+    )?);
+    collect_ca_siblings_v1(
+        member_entries,
+        member_key,
+        depth + 1,
+        empty_roots,
+        siblings_root_to_leaf,
+    )
+}
+
+fn crl_sparse_subtree_root_v1(
+    entries: &[(ZkX509MerkleDigestV1, ZkX509MerkleDigestV1)],
+    depth: usize,
+    empty_roots: &[ZkX509MerkleDigestV1; ZK_X509_CRL_TREE_DEPTH_V1 + 1],
+) -> Result<ZkX509MerkleDigestV1, ZkX509MerkleErrorV1> {
+    let remaining_height = ZK_X509_CRL_TREE_DEPTH_V1
+        .checked_sub(depth)
+        .ok_or(ZkX509MerkleErrorV1::FrameLengthOverflow)?;
+    if entries.is_empty() {
+        return Ok(empty_roots[remaining_height]);
+    }
+    if depth == ZK_X509_CRL_TREE_DEPTH_V1 {
+        debug_assert_eq!(entries.len(), 1);
+        return Ok(entries[0].1);
+    }
+
+    let first_right = entries.partition_point(|entry| !key_bit_from_msb(&entry.0, depth));
+    let left = crl_sparse_subtree_root_v1(&entries[..first_right], depth + 1, empty_roots)?;
+    let right = crl_sparse_subtree_root_v1(&entries[first_right..], depth + 1, empty_roots)?;
+    let encoded_height = u16::try_from(remaining_height)
+        .map_err(|_| ZkX509MerkleErrorV1::FrameLengthOverflow)?
+        .to_be_bytes();
+    hash_frame_v1(
+        ZK_X509_CRL_NODE_DOMAIN_V1,
+        &[&encoded_height, &left, &right],
+    )
 }
 
 fn key_bit_from_msb(key: &ZkX509MerkleDigestV1, bit_index: usize) -> bool {
@@ -388,6 +598,78 @@ mod tests {
             Err(ZkX509MerkleErrorV1::EmptyField {
                 field: "issuer_spki_der"
             })
+        );
+    }
+
+    #[test]
+    fn complete_crl_root_matches_empty_and_single_entry_paths() {
+        let issuer = b"canonical issuer SPKI";
+        let empty = crl_root_from_complete_serials_v1(issuer, &[]).expect("empty root");
+        let empty_roots = crl_empty_subtree_roots_v1().expect("empty roots");
+        assert_eq!(empty, empty_roots[ZK_X509_CRL_TREE_DEPTH_V1]);
+
+        let serial = [0x12, 0x34];
+        let serials: [&[u8]; 1] = [&serial];
+        let complete =
+            crl_root_from_complete_serials_v1(issuer, &serials).expect("single-entry root");
+        let key = crl_key_v1(issuer, &serial).expect("key");
+        let mut siblings = Vec::with_capacity(ZK_X509_CRL_TREE_DEPTH_V1);
+        for level in 0..ZK_X509_CRL_TREE_DEPTH_V1 {
+            siblings.push(empty_roots[level]);
+        }
+        let from_path = fold_path_v1(
+            crl_leaf_v1(issuer, &serial).expect("leaf"),
+            &key,
+            &siblings,
+            ZK_X509_CRL_NODE_DOMAIN_V1,
+        )
+        .expect("path root");
+        assert_eq!(complete, from_path);
+    }
+
+    #[test]
+    fn complete_crl_root_is_order_independent_and_rejects_duplicates() {
+        let issuer = b"issuer";
+        let a = [1_u8];
+        let b = [2_u8];
+        let forward: [&[u8]; 2] = [&a, &b];
+        let reverse: [&[u8]; 2] = [&b, &a];
+        assert_eq!(
+            crl_root_from_complete_serials_v1(issuer, &forward),
+            crl_root_from_complete_serials_v1(issuer, &reverse)
+        );
+
+        let duplicate: [&[u8]; 2] = [&a, &a];
+        assert_eq!(
+            crl_root_from_complete_serials_v1(issuer, &duplicate),
+            Err(ZkX509MerkleErrorV1::DuplicateKey)
+        );
+    }
+
+    #[test]
+    fn complete_ca_tree_constructs_every_canonical_membership_path() {
+        let first = b"first canonical root SPKI".as_slice();
+        let second = b"second canonical root SPKI".as_slice();
+        let third = b"third canonical root SPKI".as_slice();
+        let complete = [first, second, third];
+        let root = ca_root_from_complete_spkis_v1(&complete).expect("complete CA root");
+        assert_eq!(
+            ca_root_from_complete_spkis_v1(&[third, first, second]).expect("reordered CA root"),
+            root
+        );
+        for member in complete {
+            let path = ca_membership_path_from_complete_spkis_v1(&complete, member)
+                .expect("canonical membership path");
+            assert_eq!(path.siblings.len(), ZK_X509_CA_TREE_DEPTH_V1);
+            verify_ca_membership_v1(root, member, &path).expect("member verifies");
+        }
+        assert_eq!(
+            ca_membership_path_from_complete_spkis_v1(&complete, b"absent root SPKI"),
+            Err(ZkX509MerkleErrorV1::MissingMember)
+        );
+        assert_eq!(
+            ca_root_from_complete_spkis_v1(&[first, first]),
+            Err(ZkX509MerkleErrorV1::DuplicateKey)
         );
     }
 

@@ -666,6 +666,7 @@ BY AsyncStrongTypeProjectsAsyncType,
        AsyncTransportContentTypeInvariant,
        AsyncPacketContentTypeInvariant, AsyncPacketTyped,
        AsyncItemTyped, OverdueResponsivePackets,
+       AsyncPacketOwnsClockDeadline,
        DueSourcePackets, AsyncTimedServiceNodes
 
 THEOREM ArchiveAdmissibleOverdueHeadEnablesOwnershipExit ==
@@ -811,7 +812,8 @@ PROOF
     <2>3. AdmissibleOverdueLaneHead(Recipient, Source)
       BY <2>1a, <2>2 DEF AdmissibleOverdueLaneHead
     <2>4. Recipient \in AsyncTimedServiceNodes
-      BY <2>2 DEF OverdueResponsivePackets, Recipient
+      BY <2>2 DEF OverdueResponsivePackets,
+                     AsyncPacketOwnsClockDeadline, Recipient
     <2> QED BY <1>1, <2>1a, <2>3, <2>4,
          AdmissibleOverdueLaneHeadIsImmediatelyProductive
   <1> QED BY <1>1
@@ -1732,7 +1734,8 @@ BY OldestDueSourcePacketFacts, Isa
        PostGstAdmitHistoricalRecoveryPacket,
        AdmitIngressPacket, AdmitHiddenPacket,
        CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
-       OverdueResponsivePackets, DueSourcePackets
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+       DueSourcePackets
 
 THEOREM NonOverdueShadowAdmissionDecreasesDependencyRank ==
   \A packet \in OverdueResponsivePackets,
@@ -1977,7 +1980,9 @@ THEOREM AuthenticatedAggregateCertifiedResponseIsTimed ==
     AuthenticatedAggregateCertifiedResponsePacket(packet)
       => packet \in OverdueResponsivePackets
 BY DEF AuthenticatedAggregateCertifiedResponsePacket,
-       OverdueResponsivePackets
+       OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
+       AsyncServeTransportAdmissionGateAllows,
+       AsyncServeRequestAuthorized
 
 THEOREM ChunkAndCertifiedResponseHaveDistinctLogicalClassesAndSharedPhysicalOwner ==
   \A response, chunk:

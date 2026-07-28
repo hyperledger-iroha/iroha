@@ -20,8 +20,9 @@ TREE = "2" * 40
 LOCK = "3" * 64
 FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial "
-    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness "
-    "mutations, bounded TLC, trace replay, and production Verus"
+    "scheduler/post-decision/recovery/effect-capacity/ingress-causal-freshness/"
+    "liveness-ownership/historical-discovery-rank mutations, bounded TLC, "
+    "trace replay, and production Verus"
 )
 
 
@@ -511,6 +512,14 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
         / "scripts"
         / "formal"
         / "run_sumeragi_v2_ingress_causal_freshness_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_liveness_ownership_mutations.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh",
     )
     for entrypoint in entrypoints:
         source = entrypoint.read_text(encoding="utf-8")
@@ -1308,3 +1317,57 @@ def test_ingress_causal_freshness_mutation_is_release_gated_and_pinned() -> None
         in model
     )
     assert "ELSE ~CandidateInFlight(candidate)" in model
+
+
+def test_historical_discovery_occurrence_rank_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/"
+        "run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(
+        "run_sumeragi_v2_liveness_ownership_mutations.sh"
+    ) < gate.index(relative_runner)
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    for required in (
+        'readonly TLA2TOOLS_VERSION="1.7.4"',
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"',
+        'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.12"\'',
+        'readonly MODEL="SumeragiV2HistoricalDiscoveryOccurrenceRankMutation.tla"',
+        'readonly FIXED_CONFIG="historical_discovery_occurrence_rank_fixed.cfg"',
+        'readonly MUTANT_CONFIG="historical_discovery_plain_minimum_bug.cfg"',
+        'readonly MUTANT_FIRST_MARKER="Error: Invariant '
+        'RankNeverIncreases is violated."',
+        'readonly RETAINED_NEGATIVE_CONTROL="INVARIANT '
+        'LowerServiceStrictlyDescends"',
+        'fixed_log="$(run_tlc repaired-count-first "$FIXED_CONFIG" 0)"',
+        'mutant_log="$(run_tlc plain-minimum-mutant '
+        '"$MUTANT_CONFIG" 12)"',
+        '[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]]',
+        'grep -Eq "$TLC_FINISHED_PATTERN" <<<"$last_nonblank"',
+        'echo "[tlc] exact terminal contract passed; '
+        'LowerServiceStrictlyDescends remained an enabled negative control"',
+    ):
+        assert runner.count(required) == 1
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    for config_name, count_occurrences in (
+        ("historical_discovery_occurrence_rank_fixed.cfg", "TRUE"),
+        ("historical_discovery_plain_minimum_bug.cfg", "FALSE"),
+    ):
+        config = (formal_dir / config_name).read_text(encoding="utf-8")
+        assert config.splitlines().count(
+            f"CONSTANT CountOccurrences = {count_occurrences}"
+        ) == 1
+        assert config.splitlines().count(
+            "INVARIANT RankNeverIncreases"
+        ) == 1
+        assert config.splitlines().count(
+            "INVARIANT LowerServiceStrictlyDescends"
+        ) == 1

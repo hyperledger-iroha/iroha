@@ -12780,7 +12780,7 @@ export function buildRemoveSmartContractBytesInstruction(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildZkAtPolicyCommitment(options, context = "zkAtPolicyCommitment") {
+function buildZkAtPolicyCommitment(options, context = "zkAtPolicyCommitment") {
   const source = assertPlainObject(options, context);
   assertAllowedFields(
     source,
@@ -12920,7 +12920,7 @@ export function buildZkAtPolicyCommitment(options, context = "zkAtPolicyCommitme
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildZkAtAuthenticatorEnvelope(options) {
+function buildZkAtAuthenticatorEnvelope(options) {
   const source = assertPlainObject(options, "zkAtAuthenticatorEnvelope");
   assertAllowedFields(
     source,
@@ -12998,7 +12998,7 @@ export function buildZkAtAuthenticatorEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildZkAtPolicyProofV1(options) {
+function buildZkAtPolicyProofV1(options) {
   const source = assertPlainObject(options, "zkAtPolicyProofV1");
   assertAllowedFields(
     source,
@@ -13083,7 +13083,7 @@ export function buildZkAtPolicyProofV1(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildZkAtDevProofFixture(options) {
+function buildZkAtDevProofFixture(options) {
   const source = assertPlainObject(options, "zkAtDevProofFixture");
   assertAllowedFields(
     source,
@@ -13172,7 +13172,7 @@ export function buildZkAtDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyZkAtAuthenticatorLocally(options) {
+function verifyZkAtAuthenticatorLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -13292,7 +13292,7 @@ export function verifyZkAtAuthenticatorLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyZkAtPolicyProofV1(options) {
+function verifyZkAtPolicyProofV1(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -13411,7 +13411,7 @@ export function verifyZkAtPolicyProofV1(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildZkAmsAdmissionBatch(options) {
+function buildZkAmsAdmissionBatch(options) {
   const source = assertPlainObject(options, "zkAmsAdmissionBatch");
   assertAllowedFields(
     source,
@@ -13467,7 +13467,7 @@ export function buildZkAmsAdmissionBatch(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildZkAmsAdmissionProofEnvelope(options) {
+function buildZkAmsAdmissionProofEnvelope(options) {
   const source = assertPlainObject(options, "zkAmsAdmissionProofEnvelope");
   assertAllowedFields(
     source,
@@ -13539,7 +13539,7 @@ export function buildZkAmsAdmissionProofEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildZkAmsAdmissionBatchProofV0(options) {
+function buildZkAmsAdmissionBatchProofV0(options) {
   const source = assertPlainObject(options, "zkAmsAdmissionBatchProofV0");
   assertAllowedFields(
     source,
@@ -13621,7 +13621,7 @@ export function buildZkAmsAdmissionBatchProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildZkAmsAdmissionDevProofFixture(options) {
+function buildZkAmsAdmissionDevProofFixture(options) {
   const source = assertPlainObject(options, "zkAmsAdmissionDevProofFixture");
   assertAllowedFields(
     source,
@@ -13714,7 +13714,7 @@ export function buildZkAmsAdmissionDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyZkAmsAdmissionProofLocally(options) {
+function verifyZkAmsAdmissionProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -13827,7 +13827,7 @@ export function verifyZkAmsAdmissionProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyZkAmsAdmissionBatchProofV0(options) {
+function verifyZkAmsAdmissionBatchProofV0(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -13945,7 +13945,7 @@ export function verifyZkAmsAdmissionBatchProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildVegaCredentialPredicateCommitment(
+function buildVegaCredentialPredicateCommitment(
   options,
   context = "vegaCredentialPredicateCommitment",
 ) {
@@ -13982,7 +13982,7 @@ export function buildVegaCredentialPredicateCommitment(
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildVegaCredentialProofEnvelope(options) {
+function buildVegaCredentialProofEnvelope(options) {
   const source = assertPlainObject(options, "vegaCredentialProofEnvelope");
   assertAllowedFields(
     source,
@@ -14061,7 +14061,7 @@ export function buildVegaCredentialProofEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildVegaCredentialPredicateProofV0(options) {
+function buildVegaCredentialPredicateProofV0(options) {
   const source = assertPlainObject(options, "vegaCredentialPredicateProofV0");
   assertAllowedFields(
     source,
@@ -14153,7 +14153,7 @@ export function buildVegaCredentialPredicateProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildVegaCredentialDevProofFixture(options) {
+function buildVegaCredentialDevProofFixture(options) {
   const source = assertPlainObject(options, "vegaCredentialDevProofFixture");
   assertAllowedFields(
     source,
@@ -14246,7 +14246,7 @@ export function buildVegaCredentialDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyVegaCredentialProofLocally(options) {
+function verifyVegaCredentialProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -14369,7 +14369,7 @@ export function verifyVegaCredentialProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyVegaCredentialPredicateProofV0(options) {
+function verifyVegaCredentialPredicateProofV0(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -14548,7 +14548,7 @@ const SILENT_THRESHOLD_COMMON_FIELDS = Object.freeze([
  * @param {object} options
  * @returns {object}
  */
-export function buildSilentThresholdCredentialCommitments(options) {
+function buildSilentThresholdCredentialCommitments(options) {
   const source = assertPlainObject(
     options,
     "silentThresholdCredentialCommitments",
@@ -14593,7 +14593,7 @@ export function buildSilentThresholdCredentialCommitments(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildSilentThresholdCredentialEnvelope(options) {
+function buildSilentThresholdCredentialEnvelope(options) {
   const source = assertPlainObject(
     options,
     "silentThresholdCredentialEnvelope",
@@ -14643,7 +14643,7 @@ export function buildSilentThresholdCredentialEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildSilentThresholdCredentialShowingProofV0(options) {
+function buildSilentThresholdCredentialShowingProofV0(options) {
   const source = assertPlainObject(
     options,
     "silentThresholdCredentialShowingProofV0",
@@ -14703,7 +14703,7 @@ export function buildSilentThresholdCredentialShowingProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildSilentThresholdCredentialDevProofFixture(options) {
+function buildSilentThresholdCredentialDevProofFixture(options) {
   const source = assertPlainObject(
     options,
     "silentThresholdCredentialDevProofFixture",
@@ -14773,7 +14773,7 @@ export function buildSilentThresholdCredentialDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifySilentThresholdCredentialProofLocally(options) {
+function verifySilentThresholdCredentialProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -14861,7 +14861,7 @@ export function verifySilentThresholdCredentialProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifySilentThresholdCredentialShowingProofV0(options) {
+function verifySilentThresholdCredentialShowingProofV0(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -15019,7 +15019,7 @@ const ZK_X509_COMMON_FIELDS = Object.freeze([
  * @param {object} options
  * @returns {object}
  */
-export function buildZkX509IdentityCommitments(options) {
+function buildZkX509IdentityCommitments(options) {
   const source = assertPlainObject(options, "zkX509IdentityCommitments");
   assertAllowedFields(
     source,
@@ -15061,7 +15061,7 @@ export function buildZkX509IdentityCommitments(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildZkX509IdentityEnvelope(options) {
+function buildZkX509IdentityEnvelope(options) {
   const source = assertPlainObject(options, "zkX509IdentityEnvelope");
   assertAllowedFields(
     source,
@@ -15105,7 +15105,7 @@ export function buildZkX509IdentityEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildZkX509IdentityProofV0(options) {
+function buildZkX509IdentityProofV0(options) {
   const source = assertPlainObject(options, "zkX509IdentityProofV0");
   assertAllowedFields(
     source,
@@ -15159,7 +15159,7 @@ export function buildZkX509IdentityProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildZkX509IdentityDevProofFixture(options) {
+function buildZkX509IdentityDevProofFixture(options) {
   const source = assertPlainObject(options, "zkX509IdentityDevProofFixture");
   assertAllowedFields(
     source,
@@ -15226,7 +15226,7 @@ export function buildZkX509IdentityDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyZkX509IdentityProofLocally(options) {
+function verifyZkX509IdentityProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -15314,7 +15314,7 @@ export function verifyZkX509IdentityProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyZkX509IdentityProofV0(options) {
+function verifyZkX509IdentityProofV0(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -15479,7 +15479,7 @@ const JINDO_COMMON_FIELDS = Object.freeze([
  * @param {object} options
  * @returns {object}
  */
-export function buildJindoLatticePublicInputs(options) {
+function buildJindoLatticePublicInputs(options) {
   const source = assertPlainObject(options, "jindoLatticePublicInputs");
   assertAllowedFields(
     source,
@@ -15515,7 +15515,7 @@ export function buildJindoLatticePublicInputs(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildJindoLatticeProofEnvelope(options) {
+function buildJindoLatticeProofEnvelope(options) {
   const source = assertPlainObject(options, "jindoLatticeProofEnvelope");
   assertAllowedFields(
     source,
@@ -15559,7 +15559,7 @@ export function buildJindoLatticeProofEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildJindoLatticeProofV0(options) {
+function buildJindoLatticeProofV0(options) {
   const source = assertPlainObject(options, "jindoLatticeProofV0");
   assertAllowedFields(
     source,
@@ -15615,7 +15615,7 @@ export function buildJindoLatticeProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildJindoLatticeDevProofFixture(options) {
+function buildJindoLatticeDevProofFixture(options) {
   const source = assertPlainObject(options, "jindoLatticeDevProofFixture");
   assertAllowedFields(
     source,
@@ -15674,7 +15674,7 @@ export function buildJindoLatticeDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyJindoLatticeProofLocally(options) {
+function verifyJindoLatticeProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -15762,7 +15762,7 @@ export function verifyJindoLatticeProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyJindoPolynomialCommitmentV0(options) {
+function verifyJindoPolynomialCommitmentV0(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -15933,7 +15933,7 @@ const SIS_HINTS_COMMON_FIELDS = Object.freeze([
  * @param {object} options
  * @returns {object}
  */
-export function buildSisHintsCredentialCommitments(options) {
+function buildSisHintsCredentialCommitments(options) {
   const source = assertPlainObject(options, "sisHintsCredentialCommitments");
   assertAllowedFields(
     source,
@@ -15972,7 +15972,7 @@ export function buildSisHintsCredentialCommitments(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildSisHintsCredentialEnvelope(options) {
+function buildSisHintsCredentialEnvelope(options) {
   const source = assertPlainObject(options, "sisHintsCredentialEnvelope");
   assertAllowedFields(
     source,
@@ -16019,7 +16019,7 @@ export function buildSisHintsCredentialEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildSisHintsAnonymousCredentialProofV0(options) {
+function buildSisHintsAnonymousCredentialProofV0(options) {
   const source = assertPlainObject(
     options,
     "sisHintsAnonymousCredentialProofV0",
@@ -16080,7 +16080,7 @@ export function buildSisHintsAnonymousCredentialProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildSisHintsCredentialDevProofFixture(options) {
+function buildSisHintsCredentialDevProofFixture(options) {
   const source = assertPlainObject(
     options,
     "sisHintsCredentialDevProofFixture",
@@ -16149,7 +16149,7 @@ export function buildSisHintsCredentialDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifySisHintsCredentialProofLocally(options) {
+function verifySisHintsCredentialProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -16237,7 +16237,7 @@ export function verifySisHintsCredentialProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifySisHintsAnonymousCredentialProofV0(options) {
+function verifySisHintsAnonymousCredentialProofV0(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -16324,7 +16324,7 @@ export function verifySisHintsAnonymousCredentialProofV0(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildAnonymousPgcReceiverSet(options, context = "anonymousPgcReceiverSet") {
+function buildAnonymousPgcReceiverSet(options, context = "anonymousPgcReceiverSet") {
   const source = assertPlainObject(options, context);
   assertAllowedFields(
     source,
@@ -16406,7 +16406,7 @@ export function buildAnonymousPgcReceiverSet(options, context = "anonymousPgcRec
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildAnonymousPgcKOutOfNProofV1(options) {
+function buildAnonymousPgcKOutOfNProofV1(options) {
   const source = assertPlainObject(options, "anonymousPgcKOutOfNProofV1");
   assertAllowedFields(
     source,
@@ -16442,7 +16442,7 @@ export function buildAnonymousPgcKOutOfNProofV1(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildAnonymousPgcAccountCommitmentInstruction(options) {
+function buildAnonymousPgcAccountCommitmentInstruction(options) {
   const source = assertPlainObject(options, "anonymousPgcAccountCommitmentInstruction");
   assertAllowedFields(
     source,
@@ -16522,7 +16522,7 @@ export function buildAnonymousPgcAccountCommitmentInstruction(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildAnonymousPgcDevProofFixture(options) {
+function buildAnonymousPgcDevProofFixture(options) {
   const source = assertPlainObject(options, "anonymousPgcDevProofFixture");
   assertAllowedFields(
     source,
@@ -16611,7 +16611,7 @@ export function buildAnonymousPgcDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyAnonymousPgcDevProofLocally(options) {
+function verifyAnonymousPgcDevProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -16730,7 +16730,7 @@ export function verifyAnonymousPgcDevProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyAnonymousPgcKOutOfNProofV1(options) {
+function verifyAnonymousPgcKOutOfNProofV1(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -16844,7 +16844,7 @@ export function verifyAnonymousPgcKOutOfNProofV1(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildAnonymousPgcTransferInstruction(options) {
+function buildAnonymousPgcTransferInstruction(options) {
   const source = assertPlainObject(options, "anonymousPgcTransferInstruction");
   assertAllowedFields(
     source,
@@ -16943,7 +16943,7 @@ export function buildAnonymousPgcTransferInstruction(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildRangeCommitment(options, context = "rangeCommitment") {
+function buildRangeCommitment(options, context = "rangeCommitment") {
   const source = assertPlainObject(options, context);
   assertAllowedFields(
     source,
@@ -17041,7 +17041,7 @@ export function buildRangeCommitment(options, context = "rangeCommitment") {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildVeRangeProofEnvelope(options) {
+function buildVeRangeProofEnvelope(options) {
   const source = assertPlainObject(options, "veRangeProofEnvelope");
   assertAllowedFields(
     source,
@@ -17115,7 +17115,7 @@ export function buildVeRangeProofEnvelope(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildVeRangeProofV1(options) {
+function buildVeRangeProofV1(options) {
   const source = assertPlainObject(options, "veRangeProofV1");
   assertAllowedFields(
     source,
@@ -17196,7 +17196,7 @@ export function buildVeRangeProofV1(options) {
  * @param {object} options
  * @returns {object}
  */
-export function buildVeRangeDevProofFixture(options) {
+function buildVeRangeDevProofFixture(options) {
   const source = assertPlainObject(options, "veRangeDevProofFixture");
   assertAllowedFields(
     source,
@@ -17281,7 +17281,7 @@ export function buildVeRangeDevProofFixture(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyVeRangeProofLocally(options) {
+function verifyVeRangeProofLocally(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -17394,7 +17394,7 @@ export function verifyVeRangeProofLocally(options) {
  * @param {object|Buffer|string} options
  * @returns {object}
  */
-export function verifyVeRangeProofV1(options) {
+function verifyVeRangeProofV1(options) {
   const source =
     options &&
     typeof options === "object" &&
@@ -17505,7 +17505,7 @@ export function verifyVeRangeProofV1(options) {
  * @param {object} options
  * @returns {Buffer}
  */
-export function buildPrivacyProofEnvelope(options) {
+function buildPrivacyProofEnvelope(options) {
   return buildPrivacyProofEnvelopeInternal(options);
 }
 
@@ -17840,67 +17840,67 @@ function buildResearchProtocolInstruction(options, specName) {
   });
 }
 
-export function buildOrchardActionBundleProofV1(options) {
+function buildOrchardActionBundleProofV1(options) {
   return buildResearchProtocolProof(options, "orchard");
 }
 
-export function buildOrchardActionBundleInstruction(options) {
+function buildOrchardActionBundleInstruction(options) {
   return buildResearchProtocolInstruction(options, "orchard");
 }
 
-export function buildPenumbraSpendProofV1(options) {
+function buildPenumbraSpendProofV1(options) {
   return buildResearchProtocolProof(options, "penumbraSpend");
 }
 
-export function buildPenumbraOutputProofV1(options) {
+function buildPenumbraOutputProofV1(options) {
   return buildResearchProtocolProof(options, "penumbraOutput");
 }
 
-export function buildPenumbraShieldedPoolTransaction(options) {
+function buildPenumbraShieldedPoolTransaction(options) {
   return buildResearchProtocolInstruction(options, "penumbraSpend");
 }
 
-export function buildFcmpPlusPlusMembershipProofV1(options) {
+function buildFcmpPlusPlusMembershipProofV1(options) {
   return buildResearchProtocolProof(options, "fcmp");
 }
 
-export function buildFcmpPlusPlusTransferInstruction(options) {
+function buildFcmpPlusPlusTransferInstruction(options) {
   return buildResearchProtocolInstruction(options, "fcmp");
 }
 
-export function buildMidenStarkTransactionProofV1(options) {
+function buildMidenStarkTransactionProofV1(options) {
   return buildResearchProtocolProof(options, "miden");
 }
 
-export function buildMidenNoteTransactionInstruction(options) {
+function buildMidenNoteTransactionInstruction(options) {
   return buildResearchProtocolInstruction(options, "miden");
 }
 
-export function buildAztecPrivateKernelProofV1(options) {
+function buildAztecPrivateKernelProofV1(options) {
   return buildResearchProtocolProof(options, "aztec");
 }
 
-export function buildAztecPrivateRollupTransactionInstruction(options) {
+function buildAztecPrivateRollupTransactionInstruction(options) {
   return buildResearchProtocolInstruction(options, "aztec");
 }
 
-export function buildPqMaspStarkTransferProofV0(options) {
+function buildPqMaspStarkTransferProofV0(options) {
   return buildResearchProtocolProof(options, "pqMasp");
 }
 
-export function buildPqMaspStarkRegisterPoolInstruction(options) {
+function buildPqMaspStarkRegisterPoolInstruction(options) {
   return buildResearchProtocolInstruction(options, "pqMasp");
 }
 
-export function buildPqMaspStarkTransferInstruction(options) {
+function buildPqMaspStarkTransferInstruction(options) {
   return buildResearchProtocolInstruction(options, "pqMasp");
 }
 
-export function generateMlDsaKeyPair() {
+function generateMlDsaKeyPair() {
   throw new Error("ML-DSA key generation requires a native PQ provider");
 }
 
-export function encapsulateMlKem() {
+function encapsulateMlKem() {
   throw new Error("ML-KEM encapsulation requires a native PQ provider");
 }
 

@@ -740,19 +740,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     static let privacyNativeArchiveMaxBytes = 64 * 1024 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
-    private static let privacyRequestTextFieldMaxBytes = 1024
-    private static let privacyRequestPublicInputsMaxBytes = 1024 * 1024
-    private static let privacyRequestWitnessMaxBytes = privacyNativeArchiveMaxBytes / 2
-    private static let privacyRequestProofMaxBytes = privacyNativeArchiveMaxBytes / 2
     private static let privacyNoritoHeaderBytes = 40
     private static let privacyNoritoMaxHeaderPaddingBytes = 64
     private static let privacyNoritoSupportedFlagsMask: UInt8 = 0x27
     private static let privacyNoritoFieldBitsetFlag: UInt8 = 0x20
     private static let privacyNoritoFieldBitsetRequiredFlags: UInt8 = 0x06
-    private static let privacyRequestSchemaByte: UInt8 = 0x52
     private static let privacyCapabilitiesResultSchemaByte: UInt8 = 0x50
-    private static let privacyBuildProofResultSchemaByte: UInt8 = 0x42
-    private static let privacyVerifyProofResultSchemaByte: UInt8 = 0x56
     private static let privacyCrc64ReflectedPoly: UInt64 = 0xC96C_5795_D787_0F42
     private static let privacyNoritoMagic: [UInt8] = [0x4E, 0x52, 0x54, 0x30]
 
@@ -1991,19 +1984,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias PrivacyCapabilitiesFn = @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
-    private typealias PrivacyProofArchiveFn = @convention(c) (
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
-    ) -> Int32
-    private typealias PrivacyProofRequestFn = @convention(c) (
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafePointer<UInt8>?, CUnsignedLong,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
-    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -2161,9 +2141,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var aliasInstructionRoundTripFn: AliasInstructionRoundTripFn? = nil
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
-    private var privacyProofRequestFn: PrivacyProofRequestFn? = nil
-    private var privacyBuildProofFn: PrivacyProofArchiveFn? = nil
-    private var privacyVerifyProofFn: PrivacyProofArchiveFn? = nil
     private var privacyFreeFn: FreeFn? = nil
     private var privacyNativeProbeOk = false
 #else
@@ -2290,9 +2267,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let aliasInstructionRoundTripFn: Any? = nil
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
-    private let privacyProofRequestFn: Any? = nil
-    private let privacyBuildProofFn: Any? = nil
-    private let privacyVerifyProofFn: Any? = nil
     private let privacyFreeFn: Any? = nil
     private let privacyNativeProbeOk = false
 #endif
@@ -2304,9 +2278,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private func loadPrivacySymbols(from handle: UnsafeMutableRawPointer?) {
         guard let handle else {
             self.privacyCapabilitiesFn = nil
-            self.privacyProofRequestFn = nil
-            self.privacyBuildProofFn = nil
-            self.privacyVerifyProofFn = nil
             self.privacyFreeFn = nil
             return
         }
@@ -2314,21 +2285,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.privacyCapabilitiesFn = unsafeBitCast(capabilitiesSymbol, to: PrivacyCapabilitiesFn.self)
         } else {
             self.privacyCapabilitiesFn = nil
-        }
-        if let proofRequestSymbol = dlsym(handle, "iroha_privacy_proof_request_v1") {
-            self.privacyProofRequestFn = unsafeBitCast(proofRequestSymbol, to: PrivacyProofRequestFn.self)
-        } else {
-            self.privacyProofRequestFn = nil
-        }
-        if let buildProofSymbol = dlsym(handle, "iroha_privacy_build_proof_v1") {
-            self.privacyBuildProofFn = unsafeBitCast(buildProofSymbol, to: PrivacyProofArchiveFn.self)
-        } else {
-            self.privacyBuildProofFn = nil
-        }
-        if let verifyProofSymbol = dlsym(handle, "iroha_privacy_verify_proof_v1") {
-            self.privacyVerifyProofFn = unsafeBitCast(verifyProofSymbol, to: PrivacyProofArchiveFn.self)
-        } else {
-            self.privacyVerifyProofFn = nil
         }
         if let freeSymbol = dlsym(handle, "iroha_privacy_free_buffer") {
             self.privacyFreeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
@@ -3299,9 +3255,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.aliasInstructionRoundTripFn = nil
             self.canonicalJSONBlake3Fn = nil
             self.privacyCapabilitiesFn = nil
-            self.privacyProofRequestFn = nil
-            self.privacyBuildProofFn = nil
-            self.privacyVerifyProofFn = nil
             self.privacyFreeFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
@@ -3389,18 +3342,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     #if canImport(Darwin)
-    static let privacyNativeAvailabilityProbeArchive: Data = {
-        var archive = Data(repeating: 0, count: 40)
-        archive[0] = 0x4E
-        archive[1] = 0x52
-        archive[2] = 0x54
-        archive[3] = 0x30
-        for index in 6..<22 {
-            archive[index] = NoritoNativeBridge.privacyRequestSchemaByte
-        }
-        return archive
-    }()
-
     static func isValidPrivacyNativeProbeResult(
         status: Int32,
         outPtr: UnsafeMutablePointer<UInt8>?,
@@ -3423,21 +3364,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     private func probePrivacyNativeAvailability() {
-        var available = true
-        available = probePrivacyCapabilitiesFunction(privacyCapabilitiesFn) && available
-        available = probePrivacyProofRequestFunction(
-            privacyProofRequestFn,
-            expectedSchemaByte: Self.privacyRequestSchemaByte
-        ) && available
-        available = probePrivacyProofFunction(
-            privacyBuildProofFn,
-            expectedSchemaByte: Self.privacyBuildProofResultSchemaByte
-        ) && available
-        available = probePrivacyProofFunction(
-            privacyVerifyProofFn,
-            expectedSchemaByte: Self.privacyVerifyProofResultSchemaByte
-        ) && available
-        privacyNativeProbeOk = available
+        privacyNativeProbeOk = probePrivacyCapabilitiesFunction(privacyCapabilitiesFn)
     }
 
     private func probePrivacyCapabilitiesFunction(_ function: PrivacyCapabilitiesFn?) -> Bool {
@@ -3452,88 +3379,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             outPtr: outPtr,
             outLen: outLen,
             expectedSchemaByte: Self.privacyCapabilitiesResultSchemaByte,
-            free: freePrivacyFn
-        )
-    }
-
-    private func probePrivacyProofRequestFunction(
-        _ function: PrivacyProofRequestFn?,
-        expectedSchemaByte: UInt8
-    ) -> Bool {
-        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
-            return false
-        }
-        var outPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outLen: CUnsignedLong = 0
-        var algorithmId = Array("zk-ace-pq-authorization-v0".utf8)
-        var entrypoint = Array("buildZkAceAuthorizationProofV1".utf8)
-        var vkRef = Array("stark-fri:zk_ace_pq_authorization_v0".utf8)
-        var publicInputs = Array("public-inputs".utf8)
-        defer {
-            Self.clearTemporaryPrivacyRequestArchive(&algorithmId)
-            Self.clearTemporaryPrivacyRequestArchive(&entrypoint)
-            Self.clearTemporaryPrivacyRequestArchive(&vkRef)
-            Self.clearTemporaryPrivacyRequestArchive(&publicInputs)
-        }
-        let status = algorithmId.withUnsafeBufferPointer { algorithmBuffer in
-            entrypoint.withUnsafeBufferPointer { entrypointBuffer in
-                vkRef.withUnsafeBufferPointer { vkRefBuffer in
-                    publicInputs.withUnsafeBufferPointer { publicInputsBuffer in
-                        function(
-                            algorithmBuffer.baseAddress,
-                            CUnsignedLong(algorithmBuffer.count),
-                            entrypointBuffer.baseAddress,
-                            CUnsignedLong(entrypointBuffer.count),
-                            vkRefBuffer.baseAddress,
-                            CUnsignedLong(vkRefBuffer.count),
-                            publicInputsBuffer.baseAddress,
-                            CUnsignedLong(publicInputsBuffer.count),
-                            nil,
-                            0,
-                            nil,
-                            0,
-                            &outPtr,
-                            &outLen
-                        )
-                    }
-                }
-            }
-        }
-        return consumePrivacyNativeProbeResult(
-            status: status,
-            outPtr: outPtr,
-            outLen: outLen,
-            expectedSchemaByte: expectedSchemaByte,
-            free: freePrivacyFn
-        )
-    }
-
-    private func probePrivacyProofFunction(
-        _ function: PrivacyProofArchiveFn?,
-        expectedSchemaByte: UInt8
-    ) -> Bool {
-        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
-            return false
-        }
-        var outPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outLen: CUnsignedLong = 0
-        let probeArchive = Self.privacyNativeAvailabilityProbeArchive
-        let status = probeArchive.withUnsafeBytes { buffer -> Int32 in
-            guard let baseAddress = buffer.bindMemory(to: UInt8.self).baseAddress else {
-                return -1
-            }
-            return function(
-                baseAddress,
-                CUnsignedLong(buffer.count),
-                &outPtr,
-                &outLen
-            )
-        }
-        return consumePrivacyNativeProbeResult(
-            status: status,
-            outPtr: outPtr,
-            outLen: outLen,
-            expectedSchemaByte: expectedSchemaByte,
             free: freePrivacyFn
         )
     }
@@ -3689,9 +3534,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return privacyCapabilitiesFn != nil
-            && privacyProofRequestFn != nil
-            && privacyBuildProofFn != nil
-            && privacyVerifyProofFn != nil
             && (privacyFreeFn != nil || freeFn != nil)
             && privacyNativeProbeOk
         #else
@@ -6645,210 +6487,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #else
         return nil
         #endif
-    }
-
-    public func privacyProofRequestV1(
-        algorithmId: String,
-        entrypoint: String,
-        vkRef: String,
-        publicInputs: Data,
-        witness: Data,
-        proof: Data
-    ) throws -> Data? {
-        #if canImport(Darwin)
-        guard let privacyProofRequestFn, let freePrivacyFn = privacyFreeFn ?? freeFn else {
-            return nil
-        }
-        var algorithmIdBytes = try Self.privacyRequestTextBytes(algorithmId)
-        var entrypointBytes = try Self.privacyRequestTextBytes(entrypoint)
-        var vkRefBytes = try Self.privacyRequestTextBytes(vkRef)
-        var publicInputBytes = try Self.privacyRequestComponentBytes(
-            publicInputs,
-            maxBytes: Self.privacyRequestPublicInputsMaxBytes,
-            allowEmpty: false
-        )
-        var witnessBytes = try Self.privacyRequestComponentBytes(
-            witness,
-            maxBytes: Self.privacyRequestWitnessMaxBytes,
-            allowEmpty: true
-        )
-        var proofBytes = try Self.privacyRequestComponentBytes(
-            proof,
-            maxBytes: Self.privacyRequestProofMaxBytes,
-            allowEmpty: true
-        )
-        defer {
-            Self.clearTemporaryPrivacyRequestArchive(&algorithmIdBytes)
-            Self.clearTemporaryPrivacyRequestArchive(&entrypointBytes)
-            Self.clearTemporaryPrivacyRequestArchive(&vkRefBytes)
-            Self.clearTemporaryPrivacyRequestArchive(&publicInputBytes)
-            Self.clearTemporaryPrivacyRequestArchive(&witnessBytes)
-            Self.clearTemporaryPrivacyRequestArchive(&proofBytes)
-        }
-        var outPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outLen: CUnsignedLong = 0
-        let status = algorithmIdBytes.withUnsafeBufferPointer { algorithmBuffer in
-            entrypointBytes.withUnsafeBufferPointer { entrypointBuffer in
-                vkRefBytes.withUnsafeBufferPointer { vkRefBuffer in
-                    publicInputBytes.withUnsafeBufferPointer { publicInputBuffer in
-                        witnessBytes.withUnsafeBufferPointer { witnessBuffer in
-                            proofBytes.withUnsafeBufferPointer { proofBuffer in
-                                privacyProofRequestFn(
-                                    algorithmBuffer.baseAddress,
-                                    CUnsignedLong(algorithmBuffer.count),
-                                    entrypointBuffer.baseAddress,
-                                    CUnsignedLong(entrypointBuffer.count),
-                                    vkRefBuffer.baseAddress,
-                                    CUnsignedLong(vkRefBuffer.count),
-                                    publicInputBuffer.baseAddress,
-                                    CUnsignedLong(publicInputBuffer.count),
-                                    witnessBuffer.baseAddress,
-                                    CUnsignedLong(witnessBuffer.count),
-                                    proofBuffer.baseAddress,
-                                    CUnsignedLong(proofBuffer.count),
-                                    &outPtr,
-                                    &outLen
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if let error = NativeBridgeError.fromStatus(status) {
-            if let outPtr {
-                freePrivacyFn(outPtr)
-            }
-            throw error
-        }
-        guard let outPtr else {
-            throw NativeBridgeError.nullPointer
-        }
-        return try Self.readPrivacyNativeOutput(
-            pointer: outPtr,
-            length: outLen,
-            expectedSchemaByte: Self.privacyRequestSchemaByte
-        ) { pointer in
-            freePrivacyFn(pointer)
-        }
-        #else
-        return nil
-        #endif
-    }
-
-    private func callPrivacyProof(
-        requestArchive: Data,
-        function: PrivacyProofArchiveFn?,
-        expectedSchemaByte: UInt8
-    ) throws -> Data? {
-        #if canImport(Darwin)
-        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
-            return nil
-        }
-        var outPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outLen: CUnsignedLong = 0
-        let status = try Self.withTemporaryPrivacyRequestArchive(requestArchive: requestArchive) { buffer -> Int32 in
-            let baseAddress = buffer.baseAddress
-            return function(
-                baseAddress,
-                CUnsignedLong(buffer.count),
-                &outPtr,
-                &outLen
-            )
-        }
-        if let error = NativeBridgeError.fromStatus(status) {
-            if let outPtr {
-                freePrivacyFn(outPtr)
-            }
-            throw error
-        }
-        guard let outPtr else {
-            throw NativeBridgeError.nullPointer
-        }
-        return try Self.readPrivacyNativeOutput(
-            pointer: outPtr,
-            length: outLen,
-            expectedSchemaByte: expectedSchemaByte
-        ) { pointer in
-            freePrivacyFn(pointer)
-        }
-        #else
-        return nil
-        #endif
-    }
-
-    static func privacyRequestTextBytes(_ value: String) throws -> [UInt8] {
-        let bytes = Array(value.utf8)
-        guard bytes.count <= Self.privacyRequestTextFieldMaxBytes else {
-            throw NativeBridgeError.invalidPrivacyRequest
-        }
-        return bytes
-    }
-
-    static func privacyRequestComponentBytes(
-        _ value: Data,
-        maxBytes: Int,
-        allowEmpty: Bool
-    ) throws -> [UInt8] {
-        guard allowEmpty || !value.isEmpty else {
-            throw NativeBridgeError.invalidPrivacyRequest
-        }
-        guard value.count <= maxBytes else {
-            throw NativeBridgeError.invalidPrivacyRequest
-        }
-        return Array(value)
-    }
-
-    static func withTemporaryPrivacyRequestArchive<T>(
-        requestArchive: Data,
-        didClearForTesting: (([UInt8]) -> Void)? = nil,
-        _ body: (UnsafeBufferPointer<UInt8>) throws -> T
-    ) throws -> T {
-        guard !requestArchive.isEmpty, requestArchive.count <= Self.privacyNativeArchiveMaxBytes else {
-            throw NativeBridgeError.invalidPrivacyRequest
-        }
-        guard Self.isValidPrivacyNoritoArchive(requestArchive) else {
-            throw NativeBridgeError.invalidPrivacyRequest
-        }
-        guard Self.hasPrivacyNoritoSchema(
-            requestArchive,
-            expectedSchemaByte: Self.privacyRequestSchemaByte
-        ) else {
-            throw NativeBridgeError.invalidPrivacyRequest
-        }
-        guard Self.hasNonEmptyPrivacyNoritoPayload(requestArchive) else {
-            throw NativeBridgeError.invalidPrivacyRequest
-        }
-        var request = [UInt8](requestArchive)
-        defer {
-            Self.clearTemporaryPrivacyRequestArchive(&request)
-            didClearForTesting?(request)
-        }
-        return try request.withUnsafeBufferPointer { buffer in
-            try body(buffer)
-        }
-    }
-
-    static func clearTemporaryPrivacyRequestArchive(_ requestArchive: inout [UInt8]) {
-        for index in requestArchive.indices {
-            requestArchive[index] = 0
-        }
-    }
-
-    func privacyBuildProofV1(requestArchive: Data) throws -> Data? {
-        try callPrivacyProof(
-            requestArchive: requestArchive,
-            function: privacyBuildProofFn,
-            expectedSchemaByte: Self.privacyBuildProofResultSchemaByte
-        )
-    }
-
-    func privacyVerifyProofV1(requestArchive: Data) throws -> Data? {
-        try callPrivacyProof(
-            requestArchive: requestArchive,
-            function: privacyVerifyProofFn,
-            expectedSchemaByte: Self.privacyVerifyProofResultSchemaByte
-        )
     }
 
     static func readPrivacyNativeOutput(

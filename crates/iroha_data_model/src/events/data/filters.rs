@@ -1926,6 +1926,7 @@ mod tests {
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("paid")],
+            conditions: Vec::new(),
             created_at_ms: 1,
             accepted_at_ms: Some(2),
             payment_sent_at_ms: Some(3),
