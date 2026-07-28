@@ -265,6 +265,8 @@ use iroha_core::{
         SignatureVerificationFail,
     },
 };
+#[cfg(feature = "app_api")]
+use iroha_core::{block::ValidBlock, state::StateBlock, tx::SignedBlock};
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 use iroha_crypto::Signature;
 use iroha_crypto::{
@@ -12834,18 +12836,12 @@ fn mandatory_offline_metadata_escrow_bindings(
 }
 
 #[cfg(feature = "app_api")]
-/// Validate the complete offline-cash invariant against the replayed startup state.
-///
-/// This fail-closed gate binds the configured escrow assets and command issuer
-/// to an active ABI-21/V4 release, its governed verifier set, device policy,
-/// fee funding, and the latest committed block before Torii is started.
-///
-/// # Errors
-///
-/// Returns an error when any mandatory configuration or live-state dependency
-/// needed to issue, transfer, or redeem offline cash is unavailable.
-pub fn ensure_mandatory_offline_startup_readiness(
-    state: &CoreState,
+fn ensure_mandatory_offline_readiness_snapshot(
+    world: &impl WorldReadOnly,
+    release_catalog: &iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+    replayed_offline_config: &iroha_config::parameters::actual::Offline,
+    block_height: u64,
+    evaluated_at_ms: u64,
     chain_id: &ChainId,
     offline_config: &iroha_config::parameters::actual::Offline,
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
@@ -12859,22 +12855,13 @@ pub fn ensure_mandatory_offline_startup_readiness(
         .cloned()
         .ok_or_else(|| "torii.kagemusha_commands is mandatory for offline cash".to_owned())?;
     let issuer = offline_commands::OfflineCommandRuntime::from_config(command_config);
-
-    let state_view = state.view();
-    let world = state_view.world();
-    let evaluated_block = state_view
-        .latest_block()
-        .ok_or_else(|| "offline readiness requires a committed block".to_owned())?;
-    let evaluated_at_ms =
-        u64::try_from(evaluated_block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-    let block_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     if block_height == 0 {
         return Err("offline readiness requires a non-zero committed height".to_owned());
     }
 
     iroha_core::smartcontracts::isi::offline::ensure_kagemusha_active_release_material_v4(
         world,
-        &state_view.kagemusha_release_catalog,
+        release_catalog,
         block_height,
     )?;
     iroha_core::smartcontracts::isi::offline::isi::ensure_offline_device_attestation_policy_ready_v1(
@@ -12899,7 +12886,7 @@ pub fn ensure_mandatory_offline_startup_readiness(
     let metadata_derived = mandatory_offline_metadata_escrow_bindings(world, chain_id)?;
     let escrow_bindings = mandatory_offline_escrow_bindings_after_replay(
         &offline_config.escrow_accounts,
-        &state_view.settlement.offline.escrow_accounts,
+        &replayed_offline_config.escrow_accounts,
         &metadata_derived,
     )?;
     for (asset_definition_id, escrow_account_id) in &escrow_bindings {
@@ -12947,19 +12934,20 @@ pub fn ensure_mandatory_offline_startup_readiness(
             iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
         )
         .map_err(|error| format!("offline unshield verifier is invalid: {error:?}"))?;
-        let recursive = iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_readiness_v4(
-            world,
-            &state_view.kagemusha_release_catalog,
-            chain_id,
-            asset_definition_id,
-            scale,
-            block_height,
-        )?
-        .ok_or_else(|| {
-            format!(
-                "required offline asset `{asset_definition_id}` has no active authenticated ABI-21/V4 recursive release"
-            )
-        })?;
+        let recursive =
+            iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_readiness_v4(
+                world,
+                release_catalog,
+                chain_id,
+                asset_definition_id,
+                scale,
+                block_height,
+            )?
+            .ok_or_else(|| {
+                format!(
+                    "required offline asset `{asset_definition_id}` has no active authenticated ABI-21/V4 recursive release"
+                )
+            })?;
         if let Some(error) = recursive.proof_backend_error.as_ref() {
             return Err(format!(
                 "required offline asset `{asset_definition_id}` proof backend is unavailable: {error}"
@@ -12988,6 +12976,97 @@ pub fn ensure_mandatory_offline_startup_readiness(
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "app_api")]
+/// Validate the complete offline-cash invariant against replayed committed state.
+///
+/// This fail-closed gate binds the configured escrow assets and command issuer
+/// to an active ABI-21/V4 release, its governed verifier set, device policy,
+/// fee funding, and the latest committed block before Torii is started.
+///
+/// # Errors
+///
+/// Returns an error when any mandatory configuration or live-state dependency
+/// needed to issue, transfer, or redeem offline cash is unavailable.
+pub fn ensure_mandatory_offline_startup_readiness(
+    state: &CoreState,
+    chain_id: &ChainId,
+    offline_config: &iroha_config::parameters::actual::Offline,
+    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+    fee_asset_selector: &str,
+) -> Result<(), String> {
+    ensure_mandatory_offline_configuration_for_chain(chain_id, offline_config, command_config)?;
+    if !offline_config.enabled {
+        return Ok(());
+    }
+    let state_view = state.view();
+    let evaluated_block = state_view
+        .latest_block()
+        .ok_or_else(|| "offline readiness requires a committed block".to_owned())?;
+    let evaluated_at_ms =
+        u64::try_from(evaluated_block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
+    let block_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+    ensure_mandatory_offline_readiness_snapshot(
+        state_view.world(),
+        state_view.kagemusha_release_catalog.as_ref(),
+        &state_view.settlement.offline,
+        block_height,
+        evaluated_at_ms,
+        chain_id,
+        offline_config,
+        command_config,
+        fee_asset_selector,
+    )
+}
+
+#[cfg(feature = "app_api")]
+/// Validate mandatory offline cash against a signed, uncommitted genesis overlay.
+///
+/// The [`ValidBlock`] and [`StateBlock`] pair must come from signed-genesis
+/// validation. The function accepts only a height-one block over an empty
+/// committed parent and evaluates the exact staged world at height one. It
+/// does not commit the overlay or start any runtime service.
+///
+/// # Errors
+///
+/// Returns an error when the supplied pair is not a fresh signed genesis or
+/// any configuration, release, verifier, device-policy, escrow, issuer, fee,
+/// backend, or recursive-lineage invariant is unavailable.
+pub fn ensure_mandatory_offline_staged_genesis_readiness(
+    valid_genesis: &ValidBlock,
+    staged_genesis: &StateBlock<'_>,
+    chain_id: &ChainId,
+    offline_config: &iroha_config::parameters::actual::Offline,
+    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+    fee_asset_selector: &str,
+) -> Result<(), String> {
+    let signed_genesis: &SignedBlock = valid_genesis.as_ref();
+    let header = signed_genesis.header();
+    if !header.is_genesis() || header.height().get() != 1 {
+        return Err(
+            "staged offline readiness requires a validated height-one genesis block".to_owned(),
+        );
+    }
+    if staged_genesis.height() != 0 {
+        return Err("staged offline readiness requires an empty committed parent state".to_owned());
+    }
+    if staged_genesis.chain_id() != chain_id {
+        return Err("staged offline readiness chain id differs from node configuration".to_owned());
+    }
+
+    let evaluated_at_ms = u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX);
+    ensure_mandatory_offline_readiness_snapshot(
+        staged_genesis.world(),
+        staged_genesis.kagemusha_release_catalog.as_ref(),
+        &staged_genesis.settlement.offline,
+        1,
+        evaluated_at_ms,
+        chain_id,
+        offline_config,
+        command_config,
+        fee_asset_selector,
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -13605,6 +13684,56 @@ mod offline_kagemusha_readiness_tests {
             None,
         )
         .expect("non-Taira profiles may disable local offline service surfaces");
+    }
+
+    #[test]
+    fn staged_genesis_and_restart_use_one_complete_offline_validator() {
+        assert_eq!(
+            iroha_data_model::offline::KAGEMUSHA_STAGED_OFFLINE_INVARIANT_CAPABILITY_V1,
+            "staged_offline_invariant_v1"
+        );
+        let source = include_str!("lib.rs");
+        let committed_start = source
+            .find("pub fn ensure_mandatory_offline_startup_readiness")
+            .expect("committed-state readiness wrapper");
+        let staged_start = source
+            .find("pub fn ensure_mandatory_offline_staged_genesis_readiness")
+            .expect("staged-genesis readiness wrapper");
+        let readiness_snapshot = source
+            .find("fn offline_kagemusha_readiness_snapshot")
+            .expect("runtime readiness snapshot");
+        let common_start = source
+            .find("fn ensure_mandatory_offline_readiness_snapshot")
+            .expect("shared complete readiness validator");
+        let committed = &source[committed_start..staged_start];
+        let staged = &source[staged_start..readiness_snapshot];
+        let common = &source[common_start..committed_start];
+
+        assert!(committed.contains("ensure_mandatory_offline_readiness_snapshot"));
+        assert!(staged.contains("ensure_mandatory_offline_readiness_snapshot"));
+        assert!(staged.contains("valid_genesis: &ValidBlock"));
+        assert!(staged.contains("staged_genesis: &StateBlock"));
+        assert!(staged.contains("staged_genesis.height() != 0"));
+        assert!(
+            !staged.contains("ensure_mandatory_offline_startup_readiness("),
+            "staged genesis must evaluate its overlay rather than the empty committed State"
+        );
+        for required_check in [
+            "ensure_kagemusha_active_release_material_v4",
+            "ensure_offline_device_attestation_policy_ready_v1",
+            "ensure_offline_command_authority_ready_in_world",
+            "mandatory_offline_escrow_bindings_after_replay",
+            "offline_kagemusha_asset_transfer_verifier_record",
+            "offline_kagemusha_asset_topup_shield_verifier_record",
+            "CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID",
+            "resolve_kagemusha_recursive_readiness_v4",
+            "ensure_offline_readiness_verifier_roles_are_distinct",
+        ] {
+            assert!(
+                common.contains(required_check),
+                "shared staged/restart validator omitted `{required_check}`"
+            );
+        }
     }
 
     #[test]

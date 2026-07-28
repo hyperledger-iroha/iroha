@@ -8067,6 +8067,53 @@ pub mod isi {
         Ok(())
     }
 
+    /// Consensus context governing one ABI-21/V4 release activation height.
+    ///
+    /// Height one is represented by a distinct variant so the fresh-chain
+    /// exception cannot be inferred from a numeric comparison or reused by an
+    /// ordinary post-genesis transaction.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum KagemushaV4ActivationHeightContext {
+        /// The instruction is executing inside the signed height-one genesis.
+        SignedGenesisHeightOne,
+        /// The instruction is executing against an already committed chain.
+        PostGenesis {
+            /// Height of the block containing the activation instruction.
+            current_height: u64,
+        },
+    }
+
+    impl KagemushaV4ActivationHeightContext {
+        fn from_transaction(state_transaction: &StateTransaction<'_, '_>) -> Self {
+            if state_transaction._curr_block.is_genesis() {
+                Self::SignedGenesisHeightOne
+            } else {
+                Self::PostGenesis {
+                    current_height: state_transaction.block_height(),
+                }
+            }
+        }
+
+        fn ensure_activation_height(self, activation_height: u64) -> Result<(), Error> {
+            match self {
+                Self::SignedGenesisHeightOne if activation_height == 1 => Ok(()),
+                Self::SignedGenesisHeightOne => Err(labeled_invariant(
+                    "recursive_release_invalid",
+                    "signed genesis requires Kagemusha V4 activation exactly at height 1",
+                )
+                .into()),
+                Self::PostGenesis { current_height } if activation_height > current_height => {
+                    Ok(())
+                }
+                Self::PostGenesis { .. } => Err(labeled_invariant(
+                    "recursive_release_invalid",
+                    "post-genesis Kagemusha V4 activation height must be in the future",
+                )
+                .into()),
+            }
+        }
+    }
+
     impl Execute for ActivateKagemushaRecursiveReleaseV4 {
         fn execute(
             self,
@@ -8129,14 +8176,8 @@ pub mod isi {
                 )
                 .into());
             }
-            let current_height = state_transaction.block_height();
-            if manifest.activation_height <= current_height {
-                return Err(labeled_invariant(
-                    "recursive_release_invalid",
-                    "Kagemusha V4 activation height must be in the future",
-                )
-                .into());
-            }
+            KagemushaV4ActivationHeightContext::from_transaction(state_transaction)
+                .ensure_activation_height(manifest.activation_height)?;
             ensure_kagemusha_v4_non_overlapping_issuance(&binding, manifest, state_transaction)?;
 
             let expected_eq_id =
@@ -8953,6 +8994,66 @@ pub mod isi {
             assert!(
                 !validator.contains("kagemusha_release_catalog.iter()"),
                 "release-window inventory must not depend on optional local directories",
+            );
+        }
+
+        #[test]
+        fn kagemusha_v4_height_one_activation_is_genesis_only() {
+            KagemushaV4ActivationHeightContext::SignedGenesisHeightOne
+                .ensure_activation_height(1)
+                .expect("the signed genesis may activate its mandatory release at height one");
+
+            for invalid_height in [0, 2] {
+                let error = KagemushaV4ActivationHeightContext::SignedGenesisHeightOne
+                    .ensure_activation_height(invalid_height)
+                    .expect_err("genesis activation must be exactly height one");
+                assert!(
+                    error.to_string().contains("exactly at height 1"),
+                    "unexpected error: {error}"
+                );
+            }
+
+            let post_genesis =
+                KagemushaV4ActivationHeightContext::PostGenesis { current_height: 1 };
+            post_genesis
+                .ensure_activation_height(2)
+                .expect("ordinary activation retains the strict future-height rule");
+            for invalid_height in [0, 1] {
+                let error = post_genesis
+                    .ensure_activation_height(invalid_height)
+                    .expect_err("post-genesis activation cannot reuse the height-one exception");
+                assert!(
+                    error.to_string().contains("must be in the future"),
+                    "unexpected error: {error}"
+                );
+            }
+        }
+
+        #[test]
+        fn kagemusha_v4_activation_context_is_derived_from_the_block_header() {
+            let state = offline_test_state();
+            let mut genesis_block = state.block(offline_test_header());
+            let genesis_transaction = genesis_block.transaction();
+            assert_eq!(
+                KagemushaV4ActivationHeightContext::from_transaction(&genesis_transaction),
+                KagemushaV4ActivationHeightContext::SignedGenesisHeightOne
+            );
+            drop(genesis_transaction);
+            drop(genesis_block);
+
+            let post_genesis_header = BlockHeader::new(
+                NonZeroU64::new(2).expect("nonzero block height"),
+                None,
+                None,
+                None,
+                POLICY_TEST_TIME_MS,
+                0,
+            );
+            let mut post_genesis_block = state.block(post_genesis_header);
+            let post_genesis_transaction = post_genesis_block.transaction();
+            assert_eq!(
+                KagemushaV4ActivationHeightContext::from_transaction(&post_genesis_transaction),
+                KagemushaV4ActivationHeightContext::PostGenesis { current_height: 2 }
             );
         }
 

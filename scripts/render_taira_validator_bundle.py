@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -18,8 +19,16 @@ MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 128
 TAIRA_CHAIN_DISCRIMINANT = 369
-TAIRA_DS_ASSET_ALIAS = "ds#boi.is"
+TAIRA_DS_ASSET_ALIAS = "ds#boi.is2"
 TAIRA_DS_ASSET_SCALE = 2
+TAIRA_IS2_LANE_INDEX = 4
+TAIRA_IS2_LANE_ALIAS = "boi-mobile"
+TAIRA_IS2_DATASPACE_ALIAS = "is2"
+TAIRA_IS_DATASPACE_ID = 6_647_857_470_246_403_404
+TAIRA_IS2_PROPOSAL_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "configs/soranexus/taira/is2-council-manifest.proposal.json"
+)
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 I105_ALPHABET = tuple(BASE58_ALPHABET) + (
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
@@ -84,6 +93,262 @@ class SecretMaterial:
 
     validators: dict[str, str]
     shared: SharedSecrets
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object while rejecting ambiguous duplicate member names."""
+
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON member `{key}`")
+        result[key] = value
+    return result
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    """Encode the proposal's integer/string JSON subset deterministically."""
+
+    def validate(node: Any, path: str) -> None:
+        if node is None or isinstance(node, (bool, int, str)):
+            return
+        if isinstance(node, list):
+            for index, item in enumerate(node):
+                validate(item, f"{path}[{index}]")
+            return
+        if isinstance(node, dict):
+            for key, item in node.items():
+                if not isinstance(key, str):
+                    raise ValueError(f"{path} contains a non-string JSON member name")
+                validate(item, f"{path}.{key}")
+            return
+        raise ValueError(
+            f"{path} uses unsupported JSON value type {type(node).__name__}; "
+            "the council proposal permits only objects, arrays, strings, integers, "
+            "booleans, and null"
+        )
+
+    validate(value, "$")
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def derive_is2_council_manifest_identity(manifest_path: Path) -> tuple[str, int]:
+    """Validate the unapproved is2 proposal and derive its governed identity."""
+
+    try:
+        proposal = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(
+            f"could not load canonical is2 council proposal `{manifest_path}`: {error}"
+        ) from error
+    if not isinstance(proposal, dict):
+        raise ValueError("canonical is2 council proposal must be a JSON object")
+
+    expected_fields = {
+        "approval_state": "proposal_unapproved",
+        "hash_algorithm": "blake2b-256-canonical-json-v1",
+        "identity_nonce": 1,
+        "manifest_version": 1,
+        "proposal_id": "taira-is2-boi-mobile-v1",
+    }
+    for field, expected in expected_fields.items():
+        if proposal.get(field) != expected:
+            raise ValueError(
+                f"canonical is2 council proposal field `{field}` must be {expected!r}"
+            )
+    if proposal.get("existing_dataspaces_preserved") != ["is"]:
+        raise ValueError("is2 proposal must preserve the existing `is` dataspace")
+    if proposal.get("capabilities") != [
+        "cash_handoff_v1",
+        "staged_offline_invariant_v1",
+    ]:
+        raise ValueError("is2 proposal must bind both mandatory offline capabilities")
+
+    lane = proposal.get("lane")
+    if lane != {"alias": TAIRA_IS2_LANE_ALIAS, "index": TAIRA_IS2_LANE_INDEX}:
+        raise ValueError("is2 proposal must bind lane 4 with alias `boi-mobile`")
+    dataspace = proposal.get("dataspace")
+    if dataspace != {
+        "alias": TAIRA_IS2_DATASPACE_ALIAS,
+        "description": "BOI mobile Digital Shekel wallet",
+        "id_derivation": (
+            "first_8_bytes_little_endian(blake2b-256(canonical_json_v1))"
+        ),
+    }:
+        raise ValueError("is2 proposal must bind the distinct `is2` dataspace")
+    if proposal.get("domains") != [
+        "boi.is2",
+        "discount.is2",
+        "fibi.is2",
+        "hapoalim.is2",
+        "jerusalem.is2",
+        "leumi.is2",
+        "mizrahi.is2",
+        "onezero.is2",
+    ]:
+        raise ValueError("is2 proposal must bind the exact reviewed BOI/FI domain set")
+    if proposal.get("genesis") != {"requires_regeneration_and_resigning": True}:
+        raise ValueError("is2 proposal must require fresh genesis generation and signing")
+    if proposal.get("offline_asset") != {"alias": "ds#boi.is2", "scale": 2}:
+        raise ValueError("is2 proposal must bind the scale-2 `ds#boi.is2` asset")
+
+    routing = proposal.get("routing")
+    expected_hint = {
+        "dataspace_alias": TAIRA_IS2_DATASPACE_ALIAS,
+        "lane_alias": TAIRA_IS2_LANE_ALIAS,
+        "lane_index": TAIRA_IS2_LANE_INDEX,
+    }
+    if (
+        not isinstance(routing, dict)
+        or routing.get("mode") != "explicit_mobile_route_hint_v1"
+        or routing.get("fallback_allowed") is not False
+        or routing.get("required_hint") != expected_hint
+        or routing.get("static_instruction_rules") != []
+    ):
+        raise ValueError(
+            "is2 proposal must require explicit lane-4/is2 route hints without fallback"
+        )
+
+    digest = hashlib.blake2b(
+        _canonical_json_bytes(proposal),
+        digest_size=32,
+    ).digest()
+    dataspace_id = int.from_bytes(digest[:8], "little")
+    if dataspace_id == 0 or dataspace_id > (1 << 63) - 1:
+        raise ValueError(
+            "is2 proposal must derive a nonzero dataspace id representable by canonical TOML"
+        )
+    prior_nonce = dict(proposal)
+    prior_nonce["identity_nonce"] = 0
+    prior_digest = hashlib.blake2b(
+        _canonical_json_bytes(prior_nonce),
+        digest_size=32,
+    ).digest()
+    prior_id = int.from_bytes(prior_digest[:8], "little")
+    if 0 < prior_id <= (1 << 63) - 1:
+        raise ValueError(
+            "is2 proposal identity_nonce must be the first TOML-safe nonzero identity"
+        )
+    return digest.hex(), dataspace_id
+
+
+def _require_is2_operator_authorization(
+    template: dict[str, Any],
+    manifest_path: Path,
+    authorized_manifest_hash: str | None,
+) -> None:
+    """Fail closed when a config proposes is2 without exact detached approval."""
+
+    nexus = template.get("nexus")
+    if not isinstance(nexus, dict):
+        if authorized_manifest_hash is not None:
+            raise ValueError("is2 authorization was supplied for a config without `[nexus]`")
+        return
+    dataspaces = nexus.get("dataspace_catalog")
+    if not isinstance(dataspaces, list):
+        dataspaces = []
+    is2_entries = [
+        entry
+        for entry in dataspaces
+        if isinstance(entry, dict)
+        and entry.get("alias") == TAIRA_IS2_DATASPACE_ALIAS
+    ]
+    if not is2_entries:
+        if authorized_manifest_hash is not None:
+            raise ValueError(
+                "is2 authorization was supplied for a config without the `is2` dataspace"
+            )
+        return
+    if len(is2_entries) != 1:
+        raise ValueError("Taira config must contain exactly one `is2` dataspace")
+
+    manifest_hash, dataspace_id = derive_is2_council_manifest_identity(manifest_path)
+    entry = is2_entries[0]
+    if entry.get("manifest_hash") != manifest_hash or entry.get("id") != dataspace_id:
+        raise ValueError(
+            "Taira `is2` catalog identity differs from the canonical council proposal: "
+            f"expected hash {manifest_hash} and id {dataspace_id}"
+        )
+
+    existing_is = [
+        item
+        for item in dataspaces
+        if isinstance(item, dict) and item.get("alias") == "is"
+    ]
+    if (
+        len(existing_is) != 1
+        or existing_is[0].get("id") != TAIRA_IS_DATASPACE_ID
+        or existing_is[0].get("id") == dataspace_id
+    ):
+        raise ValueError(
+            "Taira must preserve the existing `is` dataspace and its stable id, "
+            "distinct from `is2`"
+        )
+
+    lanes = nexus.get("lane_catalog")
+    if not isinstance(lanes, list):
+        lanes = []
+    lane_four_entries = [
+        lane
+        for lane in lanes
+        if isinstance(lane, dict) and lane.get("index") == TAIRA_IS2_LANE_INDEX
+    ]
+    existing_lane = [
+        lane
+        for lane in lanes
+        if isinstance(lane, dict)
+        and lane.get("index") == 3
+        and lane.get("alias") == "external-poc"
+        and lane.get("dataspace") == "is"
+    ]
+    if (
+        nexus.get("lane_count") != 5
+        or len(lane_four_entries) != 1
+        or lane_four_entries[0].get("alias") != TAIRA_IS2_LANE_ALIAS
+        or lane_four_entries[0].get("dataspace") != TAIRA_IS2_DATASPACE_ALIAS
+        or len(existing_lane) != 1
+    ):
+        raise ValueError(
+            "Taira `is2` proposal requires preserved lane 3 `external-poc` -> `is` "
+            "plus lane_count 5 and one lane 4 `boi-mobile` -> `is2`"
+        )
+
+    routing = nexus.get("routing_policy")
+    rules = routing.get("rules", []) if isinstance(routing, dict) else []
+    if not isinstance(rules, list):
+        raise ValueError("Taira routing policy rules must be an array")
+    if any(
+        isinstance(rule, dict)
+        and (
+            rule.get("lane") == TAIRA_IS2_LANE_INDEX
+            or rule.get("dataspace") == TAIRA_IS2_DATASPACE_ALIAS
+        )
+        for rule in rules
+    ):
+        raise ValueError(
+            "Taira `is2` must use explicit mobile route hints, not static routing rules"
+        )
+
+    normalized_authorization = (
+        authorized_manifest_hash.removeprefix("0x").lower()
+        if authorized_manifest_hash is not None
+        else None
+    )
+    if normalized_authorization != manifest_hash:
+        raise ValueError(
+            "Taira `is2` proposal is not operator-authorized; rerun with "
+            f"`--authorize-is2-manifest-hash {manifest_hash}` only after detached "
+            "council review and approval"
+        )
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -394,11 +659,11 @@ def _validate_account_onboarding_secrets(
             )
         if shared.account_onboarding_scope_domain is not None:
             raise ValueError(
-                f"{context} BOI/Taira onboarding must use the deployed `is` dataspace, not a domain"
+                f"{context} BOI/Taira mobile onboarding must use the deployed `is2` dataspace, not a domain"
             )
-        if shared.account_onboarding_scope_dataspace != "is":
+        if shared.account_onboarding_scope_dataspace != TAIRA_IS2_DATASPACE_ALIAS:
             raise ValueError(
-                f"{context} BOI/Taira onboarding dataspace must be exactly `is`"
+                f"{context} BOI/Taira mobile onboarding dataspace must be exactly `is2`"
             )
 
 
@@ -1177,6 +1442,8 @@ def render_bundle(
     secrets_path: Path | None = None,
     only: str | None = None,
     base_genesis_path: Path | None = None,
+    is2_manifest_path: Path = TAIRA_IS2_PROPOSAL_PATH,
+    authorized_is2_manifest_hash: str | None = None,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
@@ -1185,6 +1452,11 @@ def render_bundle(
     )
     validators = load_roster(roster_path, secrets=secret_material)
     template = _load_toml(base_config_path)
+    _require_is2_operator_authorization(
+        template,
+        is2_manifest_path,
+        authorized_is2_manifest_hash,
+    )
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1294,6 +1566,18 @@ def main(argv: list[str] | None = None) -> int:
         "--only",
         help="render only one validator slug instead of the full bundle",
     )
+    parser.add_argument(
+        "--is2-council-manifest",
+        default=str(TAIRA_IS2_PROPOSAL_PATH),
+        help="canonical unapproved lane-4/is2 council proposal",
+    )
+    parser.add_argument(
+        "--authorize-is2-manifest-hash",
+        help=(
+            "exact canonical proposal hash authorized by the operator after detached "
+            "council review; required when the base config contains is2"
+        ),
+    )
     args = parser.parse_args(argv)
 
     written = render_bundle(
@@ -1303,6 +1587,8 @@ def main(argv: list[str] | None = None) -> int:
         secrets_path=Path(args.secrets) if args.secrets else None,
         only=args.only,
         base_genesis_path=Path(args.base_genesis),
+        is2_manifest_path=Path(args.is2_council_manifest),
+        authorized_is2_manifest_hash=args.authorize_is2_manifest_hash,
     )
     for path in written:
         print(f"config: {path}")

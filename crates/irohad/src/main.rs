@@ -7685,6 +7685,60 @@ fn rebind_frozen_lane_manifests_after_startup_replay(
     Ok(Arc::new(rebound))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MandatoryOfflineStartupReadinessProof {
+    ReplayedCommittedState,
+    SignedStagedGenesis,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MandatoryOfflineStartupGate {
+    empty_kura: bool,
+    proof: Option<MandatoryOfflineStartupReadinessProof>,
+}
+
+impl MandatoryOfflineStartupGate {
+    fn new(durable_height: usize) -> Self {
+        Self {
+            empty_kura: durable_height == 0,
+            proof: None,
+        }
+    }
+
+    fn record_replayed_committed_state(&mut self) -> Result<(), &'static str> {
+        if self.empty_kura {
+            return Err("empty Kura cannot satisfy readiness from committed replay state");
+        }
+        self.record(MandatoryOfflineStartupReadinessProof::ReplayedCommittedState)
+    }
+
+    fn record_signed_staged_genesis(&mut self) -> Result<(), &'static str> {
+        if !self.empty_kura {
+            return Err("non-empty Kura cannot substitute a staged genesis for replay readiness");
+        }
+        self.record(MandatoryOfflineStartupReadinessProof::SignedStagedGenesis)
+    }
+
+    fn record(
+        &mut self,
+        proof: MandatoryOfflineStartupReadinessProof,
+    ) -> Result<(), &'static str> {
+        if self.proof.is_some() {
+            return Err("mandatory offline startup readiness was validated more than once");
+        }
+        self.proof = Some(proof);
+        Ok(())
+    }
+
+    fn require_before_runtime_surfaces(
+        self,
+    ) -> Result<MandatoryOfflineStartupReadinessProof, &'static str> {
+        self.proof.ok_or(
+            "mandatory offline startup readiness was not validated before runtime surfaces",
+        )
+    }
+}
+
 #[cfg(test)]
 mod snapshot_read_error_tests {
     use super::*;
@@ -7692,6 +7746,104 @@ mod snapshot_read_error_tests {
 
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
+
+    #[test]
+    fn offline_startup_gate_requires_the_storage_specific_readiness_boundary() {
+        let mut fresh = MandatoryOfflineStartupGate::new(0);
+        assert_eq!(
+            fresh.record_replayed_committed_state(),
+            Err("empty Kura cannot satisfy readiness from committed replay state")
+        );
+        fresh
+            .record_signed_staged_genesis()
+            .expect("fresh storage accepts only signed staged-genesis readiness");
+        assert_eq!(
+            fresh
+                .require_before_runtime_surfaces()
+                .expect("staged readiness authorizes runtime startup"),
+            MandatoryOfflineStartupReadinessProof::SignedStagedGenesis
+        );
+
+        let mut restart = MandatoryOfflineStartupGate::new(7);
+        assert_eq!(
+            restart.record_signed_staged_genesis(),
+            Err("non-empty Kura cannot substitute a staged genesis for replay readiness")
+        );
+        restart
+            .record_replayed_committed_state()
+            .expect("restart accepts only replayed committed readiness");
+        assert_eq!(
+            restart
+                .require_before_runtime_surfaces()
+                .expect("replayed readiness authorizes runtime startup"),
+            MandatoryOfflineStartupReadinessProof::ReplayedCommittedState
+        );
+    }
+
+    #[test]
+    fn offline_startup_gate_is_fail_closed_before_and_after_a_process_crash() {
+        let fresh = MandatoryOfflineStartupGate::new(0);
+        assert_eq!(
+            fresh.require_before_runtime_surfaces(),
+            Err("mandatory offline startup readiness was not validated before runtime surfaces")
+        );
+
+        let mut staged = MandatoryOfflineStartupGate::new(0);
+        staged
+            .record_signed_staged_genesis()
+            .expect("staged readiness succeeds before the simulated crash");
+        let restarted_process = MandatoryOfflineStartupGate::new(0);
+        assert_eq!(
+            restarted_process.require_before_runtime_surfaces(),
+            Err("mandatory offline startup readiness was not validated before runtime surfaces"),
+            "a process-local staged proof must not survive a crash before genesis commit"
+        );
+    }
+
+    #[test]
+    fn offline_startup_gate_rejects_duplicate_boundary_proofs() {
+        let mut gate = MandatoryOfflineStartupGate::new(4);
+        gate.record_replayed_committed_state()
+            .expect("first exact replay proof is accepted");
+        assert_eq!(
+            gate.record_replayed_committed_state(),
+            Err("mandatory offline startup readiness was validated more than once")
+        );
+    }
+
+    #[test]
+    fn runtime_workers_are_source_ordered_after_the_offline_gate() {
+        let source = include_str!("main.rs");
+        let startup = source
+            .find("pub async fn start_with_runtime_deps")
+            .expect("runtime startup function");
+        let startup = &source[startup..];
+        let staged_check = startup
+            .find("ensure_mandatory_offline_staged_genesis_readiness")
+            .expect("staged-genesis readiness call");
+        let runtime_gate = startup
+            .find("require_before_runtime_surfaces")
+            .expect("typed runtime gate");
+        let kura_start = startup.find("Kura::start").expect("Kura worker startup");
+        let p2p_start = startup
+            .find("IrohaNetwork::start_with_crypto")
+            .expect("P2P startup");
+        let voting_start = startup
+            .find("let (sumeragi, child) = SumeragiStartArgs")
+            .expect("Sumeragi voting and block-production startup");
+        let torii_start = startup
+            .find("let torii_run = torii.start")
+            .expect("Torii startup");
+
+        assert!(
+            staged_check < runtime_gate
+                && runtime_gate < kura_start
+                && kura_start < p2p_start
+                && p2p_start < voting_start
+                && voting_start < torii_start,
+            "fresh-genesis validation and the typed gate must precede Kura, P2P, voting, block production, and Torii"
+        );
+    }
 
     fn dummy_block_hash(byte: u8) -> HashOf<BlockHeader> {
         let mut bytes = [0u8; Hash::LENGTH];
@@ -8203,7 +8355,7 @@ impl Iroha {
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
     pub async fn start_with_runtime_deps(
         mut config: Config,
-        mut genesis: Option<GenesisBlock>,
+        genesis: Option<GenesisBlock>,
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
         runtime_deps: IrohaRuntimeDeps,
@@ -8724,7 +8876,9 @@ impl Iroha {
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
-        {
+        let mut mandatory_offline_startup_gate =
+            MandatoryOfflineStartupGate::new(block_count.0);
+        if block_count.0 > 0 {
             iroha_torii::ensure_mandatory_offline_startup_readiness(
                 &state,
                 &config.common.chain,
@@ -8736,12 +8890,10 @@ impl Iroha {
                 Report::new(StartError::InitKura)
                     .attach(format!("mandatory offline cash readiness failed: {error}"))
             })?;
+            mandatory_offline_startup_gate
+                .record_replayed_committed_state()
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         }
-        // No Kura writer is live while trust selection or replay can still fail. Only the fully
-        // authenticated and replayed state may publish the canonical writer thread.
-        let child = Kura::start(kura.clone(), supervisor.shutdown_signal())
-            .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
-        supervisor.monitor(child);
         // Delay Arc wrapping until after we tweak state with config
 
         let (events_sender, _) = broadcast::channel(config.torii.events_buffer_capacity.get());
@@ -9056,19 +9208,201 @@ impl Iroha {
             }
         }
 
-        let bootstrap_allowlist: HashSet<PeerId> = if config.genesis.bootstrap_allowlist.is_empty()
-        {
-            config
-                .common
-                .trusted_peers
-                .value()
-                .clone()
-                .into_non_empty_vec()
-                .into_iter()
-                .collect()
-        } else {
-            config.genesis.bootstrap_allowlist.iter().cloned().collect()
-        };
+        if !snapshot_bootstrap_active && let Some(genesis_block) = genesis.as_ref() {
+            // On non-empty storage, avoid re-validating the provided genesis signature.
+            // Instead, ensure the optional provided payload matches the genesis already
+            // persisted at height 1 and continue replay from stored data.
+            if let Some(stored_genesis) = stored_genesis_block.as_ref() {
+                let stored_hash = stored_genesis.0.hash();
+                let provided_hash = genesis_block.0.hash();
+                if stored_hash != provided_hash {
+                    return Err(Report::new(StartError::InitKura).attach(format!(
+                        "provided genesis does not match stored genesis (stored={stored_hash}, provided={provided_hash})",
+                    )));
+                }
+                iroha_logger::info!(
+                    hash = %stored_hash,
+                    "non-empty block store detected; using stored genesis for restart",
+                );
+            } else {
+                let (fresh_mode_tag, _fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
+                    consensus_caps_from_genesis(
+                        genesis_block,
+                        &config.common.chain,
+                        &config_caps,
+                        &config.sumeragi,
+                    )
+                    .ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
+                        "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
+                    )
+                    })?;
+                if fresh_block_cadence_ms != signed_block_cadence_ms {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "fresh signed genesis cadence differs from the authenticated startup context",
+                    ));
+                }
+                verify_genesis_metadata(
+                    genesis_block,
+                    &config,
+                    &fresh_caps,
+                    &fresh_mode_tag,
+                    proto,
+                )
+                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+                if fresh_caps.consensus_fingerprint != consensus_caps.consensus_fingerprint
+                    || fresh_caps.mode_tag != consensus_caps.mode_tag
+                    || fresh_caps.proto_version != consensus_caps.proto_version
+                {
+                    return Err(Report::new(StartError::InitKura).attach(
+                        "fresh signed genesis consensus metadata differs from the authenticated startup context",
+                    ));
+                }
+                let genesis_account = AccountId::new(effective_genesis_public_key.clone());
+                if let Err(err) = iroha_core::validate_genesis_block(
+                    &genesis_block.0,
+                    &genesis_account,
+                    &config.common.chain,
+                ) {
+                    let err_display = err.to_string();
+                    iroha_logger::error!(
+                        error = %err,
+                        "Invalid genesis block rejected during validation"
+                    );
+                    return Err(Report::new(err)
+                        .attach(format!(
+                            "Invalid genesis block rejected during validation: {err_display}"
+                        ))
+                        .change_context(StartError::InitKura));
+                }
+
+                // Execute genesis in a disposable state overlay. The signed
+                // RegisterPeerWithPop set is the only allowed height-one voting
+                // topology; plain peer registrations are observers.
+                let signed_voters = iroha_core::sumeragi::signed_genesis_voting_peers(
+                    genesis_block,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "invalid signed Sumeragi v2 genesis roster: {error}"
+                    ))
+                })?;
+                let topology = Topology::new(signed_voters);
+                let time_source = TimeSource::new_system();
+                let mut voting_block: Option<VotingBlock> = None;
+                let committed_height_before_staging = state.committed_height();
+                let block_count_before_staging = block_count;
+                let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
+                    genesis_block.0.clone(),
+                    &topology,
+                    &config.common.chain,
+                    &genesis_account,
+                    &time_source,
+                    &state,
+                    &mut voting_block,
+                    signed_consensus_mode,
+                )
+                .unpack(|_| {});
+                match validation {
+                    Ok((valid_block, state_block)) => {
+                        let staged_block_cadence_ms = state_block
+                            .world()
+                            .parameters()
+                            .sumeragi()
+                            .block_cadence_ms()
+                            .get();
+                        if staged_block_cadence_ms != fresh_block_cadence_ms {
+                            return Err(Report::new(StartError::InitKura).attach(format!(
+                                "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
+                            )));
+                        }
+                        let (mode, signed_parameters) =
+                            signed_v2_genesis_context_metadata(genesis_block)
+                                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+                        let frozen_genesis = iroha_core::sumeragi::freeze_staged_genesis_v2(
+                            genesis_block,
+                            &state_block,
+                            mode,
+                            signed_parameters,
+                        )
+                        .map_err(|error| {
+                            Report::new(StartError::InitKura).attach(format!(
+                                "failed to freeze staged Sumeragi v2 genesis: {error}"
+                            ))
+                        })?;
+                        iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
+                            &valid_block,
+                            &state_block,
+                            &config.common.chain,
+                            &config.settlement.offline,
+                            config.torii.kagemusha_commands.as_ref(),
+                            &config.nexus.fees.fee_asset_id,
+                        )
+                        .map_err(|error| {
+                            Report::new(StartError::InitKura).attach(format!(
+                                "mandatory staged offline cash readiness failed: {error}"
+                            ))
+                        })?;
+                        // Dropping StateBlock discards the overlay. Consensus
+                        // must persist a CommitQC decision before applying it.
+                        drop(state_block);
+                        if state.committed_height() != committed_height_before_staging
+                            || block_count.0 != block_count_before_staging.0
+                        {
+                            return Err(Report::new(StartError::InitKura).attach(
+                                "fresh genesis staging mutated committed state before consensus",
+                            ));
+                        }
+                        staged_v2_genesis = Some(frozen_genesis);
+                        mandatory_offline_startup_gate
+                            .record_signed_staged_genesis()
+                            .map_err(|error| {
+                                Report::new(StartError::InitKura).attach(error)
+                            })?;
+                        iroha_logger::info!(
+                            context_id = ?staged_v2_genesis
+                                .as_ref()
+                                .expect("just staged")
+                                .context()
+                                .id(),
+                            capability = iroha_data_model::offline::KAGEMUSHA_STAGED_OFFLINE_INVARIANT_CAPABILITY_V1,
+                            "Validated mandatory offline cash in signed staged genesis without committing state or Kura"
+                        );
+                    }
+                    Err((_failed_block, err)) => {
+                        let err_display = err.to_string();
+                        iroha_logger::error!(
+                            error = %err,
+                            "Genesis block execution failed during validation"
+                        );
+                        return Err(Report::new(err)
+                            .attach(format!(
+                                "Genesis block execution failed during validation: {err_display}"
+                            ))
+                            .change_context(StartError::InitKura));
+                    }
+                }
+            }
+        } else if block_count.0 == 0 {
+            return Err(Report::new(StartError::InitKura).attach(
+                "empty storage requires a local signed genesis for mandatory offline staging; \
+                 peer bootstrap cannot start before the offline gate",
+            ));
+        }
+
+        let offline_startup_readiness_proof = mandatory_offline_startup_gate
+            .require_before_runtime_surfaces()
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
+        iroha_logger::info!(
+            readiness_boundary = ?offline_startup_readiness_proof,
+            "Mandatory offline cash startup gate passed before runtime surfaces"
+        );
+
+        // No Kura writer or network worker is live while replay, signed-genesis
+        // staging, or mandatory offline readiness can still fail.
+        let child = Kura::start(kura.clone(), supervisor.shutdown_signal())
+            .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        supervisor.monitor(child);
 
         let confidential_caps = iroha_p2p::ConfidentialHandshakeCaps {
             enabled: config.confidential.enabled,
@@ -9139,239 +9473,6 @@ impl Iroha {
                     "failed to register local genesis payload for bootstrap"
                 );
             }
-        }
-
-        // If we are starting from empty storage without a local genesis file, try bootstrapping
-        // from trusted peers before failing fast.
-        if genesis.is_none() && block_count.0 == 0 {
-            if config.genesis.bootstrap_enabled {
-                let candidates: Vec<PeerId> = bootstrap_allowlist
-                    .iter()
-                    .filter(|peer| *peer != config.common.peer.id())
-                    .cloned()
-                    .collect();
-                if candidates.is_empty() {
-                    iroha_logger::warn!(
-                        "genesis bootstrap skipped: no trusted peers available to request genesis"
-                    );
-                } else {
-                    let expected_hash = config.genesis.expected_hash;
-                    let genesis_account = AccountId::new(effective_genesis_public_key.clone());
-                    match bootstrapper
-                        .fetch_genesis(&candidates, &genesis_account, expected_hash)
-                        .await
-                    {
-                        Ok(fetched) => {
-                            let path = config
-                                .kura
-                                .store_dir
-                                .resolve_relative_path()
-                                .join("genesis.bootstrap.nrt");
-                            if let Err(err) = fs::create_dir_all(
-                                path.parent().expect("genesis bootstrap path has parent"),
-                            ) {
-                                iroha_logger::warn!(
-                                    ?err,
-                                    path = %path.display(),
-                                    "failed to create bootstrap genesis directory"
-                                );
-                            } else if let Err(err) = fs::write(&path, &fetched.bytes) {
-                                iroha_logger::warn!(
-                                    ?err,
-                                    path = %path.display(),
-                                    "failed to persist bootstrapped genesis payload"
-                                );
-                            } else {
-                                iroha_logger::info!(
-                                    path = %path.display(),
-                                    "persisted bootstrapped genesis payload"
-                                );
-                                config.genesis.file = Some(WithOrigin::inline(path.clone()));
-                            }
-                            if let Err(err) = bootstrapper.set_payload(&fetched.block).await {
-                                iroha_logger::warn!(
-                                    ?err,
-                                    "failed to register bootstrapped genesis payload"
-                                );
-                            }
-                            genesis = Some(fetched.block);
-                        }
-                        Err(err) => {
-                            iroha_logger::warn!(
-                                %err,
-                                timeout_ms = config.genesis.bootstrap_request_timeout.as_millis(),
-                                "genesis bootstrap failed"
-                            );
-                        }
-                    }
-                }
-            } else {
-                iroha_logger::warn!(
-                    "genesis bootstrap is disabled and no local genesis is available; startup will fail"
-                );
-            }
-        }
-
-        if !snapshot_bootstrap_active && let Some(genesis_block) = genesis.as_ref() {
-            // On non-empty storage, avoid re-validating the provided genesis signature.
-            // Instead, ensure the optional provided payload matches the genesis already
-            // persisted at height 1 and continue replay from stored data.
-            if let Some(stored_genesis) = stored_genesis_block.as_ref() {
-                let stored_hash = stored_genesis.0.hash();
-                let provided_hash = genesis_block.0.hash();
-                if stored_hash != provided_hash {
-                    return Err(Report::new(StartError::InitKura).attach(format!(
-                        "provided genesis does not match stored genesis (stored={stored_hash}, provided={provided_hash})",
-                    )));
-                }
-                iroha_logger::info!(
-                    hash = %stored_hash,
-                    "non-empty block store detected; using stored genesis for restart",
-                );
-            } else {
-                let (fresh_mode_tag, _fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
-                    consensus_caps_from_genesis(
-                        genesis_block,
-                        &config.common.chain,
-                        &config_caps,
-                        &config.sumeragi,
-                    )
-                    .ok_or_else(|| {
-                        Report::new(StartError::InitKura).attach(
-                        "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
-                    )
-                    })?;
-                if fresh_block_cadence_ms != signed_block_cadence_ms {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "fresh signed genesis cadence differs from the handshake opened for bootstrap",
-                    ));
-                }
-                verify_genesis_metadata(
-                    genesis_block,
-                    &config,
-                    &fresh_caps,
-                    &fresh_mode_tag,
-                    proto,
-                )
-                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
-                if fresh_caps.consensus_fingerprint != consensus_caps.consensus_fingerprint
-                    || fresh_caps.mode_tag != consensus_caps.mode_tag
-                    || fresh_caps.proto_version != consensus_caps.proto_version
-                {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "fresh signed genesis consensus metadata differs from the peer handshake opened for bootstrap",
-                    ));
-                }
-                let genesis_account = AccountId::new(effective_genesis_public_key.clone());
-                if let Err(err) = iroha_core::validate_genesis_block(
-                    &genesis_block.0,
-                    &genesis_account,
-                    &config.common.chain,
-                ) {
-                    let err_display = err.to_string();
-                    iroha_logger::error!(
-                        error = %err,
-                        "Invalid genesis block rejected during validation"
-                    );
-                    return Err(Report::new(err)
-                        .attach(format!(
-                            "Invalid genesis block rejected during validation: {err_display}"
-                        ))
-                        .change_context(StartError::InitKura));
-                }
-
-                // Execute genesis in a disposable state overlay. The signed
-                // RegisterPeerWithPop set is the only allowed height-one voting
-                // topology; plain peer registrations are observers.
-                let signed_voters = iroha_core::sumeragi::signed_genesis_voting_peers(
-                    genesis_block,
-                )
-                .map_err(|error| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "invalid signed Sumeragi v2 genesis roster: {error}"
-                    ))
-                })?;
-                let topology = Topology::new(signed_voters);
-                let time_source = TimeSource::new_system();
-                let mut voting_block: Option<VotingBlock> = None;
-                let committed_height_before_staging = state.committed_height();
-                let block_count_before_staging = block_count;
-                let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
-                    genesis_block.0.clone(),
-                    &topology,
-                    &config.common.chain,
-                    &genesis_account,
-                    &time_source,
-                    &state,
-                    &mut voting_block,
-                    signed_consensus_mode,
-                )
-                .unpack(|_| {});
-                match validation {
-                    Ok((_valid_block, state_block)) => {
-                        let staged_block_cadence_ms = state_block
-                            .world()
-                            .parameters()
-                            .sumeragi()
-                            .block_cadence_ms()
-                            .get();
-                        if staged_block_cadence_ms != fresh_block_cadence_ms {
-                            return Err(Report::new(StartError::InitKura).attach(format!(
-                                "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
-                            )));
-                        }
-                        let (mode, signed_parameters) =
-                            signed_v2_genesis_context_metadata(genesis_block)
-                                .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
-                        staged_v2_genesis = Some(
-                            iroha_core::sumeragi::freeze_staged_genesis_v2(
-                                genesis_block,
-                                &state_block,
-                                mode,
-                                signed_parameters,
-                            )
-                            .map_err(|error| {
-                                Report::new(StartError::InitKura).attach(format!(
-                                    "failed to freeze staged Sumeragi v2 genesis: {error}"
-                                ))
-                            })?,
-                        );
-                        // Dropping StateBlock discards the overlay. Consensus
-                        // must persist a CommitQC decision before applying it.
-                        drop(state_block);
-                        if state.committed_height() != committed_height_before_staging
-                            || block_count.0 != block_count_before_staging.0
-                        {
-                            return Err(Report::new(StartError::InitKura).attach(
-                                "fresh genesis staging mutated committed state before consensus",
-                            ));
-                        }
-                        iroha_logger::info!(
-                            context_id = ?staged_v2_genesis
-                                .as_ref()
-                                .expect("just staged")
-                                .context()
-                                .id(),
-                            "Validated and staged genesis without committing state or Kura"
-                        );
-                    }
-                    Err((_failed_block, err)) => {
-                        let err_display = err.to_string();
-                        iroha_logger::error!(
-                            error = %err,
-                            "Genesis block execution failed during validation"
-                        );
-                        return Err(Report::new(err)
-                            .attach(format!(
-                                "Genesis block execution failed during validation: {err_display}"
-                            ))
-                            .change_context(StartError::InitKura));
-                    }
-                }
-            }
-        } else if !snapshot_bootstrap_active && block_count.0 == 0 {
-            return Err(Report::new(StartError::InitKura)
-                .attach("missing genesis file for empty storage; provide `--genesis.file`"));
         }
 
         let snapshot_file = config

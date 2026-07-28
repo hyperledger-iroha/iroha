@@ -22,6 +22,10 @@ TAIRA_GENESIS_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/genesis.j
 TAIRA_SECRETS_EXAMPLE_PATH = (
     MODULE_PATH.parents[1] / "configs/soranexus/taira/validator_secrets.example.toml"
 )
+TAIRA_IS2_PROPOSAL_PATH = (
+    MODULE_PATH.parents[1]
+    / "configs/soranexus/taira/is2-council-manifest.proposal.json"
+)
 TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 TAIRA_CHAIN_DISCRIMINANT = 369
 TAIRA_CITIZEN_ID = (
@@ -69,13 +73,113 @@ def test_taira_templates_require_operator_provisioned_scale_2_ds_offline_binding
     secrets_text = TAIRA_SECRETS_EXAMPLE_PATH.read_text(encoding="utf-8")
 
     assert "wonderland.universal" not in secrets_text
-    assert 'account_onboarding_scope_dataspace = "is"' in secrets_text
-    assert 'offline_asset_alias = "ds#boi.is"' in secrets_text
+    assert 'account_onboarding_scope_dataspace = "is2"' in secrets_text
+    assert 'offline_asset_alias = "ds#boi.is2"' in secrets_text
     assert "offline_asset_scale = 2" in secrets_text
     assert "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" in secrets_text
     assert "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" in config_text
     offline_section = config_text.split("[settlement.offline]", 1)[1].split("\n[", 1)[0]
     assert TAIRA_GAS_ASSET_ID not in offline_section
+
+
+def test_is2_council_proposal_has_canonical_distinct_identity_and_explicit_routing() -> None:
+    manifest_hash, dataspace_id = MODULE.derive_is2_council_manifest_identity(
+        TAIRA_IS2_PROPOSAL_PATH
+    )
+    assert (
+        manifest_hash
+        == "4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b"
+    )
+    assert dataspace_id == 8_477_022_798_449_861_195
+
+    config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+    nexus = config["nexus"]
+    assert nexus["lane_count"] == 5
+    existing_is = next(
+        entry for entry in nexus["dataspace_catalog"] if entry["alias"] == "is"
+    )
+    is2 = next(
+        entry for entry in nexus["dataspace_catalog"] if entry["alias"] == "is2"
+    )
+    assert existing_is["id"] == 6_647_857_470_246_403_404
+    assert is2["id"] == dataspace_id
+    assert is2["manifest_hash"] == manifest_hash
+    assert is2["id"] != existing_is["id"]
+    assert any(
+        lane["index"] == 4
+        and lane["alias"] == "boi-mobile"
+        and lane["dataspace"] == "is2"
+        for lane in nexus["lane_catalog"]
+    )
+    assert all(
+        rule.get("lane") != 4 and rule.get("dataspace") != "is2"
+        for rule in nexus["routing_policy"]["rules"]
+    )
+
+
+def test_is2_rollout_requires_exact_detached_operator_authorization() -> None:
+    config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+    manifest_hash, _ = MODULE.derive_is2_council_manifest_identity(
+        TAIRA_IS2_PROPOSAL_PATH
+    )
+
+    for authorization in (None, "00" * 32):
+        try:
+            MODULE._require_is2_operator_authorization(
+                config,
+                TAIRA_IS2_PROPOSAL_PATH,
+                authorization,
+            )
+        except ValueError as error:
+            assert "not operator-authorized" in str(error)
+            assert manifest_hash in str(error)
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError("renderer accepted is2 without exact detached approval")
+
+    MODULE._require_is2_operator_authorization(
+        config,
+        TAIRA_IS2_PROPOSAL_PATH,
+        manifest_hash,
+    )
+
+
+def test_is2_rollout_rejects_proposal_or_catalog_drift(tmp_path: Path) -> None:
+    config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+    manifest_hash, _ = MODULE.derive_is2_council_manifest_identity(
+        TAIRA_IS2_PROPOSAL_PATH
+    )
+    proposal = json.loads(TAIRA_IS2_PROPOSAL_PATH.read_text(encoding="utf-8"))
+    proposal["routing"]["fallback_allowed"] = True
+    drifted = tmp_path / "is2-drifted.json"
+    drifted.write_text(json.dumps(proposal), encoding="utf-8")
+
+    try:
+        MODULE._require_is2_operator_authorization(
+            config,
+            drifted,
+            manifest_hash,
+        )
+    except ValueError as error:
+        assert "explicit lane-4/is2 route hints without fallback" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted a drifted is2 proposal")
+
+    drifted_config = json.loads(json.dumps(config))
+    next(
+        entry
+        for entry in drifted_config["nexus"]["dataspace_catalog"]
+        if entry["alias"] == "is2"
+    )["id"] += 1
+    try:
+        MODULE._require_is2_operator_authorization(
+            drifted_config,
+            TAIRA_IS2_PROPOSAL_PATH,
+            manifest_hash,
+        )
+    except ValueError as error:
+        assert "catalog identity differs" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted an is2 catalog id mismatch")
 
 
 def test_taira_governance_timing_contract_is_release_pinned() -> None:
@@ -393,11 +497,11 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         'account_onboarding_private_key = "bootstrap-private-key"',
         'account_onboarding_api_token = "bootstrap-api-token"',
         'account_onboarding_credential_id = "local-dev"',
-        'account_onboarding_scope_dataspace = "is"',
+        'account_onboarding_scope_dataspace = "is2"',
         'torii_faucet_authority = "faucet-authority"',
         'torii_faucet_private_key = "faucet-private-key"',
         'kagemusha_commands_private_key = "kagemusha-commands-private-key"',
-        'offline_asset_alias = "ds#boi.is"',
+        'offline_asset_alias = "ds#boi.is2"',
         f'offline_asset_definition_id = "{TAIRA_GAS_ASSET_ID}"',
         "offline_asset_scale = 2",
         f'offline_escrow_account = "{TAIRA_GENESIS_DEPLOYER_ID}"',
@@ -455,7 +559,7 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         f'"{TAIRA_GENESIS_DEPLOYER_ID}" }}' in config
     )
     assert 'id = "local-dev"' in config
-    assert 'scope = { dataspace = "is" }' in config
+    assert 'scope = { dataspace = "is2" }' in config
     assert MODULE._blake3_token_hash("bootstrap-api-token") in config
     assert "bootstrap-private-key" not in config
     assert "faucet-private-key" not in config
@@ -936,7 +1040,7 @@ def test_secret_material_requires_exact_scale_2_ds_offline_binding(
 
     mutations = (
         (
-            valid.replace('offline_asset_alias = "ds#boi.is"\n', ""),
+            valid.replace('offline_asset_alias = "ds#boi.is2"\n', ""),
             "offline cash configuration is mandatory",
         ),
         (
@@ -947,8 +1051,8 @@ def test_secret_material_requires_exact_scale_2_ds_offline_binding(
             "still contain placeholders",
         ),
         (
-            valid.replace('offline_asset_alias = "ds#boi.is"', 'offline_asset_alias = "xor#sora"'),
-            "registered ds#boi.is alias",
+            valid.replace('offline_asset_alias = "ds#boi.is2"', 'offline_asset_alias = "xor#sora"'),
+            "registered ds#boi.is2 alias",
         ),
         (
             valid.replace("offline_asset_scale = 2", "offline_asset_scale = 9"),
@@ -984,7 +1088,7 @@ def test_secret_material_rejects_wonderland_onboarding_scope(tmp_path: Path) -> 
     secrets_path = tmp_path / "validator_secrets.toml"
     _write_secrets(secrets_path)
     text = secrets_path.read_text(encoding="utf-8").replace(
-        'account_onboarding_scope_dataspace = "is"',
+        'account_onboarding_scope_dataspace = "is2"',
         'account_onboarding_scope_domain = "wonderland.universal"',
     )
     secrets_path.write_text(text, encoding="utf-8")
@@ -992,7 +1096,7 @@ def test_secret_material_rejects_wonderland_onboarding_scope(tmp_path: Path) -> 
     try:
         MODULE.load_secret_material(secrets_path)
     except ValueError as error:
-        assert "deployed `is` dataspace" in str(error)
+        assert "deployed `is2` dataspace" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("renderer accepted the stale Wonderland onboarding scope")
 

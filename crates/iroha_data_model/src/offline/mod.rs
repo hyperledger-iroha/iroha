@@ -52,6 +52,13 @@ pub const OFFLINE_REJECTION_REASON_PREFIX: &str = "offline_reason::";
 /// receiver-capable transport. Receiver acknowledgement is delivery evidence
 /// only: it is never an acceptance, commit, rollback, or clawback gate.
 pub const KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1: &str = "cash_handoff_v1";
+/// Fresh-chain capability for fail-closed staged offline-genesis validation.
+///
+/// A node advertising this capability executes a signed height-one genesis in
+/// a disposable state overlay and validates the complete mandatory offline
+/// invariant before it starts any P2P, Torii, voting, or block-production
+/// surface.
+pub const KAGEMUSHA_STAGED_OFFLINE_INVARIANT_CAPABILITY_V1: &str = "staged_offline_invariant_v1";
 /// Asset-definition metadata key that enables Offline escrow tracking.
 pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
 /// Domain-separation tag for deterministic offline escrow derivation.

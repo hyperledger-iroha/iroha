@@ -131,7 +131,7 @@ config rather than wrapper-local defaults:
   from `/v1/sumeragi/status` and an optional signed write canary for final
   public cutover. Every invocation must pass `--offline-asset-definition-id`
   with the operator-provisioned canonical ID for the registered scale-2
-  `ds#boi.is` asset and `--offline-expected-identity` with an absolute path to
+  `ds#boi.is2` asset and `--offline-expected-identity` with an absolute path to
   the external, operator-reviewed JSON identity. The identity seals the exact
   capability, ABI, asset ID/scale, authenticated artifact set, and every field
   of all five governed verifier identities. It must remain outside the source
@@ -175,7 +175,7 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put the matching validator `private_key` values and the shared
    `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`,
-   `kagemusha_commands_private_key`, `offline_asset_alias = "ds#boi.is"`,
+   `kagemusha_commands_private_key`, `offline_asset_alias = "ds#boi.is2"`,
    the operator-provisioned canonical `offline_asset_definition_id`,
    `offline_asset_scale = 2`, and canonical Taira I105
    `offline_escrow_account`,
@@ -183,9 +183,18 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    values in the runtime file. SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
-4. Render the per-validator bundle:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
-5. Copy each validator's complete generated directory to its host and point the
+4. Obtain detached council approval for the exact canonical
+   `configs/soranexus/taira/is2-council-manifest.proposal.json` bytes. The
+   proposal is deliberately marked `proposal_unapproved`; approval is an
+   external operator input and must not be inferred from its presence in this
+   repository. Its Blake2b-256 canonical-JSON identity is
+   `4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b`,
+   which derives dataspace ID `8477022798449861195` from the first eight digest
+   bytes in little-endian order. Identity nonce `1` is the first proposal nonce
+   whose derived nonzero ID fits canonical TOML's signed integer range.
+5. Render the per-validator bundle only after that detached approval:
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
+6. Copy each validator's complete generated directory to its host and point the
    node at `<validator-slug>/config.toml`. The renderer creates bundle and
    runtime directories with mode `0700`, creates the onboarding/faucet signer
    and API-token sidecars with mode `0600`, writes only signer paths and the
@@ -210,7 +219,7 @@ larger than the trusted set. It also requires explicit per-validator
 checked operator input instead of a hard-coded shared edge default.
 It also refuses every render that omits offline cash inputs, retains a
 `REPLACE_WITH_` placeholder, uses an asset other than the registered scale-2
-`ds#boi.is`, supplies a non-canonical asset-definition ID, or binds escrow to a
+`ds#boi.is2`, supplies a non-canonical asset-definition ID, or binds escrow to a
 non-canonical Taira I105 account. The checked-in config contains no guessed DS
 asset ID; the operator-provisioned ID is injected into
 `settlement.offline.escrow_accounts` at render time.
@@ -932,7 +941,7 @@ available as an optional convenience for environments that do have Compose.
    - local host-side override:
      `docker load < iroha3-<version>-linux-image.tar`
 2. Render the validator config bundle from your user-local roster and secrets:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
 3. Install the rendered config and storage directories on the validator host:
    - `sudo install -d -o 1001 -g 1001 /etc/iroha/taira-validator-1`
    - `sudo install -d -o 1001 -g 1001 /var/lib/iroha/taira-validator-1`
@@ -1004,7 +1013,7 @@ away from the shipped MCP-enabled config:
      that is the exact runtime candidate the later SoraSwap gate must approve
 3. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --authorize-is2-manifest-hash 4be27d6e526fa47522b2865462b79d228450d02fb3b63b011fb8731932405c2b --output-dir dist/taira-validators`
    - `validator_secrets.local.toml` must include both the validator private
      keys and the shared `account_onboarding_*`, `torii_faucet_*`, and
      `streaming_identity_*`, `sorafs_council_public_keys`, and

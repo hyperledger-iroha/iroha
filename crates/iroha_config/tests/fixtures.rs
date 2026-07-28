@@ -4588,6 +4588,25 @@ fn taira_config_enables_untrusted_cid_hosting() {
         Some(6_647_857_470_246_403_404),
         "external dataspace id should match its manifest hash"
     );
+    let mobile_dataspace = dataspaces
+        .iter()
+        .find(|entry| {
+            entry
+                .get("alias")
+                .and_then(TomlValue::as_str)
+                .is_some_and(|alias| alias == "is2")
+        })
+        .expect("Taira profile should include the distinct mobile `is2` dataspace");
+    assert_eq!(
+        mobile_dataspace.get("id").and_then(TomlValue::as_integer),
+        Some(8_477_022_798_449_861_195),
+        "mobile dataspace id should match its proposed council manifest hash"
+    );
+    assert_ne!(
+        mobile_dataspace.get("id").and_then(TomlValue::as_integer),
+        external_dataspace.get("id").and_then(TomlValue::as_integer),
+        "`is2` must not reuse the scenario browser's `is` dataspace id"
+    );
 
     let nexus = doc
         .get("nexus")
@@ -4595,8 +4614,8 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .expect("nexus should be configured");
     assert_eq!(
         nexus.get("lane_count").and_then(TomlValue::as_integer),
-        Some(4),
-        "Taira profile should reserve a lane for the external dataspace"
+        Some(5),
+        "Taira profile should reserve distinct lanes for browser `is` and mobile `is2`"
     );
     let lanes = nexus
         .get("lane_catalog")
@@ -4613,6 +4632,20 @@ fn taira_config_enables_untrusted_cid_hosting() {
                     .is_some_and(|dataspace| dataspace == "is")
         }),
         "Taira profile should bind the external dataspace to a lane"
+    );
+    assert!(
+        lanes.iter().any(|lane| {
+            lane.get("index").and_then(TomlValue::as_integer) == Some(4)
+                && lane
+                    .get("alias")
+                    .and_then(TomlValue::as_str)
+                    .is_some_and(|alias| alias == "boi-mobile")
+                && lane
+                    .get("dataspace")
+                    .and_then(TomlValue::as_str)
+                    .is_some_and(|dataspace| dataspace == "is2")
+        }),
+        "Taira profile should bind mobile `is2` to lane 4 `boi-mobile`"
     );
     let routing_rules = nexus
         .get("routing_policy")
@@ -4645,6 +4678,13 @@ fn taira_config_enables_untrusted_cid_hosting() {
             "Taira profile should route {instruction} to the external `is` lane"
         );
     }
+    assert!(
+        routing_rules.iter().all(|rule| {
+            rule.get("lane").and_then(TomlValue::as_integer) != Some(4)
+                && rule.get("dataspace").and_then(TomlValue::as_str) != Some("is2")
+        }),
+        "mobile `is2` must require an explicit route hint instead of static instruction rules"
+    );
 
     let block = doc
         .get("sumeragi")

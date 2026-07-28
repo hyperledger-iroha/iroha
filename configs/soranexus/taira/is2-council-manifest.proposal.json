@@ -1,0 +1,50 @@
+{
+  "approval_state": "proposal_unapproved",
+  "capabilities": [
+    "cash_handoff_v1",
+    "staged_offline_invariant_v1"
+  ],
+  "dataspace": {
+    "alias": "is2",
+    "description": "BOI mobile Digital Shekel wallet",
+    "id_derivation": "first_8_bytes_little_endian(blake2b-256(canonical_json_v1))"
+  },
+  "domains": [
+    "boi.is2",
+    "discount.is2",
+    "fibi.is2",
+    "hapoalim.is2",
+    "jerusalem.is2",
+    "leumi.is2",
+    "mizrahi.is2",
+    "onezero.is2"
+  ],
+  "existing_dataspaces_preserved": [
+    "is"
+  ],
+  "genesis": {
+    "requires_regeneration_and_resigning": true
+  },
+  "hash_algorithm": "blake2b-256-canonical-json-v1",
+  "identity_nonce": 1,
+  "lane": {
+    "alias": "boi-mobile",
+    "index": 4
+  },
+  "manifest_version": 1,
+  "offline_asset": {
+    "alias": "ds#boi.is2",
+    "scale": 2
+  },
+  "proposal_id": "taira-is2-boi-mobile-v1",
+  "routing": {
+    "fallback_allowed": false,
+    "mode": "explicit_mobile_route_hint_v1",
+    "required_hint": {
+      "dataspace_alias": "is2",
+      "lane_alias": "boi-mobile",
+      "lane_index": 4
+    },
+    "static_instruction_rules": []
+  }
+}
