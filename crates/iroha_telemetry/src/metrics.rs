@@ -3388,6 +3388,14 @@ mod serde_tests {
     use super::*;
     use norito::{from_bytes, to_bytes};
 
+    #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+    struct LegacyBuildStatus {
+        version: String,
+        git_commit_sha: String,
+        cargo_features: String,
+        target_triple: String,
+    }
+
     #[test]
     fn uptime_json_roundtrip() {
         let uptime = Uptime(Duration::new(5, 123));
@@ -3406,6 +3414,7 @@ mod serde_tests {
                 git_commit_sha: "deadbeef".to_owned(),
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
+                torii_cargo_features: "app_api,telemetry".to_owned(),
             },
             peer_id: "ed0120AABB".to_owned(),
             peers: 3,
@@ -3432,6 +3441,7 @@ mod serde_tests {
                 halo2: Halo2Status::default(),
             },
             stack: StackStatus::default(),
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -3449,6 +3459,61 @@ mod serde_tests {
         let decoded: Status = norito::json::from_json(&json).expect("deserialize status");
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.uptime.0, status.uptime.0);
+        assert_eq!(
+            decoded.build.torii_cargo_features,
+            status.build.torii_cargo_features
+        );
+    }
+
+    #[test]
+    fn build_status_defaults_missing_torii_feature_provenance() {
+        let legacy_json = r#"{
+            "version":"2.0.0-rc.test",
+            "git_commit_sha":"deadbeef",
+            "cargo_features":"metric-instrumentation",
+            "target_triple":"aarch64-unknown-linux-gnu"
+        }"#;
+        let decoded: BuildStatus =
+            norito::json::from_json(legacy_json).expect("decode legacy build status");
+
+        assert!(decoded.torii_cargo_features.is_empty());
+    }
+
+    #[test]
+    fn build_status_norito_roundtrip_preserves_torii_feature_provenance() {
+        let status = BuildStatus {
+            version: "2.0.0-rc.test".to_owned(),
+            git_commit_sha: "deadbeef".to_owned(),
+            cargo_features: "metric-instrumentation".to_owned(),
+            target_triple: "aarch64-unknown-linux-gnu".to_owned(),
+            torii_cargo_features: "app_api,telemetry".to_owned(),
+        };
+        let bytes = to_bytes(&status).expect("encode build status");
+        let archived = from_bytes::<BuildStatus>(&bytes).expect("archive build status");
+        let decoded: BuildStatus = norito::core::NoritoDeserialize::deserialize(archived);
+
+        assert_eq!(decoded.torii_cargo_features, status.torii_cargo_features);
+    }
+
+    #[test]
+    fn build_status_norito_defaults_legacy_torii_feature_provenance() {
+        let legacy = LegacyBuildStatus {
+            version: "2.0.0-rc.test".to_owned(),
+            git_commit_sha: "deadbeef".to_owned(),
+            cargo_features: "metric-instrumentation".to_owned(),
+            target_triple: "aarch64-unknown-linux-gnu".to_owned(),
+        };
+        let (payload, flags) = norito::codec::encode_with_header_flags(&legacy);
+        let bytes = norito::core::frame_bare_with_header_flags::<BuildStatus>(&payload, flags)
+            .expect("frame legacy build status as current schema");
+        let archived = from_bytes::<BuildStatus>(&bytes).expect("archive legacy build status");
+        let decoded: BuildStatus = norito::core::NoritoDeserialize::deserialize(archived);
+
+        assert_eq!(decoded.version, legacy.version);
+        assert_eq!(decoded.git_commit_sha, legacy.git_commit_sha);
+        assert_eq!(decoded.cargo_features, legacy.cargo_features);
+        assert_eq!(decoded.target_triple, legacy.target_triple);
+        assert!(decoded.torii_cargo_features.is_empty());
     }
 
     #[test]
@@ -5538,10 +5603,16 @@ pub struct BuildStatus {
     pub version: String,
     /// Git commit SHA baked into this binary.
     pub git_commit_sha: String,
-    /// Enabled Cargo features baked into this binary.
+    /// Enabled Cargo features baked into the telemetry crate.
     pub cargo_features: String,
     /// Target triple used to compile this binary.
     pub target_triple: String,
+    /// Enabled Cargo features baked into the Torii crate.
+    ///
+    /// Torii populates this field while constructing the `/status` response.
+    /// An empty value means the producer predates Torii feature provenance.
+    #[norito(default)]
+    pub torii_cargo_features: String,
 }
 
 impl BuildStatus {
@@ -5557,6 +5628,7 @@ impl BuildStatus {
             target_triple: option_env!("VERGEN_CARGO_TARGET_TRIPLE")
                 .unwrap_or("unknown")
                 .to_owned(),
+            torii_cargo_features: String::new(),
         }
     }
 }
@@ -21364,6 +21436,7 @@ mod test {
                 git_commit_sha: "deadbeef".to_owned(),
                 cargo_features: "telemetry,zk-halo2".to_owned(),
                 target_triple: "aarch64-apple-darwin".to_owned(),
+                torii_cargo_features: "app_api,telemetry".to_owned(),
             },
             peer_id: "ed0120AABB".to_owned(),
             observed_at_ms: 1_234_999,
@@ -21411,6 +21484,7 @@ mod test {
                 pool_fallback_total: 0,
                 budget_hit_total: 0,
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus {
                 mode_tag: PERMISSIONED_TAG.to_string(),
                 leader_index: 1,
@@ -21603,8 +21677,10 @@ mod test {
                 "version": "2.0.0-rc.test",
                 "git_commit_sha": "deadbeef",
                 "cargo_features": "telemetry,zk-halo2",
-                "target_triple": "aarch64-apple-darwin"
+                "target_triple": "aarch64-apple-darwin",
+                "torii_cargo_features": "app_api,telemetry"
             },
+            "peer_id": "ed0120AABB",
             "observed_at_ms": 1_234_999,
             "peers": 4,
             "blocks": 5,
@@ -21779,8 +21855,10 @@ mod test {
                 "version": "2.0.0-rc.test",
                 "git_commit_sha": "deadbeef",
                 "cargo_features": "telemetry,zk-halo2",
-                "target_triple": "aarch64-apple-darwin"
+                "target_triple": "aarch64-apple-darwin",
+                "torii_cargo_features": "app_api,telemetry"
               },
+              "peer_id": "ed0120AABB",
               "observed_at_ms": 1234999,
               "peers": 4,
               "blocks": 5,

@@ -79985,6 +79985,7 @@ pub async fn handle_status(
     }
 
     let mut status = Status::from(telemetry.metrics().await);
+    status.build.torii_cargo_features = torii_cargo_features().to_owned();
     status.peer_id = peer_id.unwrap_or_default();
     normalize_status_block_visibility(&mut status, authoritative_block_height);
     if !nexus_enabled {
@@ -80070,10 +80071,19 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
 }
 
 #[cfg(feature = "telemetry")]
+fn torii_cargo_features() -> &'static str {
+    option_env!("VERGEN_CARGO_FEATURES").unwrap_or("unknown")
+}
+
+#[cfg(feature = "telemetry")]
 fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Value> {
     let mut segments = tail.split('/').filter(|s| !s.is_empty());
     let field = segments.next()?;
     match field {
+        "build" => {
+            let value = norito::json::to_value(&status.build).ok()?;
+            json_value_by_segments(value, segments)
+        }
         "observed_at_ms" if segments.next().is_none() => Some(status.observed_at_ms.into()),
         "peers" if segments.next().is_none() => Some(status.peers.into()),
         "blocks" if segments.next().is_none() => Some(status.blocks.into()),
@@ -80519,6 +80529,72 @@ mod tests {
             payload.get("blocks").and_then(norito::json::Value::as_u64),
             Some(4_274)
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn torii_feature_provenance_reports_compiled_app_api() {
+        assert!(
+            super::torii_cargo_features()
+                .split(',')
+                .any(|feature| feature == "app_api"),
+            "the Torii crate feature snapshot must report app_api"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_root_and_tail_report_torii_crate_features() {
+        use http_body_util::BodyExt;
+
+        let telemetry = MaybeTelemetry::for_tests();
+        let expected = super::torii_cargo_features();
+        let response = super::handle_status(
+            &telemetry,
+            Some(axum::http::HeaderValue::from_static("application/json")),
+            None,
+            true,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("status succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status body")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status payload");
+        assert_eq!(
+            payload
+                .get("build")
+                .and_then(|build| build.get("torii_cargo_features"))
+                .and_then(norito::json::Value::as_str),
+            Some(expected)
+        );
+
+        let response = super::handle_status(
+            &telemetry,
+            None,
+            Some("build/torii_cargo_features"),
+            true,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("Torii build-feature status tail succeeds");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect status tail")
+            .to_bytes();
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode status tail");
+        assert_eq!(payload.as_str(), Some(expected));
     }
 
     #[cfg(feature = "app_api")]
