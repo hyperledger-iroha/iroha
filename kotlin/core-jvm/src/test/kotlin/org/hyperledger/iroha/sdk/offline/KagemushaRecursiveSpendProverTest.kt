@@ -526,7 +526,7 @@ class KagemushaRecursiveSpendProverTest {
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS)
         assertEquals(8, KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS)
         assertEquals(
-            21_764,
+            256 * 1024,
             KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4,
         )
         assertEquals(32 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2)

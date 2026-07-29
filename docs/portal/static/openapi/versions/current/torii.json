@@ -7324,7 +7324,7 @@
           "max_proof_bytes": {
             "description": "Authenticated upper bound for one canonical ABI-21 V4 proof-pair payload.",
             "format": "uint32",
-            "maximum": 21764,
+            "maximum": 65536,
             "minimum": 1,
             "type": "integer"
           },

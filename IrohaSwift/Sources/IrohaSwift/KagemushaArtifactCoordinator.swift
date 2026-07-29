@@ -28,7 +28,7 @@ public struct KagemushaRecursiveSpendArtifactStream: Sendable {
             field: "artifact.sha256"
         )
         guard byteCount > 0,
-              byteCount <= UInt64(KagemushaRecursiveSpend.artifactMaximumFileBytes) else {
+              byteCount <= KagemushaRecursiveSpend.artifactMaximumStreamedFileBytesV4 else {
             throw KagemushaRecursiveSpendError.invalidField("artifact.byteCount")
         }
         self.role = role

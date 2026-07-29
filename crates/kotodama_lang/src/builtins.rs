@@ -358,8 +358,9 @@ pub enum Builtin {
     MintAsset,
     BurnAsset,
     TransferAsset,
-    SetAssetTransferFreeze,
+    SetAssetTransferAvailability,
     SetAssetTransferDailyLimit,
+    SetAssetHoldingLimit,
     AccountRecoveryPropose,
     AccountRecoveryApprove,
     AccountRecoveryCancel,
@@ -652,8 +653,9 @@ impl Builtin {
             "mint_asset" => Self::MintAsset,
             "burn_asset" => Self::BurnAsset,
             "transfer_asset" => Self::TransferAsset,
-            "set_asset_transfer_freeze" => Self::SetAssetTransferFreeze,
+            "set_asset_transfer_availability" => Self::SetAssetTransferAvailability,
             "set_asset_transfer_daily_limit" => Self::SetAssetTransferDailyLimit,
+            "set_asset_holding_limit" => Self::SetAssetHoldingLimit,
             "account_recovery_propose" => Self::AccountRecoveryPropose,
             "account_recovery_approve" => Self::AccountRecoveryApprove,
             "account_recovery_cancel" => Self::AccountRecoveryCancel,
@@ -916,8 +918,9 @@ impl Builtin {
             Self::MintAsset => "mint_asset",
             Self::BurnAsset => "burn_asset",
             Self::TransferAsset => "transfer_asset",
-            Self::SetAssetTransferFreeze => "set_asset_transfer_freeze",
+            Self::SetAssetTransferAvailability => "set_asset_transfer_availability",
             Self::SetAssetTransferDailyLimit => "set_asset_transfer_daily_limit",
+            Self::SetAssetHoldingLimit => "set_asset_holding_limit",
             Self::AccountRecoveryPropose => "account_recovery_propose",
             Self::AccountRecoveryApprove => "account_recovery_approve",
             Self::AccountRecoveryCancel => "account_recovery_cancel",
@@ -1203,8 +1206,9 @@ impl Builtin {
             Self::MintAsset => "ledger::asset::mint",
             Self::BurnAsset => "ledger::asset::burn",
             Self::TransferAsset => "ledger::asset::transfer",
-            Self::SetAssetTransferFreeze => "ledger::asset::set_transfer_freeze",
+            Self::SetAssetTransferAvailability => "ledger::asset::set_transfer_availability",
             Self::SetAssetTransferDailyLimit => "ledger::asset::set_transfer_daily_limit",
+            Self::SetAssetHoldingLimit => "ledger::asset::set_holding_limit",
             Self::RegisterAsset => "ledger::asset::register",
             Self::CreateNewAsset => "ledger::asset::create",
             Self::UnregisterAsset => "ledger::asset::unregister",
@@ -1471,8 +1475,9 @@ impl Builtin {
             | Self::MintAsset
             | Self::BurnAsset
             | Self::TransferAsset
-            | Self::SetAssetTransferFreeze
+            | Self::SetAssetTransferAvailability
             | Self::SetAssetTransferDailyLimit
+            | Self::SetAssetHoldingLimit
             | Self::AccountRecoveryPropose
             | Self::AccountRecoveryApprove
             | Self::AccountRecoveryCancel
@@ -1839,7 +1844,8 @@ impl Builtin {
             Self::ContractInvokeQuantity2 => &[s::SYSCALL_CALL_CONTRACT_QUANTITY2],
             Self::DebugPrint => &[s::SYSCALL_DEBUG_PRINT],
             Self::DebugLog | Self::Info => &[s::SYSCALL_DEBUG_LOG],
-            Self::Assert | Self::Require | Self::AssertEq => &[s::SYSCALL_ABORT],
+            Self::Assert | Self::AssertEq => &[s::SYSCALL_ABORT],
+            Self::Require => &[s::SYSCALL_CONTRACT_ABORT],
             Self::TestInvokeEntrypoint => &[
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_JSON_ENCODE,
@@ -1855,8 +1861,9 @@ impl Builtin {
             Self::MintAsset => &[s::SYSCALL_MINT_ASSET],
             Self::BurnAsset => &[s::SYSCALL_BURN_ASSET],
             Self::TransferAsset => &[s::SYSCALL_TRANSFER_ASSET_SCOPED],
-            Self::SetAssetTransferFreeze => &[s::SYSCALL_SET_ASSET_TRANSFER_FREEZE],
+            Self::SetAssetTransferAvailability => &[s::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY],
             Self::SetAssetTransferDailyLimit => &[s::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT],
+            Self::SetAssetHoldingLimit => &[s::SYSCALL_SET_ASSET_HOLDING_LIMIT],
             Self::AccountRecoveryPropose => &[s::SYSCALL_ACCOUNT_RECOVERY_PROPOSE],
             Self::AccountRecoveryApprove => &[s::SYSCALL_ACCOUNT_RECOVERY_APPROVE],
             Self::AccountRecoveryCancel => &[s::SYSCALL_ACCOUNT_RECOVERY_CANCEL],
@@ -2255,10 +2262,22 @@ impl Builtin {
                 ],
                 "()",
             ),
-            Self::SetAssetTransferFreeze => {
-                S::new(&["AccountId", "AssetDefinitionId", "bool"], "()")
-            }
+            Self::SetAssetTransferAvailability => S::new(
+                &[
+                    "AccountId",
+                    "AssetDefinitionId",
+                    "int",
+                    "bool",
+                    "bool",
+                    "Option<string>",
+                ],
+                "()",
+            ),
             Self::SetAssetTransferDailyLimit => S::new(
+                &["AccountId", "AssetDefinitionId", "Option<quantity>"],
+                "()",
+            ),
+            Self::SetAssetHoldingLimit => S::new(
                 &["AccountId", "AssetDefinitionId", "Option<quantity>"],
                 "()",
             ),
@@ -2534,11 +2553,19 @@ impl Builtin {
                 "amount",
                 "dataspace",
             ]),
-            Self::SetAssetTransferFreeze => {
-                signature.with_names(&["account", "asset_definition", "frozen"])
-            }
+            Self::SetAssetTransferAvailability => signature.with_names(&[
+                "account",
+                "asset_definition",
+                "expected_revision",
+                "incoming",
+                "outgoing",
+                "reason",
+            ]),
             Self::SetAssetTransferDailyLimit => {
                 signature.with_names(&["account", "asset_definition", "cap"])
+            }
+            Self::SetAssetHoldingLimit => {
+                signature.with_names(&["account", "asset_definition", "limit"])
             }
             Self::AccountRecoveryPropose => signature.with_names(&["alias", "replacement"]),
             Self::AccountRecoveryApprove
@@ -2985,12 +3012,26 @@ mod tests {
 
         for (builtin, name, source_name, syscall, parameters, parameter_names) in [
             (
-                Builtin::SetAssetTransferFreeze,
-                "set_asset_transfer_freeze",
-                "ledger::asset::set_transfer_freeze",
-                s::SYSCALL_SET_ASSET_TRANSFER_FREEZE,
-                &["AccountId", "AssetDefinitionId", "bool"][..],
-                &["account", "asset_definition", "frozen"][..],
+                Builtin::SetAssetTransferAvailability,
+                "set_asset_transfer_availability",
+                "ledger::asset::set_transfer_availability",
+                s::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
+                &[
+                    "AccountId",
+                    "AssetDefinitionId",
+                    "int",
+                    "bool",
+                    "bool",
+                    "Option<string>",
+                ][..],
+                &[
+                    "account",
+                    "asset_definition",
+                    "expected_revision",
+                    "incoming",
+                    "outgoing",
+                    "reason",
+                ][..],
             ),
             (
                 Builtin::SetAssetTransferDailyLimit,
@@ -2999,6 +3040,14 @@ mod tests {
                 s::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
                 &["AccountId", "AssetDefinitionId", "Option<quantity>"][..],
                 &["account", "asset_definition", "cap"][..],
+            ),
+            (
+                Builtin::SetAssetHoldingLimit,
+                "set_asset_holding_limit",
+                "ledger::asset::set_holding_limit",
+                s::SYSCALL_SET_ASSET_HOLDING_LIMIT,
+                &["AccountId", "AssetDefinitionId", "Option<quantity>"][..],
+                &["account", "asset_definition", "limit"][..],
             ),
             (
                 Builtin::AccountRecoveryPropose,

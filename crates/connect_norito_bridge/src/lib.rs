@@ -104,6 +104,12 @@ use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 mod kagemusha_candidate_scenario;
+#[cfg(all(
+    feature = "kagemusha-candidate-evidence-lab",
+    target_os = "ios",
+    not(target_abi = "sim")
+))]
+mod kagemusha_candidate_apple;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 
@@ -5873,7 +5879,7 @@ impl KagemushaCandidateEvidenceLabInstalledArtifactSetV4 {
             || self.accepted_identity.candidate_record_sha256 != self.candidate_sha256
             || self.accepted_identity.candidate_manifest_sha256 != self.manifest_sha256
             || self.accepted_identity.production_capability_observed
-            || self.accepted_identity.source_repo_dirty
+            || !self.accepted_identity.source_repo_dirty
             || iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
         {
             return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
@@ -13320,6 +13326,99 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_
     bridge_result_to_code(result)
 }
 
+/// Execute the candidate-only proof phase on a physical iOS process.
+///
+/// Simulator and non-iOS feature builds retain an explicit rejecting symbol so
+/// a candidate harness cannot silently fall back to another execution target.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1(
+    candidate_path_ptr: *const c_uchar,
+    candidate_path_len: c_ulong,
+    roster_path_ptr: *const c_uchar,
+    roster_path_len: c_ulong,
+    artifact_root_path_ptr: *const c_uchar,
+    artifact_root_path_len: c_ulong,
+    scenario_path_ptr: *const c_uchar,
+    scenario_path_len: c_ulong,
+    launch_nonce_ptr: *const c_uchar,
+    launch_nonce_len: c_ulong,
+    out_checkpoint_ptr: *mut *mut c_uchar,
+    out_checkpoint_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_checkpoint_ptr, out_checkpoint_len);
+    #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
+    {
+        return unsafe {
+            kagemusha_candidate_apple::proof_phase_bridge_v1(
+                candidate_path_ptr,
+                candidate_path_len,
+                roster_path_ptr,
+                roster_path_len,
+                artifact_root_path_ptr,
+                artifact_root_path_len,
+                scenario_path_ptr,
+                scenario_path_len,
+                launch_nonce_ptr,
+                launch_nonce_len,
+                out_checkpoint_ptr,
+                out_checkpoint_len,
+            )
+        };
+    }
+    #[cfg(not(all(target_os = "ios", not(target_abi = "sim"))))]
+    {
+        ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE
+    }
+}
+
+/// Execute the candidate-only restart phase on a distinct physical iOS process.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1(
+    candidate_path_ptr: *const c_uchar,
+    candidate_path_len: c_ulong,
+    roster_path_ptr: *const c_uchar,
+    roster_path_len: c_ulong,
+    artifact_root_path_ptr: *const c_uchar,
+    artifact_root_path_len: c_ulong,
+    scenario_path_ptr: *const c_uchar,
+    scenario_path_len: c_ulong,
+    checkpoint_ptr: *const c_uchar,
+    checkpoint_len: c_ulong,
+    launch_nonce_ptr: *const c_uchar,
+    launch_nonce_len: c_ulong,
+    out_transcript_ptr: *mut *mut c_uchar,
+    out_transcript_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_transcript_ptr, out_transcript_len);
+    #[cfg(all(target_os = "ios", not(target_abi = "sim")))]
+    {
+        return unsafe {
+            kagemusha_candidate_apple::restart_phase_bridge_v1(
+                candidate_path_ptr,
+                candidate_path_len,
+                roster_path_ptr,
+                roster_path_len,
+                artifact_root_path_ptr,
+                artifact_root_path_len,
+                scenario_path_ptr,
+                scenario_path_len,
+                checkpoint_ptr,
+                checkpoint_len,
+                launch_nonce_ptr,
+                launch_nonce_len,
+                out_transcript_ptr,
+                out_transcript_len,
+            )
+        };
+    }
+    #[cfg(not(all(target_os = "ios", not(target_abi = "sim"))))]
+    {
+        ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE
+    }
+}
+
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_uninstall_v4(
@@ -15254,7 +15353,10 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
             KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
+            KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaAuthenticatedReleaseV4,
@@ -15285,8 +15387,9 @@ mod kagemusha_bridge_tests {
             let circuit_params = KagemushaStepCircuitParamsV4 {
                 version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
                 k,
-                num_advice_per_phase: vec![1],
-                num_lookup_advice_per_phase: vec![1],
+                num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+                num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4
+                    .to_vec(),
                 num_fixed: 1,
                 lookup_bits: k - 1,
                 num_instance_columns: 1,
@@ -18066,6 +18169,91 @@ mod kagemusha_bridge_tests {
         fresh_recipient_opening: KagemushaNoteOpeningV2,
         framed_artifacts: Vec<ProductionReleaseFramedArtifactV4>,
         live_pair: Vec<u8>,
+        taira_release_catalog: bool,
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_ROSTER_ENV_V4: &str = "IROHA_KAGEMUSHA_TAIRA_RELEASE_ROSTER";
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_CATALOG_DIR_ENV_V4: &str = "IROHA_KAGEMUSHA_TAIRA_RELEASE_CATALOG_DIR";
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_ACTIVATION_HEIGHT_V4: u64 = 2;
+    #[cfg(feature = "privacy-production-enabled")]
+    const TAIRA_RELEASE_MINIMUM_WITHDRAWAL_HEIGHT_V4: u64 = 1_000_000;
+
+    #[cfg(feature = "privacy-production-enabled")]
+    fn configured_taira_topup_finality_roster_v4(
+        chain_id: &ChainId,
+        generation: &str,
+    ) -> Option<iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2> {
+        use std::io::Read as _;
+
+        let path = std::env::var_os(TAIRA_RELEASE_ROSTER_ENV_V4).map(std::path::PathBuf::from)?;
+        assert!(
+            path.is_absolute(),
+            "{TAIRA_RELEASE_ROSTER_ENV_V4} must select an absolute canonical Norito roster"
+        );
+        let metadata = std::fs::symlink_metadata(&path)
+            .unwrap_or_else(|error| panic!("inspect configured Taira release roster: {error}"));
+        assert!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "configured Taira release roster must be a regular non-symlink file"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            assert_eq!(
+                metadata.nlink(),
+                1,
+                "configured Taira release roster must not be hard-linked"
+            );
+            assert_eq!(
+                metadata.mode() & 0o022,
+                0,
+                "configured Taira release roster must not be group/world writable"
+            );
+        }
+        assert!(
+            metadata.len()
+                <= iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+            "configured Taira release roster exceeds its canonical size bound"
+        );
+        let mut file = File::open(&path)
+            .unwrap_or_else(|error| panic!("open configured Taira release roster: {error}"));
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(metadata.len()).expect("bounded Taira roster size fits usize"),
+        );
+        file.read_to_end(&mut bytes)
+            .unwrap_or_else(|error| panic!("read configured Taira release roster: {error}"));
+        let roster = norito::decode_from_bytes::<
+            iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+        >(&bytes)
+        .expect("decode configured canonical Taira release roster");
+        assert_eq!(
+            norito::to_bytes(&roster).expect("re-encode configured Taira release roster"),
+            bytes,
+            "configured Taira release roster must use canonical Norito"
+        );
+        roster
+            .validate()
+            .expect("configured Taira release roster must have valid BLS PoPs");
+        assert_eq!(&roster.chain_id, chain_id);
+        assert_eq!(roster.artifact_generation, generation);
+        assert_eq!(roster.windows.len(), 1);
+        let window = &roster.windows[0];
+        assert_eq!(
+            window.activates_at_height,
+            TAIRA_RELEASE_ACTIVATION_HEIGHT_V4
+        );
+        assert!(
+            window.withdraws_at_height >= TAIRA_RELEASE_MINIMUM_WITHDRAWAL_HEIGHT_V4,
+            "configured Taira release roster window is too short for a deployed testnet"
+        );
+        assert_eq!(
+            window.consensus_mode,
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+        );
+        Some(roster)
     }
 
     #[cfg(feature = "privacy-production-enabled")]
@@ -18161,7 +18349,8 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
             KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KagemushaPastaPublicLayoutV4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
+            KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4, KagemushaPastaPublicLayoutV4,
             KagemushaStepCircuitParamsV4,
         };
 
@@ -18178,7 +18367,7 @@ mod kagemusha_bridge_tests {
             num_instance_columns: 1,
             public_input_limbs: layout.instance_column_limbs,
             minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            max_parent_proof_bytes: 16_384,
+            max_parent_proof_bytes: KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
         };
         params
             .validate_release_generation_profile()
@@ -18241,8 +18430,23 @@ mod kagemusha_bridge_tests {
         assert_eq!(chain_id.as_str(), CURRENT_TAIRA_CHAIN_ID);
         assert_eq!(asset.to_string(), CBSI_SBD_ASSET_DEFINITION_ID);
         assert_eq!(fresh_recipient_request.asset, asset);
-        let (topup_roster, topup_signing_keys) =
-            production_topup_finality_roster_v2(&chain_id, generation);
+        let configured_taira_roster =
+            configured_taira_topup_finality_roster_v4(&chain_id, generation);
+        let taira_release_catalog = configured_taira_roster.is_some();
+        let (topup_roster, topup_signing_keys) = configured_taira_roster.map_or_else(
+            || production_topup_finality_roster_v2(&chain_id, generation),
+            |roster| (roster, Vec::new()),
+        );
+        let activation_height = if taira_release_catalog {
+            TAIRA_RELEASE_ACTIVATION_HEIGHT_V4
+        } else {
+            1
+        };
+        let withdrawal_height = if taira_release_catalog {
+            topup_roster.windows[0].withdraws_at_height
+        } else {
+            1_000
+        };
         let topup_roster_bytes =
             norito::to_bytes(&topup_roster).expect("encode production top-up finality roster");
 
@@ -18356,8 +18560,8 @@ mod kagemusha_bridge_tests {
             chain_id,
             asset,
             asset_scale: 2,
-            activation_height: 1,
-            withdrawal_height: 1_000,
+            activation_height,
+            withdrawal_height,
             max_proof_bytes: u32::try_from(live_pair.len())
                 .expect("generated pair length fits release ceiling"),
             profiles: vec![step_eq, step_ep],
@@ -18500,6 +18704,7 @@ mod kagemusha_bridge_tests {
             fresh_recipient_opening,
             framed_artifacts,
             live_pair,
+            taira_release_catalog,
         }
     }
 
@@ -20033,6 +20238,163 @@ mod kagemusha_bridge_tests {
     }
 
     #[cfg(feature = "privacy-production-enabled")]
+    fn export_taira_release_catalog_v4(fixture: &ProductionReleaseFixtureV4) -> std::path::PathBuf {
+        use std::{
+            io::{Read as _, Seek as _, SeekFrom, Write as _},
+            path::PathBuf,
+        };
+
+        assert!(fixture.taira_release_catalog);
+        assert!(fixture.topup_signing_keys.is_empty());
+        assert_eq!(
+            fixture.manifest.activation_height,
+            TAIRA_RELEASE_ACTIVATION_HEIGHT_V4
+        );
+        assert!(fixture.manifest.withdrawal_height >= TAIRA_RELEASE_MINIMUM_WITHDRAWAL_HEIGHT_V4);
+
+        let output_path = std::env::var_os(TAIRA_RELEASE_CATALOG_DIR_ENV_V4)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} is required with {TAIRA_RELEASE_ROSTER_ENV_V4}"
+                )
+            });
+        assert!(
+            output_path.is_absolute(),
+            "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} must select an absolute owner-private directory"
+        );
+        let output = ProductionSbdAcceptanceBundleRootV1::create(output_path.clone())
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{TAIRA_RELEASE_CATALOG_DIR_ENV_V4} must be normalized, symlink-free, and absent or empty: {error}"
+                )
+            });
+
+        let manifest_bytes = norito::to_bytes(&fixture.manifest).expect("encode Taira manifest");
+        let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
+        assert_eq!(fixture.promotion_record.manifest_sha256, manifest_sha256);
+        let digest = hex::encode(manifest_sha256);
+        let release_prefix = format!("catalog/{digest}");
+        let release_path = |file_name: &str| format!("{release_prefix}/{file_name}");
+        let mut expected = Vec::with_capacity(17);
+
+        let mut write_bytes = |relative: String, bytes: &[u8]| {
+            output
+                .write_private_file(&relative, bytes)
+                .unwrap_or_else(|error| panic!("write Taira release file `{relative}`: {error}"));
+            expected.push(ProductionSbdAcceptanceExpectedFileV1::from_bytes(
+                &relative, bytes,
+            ));
+        };
+
+        write_bytes(
+            "release-policy-v1.norito".to_owned(),
+            &norito::to_bytes(&fixture.policy).expect("encode Taira release policy"),
+        );
+        write_bytes(release_path("manifest.norito"), &manifest_bytes);
+        let mut manifest_json =
+            norito::json::to_string_pretty(&fixture.manifest).expect("render Taira manifest JSON");
+        assert!(
+            manifest_json.contains("\"asset\""),
+            "Taira release JSON must expose the canonical `asset` field"
+        );
+        assert!(
+            !manifest_json.contains("\"asset_definition_id\""),
+            "Taira release JSON must not rename `asset` for deployment tooling"
+        );
+        manifest_json.push('\n');
+        write_bytes(release_path("manifest.json"), manifest_json.as_bytes());
+        write_bytes(
+            release_path("manifest.norito.sha256"),
+            format!("{digest}\n").as_bytes(),
+        );
+        write_bytes(
+            release_path(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
+            ),
+            &norito::to_bytes(&fixture.attestation).expect("encode Taira release attestation"),
+        );
+        write_bytes(
+            release_path(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+            ),
+            &fixture.benchmark_evidence,
+        );
+        write_bytes(
+            release_path(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+            ),
+            &fixture.cryptographic_review,
+        );
+        write_bytes(
+            release_path("promotion-record-v4.norito"),
+            &norito::to_bytes(&fixture.promotion_record)
+                .expect("encode Taira release promotion record"),
+        );
+        write_bytes(
+            release_path(&fixture.manifest.topup_finality_roster_artifact.file_name),
+            &norito::to_bytes(&fixture.topup_roster).expect("encode Taira top-up finality roster"),
+        );
+
+        let descriptors = fixture
+            .manifest
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(descriptors.len(), fixture.framed_artifacts.len());
+        drop(write_bytes);
+        for (descriptor, framed) in descriptors.iter().zip(&fixture.framed_artifacts) {
+            let relative = release_path(&descriptor.file_name);
+            let mut destination = output
+                .create_private_file(&relative)
+                .unwrap_or_else(|error| panic!("create Taira artifact `{relative}`: {error}"));
+            let mut source = framed.file.lock().expect("Taira artifact file lock");
+            assert!(kagemusha_recursive_spend_file_is_read_only_v4(&source));
+            assert_eq!(
+                source.metadata().expect("Taira artifact metadata").len(),
+                descriptor.size_bytes
+            );
+            source
+                .seek(SeekFrom::Start(0))
+                .expect("rewind Taira artifact");
+            let mut remaining = descriptor.size_bytes;
+            let mut digest_hasher = Sha256::new();
+            let mut chunk = [0_u8; 64 * 1024];
+            while remaining != 0 {
+                let take = usize::try_from(remaining.min(chunk.len() as u64))
+                    .expect("bounded Taira artifact chunk size");
+                source
+                    .read_exact(&mut chunk[..take])
+                    .expect("read Taira artifact");
+                destination
+                    .write_all(&chunk[..take])
+                    .expect("write Taira artifact");
+                digest_hasher.update(&chunk[..take]);
+                remaining -= take as u64;
+            }
+            assert_eq!(
+                <[u8; 32]>::from(digest_hasher.finalize()),
+                descriptor.sha256
+            );
+            source
+                .seek(SeekFrom::Start(0))
+                .expect("restore Taira artifact cursor");
+            destination.sync_all().expect("sync Taira artifact");
+            expected.push(ProductionSbdAcceptanceExpectedFileV1 {
+                path: relative,
+                size: descriptor.size_bytes,
+                sha256: descriptor.sha256,
+            });
+        }
+        output
+            .finish(&expected)
+            .expect("authenticate exact Taira release catalog export");
+        assert_eq!(output.path(), output_path);
+        output_path
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
     fn export_production_sbd_acceptance_bundle_v1(
         fixture: &ProductionReleaseFixtureV4,
         lifecycle: &ProductionSbdAcceptanceLifecycleV1,
@@ -20916,6 +21278,30 @@ mod kagemusha_bridge_tests {
             .expect("execute and terminally verify both genuine Eq/Ep proof branches");
         drop(verifier);
         eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 qualification-pair:verified");
+
+        if fixture.taira_release_catalog {
+            let path = export_taira_release_catalog_v4(&fixture);
+            eprintln!(
+                "wrote exact authenticated Taira release catalog to {}",
+                path.display()
+            );
+            eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 catalog:exported");
+            assert_eq!(
+                unsafe {
+                    connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4(
+                        manifest_sha256.as_ptr(),
+                        32,
+                    )
+                },
+                0
+            );
+            eprintln!("KAGEMUSHA_TAIRA_RELEASE_STAGE_V4 uninstall:complete");
+            eprintln!("KAGEMUSHA_TAIRA_RELEASE_V4_COMPLETED");
+            resource_guard
+                .write_phase("bridge.taira-release.complete")
+                .expect("write Taira release completion resource-supervisor phase");
+            return;
+        }
 
         let lifecycle = production_sbd_acceptance_lifecycle_v1(&fixture, installed.as_ref());
         eprintln!("KAGEMUSHA_SBD_PRODUCTION_STAGE_V1 lifecycle:complete");
@@ -33085,7 +33471,7 @@ fn java_native_kagemusha_candidate_lab_accepted_identity_v4(
         .map_err(|_| "candidate-lab identity failed revalidation".to_owned())?;
         if expected != installed.accepted_identity
             || expected.production_capability_observed
-            || expected.source_repo_dirty
+            || !expected.source_repo_dirty
             || expected.artifacts.len() != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4
         {
             return Err("candidate-lab identity changed after installation".to_owned());

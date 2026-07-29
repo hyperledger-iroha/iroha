@@ -3388,6 +3388,12 @@ pub mod concurrency {
     pub const SCHEDULER_MAX: usize = 0;
     /// Global Rayon thread pool size (0 = auto/physical cores)
     pub const RAYON_GLOBAL: usize = 0;
+    /// Default stack size (bytes) for Tokio runtime and blocking threads.
+    pub const TOKIO_STACK_BYTES: usize = 8 * 1024 * 1024;
+    /// Minimum allowed Tokio runtime and blocking-thread stack size.
+    pub const TOKIO_STACK_BYTES_MIN: usize = 8 * 1024 * 1024;
+    /// Maximum allowed Tokio runtime and blocking-thread stack size.
+    pub const TOKIO_STACK_BYTES_MAX: usize = 64 * 1024 * 1024;
     /// Default stack size (bytes) for scheduler worker threads.
     pub const SCHEDULER_STACK_BYTES: usize = 32 * 1024 * 1024;
     /// Default stack size (bytes) for prover worker threads.

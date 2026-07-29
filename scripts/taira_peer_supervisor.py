@@ -26,6 +26,15 @@ class IdentityError(RuntimeError):
     """Raised when a planned runtime path has changed identity."""
 
 
+BINARY_STAT_SEAL_FIELDS = (
+    "binary_device",
+    "binary_inode",
+    "binary_size",
+    "binary_mtime_ns",
+    "binary_ctime_ns",
+)
+
+
 def sha256_file(path: Path) -> str:
     """Return the SHA-256 digest of a regular file without following symlinks."""
 
@@ -52,6 +61,107 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def binary_stat_seal(
+    args: argparse.Namespace,
+) -> tuple[int, int, int, int, int] | None:
+    """Return the optional all-or-none binary stat seal."""
+
+    values = tuple(getattr(args, field, None) for field in BINARY_STAT_SEAL_FIELDS)
+    present = tuple(value is not None for value in values)
+    if not any(present):
+        return None
+    if not all(present):
+        raise IdentityError("binary stat seal fields must be provided together")
+    device, inode, size, mtime_ns, ctime_ns = values
+    if (
+        not isinstance(device, int)
+        or device < 0
+        or not isinstance(inode, int)
+        or inode <= 0
+        or not isinstance(size, int)
+        or size < 0
+        or not isinstance(mtime_ns, int)
+        or mtime_ns < 0
+        or not isinstance(ctime_ns, int)
+        or ctime_ns < 0
+    ):
+        raise IdentityError("binary stat seal metadata is invalid")
+    return device, inode, size, mtime_ns, ctime_ns
+
+
+def require_trusted_binary_path(path: Path) -> None:
+    """Require a root-owned path that the runtime user cannot rename or rewrite."""
+
+    if not path.is_absolute() or ".." in path.parts:
+        raise IdentityError(
+            f"stat-sealed validator binary path is not canonical and absolute: {path}"
+        )
+    components = [*reversed(path.parents), path]
+    for index, component in enumerate(components):
+        info = component.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise IdentityError(
+                f"stat-sealed validator binary path contains a symlink: {component}"
+            )
+        if index + 1 == len(components):
+            if not stat.S_ISREG(info.st_mode):
+                raise IdentityError(
+                    f"stat-sealed validator binary is not a regular file: {component}"
+                )
+        elif not stat.S_ISDIR(info.st_mode):
+            raise IdentityError(
+                f"stat-sealed validator binary ancestor is not a directory: {component}"
+            )
+        if info.st_uid != 0:
+            raise IdentityError(
+                f"stat-sealed validator binary path is not root-owned: {component}"
+            )
+        if stat.S_IMODE(info.st_mode) & 0o022:
+            raise IdentityError(
+                "stat-sealed validator binary path is group/world writable: "
+                f"{component}"
+            )
+
+
+def require_binary_stat_identity(
+    path: Path, expected: tuple[int, int, int, int, int]
+) -> None:
+    """Validate an executable binary against an O(1) descriptor stat seal."""
+
+    require_trusted_binary_path(path)
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise IdentityError(f"expected a non-symlink regular file: {path}")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if not stat.S_ISREG(after.st_mode) or before_identity != after_identity:
+        raise IdentityError(f"validator binary changed during stat validation: {path}")
+    if after_identity != expected:
+        raise IdentityError(f"validator binary stat identity changed: {path}")
+    if not after.st_mode & 0o111:
+        raise IdentityError(f"validator binary is not executable: {path}")
+
+
 def require_runtime_identity(args: argparse.Namespace) -> None:
     """Refuse when binary, config, working-directory, or storage identity drifted."""
 
@@ -59,10 +169,14 @@ def require_runtime_identity(args: argparse.Namespace) -> None:
     config = Path(args.config)
     workdir = Path(args.workdir)
     storage_dir = Path(args.storage_dir)
-    if sha256_file(binary) != args.binary_sha256:
-        raise IdentityError(f"validator binary digest changed: {binary}")
-    if not os.access(binary, os.X_OK):
-        raise IdentityError(f"validator binary is not executable: {binary}")
+    stat_seal = binary_stat_seal(args)
+    if stat_seal is None:
+        if sha256_file(binary) != args.binary_sha256:
+            raise IdentityError(f"validator binary digest changed: {binary}")
+        if not os.access(binary, os.X_OK):
+            raise IdentityError(f"validator binary is not executable: {binary}")
+    else:
+        require_binary_stat_identity(binary, stat_seal)
     if sha256_file(config) != args.config_sha256:
         raise IdentityError(f"validator config digest changed: {config}")
     workdir_stat = workdir.lstat()
@@ -126,6 +240,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True)
     parser.add_argument("--binary-sha256", required=True)
+    parser.add_argument("--binary-device", type=int)
+    parser.add_argument("--binary-inode", type=int)
+    parser.add_argument("--binary-size", type=int)
+    parser.add_argument("--binary-mtime-ns", type=int)
+    parser.add_argument("--binary-ctime-ns", type=int)
     parser.add_argument("--config", required=True)
     parser.add_argument("--config-sha256", required=True)
     parser.add_argument("--workdir", required=True)
@@ -139,6 +258,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--maximum-backoff-seconds", type=float, default=30.0)
     parser.add_argument("--stable-uptime-seconds", type=float, default=120.0)
     args = parser.parse_args(argv)
+    try:
+        binary_stat_seal(args)
+    except IdentityError as exc:
+        parser.error(str(exc))
     if (
         not math.isfinite(args.initial_backoff_seconds)
         or args.initial_backoff_seconds <= 0

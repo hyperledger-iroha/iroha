@@ -8940,6 +8940,7 @@ mod status_tests {
                 sm_openssl_preview_enabled: true,
                 halo2: Halo2Status::default(),
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -8995,6 +8996,7 @@ mod status_tests {
                 sm_openssl_preview_enabled: false,
                 halo2: Halo2Status::default(),
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -9043,6 +9045,7 @@ mod status_tests {
                 sm_openssl_preview_enabled: false,
                 halo2: Halo2Status::default(),
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -20357,6 +20360,30 @@ impl Client {
         )
     }
 
+    /// Convenience: POST `/v1/contracts/deployment-state` for the configured
+    /// deployment authority and one exact contract alias.
+    ///
+    /// The response bytes are intentionally left raw so callers can decode a
+    /// closed schema and bind every deployment CAS input to one ledger view.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails or the request cannot be serialized.
+    pub fn post_contract_deployment_state(
+        &self,
+        contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/deployment-state");
+        let payload = norito::json::to_vec(&norito::json!({
+            "authority": (self.account.to_string()),
+            "contract_alias": contract_alias,
+        }))?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, payload)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
     /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
     ///
     /// # Errors
@@ -26569,6 +26596,37 @@ mod tests {
     }
 
     #[test]
+    fn contract_deployment_state_sends_one_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let alias: iroha_data_model::smart_contract::ContractAlias =
+            "router::universal".parse().expect("contract alias");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_contract_deployment_state(&alias)
+                .expect("signed contract deployment-state request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/contracts/deployment-state");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode deployment-state body");
+        assert_eq!(
+            body,
+            norito::json!({
+                "authority": (client.account.to_string()),
+                "contract_alias": alias,
+            })
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
     fn governed_contract_read_sends_canonical_account_signed_request() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -30433,6 +30491,7 @@ mod tests {
             tx_gossip: TxGossipSnapshot::default(),
             crypto: CryptoStatus::default(),
             stack: StackStatus::default(),
+            offline: None,
             sumeragi: None,
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),

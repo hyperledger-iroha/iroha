@@ -16,7 +16,9 @@ export {
 
 export {
   buildMintAssetInstruction,
+  buildSetAssetTransferAvailabilityInstruction,
   buildTransferAssetInstruction,
+  ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
   SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
   buildIssueReplicationOrderInstruction,
   buildCompleteReplicationOrderInstruction,

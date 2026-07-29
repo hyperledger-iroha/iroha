@@ -10,6 +10,73 @@ use crate::asset::AssetDefinitionId;
 
 /// Account metadata key storing the v1 asset-transfer control store.
 pub const ASSET_TRANSFER_CONTROL_METADATA_KEY: &str = "asset_transfer_controls";
+/// Maximum UTF-8 byte length of an asset-transfer availability reason.
+pub const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1: usize = 512;
+
+/// Validate an optional operator reason for an availability transition.
+///
+/// Reasons are persisted in account metadata and therefore must be canonical,
+/// bounded text: non-empty, unpadded, and free of control characters.
+///
+/// # Errors
+/// Returns [`crate::error::ParseError`] when a provided reason is not canonical.
+pub fn validate_asset_transfer_availability_reason(
+    reason: Option<&str>,
+) -> Result<(), crate::error::ParseError> {
+    let Some(reason) = reason else {
+        return Ok(());
+    };
+    if reason.is_empty() {
+        return Err(crate::error::ParseError::new(
+            "asset-transfer availability reason must not be empty",
+        ));
+    }
+    if reason.trim() != reason {
+        return Err(crate::error::ParseError::new(
+            "asset-transfer availability reason must be unpadded",
+        ));
+    }
+    if reason.len() > ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 {
+        return Err(crate::error::ParseError::new(
+            "asset-transfer availability reason exceeds maximum byte length",
+        ));
+    }
+    if reason.chars().any(char::is_control) {
+        return Err(crate::error::ParseError::new(
+            "asset-transfer availability reason must not contain control characters",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether an account may participate in one direction of account-to-account transfers.
+///
+/// This policy does not govern supply operations such as mint or burn. Holding
+/// limits independently govern every native credit, including mint.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "state", content = "value")]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+pub enum AssetTransferAvailability {
+    /// Asset movement in this direction is permitted.
+    #[default]
+    Enabled,
+    /// Asset movement in this direction is rejected.
+    Disabled,
+}
+
+impl AssetTransferAvailability {
+    /// Returns `true` when movement in this direction is enabled.
+    #[must_use]
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
 
 /// Calendar window used for outbound transfer caps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -102,9 +169,21 @@ pub struct AssetTransferUsageBucket {
 pub struct AssetTransferControlRecord {
     /// Controlled asset definition.
     pub asset_definition_id: AssetDefinitionId,
-    /// Whether outbound transfers are frozen.
+    /// Monotonic revision of the directional availability state.
+    ///
+    /// Revision zero represents the implicit initial state where both directions
+    /// are enabled. Every successful availability transition increments it.
     #[norito(default)]
-    pub outgoing_frozen: bool,
+    pub availability_revision: u64,
+    /// Whether incoming asset movement is available.
+    #[norito(default)]
+    pub incoming_availability: AssetTransferAvailability,
+    /// Whether outgoing asset movement is available.
+    #[norito(default)]
+    pub outgoing_availability: AssetTransferAvailability,
+    /// Operator reason associated with the latest availability transition.
+    #[norito(default)]
+    pub availability_reason: Option<String>,
     /// Whether outbound transfers are blacklisted.
     #[norito(default)]
     pub blacklisted: bool,
@@ -129,13 +208,89 @@ pub struct AssetTransferControlRecord {
 }
 
 impl AssetTransferControlRecord {
+    /// Construct the implicit initial control state for one asset definition.
+    #[must_use]
+    pub fn new(asset_definition_id: AssetDefinitionId) -> Self {
+        Self {
+            asset_definition_id,
+            availability_revision: 0,
+            incoming_availability: AssetTransferAvailability::Enabled,
+            outgoing_availability: AssetTransferAvailability::Enabled,
+            availability_reason: None,
+            blacklisted: false,
+            holding_limit: None,
+            limits: Vec::new(),
+            usages: Vec::new(),
+            updated_at_ms: None,
+        }
+    }
+
     /// Returns `true` when the record has no active controls and can be dropped from storage.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        !self.outgoing_frozen
+        self.availability_revision == 0
+            && self.incoming_availability.is_enabled()
+            && self.outgoing_availability.is_enabled()
+            && self.availability_reason.is_none()
             && !self.blacklisted
             && self.holding_limit.is_none()
             && self.limits.iter().all(|limit| limit.cap_amount.is_none())
+    }
+}
+
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+    use crate::domain::DomainId;
+
+    fn definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    #[test]
+    fn availability_defaults_to_enabled() {
+        assert!(AssetTransferAvailability::default().is_enabled());
+        let record = AssetTransferControlRecord::new(definition_id());
+        assert_eq!(record.availability_revision, 0);
+        assert!(record.incoming_availability.is_enabled());
+        assert!(record.outgoing_availability.is_enabled());
+        assert!(record.is_empty());
+    }
+
+    #[test]
+    fn availability_revision_keeps_reopened_record() {
+        let record = AssetTransferControlRecord {
+            asset_definition_id: definition_id(),
+            availability_revision: 2,
+            incoming_availability: AssetTransferAvailability::Enabled,
+            outgoing_availability: AssetTransferAvailability::Enabled,
+            availability_reason: Some("wallet reopened".to_owned()),
+            blacklisted: false,
+            holding_limit: None,
+            limits: Vec::new(),
+            usages: Vec::new(),
+            updated_at_ms: Some(2),
+        };
+        assert!(!record.is_empty());
+    }
+
+    #[test]
+    fn availability_reason_is_canonical_and_byte_bounded() {
+        let exact_limit = "é".repeat(ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 / 2);
+        assert!(validate_asset_transfer_availability_reason(Some(&exact_limit)).is_ok());
+        assert!(validate_asset_transfer_availability_reason(None).is_ok());
+
+        let over_limit = format!("{exact_limit}a");
+        assert!(validate_asset_transfer_availability_reason(Some(&over_limit)).is_err());
+        for invalid in ["", " padded", "padded ", "line\nbreak"] {
+            assert!(
+                validate_asset_transfer_availability_reason(Some(invalid)).is_err(),
+                "{invalid:?} must be rejected"
+            );
+        }
     }
 }
 

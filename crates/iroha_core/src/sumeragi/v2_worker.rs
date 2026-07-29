@@ -14721,7 +14721,7 @@ pub(super) mod tests {
     ) -> (FairV2Ingress, CertifiedServeIngressGate) {
         let ingress = FairV2Ingress::new(
             128,
-            128 * 1024 * 1024,
+            5 * 64 * 1024 * 1024,
             64 * 1024 * 1024,
             8 * 1024 * 1024,
             8 * 1024 * 1024,
@@ -25141,7 +25141,8 @@ pub(super) mod tests {
 
     #[test]
     fn fair_ingress_classifies_current_historical_future_and_unauthenticated_requests() {
-        let (service, keys) = fixture();
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
         let authenticated = authenticated_serve_request(
             &service.context,
@@ -25160,7 +25161,13 @@ pub(super) mod tests {
                 .expect("open raw-gate persistent queue");
         let (ingress, gate) = gated_fair_ingress(&service.context, &command_tx);
 
-        let (foreign_service, foreign_keys) = fixture();
+        let (mut foreign_service, foreign_keys) = fixture();
+        allow_fixture_block_payload(&mut foreign_service.context);
+        foreign_service.context.chain_id = ChainId::from("v2-worker-foreign-test");
+        foreign_service
+            .context
+            .validate()
+            .expect("valid distinct foreign context");
         let (_, _, foreign_proposal) =
             proposal_body_and_payload(&foreign_service.context, &foreign_keys);
         let foreign = authenticated_serve_request(
@@ -25181,7 +25188,7 @@ pub(super) mod tests {
                     authenticated.request().clone(),
                 ),
             )),
-            foreign.request().requester.clone(),
+            service.context.roster[3].validator.clone(),
             via.clone(),
         );
         assert!(matches!(
@@ -25256,29 +25263,79 @@ pub(super) mod tests {
             historical_ingress.try_push(certified_serve_inbound(authenticated.request(), via,)),
             Ok(FairV2IngressPushDisposition::Enqueued)
         ));
+        let active_round = wire::ConsensusRound {
+            context_id: active_context.id(),
+            height: active_context.height,
+            view: proposal.round.view,
+        };
+        let active = authenticated_serve_request(
+            &active_context,
+            &keys[2],
+            active_round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let active_via = active_context.roster[3].validator.clone();
+        assert!(matches!(
+            historical_ingress.try_push(certified_serve_inbound(active.request(), active_via,)),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            active_tx
+                .serve_barrier_request_hash()
+                .expect("inspect mixed historical/current Serve target"),
+            Some(active.request_hash())
+        );
         let admitted = fair_ingress_accounting_snapshot(&historical_ingress);
-        assert_eq!(admitted.last_admission_ordinal, 1);
-        assert!(
-            admitted
-                .lanes
-                .iter()
-                .flat_map(|lane| &lane.entries)
-                .all(|entry| !entry.owns_certified_serve_ticket),
-            "historical context-store service does not charge the active exact-Serve geometry"
+        assert_eq!(admitted.last_admission_ordinal, 2);
+        let ticket_owners = admitted
+            .lanes
+            .iter()
+            .flat_map(|lane| &lane.entries)
+            .filter(|entry| entry.owns_certified_serve_ticket)
+            .count();
+        assert_eq!(
+            ticket_owners, 1,
+            "only the current-height request charges the active exact-Serve geometry"
         );
         {
             let state = active_tx.queue.lock();
-            assert!(state.serve_ingress_reservation.is_none());
+            assert_eq!(
+                state
+                    .serve_ingress_reservation
+                    .as_ref()
+                    .map(|reservation| reservation.projection.request_hash),
+                Some(active.request_hash())
+            );
             assert!(state.serve_ingress_waiters.is_empty());
-            assert_eq!(state.next_serve_ingress_reservation_ordinal, 0);
+            assert_eq!(state.next_serve_ingress_reservation_ordinal, 1);
             assert_eq!(state.next_serve_admission_ordinal, 0);
         }
-        assert!(
-            !active_serve_root
-                .path()
-                .join(CERTIFIED_SERVE_STATE_FILE)
-                .exists(),
-            "historical classification performs no active-height Serve-state write"
+        let barrier_hash = active.request_hash();
+        let selected = historical_ingress
+            .try_recv_if(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                        ..
+                    }) if HashOf::new(request) == barrier_hash
+                )
+            })
+            .expect("historical request cannot hide the active exact-Serve target");
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::CertifiedBodyRequest(selected_request),
+            ..
+        }) = selected.message()
+        else {
+            panic!("mixed selector preserves the current certified request");
+        };
+        assert_eq!(selected_request, active.request());
+        assert_eq!(
+            active_tx
+                .serve_barrier_request_hash()
+                .expect("dequeued unprepared target rolls its reservation back"),
+            None
         );
         let delivered = historical_ingress
             .try_recv_if(|_| true)
@@ -25555,7 +25612,6 @@ pub(super) mod tests {
                 Some(V2IoServeState::Reserved)
             );
         }
-
         let (admission, committed) = drain_and_commit_gated_serve(
             &ingress,
             &command_tx,

@@ -1361,7 +1361,7 @@ private enum KagemushaOperationValidation {
             .requiredHeaderPaddingLength(forWireName: schema),
               !value.isEmpty,
               value.count <= maximumArchiveBytes,
-              value.count <= KagemushaRecursiveSpend.artifactMaximumFileBytes,
+              value.count <= KagemushaRecursiveSpend.artifactMaximumInMemoryArchiveBytes,
               let frame = noritoDecodeFrame(value),
               frame.header.schema == noritoSchemaHash(forTypeName: schema),
               frame.header.compression == .none,

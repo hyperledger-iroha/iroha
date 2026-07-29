@@ -39,13 +39,14 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError},
     },
     asset::{
-        AssetBalanceScope, AssetTransferControlWindow, AssetTransferLimit,
+        AssetBalanceScope, AssetTransferAvailability, AssetTransferControlWindow,
+        AssetTransferLimit,
         alias::AssetDefinitionAlias,
         definition::{AssetBalancePolicy, AssetConfidentialPolicy},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
     },
     block::{
-        BlockHeader,
+        BlockHeader, SignedBlock,
         consensus::{LaneBlockCommitment, PERMISSIONED_TAG},
     },
     confidential::ConfidentialEncryptedPayload,
@@ -57,12 +58,19 @@ use iroha_data_model::{
         AssetEscrowRecord, ConditionalEscrowCondition, ConditionalEscrowValue, EscrowId,
         hash_conditional_escrow_evidence_digest,
     },
-    events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
+    events::{
+        data::prelude::{
+            AssetBatchTransferLegStatus, AssetBatchTransferOutcome, AssetBatchTransferRejectionCode,
+        },
+        time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
+    },
+    executor::{ContractRejection, ValidationFail},
     isi::{
         BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
-        Revoke, SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
-        SetAssetTransferFreeze, SetKeyValue, SetParameter, Transfer, TransferAssetBatch,
+        Revoke, SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
+        SetAssetTransferControl, SetKeyValue, SetParameter, Transfer, TransferAssetBatch,
         TransferAssetBatchEntry, Unregister,
+        error::{AssetTransferAdmissionError, InstructionExecutionError, MathError},
         escrow::{
             AttestEscrowCondition, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
             ExpireConditionalEscrow, OpenAssetLock, OpenConditionalEscrow,
@@ -94,19 +102,22 @@ use iroha_data_model::{
     privacy::{PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     query::{
-        ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
-        SingularQueryBox,
-        dsl::{CompoundPredicate, SelectorTuple},
+        CommittedTransaction, ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest,
+        QueryResponse, QueryWithParams, SingularQueryBox,
+        block::prelude::FindBlocks,
+        dsl::{CommittedTxPredicate, CompoundPredicate, SelectorTuple},
         escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
         parameters::QueryParams,
+        transaction::prelude::FindTransactions,
     },
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{ContractAddress, ContractAlias},
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
-        TransactionBuilder as ModelTransactionBuilder, TransactionPayload,
+        TransactionBuilder as ModelTransactionBuilder, TransactionEntrypoint, TransactionPayload,
         TransactionSubmissionReceipt,
+        error::TransactionRejectionReason,
         executable::{
             ContractArgumentRecord, ContractInvocation, MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
         },
@@ -8823,14 +8834,16 @@ mod tests {
                 &destination,
             )
             .expect("canonical transfer quantity");
-            Instruction::set_asset_transfer_freeze(
+            Instruction::set_asset_transfer_availability(
                 &instruction_type,
                 &owner,
                 "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-                true,
+                0,
+                "Disabled",
+                "Disabled",
                 Some("operator close".to_owned()),
             )
-            .expect("asset transfer freeze");
+            .expect("asset transfer availability");
             Instruction::set_asset_transfer_blacklist(
                 &instruction_type,
                 &owner,
@@ -8876,6 +8889,59 @@ mod tests {
                 assert!(error.is_instance_of::<PyValueError>(py));
             }
         });
+    }
+
+    #[test]
+    fn verified_transaction_rejection_codes_use_typed_variants() {
+        let validation = |error| {
+            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+        };
+        assert_eq!(
+            transaction_rejection_code(&validation(
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::IncomingDisabled("incoming closed".into()),
+                ),
+            )),
+            "IncomingDisabled"
+        );
+        assert_eq!(
+            transaction_rejection_code(&validation(
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::HoldingLimitExceeded("limit".into()),
+                ),
+            )),
+            "HoldingLimitExceeded"
+        );
+        assert_eq!(
+            transaction_rejection_code(&validation(InstructionExecutionError::Math(
+                MathError::NotEnoughQuantity,
+            ))),
+            "InsufficientBalance"
+        );
+        assert_eq!(
+            transaction_rejection_code(&TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("permission denied".into()),
+            )),
+            "NotPermitted"
+        );
+        let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
+            ContractRejection {
+                contract: "BoiFiLiquidity".into(),
+                namespace: "FiLiquidityError".into(),
+                name: "BelowMinimum".into(),
+                code: 18,
+            },
+        ));
+        assert_eq!(transaction_rejection_code(&contract), "BelowMinimum");
+        assert_eq!(
+            transaction_contract_rejection_json(&contract),
+            Some(norito::json!({
+                "contract": "BoiFiLiquidity",
+                "namespace": "FiLiquidityError",
+                "name": "BelowMinimum",
+                "code": 18,
+            }))
+        );
     }
 
     #[test]
@@ -11660,12 +11726,14 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (account_id, asset_definition_id, outgoing_frozen, *, reason=None))]
-    fn set_asset_transfer_freeze(
+    #[pyo3(signature = (account_id, asset_definition_id, expected_revision, incoming, outgoing, *, reason=None))]
+    fn set_asset_transfer_availability(
         _cls: &Bound<'_, PyType>,
         account_id: &str,
         asset_definition_id: &str,
-        outgoing_frozen: bool,
+        expected_revision: u64,
+        incoming: &str,
+        outgoing: &str,
         reason: Option<String>,
     ) -> PyResult<Self> {
         let account_id = parse_account_id(account_id)?;
@@ -11676,12 +11744,27 @@ impl Instruction {
                     "invalid asset definition id `{asset_definition_id}`: {error}"
                 ))
             })?;
-        if let Some(value) = reason.as_deref() {
-            require_non_blank_unpadded(value, "asset transfer freeze reason")?;
-        }
+        iroha_data_model::asset::validate_asset_transfer_availability_reason(reason.as_deref())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let parse_availability = |value: &str, field: &str| match value {
+            "Enabled" => Ok(AssetTransferAvailability::Enabled),
+            "Disabled" => Ok(AssetTransferAvailability::Disabled),
+            _ => Err(PyValueError::new_err(format!(
+                "{field} must be Enabled or Disabled"
+            ))),
+        };
+        let incoming = parse_availability(incoming, "incoming")?;
+        let outgoing = parse_availability(outgoing, "outgoing")?;
         Ok(Instruction::new(
-            SetAssetTransferFreeze::new(account_id, asset_definition_id, outgoing_frozen, reason)
-                .into(),
+            SetAssetTransferAvailability::new(
+                account_id,
+                asset_definition_id,
+                expected_revision,
+                incoming,
+                outgoing,
+                reason,
+            )
+            .into(),
         ))
     }
 
@@ -13372,6 +13455,36 @@ fn sign_py(
     Ok(Py::from(PyBytes::new(py, signature.payload())))
 }
 
+fn sign_query_request(
+    authority: &str,
+    private_key: &[u8],
+    request: QueryRequest,
+) -> PyResult<Vec<u8>> {
+    let authority = parse_account_id(authority)?;
+    ensure_ed25519_account(&authority)?;
+    let private = parse_private_key(private_key)?;
+    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
+        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
+    })?;
+    if key_pair.public_key() != authority.signatory() {
+        return Err(PyValueError::new_err(
+            "query private key does not match the authority account",
+        ));
+    }
+    request
+        .with_authority(authority)
+        .try_sign(&key_pair)
+        .map(|signed| signed.encode_versioned())
+        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))
+}
+
+fn parse_typed_hash<T>(value: &str, context: &str) -> PyResult<HashOf<T>> {
+    let normalized = value.strip_prefix("0x").unwrap_or(value);
+    let hash = Hash::from_str(normalized)
+        .map_err(|error| PyValueError::new_err(format!("invalid {context}: {error}")))?;
+    Ok(HashOf::from_untyped_unchecked(hash))
+}
+
 #[pyfunction]
 #[pyo3(name = "build_find_asset_escrow_query")]
 /// Build the exact versioned Norito signed query for one native escrow record.
@@ -13381,25 +13494,11 @@ fn build_find_asset_escrow_query_py(
     private_key: &[u8],
     escrow_id: &str,
 ) -> PyResult<Py<PyBytes>> {
-    let authority = parse_account_id(authority)?;
-    ensure_ed25519_account(&authority)?;
-    let private = parse_private_key(private_key)?;
-    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
-        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
-    })?;
-    if key_pair.public_key() != authority.signatory() {
-        return Err(PyValueError::new_err(
-            "query private key does not match the authority account",
-        ));
-    }
     let request = QueryRequest::Singular(SingularQueryBox::FindAssetEscrowById(
         FindAssetEscrowById::new(parse_escrow_id(escrow_id, "escrow_id")?),
     ));
-    let signed = request
-        .with_authority(authority)
-        .try_sign(&key_pair)
-        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
-    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
 fn build_find_asset_escrows_by_party_query(
@@ -13408,17 +13507,6 @@ fn build_find_asset_escrows_by_party_query(
     private_key: &[u8],
     query_payload: Vec<u8>,
 ) -> PyResult<Py<PyBytes>> {
-    let authority = parse_account_id(authority)?;
-    ensure_ed25519_account(&authority)?;
-    let private = parse_private_key(private_key)?;
-    let key_pair = KeyPair::from_private_key(private).map_err(|error| {
-        PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
-    })?;
-    if key_pair.public_key() != authority.signatory() {
-        return Err(PyValueError::new_err(
-            "query private key does not match the authority account",
-        ));
-    }
     let erased = ErasedIterQuery::<AssetEscrowRecord>::new(
         CompoundPredicate::PASS,
         SelectorTuple::default(),
@@ -13426,11 +13514,8 @@ fn build_find_asset_escrows_by_party_query(
     );
     let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
     let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
-    let signed = request
-        .with_authority(authority)
-        .try_sign(&key_pair)
-        .map_err(|error| PyValueError::new_err(format!("query signing failed: {error}")))?;
-    Ok(Py::from(PyBytes::new(py, &signed.encode_versioned())))
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
 }
 
 #[pyfunction]
@@ -13471,6 +13556,427 @@ fn build_find_asset_escrows_by_buyer_query_py(
         private_key,
         norito::codec::Encode::encode(&query),
     )
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_committed_transaction_query")]
+/// Build a signed `FindTransactions` query for one canonical transaction hash.
+fn build_find_committed_transaction_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    transaction_hash: &str,
+) -> PyResult<Py<PyBytes>> {
+    let transaction_hash =
+        parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
+    let predicate = CompoundPredicate::<CommittedTransaction>::from_committed_tx_predicate(
+        CommittedTxPredicate::EntryEq(transaction_hash),
+    );
+    let erased = ErasedIterQuery::<CommittedTransaction>::new(
+        predicate,
+        SelectorTuple::default(),
+        norito::codec::Encode::encode(&FindTransactions),
+    );
+    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+#[pyfunction]
+#[pyo3(name = "build_find_block_by_hash_query")]
+/// Build a signed `FindBlocks` query for one canonical carrier block hash.
+fn build_find_block_by_hash_query_py(
+    py: Python<'_>,
+    authority: &str,
+    private_key: &[u8],
+    block_hash: &str,
+) -> PyResult<Py<PyBytes>> {
+    let block_hash = parse_typed_hash::<BlockHeader>(block_hash, "block hash")?;
+    let predicate =
+        CompoundPredicate::<SignedBlock>::build(|prototype| prototype.equals("hash", block_hash));
+    let erased = ErasedIterQuery::<SignedBlock>::new(
+        predicate,
+        SelectorTuple::default(),
+        norito::codec::Encode::encode(&FindBlocks),
+    );
+    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
+    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let signed = sign_query_request(authority, private_key, request)?;
+    Ok(Py::from(PyBytes::new(py, &signed)))
+}
+
+fn decode_single_committed_transaction(response_bytes: &[u8]) -> PyResult<CommittedTransaction> {
+    let response = decode_from_bytes::<QueryResponse>(response_bytes).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to decode committed transaction query response: {error}"
+        ))
+    })?;
+    let QueryResponse::Iterable(output) = response else {
+        return Err(PyValueError::new_err(
+            "committed transaction query returned a singular response",
+        ));
+    };
+    if output.has_more || output.continue_cursor.is_some() {
+        return Err(PyValueError::new_err(
+            "committed transaction query returned more than one page",
+        ));
+    }
+    let mut transactions = Vec::new();
+    for batch in output.batch {
+        let QueryOutputBatchBox::CommittedTransaction(mut batch) = batch else {
+            return Err(PyValueError::new_err(
+                "committed transaction query returned an unexpected batch type",
+            ));
+        };
+        transactions.append(&mut batch);
+    }
+    if transactions.len() != 1 {
+        return Err(PyValueError::new_err(format!(
+            "committed transaction query must return exactly one record, got {}",
+            transactions.len()
+        )));
+    }
+    Ok(transactions.remove(0))
+}
+
+fn decode_single_carrier_block(response_bytes: &[u8]) -> PyResult<SignedBlock> {
+    let response = decode_from_bytes::<QueryResponse>(response_bytes).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to decode carrier block query response: {error}"
+        ))
+    })?;
+    let QueryResponse::Iterable(output) = response else {
+        return Err(PyValueError::new_err(
+            "carrier block query returned a singular response",
+        ));
+    };
+    if output.has_more || output.continue_cursor.is_some() {
+        return Err(PyValueError::new_err(
+            "carrier block query returned more than one page",
+        ));
+    }
+    let mut blocks = Vec::new();
+    for batch in output.batch {
+        let QueryOutputBatchBox::Block(mut batch) = batch else {
+            return Err(PyValueError::new_err(
+                "carrier block query returned an unexpected batch type",
+            ));
+        };
+        blocks.append(&mut batch);
+    }
+    if blocks.len() != 1 {
+        return Err(PyValueError::new_err(format!(
+            "carrier block query must return exactly one block, got {}",
+            blocks.len()
+        )));
+    }
+    Ok(blocks.remove(0))
+}
+
+#[pyfunction]
+#[pyo3(name = "committed_transaction_carrier_block_hash")]
+/// Extract and validate the carrier block hash from an exact transaction query response.
+fn committed_transaction_carrier_block_hash_py(
+    transaction_hash: &str,
+    response_bytes: &[u8],
+) -> PyResult<String> {
+    let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
+    let committed = decode_single_committed_transaction(response_bytes)?;
+    if committed.entrypoint_hash != expected {
+        return Err(PyValueError::new_err(
+            "committed transaction response does not match the requested transaction hash",
+        ));
+    }
+    Ok(hex_encode(committed.block_hash.as_ref()))
+}
+
+fn instruction_execution_rejection_code(error: &InstructionExecutionError) -> &'static str {
+    match error {
+        InstructionExecutionError::AssetTransferAdmission(admission) => match admission {
+            AssetTransferAdmissionError::HoldingLimitExceeded(_) => "HoldingLimitExceeded",
+            AssetTransferAdmissionError::IncomingDisabled(_) => "IncomingDisabled",
+            AssetTransferAdmissionError::OutgoingDisabled(_) => "OutgoingDisabled",
+            AssetTransferAdmissionError::AvailabilityRevisionMismatch(_) => {
+                "AvailabilityRevisionMismatch"
+            }
+            AssetTransferAdmissionError::Blacklisted(_) => "Blacklisted",
+            AssetTransferAdmissionError::PolicyRejected(_) => "PolicyRejected",
+        },
+        InstructionExecutionError::Math(MathError::NotEnoughQuantity) => "InsufficientBalance",
+        InstructionExecutionError::Math(_) => "MathError",
+        InstructionExecutionError::Evaluate(_) => "InstructionEvaluationFailed",
+        InstructionExecutionError::Query(_) => "QueryFailed",
+        InstructionExecutionError::Conversion(_) => "ConversionFailed",
+        InstructionExecutionError::Find(_) => "NotFound",
+        InstructionExecutionError::Repetition(_) => "Repetition",
+        InstructionExecutionError::Mintability(_) => "Mintability",
+        InstructionExecutionError::InvalidParameter(_) => "InvalidParameter",
+        InstructionExecutionError::AccountAdmission(_) => "AccountAdmission",
+        InstructionExecutionError::InvariantViolation(_) => "InvariantViolation",
+    }
+}
+
+fn transaction_rejection_code(reason: &TransactionRejectionReason) -> &str {
+    match reason {
+        TransactionRejectionReason::AccountDoesNotExist(_) => "AccountDoesNotExist",
+        TransactionRejectionReason::LimitCheck(_) => "LimitCheck",
+        TransactionRejectionReason::Validation(validation) => match validation {
+            ValidationFail::NotPermitted(_) => "NotPermitted",
+            ValidationFail::IvmAdmission(_) => "IvmAdmission",
+            ValidationFail::InstructionFailed(error) => instruction_execution_rejection_code(error),
+            ValidationFail::ContractRejected(rejection) => rejection.name.as_str(),
+            ValidationFail::QueryFailed(_) => "QueryFailed",
+            ValidationFail::AxtReject(_) => "AxtRejected",
+            ValidationFail::TooComplex => "TooComplex",
+            ValidationFail::InternalError(_) => "InternalError",
+        },
+        TransactionRejectionReason::InstructionExecution(_) => "InstructionExecutionFailed",
+        TransactionRejectionReason::IvmExecution(_) => "IvmExecutionFailed",
+        TransactionRejectionReason::TriggerExecution(_) => "TriggerExecutionFailed",
+    }
+}
+
+fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> Option<json::Value> {
+    let TransactionRejectionReason::Validation(ValidationFail::ContractRejected(rejection)) =
+        reason
+    else {
+        return None;
+    };
+    let mut value = json::Map::new();
+    value.insert(
+        "contract".into(),
+        json::Value::String(rejection.contract.clone()),
+    );
+    value.insert(
+        "namespace".into(),
+        json::Value::String(rejection.namespace.clone()),
+    );
+    value.insert("name".into(), json::Value::String(rejection.name.clone()));
+    value.insert("code".into(), json::Value::from(rejection.code));
+    Some(json::Value::Object(value))
+}
+
+fn batch_rejection_code(code: AssetBatchTransferRejectionCode) -> &'static str {
+    match code {
+        AssetBatchTransferRejectionCode::InsufficientFunds => "InsufficientFunds",
+        AssetBatchTransferRejectionCode::HoldingLimitExceeded => "HoldingLimitExceeded",
+        AssetBatchTransferRejectionCode::IncomingDisabled => "IncomingDisabled",
+        AssetBatchTransferRejectionCode::OutgoingDisabled => "OutgoingDisabled",
+        AssetBatchTransferRejectionCode::Blacklisted => "Blacklisted",
+        AssetBatchTransferRejectionCode::PolicyRejected => "PolicyRejected",
+    }
+}
+
+fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Value> {
+    let (status, rejection_code, rejection_message) = match &outcome.status {
+        AssetBatchTransferLegStatus::Applied => ("Applied", None, None),
+        AssetBatchTransferLegStatus::Rejected(rejection) => (
+            "Rejected",
+            Some(batch_rejection_code(rejection.code)),
+            Some(rejection.message.as_str()),
+        ),
+    };
+    let mut result = json::Map::new();
+    result.insert("leg_index".into(), json::Value::from(outcome.leg_index));
+    result.insert("leg_id".into(), json::Value::String(outcome.leg_id.clone()));
+    result.insert(
+        "asset".into(),
+        json::to_value(&outcome.asset).map_err(|error| {
+            PyValueError::new_err(format!("failed to serialize batch outcome asset: {error}"))
+        })?,
+    );
+    result.insert(
+        "destination".into(),
+        json::to_value(&outcome.destination).map_err(|error| {
+            PyValueError::new_err(format!(
+                "failed to serialize batch outcome destination: {error}"
+            ))
+        })?,
+    );
+    result.insert(
+        "amount".into(),
+        json::Value::String(outcome.amount.to_string()),
+    );
+    result.insert("status".into(), json::Value::String(status.to_owned()));
+    result.insert(
+        "rejection_code".into(),
+        rejection_code.map_or(json::Value::Null, |code| {
+            json::Value::String(code.to_owned())
+        }),
+    );
+    result.insert(
+        "rejection_message".into(),
+        rejection_message.map_or(json::Value::Null, |message| {
+            json::Value::String(message.to_owned())
+        }),
+    );
+    Ok(json::Value::Object(result))
+}
+
+#[pyfunction]
+#[pyo3(name = "verify_committed_transaction_inclusion_json")]
+/// Verify a committed transaction response against its exact carrier block response.
+fn verify_committed_transaction_inclusion_json_py(
+    transaction_hash: &str,
+    transaction_response_bytes: &[u8],
+    block_response_bytes: &[u8],
+) -> PyResult<String> {
+    let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
+    let committed = decode_single_committed_transaction(transaction_response_bytes)?;
+    if committed.entrypoint_hash != expected {
+        return Err(PyValueError::new_err(
+            "committed transaction response does not match the requested transaction hash",
+        ));
+    }
+    let carrier = decode_single_carrier_block(block_response_bytes)?;
+    if committed.block_hash != carrier.hash() {
+        return Err(PyValueError::new_err(
+            "carrier block response does not match the committed transaction",
+        ));
+    }
+    if !committed.verify_inclusion_in_block(&carrier) {
+        return Err(PyValueError::new_err(
+            "committed transaction inclusion proof verification failed",
+        ));
+    }
+
+    let proof_kind = if committed.merge_inclusion.is_some() {
+        "certified_merge"
+    } else {
+        "ordinary"
+    };
+    let entrypoint_kind = match &committed.entrypoint {
+        TransactionEntrypoint::External(_) => "External",
+        TransactionEntrypoint::SealedCommitment(_) => "SealedCommitment",
+        TransactionEntrypoint::SealedReveal(_) => "SealedReveal",
+        TransactionEntrypoint::PrivateKaigi(_) => "PrivateKaigi",
+        TransactionEntrypoint::Time(_) => "Time",
+    };
+    let external_transaction = match &committed.entrypoint {
+        TransactionEntrypoint::External(transaction) => Some(transaction),
+        _ => None,
+    };
+    let authority = committed
+        .entrypoint
+        .authority_opt()
+        .map(|authority| {
+            json::to_value(authority).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "failed to serialize verified transaction authority: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(json::Value::Null);
+    let metadata = committed
+        .entrypoint
+        .metadata()
+        .map(|metadata| {
+            json::to_value(metadata).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "failed to serialize verified transaction metadata: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(json::Value::Null);
+    let executable = external_transaction
+        .map(|transaction| {
+            json::to_value(transaction.instructions()).map_err(|error| {
+                PyValueError::new_err(format!(
+                    "failed to serialize verified transaction executable: {error}"
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(json::Value::Null);
+    let signer_public_key_hex = external_transaction
+        .and_then(|transaction| transaction.authority().controller().single_signatory())
+        .map(|public_key| {
+            let (_, bytes) =
+                public_key_to_bytes(public_key, "verified transaction signer public key")?;
+            Ok::<_, PyErr>(hex_encode(bytes))
+        })
+        .transpose()?;
+    let (result_ok, rejection_code, rejection_message, contract_rejection) =
+        match &committed.result.0 {
+            Ok(_) => (true, None, None, None),
+            Err(reason) => (
+                false,
+                Some(transaction_rejection_code(reason)),
+                Some(reason.to_string()),
+                transaction_contract_rejection_json(reason),
+            ),
+        };
+    let batch_outcomes = committed
+        .result
+        .batch_transfer_outcomes()
+        .iter()
+        .map(batch_outcome_json)
+        .collect::<PyResult<Vec<_>>>()?;
+    let committed_json = norito::json::to_value(&committed).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to serialize verified committed transaction: {error}"
+        ))
+    })?;
+    let mut result = norito::json::Map::new();
+    result.insert(
+        "transaction_hash".into(),
+        norito::json::Value::String(hex_encode(committed.entrypoint_hash.as_ref())),
+    );
+    result.insert(
+        "block_hash".into(),
+        norito::json::Value::String(hex_encode(committed.block_hash.as_ref())),
+    );
+    result.insert(
+        "block_height".into(),
+        norito::json::Value::from(carrier.header().height().get()),
+    );
+    result.insert(
+        "result_hash".into(),
+        norito::json::Value::String(hex_encode(committed.result_hash.as_ref())),
+    );
+    result.insert(
+        "proof_kind".into(),
+        norito::json::Value::String(proof_kind.to_owned()),
+    );
+    result.insert(
+        "entrypoint_kind".into(),
+        norito::json::Value::String(entrypoint_kind.to_owned()),
+    );
+    result.insert("authority".into(), authority);
+    result.insert(
+        "signer_public_key_hex".into(),
+        signer_public_key_hex.map_or(norito::json::Value::Null, norito::json::Value::String),
+    );
+    result.insert("metadata".into(), metadata);
+    result.insert("executable".into(), executable);
+    result.insert("result_ok".into(), norito::json::Value::Bool(result_ok));
+    result.insert(
+        "rejection_code".into(),
+        rejection_code.map_or(norito::json::Value::Null, |code| {
+            norito::json::Value::String(code.to_owned())
+        }),
+    );
+    result.insert(
+        "rejection_message".into(),
+        rejection_message.map_or(norito::json::Value::Null, norito::json::Value::String),
+    );
+    result.insert(
+        "contract_rejection".into(),
+        contract_rejection.unwrap_or(norito::json::Value::Null),
+    );
+    result.insert(
+        "batch_outcomes".into(),
+        norito::json::Value::Array(batch_outcomes),
+    );
+    result.insert("committed_transaction".into(), committed_json);
+    norito::json::to_string(&norito::json::Value::Object(result)).map_err(|error| {
+        PyValueError::new_err(format!(
+            "failed to encode verified committed transaction JSON: {error}"
+        ))
+    })
 }
 
 #[pyfunction]
@@ -14170,6 +14676,19 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         build_find_asset_escrows_by_buyer_query_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_find_committed_transaction_query_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(build_find_block_by_hash_query_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        committed_transaction_carrier_block_hash_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        verify_committed_transaction_inclusion_json_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(verify_py, module)?)?;

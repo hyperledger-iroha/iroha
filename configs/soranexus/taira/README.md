@@ -10,7 +10,7 @@ deployment.
 - Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
 - Consensus protocol: Sumeragi v2 state machine, wire revision 3 only (`wire_protocol_version = 3`)
-- Timing profile: 1,000 ms block cadence and one absolute 10,000 ms round deadline
+- Timing profile: authoritative 4,000 ms block cadence and one absolute 10,000 ms round deadline
 - Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
   geometry come from signed genesis, not a mutable local mode or RBC selector
@@ -72,6 +72,17 @@ config rather than wrapper-local defaults:
 - `torii.webhooks_enabled = false`
 - `torii.zk_attachments_enabled = false`
 
+The co-located-validator storage contract is also explicit:
+
+- `nexus.storage.local_budget_bytes = 68_719_476_736` (64 GiB per validator)
+- Kura 75%, WSV snapshots 20%, SoraFS 0%, SoraNet spool 2.5%, and SoraVPN
+  spool 2.5%
+
+SoraFS storage is disabled on this profile. Do not remove the aggregate budget
+or reassign its zero share without rerunning the free-space and fsync
+preflight; near-full shared-host storage can turn restart durability barriers
+into multi-second stalls.
+
 ## Included artifacts
 
 - `config.toml`: baseline validator config for peer 1 and the shared template
@@ -126,6 +137,21 @@ config rather than wrapper-local defaults:
 - `scripts/taira_peer_supervisor.py`: launchd-owned single-validator restart
   loop used by the migration. It guards the planned binary, config, and storage
   identities and caps exponential child-restart backoff.
+
+  The live reset controller may hash a separately root-controlled validator
+  binary once and seal its device, inode, size, mtime, and ctime into every
+  plist. Each child restart validates that all-or-none seal through a no-follow
+  descriptor in O(1). This fast path requires the binary and every path
+  component from `/` to be root-owned, non-symlink, and not group/world
+  writable, so the runtime user cannot swap the pathname after descriptor
+  validation.
+
+  Generic storage adoption automatically emits the same complete stat seal
+  when `--irohad` resolves through an entirely root-controlled path. If the
+  validator remains below its existing non-root-owned deployment base, its
+  generated plists omit all five fields and hash the complete binary before
+  each child start. Any partial seal fails closed. Config files remain
+  content-hashed in both modes because they are small and operator-editable.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, with wire-revision-3 reducer health read
   from `/v1/sumeragi/status` and an optional signed write canary for final
@@ -200,6 +226,136 @@ genesis in a disposable state block, replaces the template Nexus/AMX context
 hash with the exact staged value, recomputes the consensus fingerprint, and
 then writes `genesis.signed.nrt`. Never copy the genesis signer or validator
 private keys into the checked-in template or rendered genesis JSON.
+
+## Authenticated offline-cash bootstrap
+
+A fresh public Taira reset must activate the genuine ABI-21/V4 release at
+height 2. Height 1 executes the genesis instructions; the mandatory staged
+readiness gate evaluates that state at height 2. An activation height of 1 is
+invalid, and the synthetic mobile-acceptance roster must not be used for a
+deployed validator set.
+
+Offline cash is non-optional on the canonical public Taira chain. `/health`
+and `/readyz` fail closed with HTTP 503 until startup validation succeeds.
+Cutover requires HTTP 200 with `mandatory: true`, `ready: true`,
+`cash_handoff_capability: "cash_handoff_v1"`,
+`required_bridge_abi_version: 21`, and an empty blocker list. Native MCP
+availability alone is not sufficient.
+
+First seal the rendered public validator keys and PoPs into the release-bound
+top-up roster. The input config may contain runtime secrets, but the command
+reads only `trusted_peers_pop` and emits only the public canonical roster:
+
+```bash
+cargo run -p iroha_kagami --bin kagami -- \
+  kagemusha prepare-taira-release-roster-v4 \
+  --validator-config /absolute/path/to/rendered-validator/config.toml \
+  --output /absolute/private/path/taira-release-roster.norito
+```
+
+Generate the real Eq/Ep artifacts through the source-sealed two-stage
+packager. Start from a checkout whose `HEAD` commit signature has been
+verified, then explicitly review and seal its complete dirty closure before
+building the exact candidate binary and entering the non-raiseable 16 GiB
+generation guard. Keep at least 16 GiB free on its pinned disk-backed output
+filesystem for the raw proving-key spools and framed artifact copy.
+Retain the helper's canonical JSON report. The reviewed source closure and its
+digest are release inputs; the report's `source_commit` must equal the verified
+`HEAD`, and unreviewed working-tree changes fail closed.
+
+```bash
+python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
+  --root "$PWD" \
+  --target-dir /absolute/private/path/kagemusha-sealed-target \
+  --reviewed-source-closure /absolute/private/path/reviewed-source-closure.json \
+  --reviewed-source-closure-sha256 '<64-lowercase-hex>' \
+  > /absolute/private/path/sealed-kagemusha-candidate-build.json
+
+python3 scripts/run_kagemusha_v4_generation.py \
+  --resource-report /absolute/private/path/taira-release-generation \
+  -- \
+  /absolute/path/from/sealed-build-report/kagemusha_recursive_spend_v4_bundle \
+  generate-candidate \
+  --out-dir /absolute/private/path/taira-release-candidate \
+  --chain-id fc56984b-2be7-431d-840e-21514d1883f0 \
+  --asset-definition-id 7ZepsJTHCVLKsrFFNZGSRGZgvBhv \
+  --asset-scale 2 \
+  --generation production-gate-real-artifacts-v4 \
+  --parameter-generation production-gate-real-artifacts-v4 \
+  --source-commit '<source_commit-from-sealed-build-report>' \
+  --source-tree-sha256 '<source_tree_sha256-from-sealed-build-report>' \
+  --activation-height 2 \
+  --withdrawal-height 1000000000 \
+  --step-eq-circuit-params /absolute/private/path/step-eq-circuit-params.norito \
+  --step-ep-circuit-params /absolute/private/path/step-ep-circuit-params.norito \
+  --topup-finality-roster /absolute/private/path/taira-release-roster.norito
+
+/absolute/path/from/sealed-build-report/kagemusha_recursive_spend_v4_bundle \
+  finalize-release \
+  --candidate-dir /absolute/private/path/taira-release-candidate \
+  --out-dir /absolute/private/path/taira-final-release \
+  --release-policy /absolute/private/path/release-policy-v1.norito \
+  --release-attestation /absolute/private/path/release-attestation-v4.norito \
+  --benchmark-evidence /absolute/private/path/benchmark-evidence-v1.json \
+  --cryptographic-review /absolute/private/path/cryptographic-review-v4.norito
+```
+
+`generate-candidate` is the only command accepted by the guarded runner; do not
+wrap Cargo, a shell, or `env`. It publishes an immutable pre-evidence candidate
+and owner-private JSONL/summary resource evidence, not an approved release.
+`finalize-release` authenticates the supplied policy, attestation, physical
+benchmark, and signed cryptographic review, then copies the exact candidate
+bytes into a new sixteen-file release directory without regenerating proof
+material. Provision the same policy as
+`taira-release/release-policy-v1.norito` and install that finalized directory
+as `taira-release/catalog/<manifest_sha256>/`, where `manifest_sha256` is the
+lowercase digest recorded by the finalized `manifest.norito.sha256`.
+
+Finally append the complete state to a clean unsigned Taira genesis. The
+command never overwrites its input. App identities and signing-certificate
+digests must describe the exact BOI builds being admitted; the helper supplies
+only the native Apple App Attest and Android KeyMint roots and keeps both
+platform policies fail-closed.
+
+```bash
+cargo run -p iroha_kagami --bin kagami -- \
+  kagemusha prepare-taira-testnet-bootstrap-v4 \
+  --genesis /absolute/path/to/fresh-taira-genesis.json \
+  --release-bundle /absolute/private/path/taira-release \
+  --genesis-authority '<taira-i105-account>' \
+  --command-authority '<taira-i105-account>' \
+  --fee-mint 1000000 \
+  --ios-team-id '<apple-team-id>' \
+  --ios-bundle-id '<ios-bundle-id>' \
+  --ios-validation-category 4 \
+  --ios-bundle-version '<cf-bundle-version>' \
+  --android-package-name '<android-package>' \
+  --android-signing-certificate-sha256 '<64-lowercase-hex>' \
+  --output /absolute/path/to/genesis.offline.json \
+  --operator-identity-output /absolute/private/path/taira-offline-release-identity.json
+```
+
+The emitted manifest enables `offline.enabled` on the existing scale-2 Taira
+asset `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`, renames it to `ds`, rebinds it as
+`ds#boi.is`, and replaces the legacy display metadata with code `DS`, ISO
+currency `ILS`, symbol `₪`, and display name `Digital Shekel`. It preserves the
+opaque asset ID, fixed scale, mintability, balances, and total supply. The
+helper derives the canonical escrow, registers it plus a distinct missing
+command account, treats the genesis signer as the account that `irohad`
+implicitly creates before height one, registers and binds all three base
+verifiers, grants the exact activation/device/escrow permissions, funds the
+command authority, and atomically activates the authenticated Eq/Ep release.
+It also refuses a source genesis without non-zero public `ds#boi.is` liquidity outside escrow: top-up
+atomically moves that exact user balance into escrow, and redemption can only
+draw against finalized top-up provenance. The builder also replaces the legacy
+1,000 ms source cadence with the authoritative 4,000 ms Sumeragi parameter
+snapshot and verifies that effective cadence before recomputing consensus
+metadata. Point every validator at the reported policy and catalog paths before
+signing and deploying the reset. Preserve the separately emitted operator
+identity outside the source checkout and pass it to rollout verification as
+`--offline-expected-identity`; its artifact digests and five verifier
+projections are derived from the same authenticated activation, not copied
+from live state.
 
 The renderer rewrites the checked-in peer-1 baseline with the full
 `trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
@@ -284,7 +440,12 @@ existing storage directories. Each live peer's exact working directory is
 sealed separately from its storage inode; they are intentionally not assumed
 to be the same path. The printed manifest digest seals those process, binary,
 config, PID-file, working-directory, storage, and generated plist identities.
-Review the manifest and plists before scheduling the cutover.
+Review the manifest and plists before scheduling the cutover. Generic adoption
+uses the supervisor's full-hash path for a binary below the non-root-owned
+deployment base. Supplying a separately installed root-controlled `--irohad`
+path makes the planner emit all five stat-seal arguments and enables O(1)
+validation, as does the live reset controller's content-addressed artifact
+store.
 
 Apply only with no active ledger writer and during an announced maintenance
 window:
@@ -296,7 +457,8 @@ sudo python3 scripts/migrate_taira_peer_supervision.py apply \
   --confirm ADOPT-EXISTING-TAIRA-STORAGE
 ```
 
-`apply` rechecks every sealed identity before mutation, installs one
+`apply` rechecks every sealed identity before mutation, retains the exact
+authenticated staged asset bytes in memory through installation, installs one
 `KeepAlive` LaunchDaemon per validator, stops the legacy controller once, and
 starts all four jobs from their exact original working directories while
 retaining their separately identified storage directories. It never deletes,
@@ -700,7 +862,9 @@ Then gate the SoraFS path on the same public node:
 When `--write-config` is supplied, both rollout scripts read that runtime-only
 signer config as-is and fail if it is missing; neither script overwrites or
 bootstraps over an operator-supplied path. Omit `--write-config` only when the
-intended flow is to bootstrap the default runtime canary config automatically.
+intended flow is to bootstrap the default runtime canary config automatically,
+and then pass the exact owner-private credential with
+`--onboarding-token-file /absolute/runtime/path/onboarding-token`.
 
 Expected result:
 
@@ -753,13 +917,22 @@ debugging ingress or MCP. It also verifies that the same direct node serves:
   `query_validation_failed` response when the hash is omitted
 - no retired `/v1/transactions/status` alias (`404 route_not_found`)
 
+The same gate must sample public ingress and all four direct validator roots
+repeatedly. `/status.blocks` is the query-visible WSV committed height, not a
+lazy Kura telemetry counter or a pre-apply CommitQC height, and must advance
+with the signed canary while the fleet retains one exact offline release
+identity.
+
 That config must be a normal `iroha` client TOML for a low-risk runtime-only
 signer. Start from `taira-canary-client.example.toml`, not
 `defaults/client.toml`: the generic repo client uses the zero chain id and is
-not valid for Taira. When `--write-config` is omitted and the automatically
-selected runtime path is missing, the rollout scripts generate a fresh
-keypair, onboard the account on public Taira, and write that runtime-only
-config before the signed ping. An explicit config path is never replaced,
+not valid for Taira. The canary alias defaults to the dataspace-root form
+`<label>@universal`; do not expand it to `@wonderland.universal` or
+`@universal.universal`. When `--write-config` is omitted and the automatically
+selected runtime path is missing, `check_mcp_rollout.sh` requires
+`--onboarding-token-file /absolute/runtime/path/onboarding-token`, generates a
+fresh keypair, onboards the account on public Taira, and writes that
+runtime-only config before the signed ping. An explicit config path is never replaced,
 including when it contains a stale or placeholder authority. The Torii
 onboarding authority enrolls the account in the configured sponsor program;
 onboarding does not accept fee or gas overrides. Bootstrap requires the onboarding endpoint to return a
@@ -854,6 +1027,13 @@ path is stalled. A single one-height reducer/commit gap is normal pipeline state
 and is not sufficient evidence by itself. Unless you have validator-side
 access, describe this as a public-node or public-finality-path observation
 rather than proof that the full validator set is down.
+
+A direct Vote rejected only because its execution commitment is not yet bound
+is recoverable, not malformed. On a fixed build it remains fair-ingress-owned
+until local proposal validation establishes the exact commitment. If such
+votes disappear while completion age or service debt rises and proposal-body
+recovery does not drain, treat the node as an unfixed completion-starvation
+deployment and stop the rollout.
 
 Do not clear volatile consensus state or use an adaptive recovery path. Preserve
 the WAL, Kura, per-validator status samples, and logs as incident evidence. A
@@ -1228,8 +1408,10 @@ From `../iroha2-block-explorer-web`:
      live, pin the public host to the edge IP explicitly:
      `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --offline-asset-definition-id "${OFFLINE_ASSET_DEFINITION_ID}" --offline-expected-identity /run/secrets/taira-offline-release-identity.json --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - the public check auto-bootstraps a runtime-only canary config when
-    `--write-config` is omitted, preferring `/run/secrets` only when that
-    directory is writable and otherwise using the local temp directory; when
+    `--write-config` is omitted and
+    `--onboarding-token-file /absolute/runtime/path/onboarding-token` names the
+    exact owner-private route credential, preferring `/run/secrets` only when
+    that directory is writable and otherwise using the local temp directory; when
     the default Taira sponsor program is configured, bootstrap skips faucet and
     signs its exact quoted intent unless you set `ROLLOUT_CANARY_SKIP_FAUCET=0`
 7. Verify that SNI now serves the correct cert for each host and that MCP,

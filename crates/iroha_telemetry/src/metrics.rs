@@ -3431,6 +3431,7 @@ mod serde_tests {
                 halo2: Halo2Status::default(),
             },
             stack: StackStatus::default(),
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -21401,6 +21402,7 @@ mod test {
                 pool_fallback_total: 0,
                 budget_hit_total: 0,
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus {
                 mode_tag: PERMISSIONED_TAG.to_string(),
                 leader_index: 1,

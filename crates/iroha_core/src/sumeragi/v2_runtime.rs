@@ -3565,6 +3565,24 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         if self.fail_closed {
             return false;
         }
+        if let Some((round, _)) = self
+            .driver
+            .wire_ingress_missing_execution_commitment(&runtime_message.payload)
+            && round.height == self.round_tag.height()
+            && round.view == self.round_tag.view()
+        {
+            // The fair-ingress occurrence is the only durable process-local
+            // owner at this boundary. Retain a current-view direct vote until
+            // proposal validation binds its execution commitment. Proposal
+            // and body traffic may arrive through independent source lanes
+            // after the vote, and periodic retransmission remains best effort.
+            // Fair ingress is bounded per source and bypasses blocked entries,
+            // so an unknown subject cannot globally block later traffic. A
+            // future-view vote has no certified local transition authority and
+            // must drain normally; once the local view advances, an unmatched
+            // current-view vote likewise drains for bounded rejection.
+            return false;
+        }
         if let Some((_, ordinal)) = self
             .driver
             .deferred_authenticated_message_owner(&runtime_message)
@@ -4480,6 +4498,31 @@ mod tests {
         .payload()
         .to_vec();
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal))
+    }
+
+    fn signed_runtime_vote(
+        keys: &[KeyPair],
+        round: wire::ConsensusRound,
+        phase: wire::GlobalPhase,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> wire::ConsensusMessageV2 {
+        let mut vote = wire::Vote {
+            round,
+            proposal_round: round,
+            phase,
+            subject,
+            execution_commitment,
+            signer: 0,
+            signature: Vec::new(),
+        };
+        vote.signature = Signature::new(
+            keys[usize::try_from(vote.signer).expect("small signer index")].private_key(),
+            &vote.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
     }
 
     fn fair_runtime_ownership(
@@ -8669,62 +8712,213 @@ mod tests {
     }
 
     #[test]
-    fn unbound_direct_vote_authentication_is_recoverable_and_becomes_admissible_after_validation() {
-        let directory = TempDir::new().expect("temporary unbound-vote directory");
-        let (mut runtime, context, keys) =
-            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
-        let manifest = runtime_manifest(&context, 0xD7);
-        let durable = DurableBodyReceipt::for_test(
-            context.id(),
-            manifest.round,
-            manifest.subject,
-            HashOf::new(&manifest),
-        );
-        let validated = ValidatedBodyReceipt::for_test(durable);
-        let mut vote = wire::Vote {
-            round: manifest.round,
-            proposal_round: manifest.round,
-            phase: wire::GlobalPhase::Prepare,
-            subject: manifest.subject,
-            execution_commitment: validated.execution_commitment(),
-            signer: 0,
-            signature: Vec::new(),
-        };
-        vote.signature = Signature::new(
-            keys[usize::try_from(vote.signer).expect("small signer index")].private_key(),
-            &vote.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
-        let signed_vote =
-            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote));
+    fn unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation() {
+        for phase in [wire::GlobalPhase::Prepare, wire::GlobalPhase::Commit] {
+            let directory = TempDir::new().expect("temporary unbound-vote directory");
+            let (mut runtime, context, keys) =
+                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+            let manifest = runtime_manifest(&context, 0xD7);
+            let durable = DurableBodyReceipt::for_test(
+                context.id(),
+                manifest.round,
+                manifest.subject,
+                HashOf::new(&manifest),
+            );
+            let validated = ValidatedBodyReceipt::for_test(durable);
+            let signed_vote = signed_runtime_vote(
+                &keys,
+                manifest.round,
+                phase,
+                manifest.subject,
+                validated.execution_commitment(),
+            );
 
-        assert!(matches!(
-            runtime.enqueue_network(signed_vote.clone()),
-            Err(NetworkIngressError::Authentication(
-                AdapterError::MissingExecutionCommitment
-            ))
-        ));
-        assert_eq!(runtime.queued_commands(), 0);
-        assert!(
-            !runtime.fail_closed,
-            "recoverable authentication rejection must not poison the runtime"
-        );
+            let far_future_round = wire::ConsensusRound {
+                view: u64::MAX,
+                ..manifest.round
+            };
+            let signed_far_future = signed_runtime_vote(
+                &keys,
+                far_future_round,
+                phase,
+                manifest.subject,
+                validated.execution_commitment(),
+            );
+            assert!(
+                runtime.can_admit_network_message(&signed_far_future),
+                "a structurally valid far-future {phase:?} vote must drain without certified local view authority"
+            );
+            assert!(matches!(
+                runtime.enqueue_network(signed_far_future),
+                Err(NetworkIngressError::Authentication(
+                    AdapterError::MissingExecutionCommitment
+                ))
+            ));
+            assert_eq!(runtime.queued_commands(), 0);
+            assert!(
+                !runtime.fail_closed,
+                "rejecting a far-future unbound {phase:?} vote must not poison the runtime"
+            );
 
-        runtime
-            .enqueue_network(signed_runtime_proposal(&context, &keys, 0xD8))
-            .expect("a subsequent valid proposal remains admissible");
-        assert_eq!(runtime.queued_commands(), 1);
-        assert!(!runtime.fail_closed);
+            let mut malformed_future = signed_vote.clone();
+            let wire::ConsensusMessageV2Payload::Vote(malformed_vote) =
+                &mut malformed_future.payload
+            else {
+                unreachable!("fixture is a direct vote");
+            };
+            malformed_vote.round.view = u64::MAX;
+            malformed_vote.proposal_round.view = u64::MAX;
+            malformed_vote.signature.clear();
+            assert!(
+                runtime.can_admit_network_message(&malformed_future),
+                "a structurally invalid far-future {phase:?} vote must drain for normal rejection"
+            );
+            assert!(matches!(
+                runtime.enqueue_network(malformed_future),
+                Err(NetworkIngressError::Authentication(_))
+            ));
+            assert_eq!(runtime.queued_commands(), 0);
 
-        runtime
-            .recover_validated_body(&manifest, &validated)
-            .expect("local validation establishes canonical commitment authority");
-        runtime
-            .enqueue_network(signed_vote)
-            .expect("the same signed canonical vote becomes admissible after validation");
-        assert_eq!(runtime.queued_commands(), 2);
-        assert!(!runtime.fail_closed);
+            assert!(
+                !runtime.can_admit_network_message(&signed_vote),
+                "an early {phase:?} vote must remain fair-ingress owned until its proposal is validated"
+            );
+            // The mutating seam still rejects a caller that bypasses the
+            // non-mutating fair-ingress gate.
+            assert!(matches!(
+                runtime.enqueue_network(signed_vote.clone()),
+                Err(NetworkIngressError::Authentication(
+                    AdapterError::MissingExecutionCommitment
+                ))
+            ));
+            assert_eq!(runtime.queued_commands(), 0);
+            assert!(
+                !runtime.fail_closed,
+                "recoverable {phase:?} authentication rejection must not poison the runtime"
+            );
+
+            let proposer = context.leader(manifest.round.view);
+            let mut proposal = wire::Proposal {
+                round: manifest.round,
+                proposer,
+                subject: manifest.subject,
+                manifest: manifest.clone(),
+                justification: wire::ProposalJustification::ParentCommit(
+                    wire::ParentCommitJustification { certificate: None },
+                ),
+                signature: Vec::new(),
+            };
+            proposal.signature = Signature::new(
+                keys[usize::try_from(proposer).expect("small proposer index")].private_key(),
+                &proposal.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            runtime
+                .enqueue_network(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::Proposal(proposal),
+                ))
+                .expect("matching proposal establishes a pending body pipeline");
+            assert_eq!(runtime.queued_commands(), 1);
+            assert!(
+                !runtime.can_admit_network_message(&signed_vote),
+                "the {phase:?} vote remains a recoverable fair-ingress prerequisite while validation is pending"
+            );
+            runtime
+                .arm_live_clocks(Instant::now())
+                .expect("arm fixture clocks before dispatch");
+            runtime
+                .step_and_take_scheduler_ownership_for_test(Instant::now())
+                .expect("dispatch matching proposal");
+            assert_eq!(runtime.queued_commands(), 0);
+            assert!(
+                !runtime.can_admit_network_message(&signed_vote),
+                "the registered manifest keeps the {phase:?} vote deferred while validation is pending"
+            );
+            assert!(!runtime.fail_closed);
+
+            runtime
+                .recover_validated_body(&manifest, &validated)
+                .expect("local validation establishes canonical commitment authority");
+            assert!(
+                runtime.can_admit_network_message(&signed_vote),
+                "the retained fair-ingress {phase:?} vote becomes drainable after validation"
+            );
+
+            let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+                Hash::new(b"conflicting early vote parent state"),
+                Hash::new(b"conflicting early vote post state"),
+                Hash::new(b"conflicting early vote ordinary writes"),
+                Hash::new(b"conflicting early vote executed block"),
+            );
+            assert_ne!(
+                conflicting_commitment,
+                validated.execution_commitment(),
+                "the conflict fixture must differ from canonical validation"
+            );
+            let conflicting_vote = signed_runtime_vote(
+                &keys,
+                manifest.round,
+                phase,
+                manifest.subject,
+                conflicting_commitment,
+            );
+            assert!(
+                runtime.can_admit_network_message(&conflicting_vote),
+                "a conflicting bound {phase:?} vote must drain for authenticated rejection"
+            );
+            assert!(matches!(
+                runtime.enqueue_network(conflicting_vote),
+                Err(NetworkIngressError::Authentication(
+                    AdapterError::ConflictingExecutionCommitment
+                ))
+            ));
+            assert_eq!(runtime.queued_commands(), 0);
+            assert!(
+                !runtime.fail_closed,
+                "conflicting {phase:?} vote rejection must not poison the runtime"
+            );
+
+            runtime
+                .enqueue_network(signed_vote)
+                .expect("the same signed canonical vote becomes admissible after validation");
+            assert_eq!(runtime.queued_commands(), 1);
+            assert!(!runtime.fail_closed);
+
+            let stale_directory = TempDir::new().expect("temporary stale-vote directory");
+            let (mut stale_runtime, stale_context, stale_keys) =
+                authenticated_network_runtime(&stale_directory, RuntimeQueueConfig::new(8, 1, 1));
+            let stale_manifest = runtime_manifest(&stale_context, 0xD9);
+            let stale_durable = DurableBodyReceipt::for_test(
+                stale_context.id(),
+                stale_manifest.round,
+                stale_manifest.subject,
+                HashOf::new(&stale_manifest),
+            );
+            let stale_validated = ValidatedBodyReceipt::for_test(stale_durable);
+            let stale_message = signed_runtime_vote(
+                &stale_keys,
+                stale_manifest.round,
+                phase,
+                stale_manifest.subject,
+                stale_validated.execution_commitment(),
+            );
+            assert!(
+                !stale_runtime.can_admit_network_message(&stale_message),
+                "an unbound {phase:?} vote is retained while its view remains active"
+            );
+            let initial = stale_runtime.round_tag();
+            let next = EventTag::new(
+                initial.height(),
+                initial.view() + 1,
+                Generation::new(initial.generation().get() + 1),
+            );
+            observe_enter_view_for_test(&mut stale_runtime, initial, next, &stale_manifest);
+            assert!(
+                stale_runtime.can_admit_network_message(&stale_message),
+                "view change releases an unmatched stale {phase:?} vote for bounded rejection"
+            );
+        }
     }
 
     #[test]

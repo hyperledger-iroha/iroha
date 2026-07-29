@@ -32,7 +32,7 @@ const MAX_CANDIDATE_BYTES: u64 = 1024 * 1024;
 const MAX_ROSTER_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SCENARIO_BYTES: u64 = 16 * 1024 * 1024;
 
-const SCENARIO_FILES: [&str; 33] = [
+pub(super) const SCENARIO_FILES: [&str; 33] = [
     "init-top-up-anchor-v4.norito",
     "init-top-up-finality-proof-v2.norito",
     "init-top-up-finality-roster-artifact-v2.norito",
@@ -69,7 +69,7 @@ const SCENARIO_FILES: [&str; 33] = [
 ];
 
 #[derive(Default)]
-struct ScenarioPayloads(BTreeMap<String, Vec<u8>>);
+pub(super) struct ScenarioPayloads(pub(super) BTreeMap<String, Vec<u8>>);
 
 impl Deref for ScenarioPayloads {
     type Target = BTreeMap<String, Vec<u8>>;
@@ -101,7 +101,7 @@ fn metadata_identity(metadata: &fs::Metadata) -> (u64, u64, u32, u64, u32, u64, 
     )
 }
 
-fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
+pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err(format!("input path must be absolute: {}", path.display()));
     }
@@ -149,7 +149,7 @@ fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
     Ok(std::mem::take(&mut *bytes))
 }
 
-fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {
+pub(super) fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {
     if !directory.is_absolute() {
         return Err("scenario directory path must be absolute".to_owned());
     }
@@ -197,7 +197,10 @@ fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {
     Ok(files)
 }
 
-fn bytes<'a>(files: &'a BTreeMap<String, Vec<u8>>, name: &str) -> Result<&'a [u8], String> {
+pub(super) fn bytes<'a>(
+    files: &'a BTreeMap<String, Vec<u8>>,
+    name: &str,
+) -> Result<&'a [u8], String> {
     files
         .get(name)
         .map(Vec::as_slice)
@@ -213,13 +216,19 @@ where
         .map_err(|_| format!("{label} is not one canonical typed Norito archive"))
 }
 
-fn digest32(files: &BTreeMap<String, Vec<u8>>, name: &str) -> Result<[u8; 32], String> {
+pub(super) fn digest32(
+    files: &BTreeMap<String, Vec<u8>>,
+    name: &str,
+) -> Result<[u8; 32], String> {
     bytes(files, name)?
         .try_into()
         .map_err(|_| format!("{name} must contain exactly 32 bytes"))
 }
 
-fn positive_decimal(files: &BTreeMap<String, Vec<u8>>, name: &str) -> Result<u64, String> {
+pub(super) fn positive_decimal(
+    files: &BTreeMap<String, Vec<u8>>,
+    name: &str,
+) -> Result<u64, String> {
     let payload = bytes(files, name)?;
     let line = payload
         .strip_suffix(b"\n")
@@ -313,7 +322,9 @@ fn validate_request_material_without_opening(
     Ok(())
 }
 
-fn scenario_inventory_sha256(files: &BTreeMap<String, Vec<u8>>) -> Result<[u8; 32], String> {
+pub(super) fn scenario_inventory_sha256(
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<[u8; 32], String> {
     let mut hasher = Sha256::new();
     hasher.update(INVENTORY_DOMAIN);
     hasher.update(

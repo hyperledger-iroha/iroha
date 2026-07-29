@@ -2137,8 +2137,11 @@ impl IVMHost for CoreHost {
                 Ok(DEBUG_GAS)
             }
             syscalls::SYSCALL_ABORT => {
-                // Preserve r10 as the stable contract-provided abort code.
                 vm.request_abort();
+                Ok(DEBUG_GAS)
+            }
+            syscalls::SYSCALL_CONTRACT_ABORT => {
+                vm.request_contract_abort(vm.register(10));
                 Ok(DEBUG_GAS)
             }
             syscalls::SYSCALL_DEBUG_LOG => {

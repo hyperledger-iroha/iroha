@@ -3822,6 +3822,7 @@ fn lower_structured_data_filter(
                     Some("deleted") => AssetEventSet::Deleted,
                     Some("added") => AssetEventSet::Added,
                     Some("removed") => AssetEventSet::Removed,
+                    Some("transferred") => AssetEventSet::Transferred,
                     Some("metadata_inserted") => AssetEventSet::MetadataInserted,
                     Some("metadata_removed") => AssetEventSet::MetadataRemoved,
                     Some(kind) => {
@@ -3834,6 +3835,8 @@ fn lower_structured_data_filter(
                 });
             let mut seen_asset = false;
             let mut seen_asset_definition = false;
+            let mut seen_source_account = false;
+            let mut seen_destination_account = false;
             for matcher in &filter.matchers {
                 match matcher.key.as_str() {
                     "asset" => {
@@ -3865,6 +3868,36 @@ fn lower_structured_data_filter(
                             &matcher.value,
                         )?);
                         seen_asset_definition = true;
+                    }
+                    "source_account" => {
+                        if seen_source_account {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "source_account",
+                            ));
+                        }
+                        asset = asset.for_transfer_source_account(parse_account_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_source_account = true;
+                    }
+                    "destination_account" => {
+                        if seen_destination_account {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "destination_account",
+                            ));
+                        }
+                        asset = asset.for_transfer_destination_account(parse_account_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_destination_account = true;
                     }
                     key => {
                         return Err(unsupported_data_matcher_error(
@@ -8491,16 +8524,20 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
-        Builtin::SetAssetTransferFreeze => {
-            if arg_typed.len() != 3
+        Builtin::SetAssetTransferAvailability => {
+            if arg_typed.len() != 6
                 || !(arg_typed[0].ty == Type::AccountId
                     && arg_typed[1].ty == Type::AssetDefinitionId
-                    && arg_typed[2].ty == Type::Bool)
+                    && arg_typed[2].ty == Type::Int
+                    && arg_typed[3].ty == Type::Bool
+                    && arg_typed[4].ty == Type::Bool
+                    && resolve_struct_type(&arg_typed[5].ty)
+                        == Type::Option(Box::new(Type::String)))
             {
                 return Err(SemanticError {
                     code: "K2003",
                     message:
-                        "ledger::asset::set_transfer_freeze expects (AccountId, AssetDefinitionId, bool)"
+                        "ledger::asset::set_transfer_availability expects (AccountId, AssetDefinitionId, int, bool, bool, Option<string>)"
                             .into(),
                 });
             }
@@ -8523,6 +8560,28 @@ fn analyze_surface_builtin_call(
                     code: "K2003",
                     message:
                         "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, Option<quantity>)"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetAssetHoldingLimit => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId
+                    && resolve_struct_type(&arg_typed[2].ty)
+                        == Type::Option(Box::new(Type::Quantity)))
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message:
+                        "ledger::asset::set_holding_limit expects (AccountId, AssetDefinitionId, Option<quantity>)"
                             .into(),
                 });
             }
@@ -19533,6 +19592,53 @@ seiyaku UnshieldAmount {{
                 AssetEventFilter::new()
                     .for_events(AssetEventSet::Added)
                     .for_asset_definition(asset_definition),
+            ))
+        );
+    }
+
+    #[test]
+    fn trigger_decl_supports_transfer_specific_asset_filter() {
+        use iroha_data_model::account::ParsedAccountId;
+
+        let source_literal = sample_account_literal();
+        let source = AccountId::parse_encoded(source_literal.as_str())
+            .map(ParsedAccountId::into_account_id)
+            .expect("source account");
+        let destination_literal = {
+            let key_pair = iroha_crypto::KeyPair::try_random().expect("destination key");
+            AccountId::new(key_pair.public_key().clone()).to_string()
+        };
+        let destination = AccountId::parse_encoded(destination_literal.as_str())
+            .map(ParsedAccountId::into_account_id)
+            .expect("destination account");
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let program = parse(&format!(
+            r#"
+            seiyaku C {{
+                kotoage fn run() authorize("RunTrigger") {{}}
+                trigger wake -> run {{
+                    on data asset transferred {{
+                        asset_definition "{asset_definition}";
+                        source_account "{source_literal}";
+                        destination_account "{destination_literal}";
+                    }}
+                }}
+            }}
+            "#
+        ))
+        .expect("parse transfer trigger");
+        let typed = analyze(&program).expect("analyze transfer trigger");
+        assert_eq!(
+            typed.triggers[0].filter,
+            EventFilterBox::Data(DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_events(AssetEventSet::Transferred)
+                    .for_asset_definition(asset_definition)
+                    .for_transfer_source_account(source)
+                    .for_transfer_destination_account(destination),
             ))
         );
     }

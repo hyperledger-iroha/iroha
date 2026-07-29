@@ -78,7 +78,7 @@ use super::{
 use crate::{
     block::BlockBuilder,
     kura::{
-        AutonomousLaneBlockArtifact, CertifiedLaneBlockArtifact, Kura,
+        AutonomousLaneBlockArtifact, CertifiedLaneBlockArtifact, Kura, KuraV2CommitReceipt,
         LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
         LaneBlockPayloadAvailability, sumeragi_v2_validator_storage_supported,
     },
@@ -917,6 +917,7 @@ enum LockedGlobalBodyOrigin<'a> {
     FixedGenesisViewZero {
         authenticated_genesis: &'a SignedBlock,
     },
+    CanonicalDecided,
 }
 
 #[derive(Clone, Debug)]
@@ -3686,6 +3687,117 @@ impl V2LaneWorkAdapter {
         )
     }
 
+    fn bind_decided_canonical_global_body(&mut self, block: &SignedBlock) -> V2LaneIngressOutcome {
+        self.bind_locked_global_body_from_origin(block, LockedGlobalBodyOrigin::CanonicalDecided)
+    }
+
+    /// Recover autonomous lane work from the exact body durably decided and
+    /// applied by the global executor, independently of any earlier local
+    /// Prepare lock or asynchronous body-load lifetime.
+    pub(crate) fn recover_decided_canonical_lane_body(
+        &mut self,
+        receipt: &KuraV2CommitReceipt,
+        artifact: &wire::finality::V2FinalityArtifact,
+    ) -> Result<V2LaneIngressOutcome, V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(V2LaneWorkError::RestartRequired)?;
+        let decided = self
+            .retained_merge_carrier_state
+            .and_then(|(_, _, decided)| decided)
+            .ok_or_else(|| {
+                V2LaneWorkError::InvalidContext(
+                    "canonical lane recovery requires an exact retained Decision".to_owned(),
+                )
+            })?;
+        let certificate = receipt.certificate();
+        if artifact.height_context != self.context
+            || artifact.subject != decided
+            || receipt.height() != self.context.height
+            || receipt.context_id() != self.context.id()
+            || receipt.block_hash() != decided.block_hash
+            || receipt.subject() != decided
+            || receipt.subject() != artifact.subject
+            || receipt.block_hash() != artifact.block_hash
+            || receipt.certificate() != artifact.commit_qc.as_ref()
+            || receipt.artifact_hash() != HashOf::new(artifact)
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.subject != decided
+            || certificate.round.context_id != self.context.id()
+            || certificate.round.height != self.context.height
+            || certificate.proposal_round.context_id != self.context.id()
+            || certificate.proposal_round.height != self.context.height
+            || u64::try_from(self.state.committed_height()).ok() != Some(self.context.height)
+            || self.state.latest_block_hash_fast() != Some(decided.block_hash)
+        {
+            return Err(V2LaneWorkError::InvalidContext(
+                "durable global Decision does not match lane recovery state".to_owned(),
+            ));
+        }
+        let height = usize::try_from(self.context.height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .ok_or_else(|| {
+                V2LaneWorkError::InvalidContext(
+                    "canonical lane carrier height is not representable".to_owned(),
+                )
+            })?;
+        let durable_count = self
+            .kura
+            .exact_durable_blocks_count()
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        let block = self.kura.get_block(height).ok_or_else(|| {
+            V2LaneWorkError::Persistence(
+                "durably decided lane carrier is absent from Kura".to_owned(),
+            )
+        })?;
+        let proposal = block.canonical_resultless_proposal();
+        let canonical_wire = proposal
+            .encode_wire()
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        let canonical_subject = wire::BlockSubject {
+            parent_block_hash: proposal.header().prev_block_hash(),
+            block_hash: proposal.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        if durable_count != height.get()
+            || self.kura.block_hash_at_height(height) != Some(receipt.block_hash())
+            || canonical_subject != decided
+            || artifact.validate_for_header(&proposal.header()).is_err()
+        {
+            return Err(V2LaneWorkError::InvalidContext(
+                "Kura canonical lane carrier does not match the durable Decision".to_owned(),
+            ));
+        }
+
+        if self.context.height == 1 {
+            let has_autonomous_envelope = proposal
+                .execution_context()
+                .is_some_and(|bundle| !bundle.autonomous_lane_payloads.is_empty());
+            if has_autonomous_envelope || !self.pending_autonomous_anchor_payloads.is_empty() {
+                return Err(V2LaneWorkError::InvalidContext(
+                    "genesis cannot recover autonomous lane work through a decided-body origin"
+                        .to_owned(),
+                ));
+            }
+            operation.complete();
+            return Ok(V2LaneIngressOutcome::Duplicate);
+        }
+
+        // Repair current-height ordinary ownership sidecars and recover any
+        // producer-durable hint-free payload before binding a mixed carrier.
+        self.hydrate_canonical_lane_artifacts()?;
+        let outcome = self.bind_decided_canonical_global_body(&proposal);
+        if outcome == V2LaneIngressOutcome::Rejected {
+            return Err(V2LaneWorkError::Persistence(
+                "canonical decided body failed exact lane-carrier binding".to_owned(),
+            ));
+        }
+        operation.complete();
+        Ok(outcome)
+    }
+
     fn bind_locked_global_body_from_origin(
         &mut self,
         block: &SignedBlock,
@@ -3704,13 +3816,14 @@ impl V2LaneWorkAdapter {
             block_hash,
             payload_hash: Hash::new(&canonical_wire),
         };
-        let Some(global_lock) = self.globally_locked_body else {
-            return V2LaneIngressOutcome::Rejected;
-        };
+        let canonical_decided = matches!(origin, LockedGlobalBodyOrigin::CanonicalDecided);
         let origin_matches = match origin {
             LockedGlobalBodyOrigin::AuthenticatedHeaderAtOrBeforeLock => {
-                self.context.height != 1
-                    && block.header().view_change_index() <= global_lock.round.view
+                self.globally_locked_body.is_some_and(|global_lock| {
+                    global_lock.subject == subject
+                        && self.context.height != 1
+                        && block.header().view_change_index() <= global_lock.round.view
+                })
             }
             LockedGlobalBodyOrigin::FixedGenesisViewZero {
                 authenticated_genesis,
@@ -3721,7 +3834,9 @@ impl V2LaneWorkAdapter {
                 else {
                     return V2LaneIngressOutcome::Rejected;
                 };
-                self.context.height == 1
+                self.globally_locked_body
+                    .is_some_and(|global_lock| global_lock.subject == subject)
+                    && self.context.height == 1
                     && self.context.parent_commit_qc.is_none()
                     && self.context.snapshot_bootstrap.is_none()
                     && block.header().height().get() == 1
@@ -3732,11 +3847,34 @@ impl V2LaneWorkAdapter {
                     && block.is_resultless_proposal()
                     && canonical_wire == authenticated_wire
             }
+            LockedGlobalBodyOrigin::CanonicalDecided => {
+                let decided = self
+                    .retained_merge_carrier_state
+                    .and_then(|(_, _, decided)| decided);
+                let canonical_wire_matches = usize::try_from(self.context.height)
+                    .ok()
+                    .and_then(NonZeroUsize::new)
+                    .and_then(|height| self.kura.get_block(height))
+                    .and_then(|canonical| {
+                        canonical.canonical_resultless_proposal().encode_wire().ok()
+                    })
+                    .is_some_and(|wire| wire == canonical_wire);
+                decided == Some(subject)
+                    && canonical_wire_matches
+                    && u64::try_from(self.state.committed_height())
+                        .is_ok_and(|height| height >= self.context.height)
+            }
         };
-        if global_lock.subject != subject
-            || !origin_matches
-            || block.header().height().get() != self.context.height
-        {
+        if !origin_matches || block.header().height().get() != self.context.height {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let canonical_recovery = canonical_v2_lane_payload_matches_kura(
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            &self.context,
+            block,
+        );
+        if canonical_decided && !canonical_recovery {
             return V2LaneIngressOutcome::Rejected;
         }
         let bundle = block.execution_context();
@@ -3769,12 +3907,6 @@ impl V2LaneWorkAdapter {
         let nexus = self.state.nexus_snapshot();
         let shared_committee =
             !nexus.enabled || !proposal_lookahead_enabled(&nexus, self.context.height);
-        let canonical_recovery = canonical_v2_lane_payload_matches_kura(
-            self.state.as_ref(),
-            self.kura.as_ref(),
-            &self.context,
-            block,
-        );
         if !canonical_recovery {
             let Ok(expected) = prepare_v2_lane_payload_plan(
                 self.state.as_ref(),
@@ -5618,9 +5750,15 @@ impl V2LaneWorkAdapter {
             && descriptor.lane_block_view == 0
             && hint.proposal_height == descriptor.proposal_height
             && hint.proposal_view <= active_view
-            && self
+            && (self
                 .globally_locked_body
                 .is_none_or(|locked| hint.proposal_block_hash == locked.subject.block_hash)
+                // A directly learned higher-view Decision can legitimately
+                // differ from this validator's earlier local Prepare lock.
+                // Post-application recovery may use only the exact decided
+                // proposal proven by the canonical Kura envelope.
+                || (self.decision_pending()
+                    && self.proposal_is_bound_to_decided_carrier(proposal)))
             && self.qc_mode_tag_matches_context(
                 &descriptor.qc_mode_tag,
                 descriptor.lane_id,
@@ -9907,21 +10045,30 @@ impl V2LaneWorkAdapter {
                 continue;
             }
             let key = AutonomousLanePayloadKey::from(proposal);
-            if self
-                .pending_autonomous_anchor_payloads
-                .insert(key, payload)
-                .is_some()
-            {
-                self.output_guard.close_admission_for_restart();
-                return Err(V2LaneWorkError::InvalidContext(
-                    "durable autonomous payload index contains a duplicate current slot".to_owned(),
-                ));
+            match self.pending_autonomous_anchor_payloads.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(payload);
+                }
+                std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &payload => {
+                    // Hydration runs at construction and again at the rollover
+                    // boundary. Re-reading the exact durable payload is an
+                    // idempotent replay, not a second owner for the slot.
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {
+                    self.output_guard.close_admission_for_restart();
+                    return Err(V2LaneWorkError::InvalidContext(
+                        "durable autonomous payload index contains conflicting bytes for the current slot"
+                            .to_owned(),
+                    ));
+                }
             }
         }
         // Reconstruct a sidecar if this is the post-application crash window.
         // Normal block persistence writes ownership sidecars transactionally;
         // the exact canonical lookup covers the one interrupted current-height
-        // boundary without walking historical global blocks.
+        // boundary without walking historical global blocks. This must precede
+        // decided-body binding because canonical recovery validates mixed
+        // ordinary/autonomous carriers against these repaired ownerships.
         let _ = self
             .kura
             .canonical_lane_block_artifacts_at_proposal_height_matching(
@@ -20227,7 +20374,9 @@ pub(super) mod tests {
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
-            signers: vec![0, 1, 2],
+            signers: (0..keys.len())
+                .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
+                .collect(),
             aggregate_signature: vec![1],
         };
         let preimage = commit_qc
@@ -25785,6 +25934,14 @@ pub(super) mod tests {
             Some(&payload),
             "startup hydration must recover the exact hint-free Kura payload"
         );
+        recovered
+            .hydrate_canonical_lane_artifacts()
+            .expect("repeated hydration must accept the exact durable payload idempotently");
+        assert_eq!(
+            recovered.pending_autonomous_anchor_payloads.values().next(),
+            Some(&payload),
+            "repeated hydration must retain the exact same pending payload"
+        );
         let recovered_queue =
             install_autonomous_test_queue(&mut recovered, lane_id, dataspace_id, &journal_path);
         assert_eq!(
@@ -25848,6 +26005,227 @@ pub(super) mod tests {
         assert_eq!(payload.reservation_keys.len(), 1);
         assert_eq!(queue.live_lane_reservations().len(), 1);
         assert_eq!(queue.queued_len(), 2);
+    }
+
+    #[test]
+    fn canonical_autonomous_carrier_binds_after_direct_single_validator_decision() {
+        let (base, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+        let key = keys[0].clone();
+        let mut context = base.context.clone();
+        context.roster = vec![wire::ValidatorPower {
+            validator: PeerId::new(key.public_key().clone()),
+            power: 1,
+        }];
+        context.quorum =
+            wire::DualQuorum::from_roster(&context.roster).expect("single-validator quorum");
+        context
+            .parent_commit_qc
+            .as_mut()
+            .expect("height-two parent QC")
+            .signers = vec![0];
+        let state = Arc::clone(&base.state);
+        let kura = Arc::clone(&base.kura);
+        let limits = base.limits;
+        drop(base);
+        let mut adapter = V2LaneWorkAdapter::new(
+            context,
+            PeerId::new(key.public_key().clone()),
+            key.clone(),
+            true,
+            state,
+            kura,
+            limits,
+            None,
+        )
+        .expect("open single-validator lane adapter");
+
+        let (source_block, mut proposal) =
+            planned_lane_candidate_block_at_view(&adapter, std::slice::from_ref(&key), 0);
+        proposal.payload_block_hint = None;
+        let entrypoint = source_block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("autonomous entrypoint");
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
+            std::borrow::Cow::Owned(entrypoint.clone()),
+        );
+        let routing_plan = RoutingPlan::single(RoutingDecision::new(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+        ));
+        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            signed_transaction_hash: accepted.hash(),
+            entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"direct-decision-queue-plan-admission-binding",
+            ),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"direct-decision-reservation-owner"),
+            proposal_identity_hash: proposal.proposal_hash,
+        };
+        let producer = adapter.local_peer.clone();
+        bind_canonical_autonomous_reservation_identity(
+            &adapter,
+            &proposal,
+            &producer,
+            &mut reservation,
+        );
+        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            adapter.native_chain_id_hash(),
+            adapter.context.epoch,
+            proposal.clone(),
+            vec![entrypoint],
+            vec![reservation],
+            vec![routing_plan],
+            vec![None],
+            producer.clone(),
+            key.private_key(),
+        )
+        .expect("signed hint-free autonomous payload");
+        adapter
+            .kura
+            .persist_lane_executable_payload(
+                &payload,
+                adapter.native_chain_id_hash(),
+                adapter.context.epoch,
+            )
+            .expect("persist producer payload before carrier selection");
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneExecutablePayload(payload.clone()),
+                    Some(producer),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Inserted
+        );
+
+        let envelope = autonomous_lane_payload_envelope(
+            &payload,
+            adapter.native_chain_id_hash(),
+            adapter.context.epoch,
+        )
+        .expect("encode autonomous carrier envelope");
+        let header = BlockHeader::new(
+            NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+            adapter
+                .context
+                .parent_commit_qc
+                .as_ref()
+                .map(|qc| qc.subject.block_hash),
+            None,
+            None,
+            adapter.context.height,
+            0,
+        );
+        let mut builder = BlockBuilder::new(header);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(Vec::new())
+                .with_autonomous_lane_payloads(vec![envelope]),
+        ));
+        let carrier = builder.build_with_signature(0, key.private_key());
+        adapter
+            .kura
+            .store_block(carrier.clone())
+            .expect("persist canonical autonomous carrier");
+        let (locked_round, decided) = global_lock_for_block(&adapter, &carrier);
+        let finality =
+            verified_finality_artifact_for_block(&adapter, std::slice::from_ref(&key), &carrier);
+        let receipt = KuraV2CommitReceipt::for_test(&finality);
+        let stale_lock = wire::BlockSubject {
+            parent_block_hash: decided.parent_block_hash,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"stale-single-validator-local-lock",
+            )),
+            payload_hash: Hash::new(b"stale-single-validator-local-lock-payload"),
+        };
+        assert_eq!(
+            adapter.mark_global_body_locked(locked_round, stale_lock),
+            Ok(GlobalBodyLockOutcome::Inserted)
+        );
+        // Model the runner race exactly: Decision is published before another
+        // local proposal-scheduling turn can consume the worker's body load,
+        // and it supersedes this validator's different local Prepare lock.
+        adapter
+            .retain_merge_sidecars_for_global_view(
+                locked_round.view,
+                Some(stale_lock),
+                Some(decided),
+            )
+            .expect("install direct same-view Decision");
+        assert_eq!(
+            adapter.globally_locked_body.map(|lock| lock.subject),
+            Some(stale_lock)
+        );
+        let committed = ValidBlock::committed_from_replay_signed_block(carrier);
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        assert!(
+            adapter
+                .kura
+                .read_lane_block_execution_input(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_none(),
+            "Decision arrived before the live locked-body binding path"
+        );
+
+        assert_ne!(
+            adapter
+                .recover_decided_canonical_lane_body(&receipt, &finality)
+                .expect("recover exact receipt-authorized canonical carrier"),
+            V2LaneIngressOutcome::Rejected
+        );
+        assert!(
+            adapter
+                .kura
+                .read_lane_block_execution_input(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_some(),
+            "receipt-bound recovery must persist execution input before READY"
+        );
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("bind canonical carrier and finish 1-of-1 lane consensus"),
+            1
+        );
+        assert!(
+            adapter
+                .kura
+                .read_lane_block_execution_input(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                )
+                .is_some(),
+            "canonical fallback must persist execution input before READY"
+        );
+        let durable = adapter
+            .kura
+            .read_certified_lane_block_artifact(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .expect("1-of-1 READY and Commit votes produce a durable certificate");
+        assert!(durable.prepare_qc.payload_availability_qc.is_some());
+        assert!(
+            adapter
+                .durable_lane_rollover_authority(&finality)
+                .expect("validate single-validator lane rollover")
+                .is_some(),
+            "durable 1-of-1 availability and Commit certificates release rollover"
+        );
     }
 
     #[test]

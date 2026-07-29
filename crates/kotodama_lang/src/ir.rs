@@ -5513,13 +5513,52 @@ fn lower_surface_builtin_call(
         | Builtin::NumericLeDirect
         | Builtin::NumericGtDirect
         | Builtin::NumericGeDirect
-        | Builtin::SetAssetTransferFreeze
         | Builtin::SetAssetTransferDailyLimit
+        | Builtin::SetAssetHoldingLimit
         | Builtin::AccountRecoveryPropose
         | Builtin::AccountRecoveryApprove
         | Builtin::AccountRecoveryCancel
         | Builtin::AccountRecoveryFinalize
         | Builtin::ContractSubject => lower_direct_helper_call(ctx, builtin, args, vars),
+        Builtin::SetAssetTransferAvailability => {
+            let account = lower_expr(ctx, &args[0], vars);
+            let asset_definition = lower_expr(ctx, &args[1], vars);
+            let expected_revision = lower_expr_as_u64(ctx, &args[2], vars);
+            let incoming = lower_expr(ctx, &args[3], vars);
+            let outgoing = lower_expr(ctx, &args[4], vars);
+            let reason = lower_expr(ctx, &args[5], vars);
+
+            // ABI v1 exposes only r10..r14. Keep the source-level API explicit while
+            // packing the two booleans into one physical flags word.
+            let two = emit_i64_const(ctx, 2);
+            let outgoing_bit = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: outgoing_bit,
+                op: BinaryOp::Mul,
+                left: outgoing,
+                right: two,
+            });
+            let availability_flags = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: availability_flags,
+                op: BinaryOp::Add,
+                left: incoming,
+                right: outgoing_bit,
+            });
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::DirectHelperSyscall {
+                dest,
+                syscall: ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
+                args: vec![
+                    account,
+                    asset_definition,
+                    expected_revision,
+                    availability_flags,
+                    reason,
+                ],
+            });
+            dest
+        }
         Builtin::SchemaEncode => {
             let schema = lower_expr(ctx, &args[0], vars);
             let json = lower_expr(ctx, &args[1], vars);

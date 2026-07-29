@@ -8,6 +8,7 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermission
 import java.security.MessageDigest
+import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -240,6 +241,26 @@ val artifactFiles = listOf(
     "step-ep.verifying-key.krv4",
     "step-ep.bootstrap-witness.krv4",
 )
+val maxCandidateLabApkBytes = 64L * 1024 * 1024
+
+fun File.requireSmallArtifactFreeApk(label: String): File {
+    requireRegularFile(label)
+    if (length() <= 0L || length() > maxCandidateLabApkBytes) {
+        throw GradleException("$label must remain within the 64 MiB installation corridor: $this")
+    }
+    ZipFile(this).use { archive ->
+        val entries = archive.entries()
+        while (entries.hasMoreElements()) {
+            val name = entries.nextElement().name
+            val baseName = name.substringAfterLast('/').substringAfterLast('\\')
+            if (baseName in artifactFiles) {
+                throw GradleException("$label embeds forbidden external KRV4 artifact $name")
+            }
+        }
+    }
+    return this
+}
+
 val scenarioFiles = listOf(
     "init-top-up-anchor-v4.norito",
     "init-top-up-finality-proof-v2.norito",
@@ -444,10 +465,6 @@ val prepareCandidateLabAssets by tasks.registering(Sync::class) {
             "candidate-validation-v1.json",
         )
     }
-    from(evidenceRoot.resolve("evidence/candidate/artifacts")) {
-        into("artifacts")
-        include(artifactFiles)
-    }
     from(evidenceRoot.resolve("scenario")) {
         into("scenario")
         include(scenarioFiles)
@@ -548,6 +565,10 @@ androidComponents {
             include("*.apk")
             into(evidenceRoot.resolve("evidence"))
             rename { stagedApkName }
+            doLast {
+                evidenceRoot.resolve("evidence/$stagedApkName")
+                    .requireSmallArtifactFreeApk("candidate lab main APK")
+            }
         }
     }
 }
@@ -570,6 +591,10 @@ tasks.register<Copy>("stageCandidateLabTestApk") {
                 "expected exactly one debug androidTest APK, found ${testApks.size}",
             )
         }
+    }
+    doLast {
+        evidenceRoot.resolve("evidence/$stagedTestApkName")
+            .requireSmallArtifactFreeApk("candidate lab androidTest APK")
     }
 }
 

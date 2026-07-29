@@ -1613,6 +1613,7 @@ pub struct IVM {
     cycles: u64,
     halted: bool,
     constraint_failed: bool,
+    contract_abort_code: Option<u64>,
     constraints: zk::ConstraintLog,
     mem_log: MemLog,
     reg_log: zk::RegLog,
@@ -1713,6 +1714,7 @@ impl Clone for IVM {
             cycles: self.cycles,
             halted: self.halted,
             constraint_failed: self.constraint_failed,
+            contract_abort_code: self.contract_abort_code,
             constraints: self.constraints.clone(),
             mem_log: self.mem_log.clone(),
             reg_log: self.reg_log.clone(),
@@ -2046,6 +2048,7 @@ impl IVM {
             cycles: 0,
             halted: false,
             constraint_failed: false,
+            contract_abort_code: None,
             constraints: zk::ConstraintLog::default(),
             mem_log: MemLog::default(),
             reg_log: zk::RegLog::default(),
@@ -2982,6 +2985,7 @@ impl IVM {
         self.pc_alignment = self.pc & 0b11;
         self.halted = false;
         self.constraint_failed = false;
+        self.contract_abort_code = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
         self.reg_log = zk::RegLog::default();
@@ -3138,6 +3142,7 @@ impl IVM {
             VMError::NumericFault(_) => VmTrapKind::NumericFault,
             VMError::PointerAbiFault(_) => VmTrapKind::PointerAbiFault,
             VMError::AssertionFailed => VmTrapKind::AssertionFailed,
+            VMError::ContractAbort { .. } => VmTrapKind::ContractAbort,
             VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
             VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
             VMError::UnsupportedProgramVersion { .. } => VmTrapKind::UnsupportedProgramVersion,
@@ -4178,6 +4183,7 @@ impl IVM {
         self.cycles = 0;
         self.halted = false;
         self.constraint_failed = false;
+        self.contract_abort_code = None;
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
         self.reg_log = zk::RegLog::default();
@@ -4315,6 +4321,14 @@ impl IVM {
     pub fn request_abort(&mut self) {
         self.halted = true;
         self.constraint_failed = true;
+        self.contract_abort_code = None;
+    }
+
+    /// Request an application-level abort with a declared contract error code.
+    pub fn request_contract_abort(&mut self, code: u64) {
+        self.halted = true;
+        self.constraint_failed = true;
+        self.contract_abort_code = Some(code);
     }
 
     /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
@@ -5065,6 +5079,7 @@ impl IVM {
         self.last_diagnostic = None;
         self.halted = false;
         self.constraint_failed = false;
+        self.contract_abort_code = None;
         self.cycles = 0;
         // A run is one invocation. Never retain protected return state after a
         // prior trap or across a pooled-runtime reuse boundary.
@@ -7249,7 +7264,9 @@ impl IVM {
                 self.flush_cycle_logs(&mut last_logged_cycle);
             }
             self.commit_memory_after_run_if_needed();
-            if self.constraint_failed {
+            if let Some(code) = self.contract_abort_code {
+                Err(VMError::ContractAbort { code })
+            } else if self.constraint_failed {
                 Err(VMError::AssertionFailed)
             } else {
                 Ok(())
@@ -8683,6 +8700,18 @@ mod tests {
                 "privacy output boundary disagrees with the ABI signature for syscall {number:#x}"
             );
         }
+    }
+
+    #[test]
+    fn transfer_availability_syscall_stays_inside_the_abi_v1_public_window() {
+        let inputs = syscall_public_input_registers(
+            crate::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
+        );
+        assert_eq!(inputs, &[10, 11, 12, 13, 14]);
+        assert!(
+            inputs.iter().all(|register| (10..=14).contains(register)),
+            "availability syscall must never consume private or reserved r15"
+        );
     }
 
     #[test]
@@ -10148,5 +10177,18 @@ seiyaku Demo {
         assert_eq!(vm.pc(), literal_pc);
         assert_eq!(vm.register(31), vm.memory.stack_top());
         assert!(vm.prepared_contains_pc(literal_pc));
+    }
+
+    #[test]
+    fn generic_abort_cannot_inherit_a_contract_error_code() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_register(10, 18);
+
+        vm.request_abort();
+        assert_eq!(vm.contract_abort_code, None);
+
+        vm.request_contract_abort(18);
+        assert_eq!(vm.contract_abort_code, Some(18));
     }
 }

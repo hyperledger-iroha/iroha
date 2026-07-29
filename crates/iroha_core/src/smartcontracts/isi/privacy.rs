@@ -169,11 +169,12 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         | PrivacyVerificationErrorV1::NativeVeRange(_)
         | PrivacyVerificationErrorV1::NativeVega(_)
         | PrivacyVerificationErrorV1::NativeJindo(_)
-        | PrivacyVerificationErrorV1::NativeZkAce(_)
         | PrivacyVerificationErrorV1::NativeZkAms(_)
         | PrivacyVerificationErrorV1::NativeOrchard(_)
         | PrivacyVerificationErrorV1::NativeAnonymousPgc(_)
         | PrivacyVerificationErrorV1::NativeBootleLantern(_) => false,
+        #[cfg(feature = "zk-stark")]
+        PrivacyVerificationErrorV1::NativeZkAce(_) => false,
     };
     if invariant {
         Error::InvariantViolation(message.into())

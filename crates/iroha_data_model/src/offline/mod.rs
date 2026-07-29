@@ -388,7 +388,7 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4: u32 = 16;
 pub const KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4: u32 = 16;
 /// Minimum unusable-row reservation required by the Halo2 base circuit.
 pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
-/// Exact supported challenge-phase vector length.
+/// Exact supported advice challenge-phase vector length.
 ///
 /// The compact V5 Kagemusha profile has no challenge-dependent witness work. Admitting empty
 /// second/third advice phases makes Halo2 re-synthesise the phase-zero circuit
@@ -397,11 +397,15 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
 /// constrained instead of reserving speculative future phases.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
-pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 256;
+pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 360;
 /// Reviewed first-release advice-column profile for compact degree-16 generation.
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [8];
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [360];
 /// Reviewed first-release lookup-column profile for compact degree-16 generation.
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 1] = [1];
+///
+/// `BaseCircuitBuilder` reports the two unused challenge phases explicitly as
+/// zero-width suffixes even though the authenticated advice profile has only
+/// the populated phase-zero entry.
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [37, 0, 0];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:step-circuit-params:compact-v5";
@@ -419,11 +423,22 @@ pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
 /// Public selector required by every ordinary live V4 Step proof.
 pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 /// Absolute defensive ceiling for one measured V4 Step proof transcript.
-pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 8 * 1024;
+///
+/// The 128 KiB bound leaves substantial headroom for the reviewed compact
+/// profile while still rejecting unbounded or profile-incompatible proof
+/// payloads. Release promotion separately pins the candidate's measured size.
+pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 128 * 1024;
 /// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 21_764;
+///
+/// The canonical pair owns a separate 256 KiB bound. Release promotion
+/// separately pins the candidate's measured Eq/Ep pair size beneath it.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 256 * 1024;
 /// Maximum processed proving-key payload admitted by the compact V5 profile.
-pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 96 * 1024 * 1024;
+///
+/// The first-release circuit includes five authenticated Table16 SHA lanes.
+/// Its processed key is intentionally file-backed and is bounded independently
+/// from the much smaller decoded verifier-resident budget.
+pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 4 * 1024 * 1024 * 1024;
 /// Maximum serialized `ParamsIPA` payload admitted by the compact V5 profile.
 pub const KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5: u64 = 8 * 1024 * 1024;
 /// Exact cryptographic profile embedded inside the ABI-21/V4 lifecycle.
@@ -468,7 +483,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4: u16 = 4;
 /// Defensive upper bound for the canonical Norito header preceding a V4 payload.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4: u32 = 64 * 1024;
 /// Maximum size of any one V4 content-addressed artifact file.
-pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 256 * 1024 * 1024;
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 4 * 1024 * 1024 * 1024;
 /// Canonical Eq `ParamsIPA` package file name for V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4: &str =
     "step-eq.params-ipa.krv4";
@@ -1625,7 +1640,10 @@ mod model {
     #[norito(deny_unknown_fields)]
     pub struct KagemushaReviewedSourceClosureManifestEntryV1 {
         /// SHA-256 of the exact regular-file bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub blob_sha256: [u8; 32],
         /// Canonical lowercase SHA-1 Git blob object id of the same bytes.
         pub git_blob_oid: String,
@@ -1638,6 +1656,9 @@ mod model {
     }
 
     /// Canonical independently reviewed dirty source closure for one candidate.
+    ///
+    /// Its JSON representation matches the reviewed descriptor: SHA-256 fields,
+    /// including those in untracked-file entries, are lowercase hex strings.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1654,10 +1675,16 @@ mod model {
         /// Derived dirty state; first release requires `true`.
         pub source_repo_dirty: bool,
         /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub source_tree_sha256: [u8; 32],
         /// SHA-256 of the canonical full-index binary Git diff from `source_commit`.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub tracked_binary_diff_sha256: [u8; 32],
         /// Exact number of raw-byte-sorted untracked manifest entries.
         pub untracked_file_count: u64,
@@ -1665,15 +1692,24 @@ mod model {
         pub untracked_path_mode_blob_oid_manifest:
             Vec<KagemushaReviewedSourceClosureManifestEntryV1>,
         /// SHA-256 of each entry's canonical compact sorted-key JSON plus LF.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
         /// Exact ignored root `Cargo.lock` byte length.
         pub ignored_cargo_lock_size_bytes: u64,
         /// SHA-256 of the exact ignored root `Cargo.lock` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub ignored_cargo_lock_sha256: [u8; 32],
         /// Cross-repository tracked-diff/untracked-manifest fingerprint.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub combined_source_fingerprint_sha256: [u8; 32],
     }
 
@@ -4903,12 +4939,10 @@ impl KagemushaStepCircuitParamsV4 {
                 .contains(&self.k)
             || phase_count != 1
             || phase_count > KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4
-            || phase_count != self.num_lookup_advice_per_phase.len()
-            || self.num_advice_per_phase.iter().any(|count| *count != 8)
-            || self
-                .num_lookup_advice_per_phase
-                .iter()
-                .any(|count| *count != 1)
+            || self.num_advice_per_phase.as_slice()
+                != KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4
+            || self.num_lookup_advice_per_phase.as_slice()
+                != KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4
             || self.num_fixed != 1
             || self.lookup_bits != self.k - 1
             || self.num_instance_columns != 1
@@ -7185,6 +7219,25 @@ mod kagemusha_v4_artifact_contract_tests {
         }
     }
 
+    #[test]
+    fn reviewed_source_closure_json_matches_canonical_hex_descriptor() {
+        let closure = reviewed_source_closure();
+        let json = norito::json::to_json(&closure).expect("serialize reviewed source closure JSON");
+
+        assert!(json.contains(&format!(
+            "\"source_tree_sha256\":\"{}\"",
+            hex::encode(closure.source_tree_sha256)
+        )));
+        assert!(json.contains(&format!(
+            "\"blob_sha256\":\"{}\"",
+            hex::encode(closure.untracked_path_mode_blob_oid_manifest[0].blob_sha256)
+        )));
+
+        let decoded: KagemushaReviewedSourceClosureV1 =
+            norito::json::from_str(&json).expect("decode canonical hex descriptor JSON");
+        assert_eq!(decoded, closure);
+    }
+
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
         let layout =
@@ -7192,8 +7245,8 @@ mod kagemusha_v4_artifact_contract_tests {
         KagemushaStepCircuitParamsV4 {
             version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![8],
-            num_lookup_advice_per_phase: vec![1],
+            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,

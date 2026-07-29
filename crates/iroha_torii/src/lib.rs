@@ -225,6 +225,8 @@ use iroha_config::{
         defaults,
     },
 };
+#[cfg(feature = "app_api")]
+use iroha_core::state::StateBlock;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::Telemetry;
 use iroha_core::{
@@ -12855,13 +12857,8 @@ pub fn ensure_mandatory_offline_startup_readiness(
     if !offline_config.enabled {
         return Ok(());
     }
-    let command_config = command_config
-        .cloned()
-        .ok_or_else(|| "torii.kagemusha_commands is mandatory for offline cash".to_owned())?;
-    let issuer = offline_commands::OfflineCommandRuntime::from_config(command_config);
 
     let state_view = state.view();
-    let world = state_view.world();
     let evaluated_block = state_view
         .latest_block()
         .ok_or_else(|| "offline readiness requires a committed block".to_owned())?;
@@ -12872,9 +12869,97 @@ pub fn ensure_mandatory_offline_startup_readiness(
         return Err("offline readiness requires a non-zero committed height".to_owned());
     }
 
+    ensure_mandatory_offline_readiness_snapshot(
+        state_view.world(),
+        &state_view.kagemusha_release_catalog,
+        &state_view.settlement.offline.escrow_accounts,
+        chain_id,
+        offline_config,
+        command_config,
+        fee_asset_selector,
+        block_height,
+        evaluated_at_ms,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn mandatory_offline_staged_genesis_evaluation_height(genesis_height: u64) -> Result<u64, String> {
+    if genesis_height != 1 {
+        return Err(format!(
+            "staged offline readiness requires height-one genesis, got height {genesis_height}"
+        ));
+    }
+    genesis_height
+        .checked_add(1)
+        .ok_or_else(|| "staged offline readiness height overflowed".to_owned())
+}
+
+#[cfg(feature = "app_api")]
+/// Validate scheduled mandatory offline cash against the executed genesis overlay.
+///
+/// Fresh nodes execute genesis before consensus but deliberately discard that
+/// [`StateBlock`] until a commit certificate exists. This gate must therefore
+/// inspect the overlay while it is still alive instead of consulting the empty
+/// committed [`CoreState`]. Kagemusha activation instructions must schedule
+/// releases strictly after their executing block, so the complete invariant is
+/// evaluated at height two while public readiness remains tied to committed
+/// height and stays false after height-one genesis.
+///
+/// # Errors
+///
+/// Returns an error when the supplied block is not height-one genesis or any
+/// mandatory offline dependency is absent from its staged world state.
+pub fn ensure_mandatory_offline_staged_genesis_readiness(
+    state_block: &StateBlock<'_>,
+    genesis_header: BlockHeader,
+    chain_id: &ChainId,
+    offline_config: &iroha_config::parameters::actual::Offline,
+    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+    fee_asset_selector: &str,
+) -> Result<(), String> {
+    ensure_mandatory_offline_configuration_for_chain(chain_id, offline_config, command_config)?;
+    if !offline_config.enabled {
+        return Ok(());
+    }
+    let block_height =
+        mandatory_offline_staged_genesis_evaluation_height(genesis_header.height().get())?;
+    let evaluated_at_ms =
+        u64::try_from(genesis_header.creation_time().as_millis()).unwrap_or(u64::MAX);
+
+    ensure_mandatory_offline_readiness_snapshot(
+        state_block.world(),
+        &state_block.kagemusha_release_catalog,
+        &state_block.settlement.offline.escrow_accounts,
+        chain_id,
+        offline_config,
+        command_config,
+        fee_asset_selector,
+        block_height,
+        evaluated_at_ms,
+    )
+}
+
+#[cfg(feature = "app_api")]
+#[allow(clippy::too_many_arguments)]
+fn ensure_mandatory_offline_readiness_snapshot(
+    world: &impl WorldReadOnly,
+    kagemusha_release_catalog: &iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+    state_escrow_accounts: &BTreeMap<AssetDefinitionId, AccountId>,
+    chain_id: &ChainId,
+    offline_config: &iroha_config::parameters::actual::Offline,
+    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+    fee_asset_selector: &str,
+    block_height: u64,
+    evaluated_at_ms: u64,
+) -> Result<(), String> {
+    let command_config = command_config
+        .cloned()
+        .ok_or_else(|| "torii.kagemusha_commands is mandatory for offline cash".to_owned())?;
+    let issuer = offline_commands::OfflineCommandRuntime::from_config(command_config);
+
     iroha_core::smartcontracts::isi::offline::ensure_kagemusha_active_release_material_v4(
         world,
-        &state_view.kagemusha_release_catalog,
+        kagemusha_release_catalog,
         block_height,
     )?;
     iroha_core::smartcontracts::isi::offline::isi::ensure_offline_device_attestation_policy_ready_v1(
@@ -12891,15 +12976,15 @@ pub fn ensure_mandatory_offline_startup_readiness(
 
     // `State::settlement` is process-local and intentionally absent from WSV
     // snapshots, while `offline.enabled` metadata and its escrow account are
-    // committed world state. Re-derive those bindings from the fully replayed
-    // world so snapshot startup gates the complete catalog. Conversely, an
-    // operator-provided binding must not be silently replaced: that would make
-    // the startup report validate a different reserve account than the operator
-    // reviewed.
+    // world state. Re-derive those bindings from the selected startup view so
+    // both staged genesis and replayed startup gate the complete catalog.
+    // Conversely, an operator-provided binding must not be silently replaced:
+    // that would make the startup report validate a different reserve account
+    // than the operator reviewed.
     let metadata_derived = mandatory_offline_metadata_escrow_bindings(world, chain_id)?;
     let escrow_bindings = mandatory_offline_escrow_bindings_after_replay(
         &offline_config.escrow_accounts,
-        &state_view.settlement.offline.escrow_accounts,
+        state_escrow_accounts,
         &metadata_derived,
     )?;
     for (asset_definition_id, escrow_account_id) in &escrow_bindings {
@@ -12949,7 +13034,7 @@ pub fn ensure_mandatory_offline_startup_readiness(
         .map_err(|error| format!("offline unshield verifier is invalid: {error:?}"))?;
         let recursive = iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_readiness_v4(
             world,
-            &state_view.kagemusha_release_catalog,
+            kagemusha_release_catalog,
             chain_id,
             asset_definition_id,
             scale,
@@ -13431,15 +13516,27 @@ async fn handler_offline_recipient_lineage(
 
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU64, NonZeroUsize},
+    };
 
-    use iroha_data_model::{ChainId, asset::AssetDefinitionId};
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        ChainId,
+        asset::AssetDefinitionId,
+        block::BlockHeader,
+        prelude::{AccountId, Quantity},
+    };
 
     use super::{
         PUBLIC_TAIRA_CHAIN_ID, encode_offline_readiness_representation,
         ensure_mandatory_offline_configuration, ensure_mandatory_offline_configuration_for_chain,
+        ensure_mandatory_offline_staged_genesis_readiness,
+        ensure_mandatory_offline_startup_readiness,
         ensure_offline_readiness_verifier_roles_are_distinct,
         mandatory_offline_escrow_bindings_after_replay, mandatory_offline_probe_status,
+        mandatory_offline_staged_genesis_evaluation_height,
         offline_kagemusha_asset_transfer_verifier_record,
         offline_kagemusha_readiness_capability_flags, offline_kagemusha_readiness_verifier_record,
         offline_kagemusha_recursive_v4_evaluation_from_resolution, offline_readiness_blocker,
@@ -13647,6 +13744,85 @@ mod offline_kagemusha_readiness_tests {
         assert!(
             error.contains("Kura replay selected"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn staged_genesis_and_restart_use_one_complete_offline_validator() {
+        assert_eq!(
+            mandatory_offline_staged_genesis_evaluation_height(1)
+                .expect("height-one genesis has an eligible successor"),
+            2,
+            "the activation ISI is future-only, so staged readiness must evaluate height two",
+        );
+        assert!(
+            mandatory_offline_staged_genesis_evaluation_height(2).is_err(),
+            "the staged path must never relabel a later block as genesis",
+        );
+
+        let chain_id = ChainId::from("chain");
+        let app = super::mk_app_state_for_tests();
+        let asset_definition_id = AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("offline", "universal")
+                .expect("fixture asset domain"),
+            "cash".parse().expect("fixture asset name"),
+        );
+        let mut offline = iroha_config::parameters::actual::Offline::default();
+        offline
+            .escrow_accounts
+            .insert(asset_definition_id, iroha_test_samples::ALICE_ID.clone());
+        offline.kagemusha_release_policy_path = Some("release-policy.norito".into());
+        offline.kagemusha_artifact_dir = Some("release-artifacts".into());
+
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).expect("fixture key");
+        let command_config = iroha_config::parameters::actual::ToriiKagemushaCommands {
+            authority: AccountId::new(key_pair.public_key().clone()),
+            key_pair,
+            minimum_xor_balance: Quantity::from(1_u32),
+            max_tx_value: Quantity::from(1_u32),
+            operation_registry_max_entries: NonZeroUsize::new(1).expect("non-zero entries"),
+            operation_registry_max_bytes: NonZeroUsize::new(
+                iroha_config::parameters::defaults::torii::kagemusha_commands::
+                    OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY,
+            )
+            .expect("non-zero bytes"),
+        };
+
+        let restart_error = ensure_mandatory_offline_startup_readiness(
+            app.state.as_ref(),
+            &chain_id,
+            &offline,
+            Some(&command_config),
+            "xor#sora",
+        )
+        .expect_err("an empty replayed state has no committed observation");
+        assert_eq!(
+            restart_error,
+            "offline readiness requires a committed block"
+        );
+
+        let genesis_header = BlockHeader::new(
+            NonZeroU64::new(1).expect("height one"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let state_block = app.state.block(genesis_header);
+        let staged_error = ensure_mandatory_offline_staged_genesis_readiness(
+            &state_block,
+            genesis_header,
+            &chain_id,
+            &offline,
+            Some(&command_config),
+            "xor#sora",
+        )
+        .expect_err("the staged view must reach the complete offline validator");
+        assert_eq!(
+            staged_error,
+            "no active authenticated ABI-21/V4 Kagemusha Eq/Ep release is installed"
         );
     }
 
@@ -84821,6 +84997,7 @@ impl Error {
         match validation_error {
             NotPermitted(_) => StatusCode::FORBIDDEN,
             IvmAdmission(_) => StatusCode::BAD_REQUEST,
+            ContractRejected(_) => StatusCode::UNPROCESSABLE_ENTITY,
             AxtReject(_) => StatusCode::BAD_REQUEST,
             QueryFailed(query_error)
             | InstructionFailed(InstructionExecutionError::Query(query_error)) => match query_error
@@ -95931,6 +96108,21 @@ mod tests {
         assert_eq!(
             Error::FailedExit.status_code(),
             StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn contract_rejection_maps_to_unprocessable_entity() {
+        let rejection = iroha_data_model::executor::ContractRejection {
+            contract: "BoiFiLiquidity".to_owned(),
+            namespace: "FiLiquidityError".to_owned(),
+            name: "BelowMinimum".to_owned(),
+            code: 18,
+        };
+
+        assert_eq!(
+            Error::Query(ValidationFail::ContractRejected(rejection)).status_code(),
+            StatusCode::UNPROCESSABLE_ENTITY
         );
     }
 }

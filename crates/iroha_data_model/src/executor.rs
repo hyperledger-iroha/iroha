@@ -10,10 +10,11 @@ use iroha_schema::Ident;
 pub use self::model::*;
 #[cfg(not(any(feature = "transparent_api", feature = "ffi_import")))]
 pub use self::model::{
-    ArtifactAbiHashMismatchInfo, DecodedCodeSizeLimitInfo, DecodedInstructionLimitInfo, Executor,
-    ExecutorDataModel, IvmAdmissionError, ManifestAbiHashMismatchInfo,
-    ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo, MaxCyclesExceedsUpperBoundInfo,
-    UnsupportedVersionInfo, ValidationFail, VectorLengthTooLargeInfo,
+    ArtifactAbiHashMismatchInfo, ContractRejection, DecodedCodeSizeLimitInfo,
+    DecodedInstructionLimitInfo, Executor, ExecutorDataModel, IvmAdmissionError,
+    ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo,
+    MaxCyclesExceedsUpperBoundInfo, UnsupportedVersionInfo, ValidationFail,
+    VectorLengthTooLargeInfo,
 };
 use crate::transaction::executable::IvmBytecode;
 
@@ -135,6 +136,8 @@ mod model {
         IvmAdmission(IvmAdmissionError),
         /// Instruction execution failed
         InstructionFailed(#[source] isi::error::InstructionExecutionError),
+        /// Contract rejected the operation: {0}
+        ContractRejected(ContractRejection),
         /// Query execution failed
         QueryFailed(#[source] query::error::QueryExecutionFail),
         /// Atomic cross-transaction policy rejected the request.
@@ -158,6 +161,36 @@ mod model {
             #[skip_try_from]
             String,
         ),
+    }
+
+    /// Manifest-authenticated application error returned by a contract.
+    #[derive(
+        Debug,
+        derive_more::Display,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+    )]
+    #[display("Contract {contract} rejected with {namespace}::{name} ({code})")]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct ContractRejection {
+        /// Canonical source-level contract identity embedded in the artifact.
+        pub contract: String,
+        /// Declared error enum namespace.
+        pub namespace: String,
+        /// Declared variant name.
+        pub name: String,
+        /// Explicit stable non-zero application error code.
+        pub code: u32,
     }
 
     /// Structured reasons for IVM admission/static validation failure.

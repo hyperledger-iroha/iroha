@@ -1454,6 +1454,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             scheduler_min_threads: 0,
             scheduler_max_threads: 0,
             rayon_global_threads: 0,
+            tokio_stack_bytes: defaults::concurrency::TOKIO_STACK_BYTES,
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
             sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,

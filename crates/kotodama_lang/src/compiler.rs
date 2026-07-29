@@ -7439,12 +7439,15 @@ fn main() { let _chain = context::chain_id(1); }
             .compile_source(
                 r#"
 seiyaku CompilerFixture {
-kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> cap, quantity replacement_cap, string alias, AccountId replacement) authorize("ControlAdmin") {
+kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> cap, quantity replacement_cap, string alias, AccountId replacement, Option<string> reason) authorize("ControlAdmin") {
   let Option<quantity> no_cap = Option::none;
-  ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: true);
+  ledger::asset::set_transfer_availability(account: account, asset_definition: asset, expected_revision: 0, incoming: false, outgoing: false, reason: reason);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::some(replacement_cap));
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: no_cap);
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: cap);
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: Option::some(replacement_cap));
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: no_cap);
   ledger::account::recovery::propose(alias: alias, replacement: replacement);
   ledger::account::recovery::approve(alias: alias);
   ledger::account::recovery::cancel(alias: alias);
@@ -7458,12 +7461,16 @@ kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> ca
         let code = &bytes[parsed.code_offset..];
         for (syscall, label) in [
             (
-                ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE,
-                "SET_ASSET_TRANSFER_FREEZE",
+                ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
+                "SET_ASSET_TRANSFER_AVAILABILITY",
             ),
             (
                 ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
                 "SET_ASSET_TRANSFER_DAILY_LIMIT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT,
+                "SET_ASSET_HOLDING_LIMIT",
             ),
             (
                 ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
@@ -7497,11 +7504,11 @@ kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> ca
                 r#"
 seiyaku CompilerFixture {
 fn apply(AccountId account, AssetDefinitionId asset) {
-  ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: 1);
+  ledger::asset::set_transfer_availability(account: account, asset_definition: asset, expected_revision: 0, incoming: true, outgoing: 1, reason: Option::some("operator review"));
 }
 }
 "#,
-                "ledger::asset::set_transfer_freeze expects (AccountId, AssetDefinitionId, bool)",
+                "ledger::asset::set_transfer_availability expects (AccountId, AssetDefinitionId, int, bool, bool, Option<string>)",
             ),
             (
                 r#"
@@ -7512,6 +7519,16 @@ fn apply(AccountId account, AssetDefinitionId asset) {
 }
 "#,
                 "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: true);
+}
+}
+"#,
+                "ledger::asset::set_holding_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
             ),
             (
                 r#"
@@ -7850,7 +7867,7 @@ view fn account() -> AccountId { return AccountId::parse("merchant"); }
     }
 
     #[test]
-    fn require_exports_stable_error_code_and_uses_abort_syscall() {
+    fn require_exports_stable_error_code_and_uses_contract_abort_syscall() {
         let src = r#"
 seiyaku Test {
   error enum PaymentError {
@@ -7896,7 +7913,7 @@ seiyaku Test {
             let op = instruction::wide::opcode(word);
             if op == instruction::wide::system::SCALL {
                 let (_op, imm8) = encoding::wide::decode_sys(word);
-                if imm8 == crate::syscalls::SYSCALL_ABORT as u8 {
+                if imm8 == crate::syscalls::SYSCALL_CONTRACT_ABORT as u8 {
                     found_abort = true;
                 }
             }
@@ -7904,7 +7921,10 @@ seiyaku Test {
                 found_zk_assert = true;
             }
         }
-        assert!(found_abort, "expected ABORT syscall in compiled require");
+        assert!(
+            found_abort,
+            "expected CONTRACT_ABORT syscall in compiled require"
+        );
         assert!(
             !found_zk_assert,
             "require should not emit ZK ASSERT/ASSERT_EQ opcodes"
@@ -16879,7 +16899,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(10, error_code, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_ABORT as u8,
+                                syscalls::SYSCALL_CONTRACT_ABORT as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }

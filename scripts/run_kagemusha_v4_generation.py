@@ -11,7 +11,6 @@ import math
 import os
 from pathlib import Path
 import secrets
-import shutil
 import signal
 import stat
 import subprocess
@@ -34,8 +33,13 @@ from scripts.kagemusha_staged_resource_guard import (
 )
 
 
-ABSOLUTE_MAX_MEMORY_BYTES = 256 * 1024 * 1024
-SAMPLE_INTERVAL_SECONDS = 0.05
+ABSOLUTE_MAX_MEMORY_BYTES = 16 * 1024 * 1024 * 1024
+# Every resource sample includes a full-host process inventory so the guard can
+# reject a concurrently started unowned heavy job. Sampling that inventory at
+# 20 Hz can spend most of a busy macOS host's time starting and reaping `ps`,
+# delaying the guarded executable itself. Match the formal guard's bounded
+# 4 Hz cadence; the kernel peak-RSS check remains an independent final gate.
+SAMPLE_INTERVAL_SECONDS = 0.25
 BYTES_PER_GIB = 1024 * 1024 * 1024
 LOCK_PATH = Path("/tmp") / f"iroha-kagemusha-v4-{os.getuid()}.lock"
 STAGING_ID_OPTION = "--staging-id"
@@ -50,7 +54,7 @@ JOURNAL_SCHEMA = "iroha.kagemusha.candidate_guard_journal.v1"
 MAX_JOURNAL_BYTES = 4096
 MAX_RECOVERABLE_JOURNALS = 64
 CANDIDATE_SESSION_WRAPPER_FLAG = "--kagemusha-candidate-session-wrapper"
-MINIMUM_OUTPUT_FREE_BYTES = 512 * 1024 * 1024
+MINIMUM_OUTPUT_FREE_BYTES = 16 * 1024 * 1024 * 1024
 DISK_BACKED_OUTPUT_FILESYSTEM_TYPES = frozenset(
     {
         "apfs",
@@ -447,6 +451,94 @@ def _execution_copy_name(staging_id: str) -> str:
     return f"{STAGING_PREFIX}{staging_id}-exec"
 
 
+def _remove_directory_tree_at(parent_descriptor: int, name: str) -> None:
+    """Remove one tree relative to a pinned parent without following symlinks."""
+
+    if not name or name in {".", ".."} or Path(name).name != name:
+        raise resource_guard.GuardError(
+            "Kagemusha cleanup directory name is invalid"
+        )
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+    def remove_contents(directory_descriptor: int) -> None:
+        with os.scandir(directory_descriptor) as entries:
+            children = list(entries)
+        for entry in children:
+            if not entry.is_dir(follow_symlinks=False):
+                os.unlink(entry.name, dir_fd=directory_descriptor)
+                continue
+            before = entry.stat(follow_symlinks=False)
+            child_descriptor = os.open(
+                entry.name,
+                directory_flags,
+                dir_fd=directory_descriptor,
+            )
+            try:
+                opened = os.fstat(child_descriptor)
+                if (
+                    not stat.S_ISDIR(opened.st_mode)
+                    or not os.path.samestat(before, opened)
+                    or opened.st_uid != os.geteuid()
+                    or opened.st_mode & 0o077 != 0
+                ):
+                    raise resource_guard.GuardError(
+                        "Kagemusha cleanup directory is untrusted or changed"
+                    )
+                os.fchmod(child_descriptor, 0o700)
+                remove_contents(child_descriptor)
+                current = os.stat(
+                    entry.name,
+                    dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISDIR(current.st_mode)
+                    or not os.path.samestat(opened, current)
+                ):
+                    raise resource_guard.GuardError(
+                        "Kagemusha cleanup directory identity changed"
+                    )
+                os.rmdir(entry.name, dir_fd=directory_descriptor)
+            finally:
+                os.close(child_descriptor)
+
+    before = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    if not stat.S_ISDIR(before.st_mode):
+        raise resource_guard.GuardError(
+            "Kagemusha cleanup target is not a directory"
+        )
+    descriptor = os.open(name, directory_flags, dir_fd=parent_descriptor)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or not os.path.samestat(before, opened)
+            or opened.st_uid != os.geteuid()
+            or opened.st_mode & 0o077 != 0
+        ):
+            raise resource_guard.GuardError(
+                "Kagemusha cleanup directory is untrusted or changed"
+            )
+        os.fchmod(descriptor, 0o700)
+        remove_contents(descriptor)
+        current = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or not os.path.samestat(opened, current)
+        ):
+            raise resource_guard.GuardError(
+                "Kagemusha cleanup directory identity changed"
+            )
+        os.rmdir(name, dir_fd=parent_descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _prepare_execution_copy(
     parent: PinnedOutputParent,
     snapshot: ExecutableSnapshot,
@@ -568,8 +660,7 @@ def _prepare_execution_copy(
                 os.close(descriptor)
         if created:
             try:
-                os.chmod(directory_name, 0o700, dir_fd=parent.descriptor)
-                shutil.rmtree(directory_name, dir_fd=parent.descriptor)
+                _remove_directory_tree_at(parent.descriptor, directory_name)
                 os.fsync(parent.descriptor)
             except BaseException:
                 pass
@@ -628,7 +719,7 @@ def _physical_memory_bytes() -> int:
 
 
 def _effective_memory_limit_bytes(requested_gib: float | None) -> int:
-    """Apply the non-bypassable 256 MiB / half-physical-RAM ceiling."""
+    """Apply the non-bypassable 16 GiB / half-physical-RAM ceiling."""
 
     physical_half = max(1, _physical_memory_bytes() // 2)
     ceiling = min(ABSOLUTE_MAX_MEMORY_BYTES, physical_half)
@@ -691,7 +782,7 @@ def _validate_generation_command(command: Sequence[str]) -> None:
         raise resource_guard.GuardError(
             "Kagemusha resource guard requires the prebuilt "
             "kagemusha_recursive_spend_v4_bundle executable; build it before "
-            "entering the 256 MiB generation guard"
+            "entering the 16 GiB generation guard"
         )
     if len(command) < 2 or command[1] != "generate-candidate":
         raise resource_guard.GuardError(
@@ -874,7 +965,7 @@ def _prepare_guarded_command(
     if free_bytes < MINIMUM_OUTPUT_FREE_BYTES:
         os.close(descriptor)
         raise resource_guard.GuardError(
-            "Kagemusha output parent has less than 512 MiB available"
+            "Kagemusha output parent has less than 16 GiB available"
         )
     pinned = PinnedOutputParent(
         path=parent,
@@ -907,10 +998,6 @@ def _cleanup_staging(parent: PinnedOutputParent, staging_id: str) -> int:
         or any(byte not in "0123456789abcdef" for byte in staging_id)
     ):
         raise resource_guard.GuardError("Kagemusha staging id is invalid")
-    if not shutil.rmtree.avoids_symlink_attacks:
-        raise resource_guard.GuardError(
-            "this Python runtime cannot safely remove Kagemusha staging residue"
-        )
 
     parent.validate(require_path=False)
     prefix = f"{STAGING_PREFIX}{staging_id}-"
@@ -929,8 +1016,7 @@ def _cleanup_staging(parent: PinnedOutputParent, staging_id: str) -> int:
                     "refusing to remove untrusted Kagemusha staging residue "
                     f"{entry.name}"
                 )
-            os.chmod(entry.name, 0o700, dir_fd=parent.descriptor)
-            shutil.rmtree(entry.name, dir_fd=parent.descriptor)
+            _remove_directory_tree_at(parent.descriptor, entry.name)
             removed += 1
 
     parent.validate(require_path=False)
@@ -1597,7 +1683,7 @@ def _run_authenticated_bundle_command(
                 "timed out publishing the validated Kagemusha candidate"
             )
         wrapper_exit = session.control.read_line(
-            timeout=resource_guard.PROCESS_INSPECTION_TIMEOUT_SECONDS,
+            timeout=resource_guard.CONTROL_RECORD_TIMEOUT_SECONDS,
             description="candidate publisher exit status",
         )
         fields = wrapper_exit.split()
@@ -1704,9 +1790,18 @@ def _publish_staged_candidate(
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run Kagemusha V4 candidate generation beneath the non-raiseable "
+            "lower of the 16 GiB production ceiling or half of physical RAM."
+        )
+    )
     parser.add_argument("--resource-report", required=True, type=Path)
-    parser.add_argument("--max-memory-gib", type=float)
+    parser.add_argument(
+        "--max-memory-gib",
+        type=float,
+        help="optionally lower, but never raise, the production memory ceiling",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
@@ -1773,6 +1868,8 @@ def _candidate_main(argv: Sequence[str] | None = None) -> int:
                         report_path=jsonl_path,
                         summary_path=summary_path,
                         memory_limit_bytes=memory_limit,
+                        maximum_memory_bytes=ABSOLUTE_MAX_MEMORY_BYTES,
+                        absolute_memory_ceiling_bytes=ABSOLUTE_MAX_MEMORY_BYTES,
                         held_lock_descriptors=(heavy_lock, kagemusha_lock),
                         child_directory_descriptors=(output_parent.descriptor,),
                         sample_interval_seconds=SAMPLE_INTERVAL_SECONDS,
@@ -1819,7 +1916,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     )
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--max-memory-gib", type=float, default=DEFAULT_MAX_MEMORY_GIB)
+    parser.add_argument(
+        "--max-memory-gib",
+        type=float,
+        default=DEFAULT_MAX_MEMORY_GIB,
+        help="requested memory limit; the reviewed absolute maximum is 16 GiB",
+    )
     parser.add_argument(
         "--minimum-headroom-gib", type=float, default=DEFAULT_MINIMUM_HEADROOM_GIB
     )

@@ -2073,6 +2073,83 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
 
 
 class AndroidDeviceLabSlotTest(unittest.TestCase):
+    def test_candidate_lab_apk_forbidden_catalog_is_exactly_the_eight_krv4_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            clean = root / "clean.apk"
+            with zipfile.ZipFile(clean, "w") as archive:
+                archive.writestr("assets/candidate/candidate-v4.norito", b"candidate")
+            self.assertEqual(
+                device_lab._candidate_lab_apk_forbidden_krv4_entries(clean),
+                [],
+            )
+            forbidden = root / "forbidden.apk"
+            with zipfile.ZipFile(forbidden, "w") as archive:
+                for name in device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4:
+                    archive.writestr(f"assets/artifacts/{name}", b"must stay external")
+            self.assertEqual(
+                device_lab._candidate_lab_apk_forbidden_krv4_entries(forbidden),
+                sorted(
+                    (
+                        f"assets/artifacts/{name}"
+                        for name in device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4
+                    ),
+                    key=lambda value: value.encode("utf-8"),
+                ),
+            )
+
+    def test_krv4_artifact_limit_matches_core_and_rejects_next_byte(self) -> None:
+        maximum = 4 * 1024 * 1024 * 1024
+        self.assertEqual(device_lab.MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES, maximum)
+        self.assertFalse(device_lab._kagemusha_krv4_size_exceeds_bound(maximum))
+        self.assertTrue(device_lab._kagemusha_krv4_size_exceeds_bound(maximum + 1))
+
+    def test_stage_catalog_metadata_mode_defers_content_authentication_to_streamer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            slot = Path(temporary) / "candidate-slot"
+            slot.mkdir(mode=0o700)
+            binding, _ = write_candidate_binding_v2(slot, slot.name)
+            artifact = slot / "evidence/candidate/artifacts/step-eq.params-ipa.krv4"
+            original = artifact.read_bytes()
+            artifact.write_bytes(bytes((original[0] ^ 1,)) + original[1:])
+            artifact.chmod(0o600)
+            arguments = {
+                "candidate_sha256": str(binding["candidate_record_sha256"]),
+                "stage_sha256": str(binding["candidate_stage_manifest_sha256"]),
+                "source_commit": str(binding["candidate_source_commit"]),
+                "source_tree_sha256": str(binding["candidate_source_tree_sha256"]),
+            }
+            with self.assertRaisesRegex(ValueError, "digest is not exact"):
+                device_lab.validate_kagemusha_candidate_stage_manifest_v1(
+                    slot,
+                    **arguments,
+                )
+            manifest = device_lab.validate_kagemusha_candidate_stage_manifest_v1(
+                slot,
+                verify_entry_digests=False,
+                **arguments,
+            )
+            self.assertEqual(manifest["candidate_record_sha256"], arguments["candidate_sha256"])
+
+    def test_stage_catalog_rejects_a_symlinked_entry_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            slot = Path(temporary) / "candidate-slot"
+            slot.mkdir(mode=0o700)
+            binding, _ = write_candidate_binding_v2(slot, slot.name)
+            artifact_parent = slot / "evidence/candidate/artifacts"
+            real_parent = slot / "real-artifacts"
+            artifact_parent.rename(real_parent)
+            artifact_parent.symlink_to(real_parent, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "parent is not a real directory"):
+                device_lab.validate_kagemusha_candidate_stage_manifest_v1(
+                    slot,
+                    candidate_sha256=str(binding["candidate_record_sha256"]),
+                    stage_sha256=str(binding["candidate_stage_manifest_sha256"]),
+                    source_commit=str(binding["candidate_source_commit"]),
+                    source_tree_sha256=str(binding["candidate_source_tree_sha256"]),
+                    verify_entry_digests=False,
+                )
+
     @classmethod
     def setUpClass(cls) -> None:
         global _TEST_ATTESTATION_OPENSSL

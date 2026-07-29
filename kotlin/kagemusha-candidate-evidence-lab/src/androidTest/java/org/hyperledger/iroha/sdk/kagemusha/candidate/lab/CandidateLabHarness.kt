@@ -6,6 +6,7 @@ import android.net.ConnectivityManager
 import android.os.Process
 import android.os.SystemClock
 import android.system.Os
+import android.system.OsConstants
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import java.io.FileInputStream
@@ -31,6 +32,12 @@ internal object CandidateLabHarness {
     private const val MAX_REQUEST_BYTES = 64 * 1024 * 1024
     private const val MAX_RESULT_BYTES = 64 * 1024 * 1024
     private const val STREAM_CHUNK_BYTES = 1024 * 1024
+    private const val MAX_ARTIFACT_BYTES = 4L * 1024 * 1024 * 1024
+    private const val ARTIFACT_SPOOL_RESERVE_BYTES = 1024L * 1024 * 1024
+    private const val EXTERNAL_ARTIFACT_ROOT = "kagemusha-candidate-artifacts-v1"
+    private const val EXTERNAL_ARTIFACT_BINDING = "artifact-set-binding-v1.txt"
+    private const val EXTERNAL_ARTIFACT_BINDING_SCHEMA =
+        "iroha.kagemusha.android_candidate_artifact_set.v1"
     private const val ACCEPTED_IDENTITY_FIELD_COUNT = 49
     private const val MAXIMUM_PROOF_HOPS = 8
     private val STRONGBOX_CHALLENGE_DOMAIN =
@@ -996,7 +1003,8 @@ internal object CandidateLabHarness {
         check(sha256(stageManifest) == BuildConfig.CANDIDATE_STAGE_MANIFEST_SHA256) {
             "packaged candidate stage manifest differs from the staged root identity"
         }
-        validatePackagedStageManifest(context, stageManifest)
+        val stageCatalog = validatePackagedStageManifest(context, stageManifest)
+        val artifactDirectory = externalArtifactDirectory(context, stageCatalog)
         val candidate = readAsset(
             context,
             "candidate/candidate-v4.norito",
@@ -1009,24 +1017,20 @@ internal object CandidateLabHarness {
         var installed = false
         try {
             artifacts.forEachIndexed { index, artifact ->
-                val assetPath = "artifacts/${artifact.fileName}"
-                val digest = sha256Asset(context, assetPath)
+                val expected = stageCatalog.artifacts.getValue(artifact.fileName)
                 val handle = KagemushaCandidateLabNative.nativeArtifactBeginV4(
                     candidate,
                     candidateSha,
-                    decodeHex(digest.sha256),
+                    decodeHex(expected.sha256),
                 )
                 check(handle > 0) { "native candidate artifact begin returned no handle" }
                 handles[index] = handle
                 opened += 1
-                context.assets.open(assetPath).buffered().use { input ->
-                    val buffer = ByteArray(STREAM_CHUNK_BYTES)
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        val chunk = if (count == buffer.size) buffer else buffer.copyOf(count)
-                        KagemushaCandidateLabNative.nativeArtifactWriteV4(handle, chunk)
-                    }
+                streamExternalArtifact(
+                    artifactDirectory.resolve(artifact.fileName),
+                    expected,
+                ) { chunk ->
+                    KagemushaCandidateLabNative.nativeArtifactWriteV4(handle, chunk)
                 }
                 KagemushaCandidateLabNative.nativeArtifactFinalizeV4(handle)
             }
@@ -1062,6 +1066,7 @@ internal object CandidateLabHarness {
             parseAcceptedIdentity(
                 context,
                 KagemushaCandidateLabNative.nativeAcceptedIdentityV4(),
+                stageCatalog,
             )
         } catch (failure: Throwable) {
             runCatching { uninstallCandidate() }
@@ -1069,7 +1074,10 @@ internal object CandidateLabHarness {
         }
     }
 
-    private fun validatePackagedStageManifest(context: Context, manifestBytes: ByteArray) {
+    private fun validatePackagedStageManifest(
+        context: Context,
+        manifestBytes: ByteArray,
+    ): ValidatedStageManifest {
         fun requireFields(value: JSONObject, fields: Set<String>, label: String) {
             val actual = mutableSetOf<String>()
             val iterator = value.keys()
@@ -1176,17 +1184,27 @@ internal object CandidateLabHarness {
                 "candidate stage entry $index",
             )
             check(entry.getString("path") == expectedPath && entry.getString("mode") == "0600")
-            val assetPath = when {
-                expectedPath.startsWith("evidence/candidate/artifacts/") ->
-                    "artifacts/${expectedPath.substringAfterLast('/')}"
-                expectedPath.startsWith("evidence/candidate/") ->
-                    "candidate/${expectedPath.substringAfterLast('/')}"
-                expectedPath.startsWith("scenario/") -> expectedPath
-                else -> error("unsupported candidate stage path")
+            val declaredSize = entry.getLong("size_bytes")
+            val declaredSha256 = nonzeroSha256(
+                entry.getString("sha256"),
+                "candidate stage entry $expectedPath",
+            )
+            val digest = if (expectedPath.startsWith("evidence/candidate/artifacts/")) {
+                check(declaredSize in 1..MAX_ARTIFACT_BYTES) {
+                    "candidate artifact $expectedPath exceeds the V4 corridor"
+                }
+                AssetDigest(declaredSize, declaredSha256)
+            } else {
+                val assetPath = when {
+                    expectedPath.startsWith("evidence/candidate/") ->
+                        "candidate/${expectedPath.substringAfterLast('/')}"
+                    expectedPath.startsWith("scenario/") -> expectedPath
+                    else -> error("unsupported candidate stage path")
+                }
+                sha256Asset(context, assetPath).also {
+                    check(declaredSize == it.size && declaredSha256 == it.sha256)
+                }
             }
-            val digest = sha256Asset(context, assetPath)
-            check(entry.getLong("size_bytes") == digest.size)
-            check(entry.getString("sha256") == digest.sha256)
             measured[expectedPath] = digest
         }
         check(
@@ -1224,6 +1242,208 @@ internal object CandidateLabHarness {
                     "scenario inventory",
                 ),
         ) { "packaged candidate scenario inventory is not exact" }
+        return ValidatedStageManifest(
+            artifacts.associate { artifact ->
+                artifact.fileName to measured.getValue(
+                    "evidence/candidate/artifacts/${artifact.fileName}",
+                )
+            },
+        )
+    }
+
+    private fun externalArtifactDirectory(
+        context: Context,
+        stageCatalog: ValidatedStageManifest,
+    ): File {
+        val noBackupRoot = context.noBackupFilesDir.canonicalFile
+        val artifactRoot = noBackupRoot.resolve(EXTERNAL_ARTIFACT_ROOT)
+        val candidateRoot = artifactRoot.resolve(BuildConfig.CANDIDATE_RECORD_SHA256)
+        val artifactDirectory = candidateRoot.resolve(BuildConfig.CANDIDATE_STAGE_MANIFEST_SHA256)
+        listOf(
+            artifactRoot to "external artifact root",
+            candidateRoot to "candidate-bound external artifact root",
+            artifactDirectory to "stage-bound external artifact root",
+        ).forEach { (directory, label) ->
+            val metadata = Os.lstat(directory.absolutePath)
+            check(
+                OsConstants.S_ISDIR(metadata.st_mode) &&
+                    metadata.st_nlink >= 2L &&
+                    metadata.st_uid == Process.myUid(),
+            ) {
+                "$label must be an app-owned real directory"
+            }
+            check((metadata.st_mode and 511) == 448) {
+                "$label must be app-owner-only mode 0700"
+            }
+            check(directory.canonicalFile == directory.absoluteFile) {
+                "$label must not traverse a symbolic link"
+            }
+        }
+
+        val exactNames = (artifacts.map { it.fileName } + EXTERNAL_ARTIFACT_BINDING).sorted()
+        check(artifactDirectory.list()?.sorted() == exactNames) {
+            "app-private artifact directory is missing, extra, or not finalized"
+        }
+        val binding = artifactDirectory.resolve(EXTERNAL_ARTIFACT_BINDING)
+        requirePrivateRegularFile(binding, "external artifact-set binding")
+        val expectedBinding = buildString {
+            append(EXTERNAL_ARTIFACT_BINDING_SCHEMA)
+            append('\n')
+            append(BuildConfig.CANDIDATE_RECORD_SHA256)
+            append('\n')
+            append(BuildConfig.CANDIDATE_STAGE_MANIFEST_SHA256)
+            append('\n')
+            append(artifacts.size)
+            append('\n')
+        }.toByteArray(Charsets.US_ASCII)
+        check(binding.length() == expectedBinding.size.toLong()) {
+            "external artifact-set binding has the wrong size"
+        }
+        val observedBinding = readExactPrivateFile(
+            binding,
+            expectedBinding.size,
+            "external artifact-set binding",
+        )
+        check(observedBinding.contentEquals(expectedBinding)) {
+            "external artifact-set binding does not match this candidate and stage"
+        }
+
+        val artifactBytes = stageCatalog.artifacts.values.fold(0L) { total, artifact ->
+            Math.addExact(total, artifact.size)
+        }
+        check(artifactDirectory.usableSpace >= Math.addExact(
+            artifactBytes,
+            ARTIFACT_SPOOL_RESERVE_BYTES,
+        )) {
+            "app-private storage cannot spool the authenticated artifact set"
+        }
+        return artifactDirectory
+    }
+
+    private fun requirePrivateRegularFile(file: File, label: String) {
+        val metadata = Os.lstat(file.absolutePath)
+        check(
+            OsConstants.S_ISREG(metadata.st_mode) &&
+                metadata.st_nlink == 1L &&
+                metadata.st_uid == Process.myUid(),
+        ) { "$label must be one singly-linked app-owned regular file" }
+        check((metadata.st_mode and 511) == 384) { "$label must have exact mode 0600" }
+        check(file.canonicalFile == file.absoluteFile) { "$label must not be a symbolic link" }
+    }
+
+    private fun readExactPrivateFile(file: File, expectedSize: Int, label: String): ByteArray {
+        requirePrivateRegularFile(file, label)
+        val before = Os.lstat(file.absolutePath)
+        check(before.st_size == expectedSize.toLong()) { "$label has the wrong size" }
+        val output = ByteArray(expectedSize)
+        FileInputStream(file).use { input ->
+            val opened = Os.fstat(input.fd)
+            check(
+                OsConstants.S_ISREG(opened.st_mode) &&
+                    opened.st_nlink == 1L &&
+                    opened.st_uid == Process.myUid() &&
+                    (opened.st_mode and 511) == 384 &&
+                    opened.st_dev == before.st_dev &&
+                    opened.st_ino == before.st_ino &&
+                    opened.st_size == before.st_size,
+            ) { "$label changed while opening" }
+            var offset = 0
+            while (offset < output.size) {
+                val count = input.read(output, offset, output.size - offset)
+                check(count > 0) { "$label ended before its declared size" }
+                offset += count
+            }
+            check(input.read() == -1) { "$label grew while being read" }
+            val finalOpened = Os.fstat(input.fd)
+            check(
+                OsConstants.S_ISREG(finalOpened.st_mode) &&
+                    finalOpened.st_nlink == 1L &&
+                    finalOpened.st_uid == Process.myUid() &&
+                    (finalOpened.st_mode and 511) == 384 &&
+                    finalOpened.st_dev == before.st_dev &&
+                    finalOpened.st_ino == before.st_ino &&
+                    finalOpened.st_size == before.st_size,
+            ) { "$label changed while being read" }
+        }
+        val after = Os.lstat(file.absolutePath)
+        check(
+            OsConstants.S_ISREG(after.st_mode) &&
+                after.st_nlink == 1L &&
+                after.st_uid == Process.myUid() &&
+                (after.st_mode and 511) == 384 &&
+                after.st_dev == before.st_dev &&
+                after.st_ino == before.st_ino &&
+                after.st_size == before.st_size &&
+                file.canonicalFile == file.absoluteFile,
+        ) { "$label path changed while being read" }
+        return output
+    }
+
+    private fun streamExternalArtifact(
+        file: File,
+        expected: AssetDigest,
+        consume: (ByteArray) -> Unit,
+    ) {
+        requirePrivateRegularFile(file, "external candidate artifact ${file.name}")
+        val before = Os.lstat(file.absolutePath)
+        check(
+            OsConstants.S_ISREG(before.st_mode) &&
+                before.st_nlink == 1L &&
+                before.st_uid == Process.myUid() &&
+                (before.st_mode and 511) == 384 &&
+                before.st_size == expected.size,
+        ) {
+            "external candidate artifact ${file.name} size differs from the stage catalog"
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        var size = 0L
+        FileInputStream(file).use { input ->
+            val opened = Os.fstat(input.fd)
+            check(
+                OsConstants.S_ISREG(opened.st_mode) &&
+                    opened.st_nlink == 1L &&
+                    opened.st_uid == Process.myUid() &&
+                    (opened.st_mode and 511) == 384 &&
+                    opened.st_dev == before.st_dev &&
+                    opened.st_ino == before.st_ino &&
+                    opened.st_size == before.st_size,
+            ) { "external candidate artifact ${file.name} changed while opening" }
+            val buffer = ByteArray(STREAM_CHUNK_BYTES)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                size = Math.addExact(size, count.toLong())
+                check(size <= expected.size) {
+                    "external candidate artifact ${file.name} grew while streaming"
+                }
+                digest.update(buffer, 0, count)
+                consume(if (count == buffer.size) buffer else buffer.copyOf(count))
+            }
+            val finalOpened = Os.fstat(input.fd)
+            check(
+                OsConstants.S_ISREG(finalOpened.st_mode) &&
+                    finalOpened.st_nlink == 1L &&
+                    finalOpened.st_uid == Process.myUid() &&
+                    (finalOpened.st_mode and 511) == 384 &&
+                    finalOpened.st_dev == before.st_dev &&
+                    finalOpened.st_ino == before.st_ino &&
+                    finalOpened.st_size == before.st_size,
+            ) { "external candidate artifact ${file.name} changed while streaming" }
+        }
+        val after = Os.lstat(file.absolutePath)
+        check(
+            OsConstants.S_ISREG(after.st_mode) &&
+                after.st_nlink == 1L &&
+                after.st_uid == Process.myUid() &&
+                (after.st_mode and 511) == 384 &&
+                after.st_dev == before.st_dev &&
+                after.st_ino == before.st_ino &&
+                after.st_size == before.st_size &&
+                file.canonicalFile == file.absoluteFile,
+        ) { "external candidate artifact ${file.name} path changed while streaming" }
+        check(size == expected.size && hex(digest.digest()) == expected.sha256) {
+            "external candidate artifact ${file.name} failed its exact stage-catalog binding"
+        }
     }
 
     private fun uninstallCandidate() {
@@ -1235,6 +1455,7 @@ internal object CandidateLabHarness {
     private fun parseAcceptedIdentity(
         context: Context,
         fields: Array<ByteArray>,
+        stageCatalog: ValidatedStageManifest,
     ): AcceptedIdentity {
         check(fields.size == ACCEPTED_IDENTITY_FIELD_COUNT) {
             "native accepted identity must contain exactly 49 fields"
@@ -1268,9 +1489,9 @@ internal object CandidateLabHarness {
             val payloadSha = requireDigest(fields[cursor++], "artifact payload digest")
             check(role == contract.role) { "native artifact inventory is not in canonical order" }
             check(framedSize > 0 && payloadSize > 0 && payloadSize <= framedSize)
-            val asset = sha256Asset(context, "artifacts/${contract.fileName}")
-            check(asset.size == framedSize && asset.sha256 == framedSha) {
-                "native accepted framed artifact differs from the APK asset"
+            val staged = stageCatalog.artifacts.getValue(contract.fileName)
+            check(staged.size == framedSize && staged.sha256 == framedSha) {
+                "native accepted framed artifact differs from the authenticated stage catalog"
             }
             observed += AcceptedArtifact(
                 role,
@@ -2101,6 +2322,7 @@ internal object CandidateLabHarness {
 
     private data class Artifact(val role: String, val fileName: String)
     private data class AssetDigest(val size: Long, val sha256: String)
+    private data class ValidatedStageManifest(val artifacts: Map<String, AssetDigest>)
     private data class AcceptedArtifact(
         val role: String,
         val framedSize: Long,

@@ -116,6 +116,8 @@ KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
     "connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4",
     "connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4",
     "connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1",
 }
 FORBIDDEN_FIRST_RELEASE_EXPORTS = {
     "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",

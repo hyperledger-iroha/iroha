@@ -75,7 +75,8 @@ MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024
 MAX_BENCHMARK_EVIDENCE_BYTES = 16 * 1024 * 1024
 MAX_CRYPTOGRAPHIC_REVIEW_BYTES = 1024 * 1024
 MAX_PROMOTION_RECORD_BYTES = 1024 * 1024
-MAX_DECLARED_ARTIFACT_BYTES = 256 * 1024 * 1024
+MAX_DECLARED_ARTIFACT_FILE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES = 8 * 1024 * 1024 * 1024
 READ_CHUNK_BYTES = 1024 * 1024
 ROUTE_LITERALS = (
     "/v1/offline/readiness",
@@ -249,6 +250,26 @@ def inspect_regular_prefix(
         return prefix
     finally:
         os.close(descriptor)
+
+
+def checked_declared_artifact_total(declared_artifacts: dict[str, int]) -> int:
+    """Validate each exact artifact size and its aggregate release inventory."""
+
+    total = 0
+    for name in ARTIFACTS:
+        size_bytes = declared_artifacts[name]
+        if size_bytes <= 0 or size_bytes > MAX_DECLARED_ARTIFACT_FILE_BYTES:
+            raise ValueError(
+                f"artifact {name} violates its "
+                f"{MAX_DECLARED_ARTIFACT_FILE_BYTES}-byte size limit"
+            )
+        total += size_bytes
+        if total > MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES:
+            raise ValueError(
+                "declared artifacts exceed the "
+                f"{MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES}-byte aggregate limit"
+            )
+    return total
 
 
 def evidence_is_non_placeholder(path: Path, maximum_bytes: int, label: str) -> bool:
@@ -515,7 +536,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         r'instruction_count\":1',
     )
     require(
-        texts[CONFIG] + texts[NODE],
+        texts[CONFIG] + texts[NODE] + texts[CORE],
         "configured V4 runtime",
         errors,
         "kagemusha_release_policy_path",
@@ -793,24 +814,25 @@ def promotion_errors() -> list[str]:
                 declared_artifacts[name] = size_bytes
         if set(declared_artifacts) != set(ARTIFACTS):
             errors.append(f"{directory.name}: manifest artifact names are not exact")
-        elif sum(declared_artifacts.values()) > MAX_DECLARED_ARTIFACT_BYTES:
-            errors.append(
-                f"{directory.name}: declared artifacts exceed {MAX_DECLARED_ARTIFACT_BYTES} bytes"
-            )
         else:
-            for name in ARTIFACTS:
-                try:
-                    prefix = inspect_regular_prefix(
-                        directory / name,
-                        declared_artifacts[name],
-                        MAX_DECLARED_ARTIFACT_BYTES,
-                        8,
-                        f"artifact {name}",
-                    )
-                    if prefix != b"KRV4KEY\0":
-                        errors.append(f"{directory.name}/{name}: invalid KRV4 framing")
-                except (OSError, ValueError) as error:
-                    errors.append(f"{directory.name}/{name}: invalid artifact: {error}")
+            try:
+                checked_declared_artifact_total(declared_artifacts)
+            except ValueError as error:
+                errors.append(f"{directory.name}: {error}")
+            else:
+                for name in ARTIFACTS:
+                    try:
+                        prefix = inspect_regular_prefix(
+                            directory / name,
+                            declared_artifacts[name],
+                            MAX_DECLARED_ARTIFACT_FILE_BYTES,
+                            8,
+                            f"artifact {name}",
+                        )
+                        if prefix != b"KRV4KEY\0":
+                            errors.append(f"{directory.name}/{name}: invalid KRV4 framing")
+                    except (OSError, ValueError) as error:
+                        errors.append(f"{directory.name}/{name}: invalid artifact: {error}")
         evidence_limits = (
             ("release-attestation-v4.norito", MAX_RELEASE_ATTESTATION_BYTES),
             ("physical-device-benchmark.evidence", MAX_BENCHMARK_EVIDENCE_BYTES),
@@ -897,6 +919,38 @@ if self_test:
         for error in missing_frontier_filter_errors
     ):
         errors.append("self-test failed to reject a missing frontier-test workflow filter")
+    boundary_artifacts = {
+        name: MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES // len(ARTIFACTS)
+        for name in ARTIFACTS
+    }
+    if (
+        checked_declared_artifact_total(boundary_artifacts)
+        != MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES
+    ):
+        errors.append("self-test failed to accept the exact artifact aggregate limit")
+    exact_file_artifacts = {name: 1 for name in ARTIFACTS}
+    exact_file_artifacts[ARTIFACTS[0]] = MAX_DECLARED_ARTIFACT_FILE_BYTES
+    if (
+        checked_declared_artifact_total(exact_file_artifacts)
+        != MAX_DECLARED_ARTIFACT_FILE_BYTES + len(ARTIFACTS) - 1
+    ):
+        errors.append("self-test failed to accept the exact artifact file limit")
+    oversized_file_artifacts = dict(boundary_artifacts)
+    oversized_file_artifacts[ARTIFACTS[0]] = MAX_DECLARED_ARTIFACT_FILE_BYTES + 1
+    try:
+        checked_declared_artifact_total(oversized_file_artifacts)
+    except ValueError:
+        pass
+    else:
+        errors.append("self-test failed to reject an oversized artifact file")
+    oversized_aggregate_artifacts = dict(boundary_artifacts)
+    oversized_aggregate_artifacts[ARTIFACTS[0]] += 1
+    try:
+        checked_declared_artifact_total(oversized_aggregate_artifacts)
+    except ValueError:
+        pass
+    else:
+        errors.append("self-test failed to reject an oversized artifact aggregate")
     verifier_override_name = "KAGEMUSHA_V4_RELEASE_" + "VERIFIER_BIN"
     readiness_source = (root / "ci/check_kagemusha_production_readiness.sh").read_text(
         encoding="utf-8"

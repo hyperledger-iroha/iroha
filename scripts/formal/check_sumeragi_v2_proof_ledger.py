@@ -5844,7 +5844,7 @@ _SERVICED_CANDIDATE_PRODUCTION_ITEM_SHA256 = {
         "0da75908ad9b79e478abfa2df59096e785c94e0565b99e9e7a8aaaa28bb3142d"
     ),
     "drain_deferred_with_evidence": (
-        "029ceb120fa136762530f480b4b56ca0a0f721cfc347d51f08aea65bc5360dd7"
+        "52f31bb81413dc0e2e60919bc8b7c0bc2fb3db653c2a68516d9e5e0821f7ccb4"
     ),
     "retain_failed_serviced_deferred_owner": (
         "ed4c65e5419812874e501ecc6213a3a5b804872a66f3c09e86918632019e7c32"
@@ -13665,6 +13665,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "deferred_authenticated_event_matches_wire": (
         "71cff12249ba75d45cc55f3be85c966fa2f317a3638ce36fa250d399c0f88fd5"
     ),
+    "wire_ingress_missing_execution_commitment": (
+        "ab4345a4067a48f67735cb5867d717cf8f32aa809f7218aeb04c8eaaf3775678"
+    ),
     "runtime_ingress_from_fair_ingress": (
         "638d44eae201d3477a987e857d3c9318c7a525347cddb9d5bbce704d9bbc7985"
     ),
@@ -13696,7 +13699,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "708305b7037a4fae5e8d796ee08a80f46065ec2fe73ecc498a5e806c7efe33bc"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "f5faf916f195ed39af046bd533d4fcc97dc66cd1979ddf010ca347a2b14454e9"
+        "20fdb8057db53f88bced2eef196421432d2db968f475af444ec08c65bb5c3f11"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
@@ -42800,6 +42803,11 @@ def _production_causal_fifo_source_fidelity_errors(
                 "deferred_authenticated_event_matches_wire",
                 (("impl", "SumeragiV2Adapter"),),
                 "typed deferred event to canonical-envelope comparator",
+            ),
+            (
+                "wire_ingress_missing_execution_commitment",
+                (("impl", "SumeragiV2Adapter"),),
+                "structurally validated missing-execution-commitment ingress classifier",
             ),
         )
         observed_authenticated_deferred_adapter_items: dict[

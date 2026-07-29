@@ -16,12 +16,12 @@ use std::{convert::TryInto, marker::PhantomData};
 use ff::{Field, PrimeField};
 use halo2_proofs::{
     circuit::{Chip, Layouter, Region, Value},
-    plonk::{Advice, Column, ConstraintSystem, Error, TableColumn},
+    plonk::{Advice, Column, ConstraintSystem, Error, Expression, TableColumn},
     poly::Rotation,
 };
 
 use crate::zk::kagemusha_sha256_table16_v4::{
-    AssignedBits,
+    AssignedBits, TABLE16_SPREAD_TABLE_ROWS,
     util::{lebs2ip, spread_bits},
 };
 
@@ -31,6 +31,9 @@ const BITS_10: usize = 1 << 10;
 const BITS_11: usize = 1 << 11;
 const BITS_13: usize = 1 << 13;
 const BITS_14: usize = 1 << 14;
+const LAST_DENSE: u64 = (1 << 16) - 1;
+const FIRST_TAIL_DENSE: u64 = TABLE16_SPREAD_TABLE_ROWS as u64;
+const LAST_SPREAD: u64 = 0x5555_5555;
 
 /// An input word into a lookup, containing (tag, dense, spread)
 #[derive(Copy, Clone, Debug)]
@@ -102,8 +105,14 @@ impl<const DENSE: usize, const SPREAD: usize, F: PrimeField> SpreadVar<DENSE, SP
         let tag = word.map(|word| word.tag);
         let dense_val = word.map(|word| word.dense);
         let spread_val = word.map(|word| word.spread);
+        let tail = word.map(|word| {
+            F::from(u64::from(
+                lebs2ip(&word.dense) >= TABLE16_SPREAD_TABLE_ROWS as u64,
+            ))
+        });
 
         region.assign_advice(cols.tag, row, tag.map(|tag| F::from(tag as u64)));
+        region.assign_advice(cols.tail, row, tail);
 
         let dense =
             AssignedBits::<DENSE, F>::assign_bits(region, || "dense", cols.dense, row, dense_val)?;
@@ -185,6 +194,7 @@ pub(super) struct SpreadInputs {
     pub(super) tag: Column<Advice>,
     pub(super) dense: Column<Advice>,
     pub(super) spread: Column<Advice>,
+    pub(super) tail: Column<Advice>,
 }
 
 #[derive(Clone, Debug)]
@@ -236,7 +246,15 @@ impl<F: PrimeField> SpreadTableChip<F> {
         input_spread: Column<Advice>,
     ) -> <Self as Chip<F>>::Config {
         let table = Self::configure_table(meta);
-        Self::configure_with_table(meta, input_tag, input_dense, input_spread, table)
+        let input_tail = meta.advice_column();
+        Self::configure_with_table(
+            meta,
+            input_tag,
+            input_dense,
+            input_spread,
+            input_tail,
+            table,
+        )
     }
 
     pub(super) fn configure_with_table(
@@ -244,18 +262,77 @@ impl<F: PrimeField> SpreadTableChip<F> {
         input_tag: Column<Advice>,
         input_dense: Column<Advice>,
         input_spread: Column<Advice>,
+        input_tail: Column<Advice>,
         table: SpreadTable,
     ) -> <Self as Chip<F>>::Config {
-        meta.lookup("lookup", |meta| {
+        // The physical k=16 table omits dense words 65527..=65535. A valid
+        // tail witness redirects only those tuples to the canonical zero row.
+        meta.lookup("spread table or constrained tail", |meta| {
             let tag_cur = meta.query_advice(input_tag, Rotation::cur());
             let dense_cur = meta.query_advice(input_dense, Rotation::cur());
             let spread_cur = meta.query_advice(input_spread, Rotation::cur());
+            let tail_cur = meta.query_advice(input_tail, Rotation::cur());
+            let loaded = Expression::Constant(F::ONE) - tail_cur;
 
             vec![
-                (tag_cur, table.tag),
-                (dense_cur, table.dense),
-                (spread_cur, table.spread),
+                (loaded.clone() * tag_cur, table.tag),
+                (loaded.clone() * dense_cur, table.dense),
+                (loaded * spread_cur, table.spread),
             ]
+        });
+
+        // In the canonical table, dense == spread holds only for rows zero
+        // and one, and both rows have tag zero. This proves tail is Boolean;
+        // when it is one, the first component also forces input_tag == 6.
+        // A lookup is used instead of an unselected gate so reserved rows are
+        // handled by Halo2's lookup argument rather than activating a gate.
+        meta.lookup("spread-table tail flag and tag", |meta| {
+            let tag_cur = meta.query_advice(input_tag, Rotation::cur());
+            let tail_cur = meta.query_advice(input_tail, Rotation::cur());
+
+            vec![
+                (
+                    tail_cur.clone() * (Expression::Constant(F::from(6)) - tag_cur),
+                    table.tag,
+                ),
+                (tail_cur.clone(), table.dense),
+                (tail_cur, table.spread),
+            ]
+        });
+
+        // For c = 65535 - dense, bit interleaving commutes with complement:
+        // spread(dense) + spread(c) = spread(65535) = 0x5555_5555.
+        // Looking up (tag=0, c, complement_spread) constrains c to 0..=15
+        // and proves the exact spread polynomial without another table.
+        meta.lookup("spread-table tail complement", |meta| {
+            let dense_cur = meta.query_advice(input_dense, Rotation::cur());
+            let spread_cur = meta.query_advice(input_spread, Rotation::cur());
+            let tail_cur = meta.query_advice(input_tail, Rotation::cur());
+
+            vec![
+                (Expression::Constant(F::ZERO), table.tag),
+                (
+                    tail_cur.clone() * (Expression::Constant(F::from(LAST_DENSE)) - dense_cur),
+                    table.dense,
+                ),
+                (
+                    tail_cur * (Expression::Constant(F::from(LAST_SPREAD)) - spread_cur),
+                    table.spread,
+                ),
+            ]
+        });
+
+        // Since the complement lookup proves c <= 15, requiring
+        // dense - 65527 = 8 - c to occur in the dense table leaves c <= 8.
+        // Together the two lookups prove dense is exactly 65527..=65535.
+        meta.lookup("spread-table tail lower endpoint", |meta| {
+            let dense_cur = meta.query_advice(input_dense, Rotation::cur());
+            let tail_cur = meta.query_advice(input_tail, Rotation::cur());
+
+            vec![(
+                tail_cur * (dense_cur - Expression::Constant(F::from(FIRST_TAIL_DENSE))),
+                table.dense,
+            )]
         });
 
         SpreadTableConfig {
@@ -263,6 +340,7 @@ impl<F: PrimeField> SpreadTableChip<F> {
                 tag: input_tag,
                 dense: input_dense,
                 spread: input_spread,
+                tail: input_tail,
             },
             table,
         }
@@ -285,7 +363,7 @@ impl<F: PrimeField> SpreadTableChip<F> {
                 // We generate the row values lazily (we only need them during keygen).
                 let mut rows = SpreadTableConfig::generate::<F>();
 
-                for index in 0..(1 << 16) {
+                for index in 0..TABLE16_SPREAD_TABLE_ROWS {
                     let mut row = None;
                     table.assign_cell(
                         || "tag",
@@ -348,7 +426,6 @@ impl SpreadTableConfig {
 
 #[cfg(test)]
 mod tests {
-    use ff::PrimeField;
     use halo2_proofs::halo2curves::pasta::Fp;
     use halo2_proofs::{
         circuit::{Layouter, V1, Value},
@@ -357,142 +434,131 @@ mod tests {
     };
     use rand::Rng;
 
-    use super::{SpreadTableChip, SpreadTableConfig, get_tag};
+    use super::{
+        FIRST_TAIL_DENSE, LAST_SPREAD, SpreadTableChip, SpreadTableConfig, SpreadVar, SpreadWord,
+        get_tag,
+    };
+    use crate::zk::kagemusha_sha256_table16_v4::{TABLE16_SPREAD_TABLE_ROWS, util::i2lebsp};
 
-    #[test]
-    fn lookup_table() {
-        struct MyCircuit {}
+    #[derive(Clone, Copy, Debug)]
+    struct LookupWitness {
+        tag: u64,
+        dense: u64,
+        spread: u64,
+        tail: u64,
+    }
 
-        impl<F: PrimeField> Circuit<F> for MyCircuit {
-            type Config = SpreadTableConfig;
-            type FloorPlanner = V1;
-            type Params = ();
-
-            fn without_witnesses(&self) -> Self {
-                MyCircuit {}
-            }
-
-            fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-                let input_tag = meta.advice_column();
-                let input_dense = meta.advice_column();
-                let input_spread = meta.advice_column();
-
-                SpreadTableChip::configure(meta, input_tag, input_dense, input_spread)
-            }
-
-            fn synthesize(
-                &self,
-                config: Self::Config,
-                mut layouter: impl Layouter<F>,
-            ) -> Result<(), Error> {
-                SpreadTableChip::load(config.clone(), &mut layouter)?;
-
-                layouter.assign_region(
-                    || "spread_test",
-                    |mut gate| {
-                        let mut row = 0;
-                        let mut add_row = |tag, dense, spread| -> Result<(), Error> {
-                            gate.assign_advice(config.input.tag, row, Value::known(tag));
-                            gate.assign_advice(config.input.dense, row, Value::known(dense));
-                            gate.assign_advice(config.input.spread, row, Value::known(spread));
-                            row += 1;
-                            Ok(())
-                        };
-
-                        // Test the first few small values.
-                        add_row(F::ZERO, F::from(0b000), F::from(0b000000))?;
-                        add_row(F::ZERO, F::from(0b001), F::from(0b000001))?;
-                        add_row(F::ZERO, F::from(0b010), F::from(0b000100))?;
-                        add_row(F::ZERO, F::from(0b011), F::from(0b000101))?;
-                        add_row(F::ZERO, F::from(0b100), F::from(0b010000))?;
-                        add_row(F::ZERO, F::from(0b101), F::from(0b010001))?;
-
-                        // Test the tag boundaries:
-                        // 4-bit
-                        add_row(F::ZERO, F::from(0b1111), F::from(0b01010101))?;
-                        add_row(F::ONE, F::from(0b10000), F::from(0x100))?;
-                        // 7-bit
-                        add_row(F::ONE, F::from(0b1111111), F::from(0b01010101010101))?;
-                        add_row(F::from(2), F::from(0b10000000), F::from(0b0100000000000000))?;
-                        // - 10-bit
-                        add_row(
-                            F::from(2),
-                            F::from(0b1111111111),
-                            F::from(0b01010101010101010101),
-                        )?;
-                        add_row(
-                            F::from(3),
-                            F::from(0b10000000000),
-                            F::from(0b0100000000000000000000),
-                        )?;
-                        // - 11-bit
-                        add_row(
-                            F::from(3),
-                            F::from(0b11111111111),
-                            F::from(0b0101010101010101010101),
-                        )?;
-                        add_row(
-                            F::from(4),
-                            F::from(0b100000000000),
-                            F::from(0b010000000000000000000000),
-                        )?;
-                        // - 13-bit
-                        add_row(
-                            F::from(4),
-                            F::from(0b1111111111111),
-                            F::from(0b01010101010101010101010101),
-                        )?;
-                        add_row(
-                            F::from(5),
-                            F::from(0b10000000000000),
-                            F::from(0b0100000000000000000000000000),
-                        )?;
-                        // - 14-bit
-                        add_row(
-                            F::from(5),
-                            F::from(0b11111111111111),
-                            F::from(0b0101010101010101010101010101),
-                        )?;
-                        add_row(
-                            F::from(6),
-                            F::from(0b100000000000000),
-                            F::from(0b010000000000000000000000000000),
-                        )?;
-
-                        // Test random lookup values
-                        let mut rng = rand::rng();
-
-                        fn interleave_u16_with_zeros(word: u16) -> u32 {
-                            let mut word: u32 = word.into();
-                            word = (word ^ (word << 8)) & 0x00ff00ff;
-                            word = (word ^ (word << 4)) & 0x0f0f0f0f;
-                            word = (word ^ (word << 2)) & 0x33333333;
-                            word = (word ^ (word << 1)) & 0x55555555;
-                            word
-                        }
-
-                        for _ in 0..10 {
-                            let word: u16 = rng.random();
-                            add_row(
-                                F::from(u64::from(get_tag(word))),
-                                F::from(u64::from(word)),
-                                F::from(u64::from(interleave_u16_with_zeros(word))),
-                            )?;
-                        }
-
-                        Ok(())
-                    },
-                )
+    impl LookupWitness {
+        fn canonical(word: u16) -> Self {
+            Self {
+                tag: u64::from(get_tag(word)),
+                dense: u64::from(word),
+                spread: u64::from(interleave_u16_with_zeros(word)),
+                tail: u64::from(usize::from(word) >= TABLE16_SPREAD_TABLE_ROWS),
             }
         }
+    }
 
-        let circuit: MyCircuit = MyCircuit {};
+    #[derive(Clone, Debug)]
+    struct LookupCircuit {
+        rows: Vec<LookupWitness>,
+    }
 
-        let prover = match MockProver::<Fp>::run(17, &circuit, vec![]) {
-            Ok(prover) => prover,
-            Err(e) => panic!("{:?}", e),
-        };
-        assert_eq!(prover.verify(), Ok(()));
+    impl Circuit<Fp> for LookupCircuit {
+        type Config = SpreadTableConfig;
+        type FloorPlanner = V1;
+        type Params = ();
+
+        fn without_witnesses(&self) -> Self {
+            self.clone()
+        }
+
+        fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
+            let input_tag = meta.advice_column();
+            let input_dense = meta.advice_column();
+            let input_spread = meta.advice_column();
+            SpreadTableChip::configure(meta, input_tag, input_dense, input_spread)
+        }
+
+        fn synthesize(
+            &self,
+            config: Self::Config,
+            mut layouter: impl Layouter<Fp>,
+        ) -> Result<(), Error> {
+            SpreadTableChip::load(config.clone(), &mut layouter)?;
+            layouter.assign_region(
+                || "spread lookup witnesses",
+                |mut region| {
+                    for (row, witness) in self.rows.iter().enumerate() {
+                        region.assign_advice(
+                            config.input.tag,
+                            row,
+                            Value::known(Fp::from(witness.tag)),
+                        );
+                        region.assign_advice(
+                            config.input.dense,
+                            row,
+                            Value::known(Fp::from(witness.dense)),
+                        );
+                        region.assign_advice(
+                            config.input.spread,
+                            row,
+                            Value::known(Fp::from(witness.spread)),
+                        );
+                        region.assign_advice(
+                            config.input.tail,
+                            row,
+                            Value::known(Fp::from(witness.tail)),
+                        );
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    fn interleave_u16_with_zeros(word: u16) -> u32 {
+        let mut word: u32 = word.into();
+        word = (word ^ (word << 8)) & 0x00ff00ff;
+        word = (word ^ (word << 4)) & 0x0f0f0f0f;
+        word = (word ^ (word << 2)) & 0x33333333;
+        word = (word ^ (word << 1)) & 0x55555555;
+        word
+    }
+
+    #[test]
+    fn lookup_table_fits_k16_and_accepts_the_constrained_tail() {
+        let mut rows = [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            (1 << 4) - 1,
+            1 << 4,
+            (1 << 7) - 1,
+            1 << 7,
+            (1 << 10) - 1,
+            1 << 10,
+            (1 << 11) - 1,
+            1 << 11,
+            (1 << 13) - 1,
+            1 << 13,
+            (1 << 14) - 1,
+            1 << 14,
+            TABLE16_SPREAD_TABLE_ROWS as u16 - 1,
+        ]
+        .map(LookupWitness::canonical)
+        .to_vec();
+        rows.extend((FIRST_TAIL_DENSE as u16..=u16::MAX).map(LookupWitness::canonical));
+        let mut rng = rand::rng();
+        rows.extend((0..10).map(|_| LookupWitness::canonical(rng.random())));
+
+        let circuit = LookupCircuit { rows };
+        MockProver::run(16, &circuit, vec![])
+            .expect("k=16 spread-table synthesis")
+            .assert_satisfied();
     }
 
     #[test]
@@ -512,16 +578,78 @@ mod tests {
     }
 
     #[test]
-    fn incorrect_bits_4_tag_is_rejected() {
-        struct BadTagCircuit;
+    fn malformed_loaded_or_tail_tuple_is_rejected() {
+        let canonical_last = LookupWitness::canonical(u16::MAX);
+        for (name, witness) in [
+            (
+                "wrong loaded tag",
+                LookupWitness {
+                    tag: 1,
+                    dense: 15,
+                    spread: 0x55,
+                    tail: 0,
+                },
+            ),
+            (
+                "missing tail flag",
+                LookupWitness {
+                    tail: 0,
+                    ..canonical_last
+                },
+            ),
+            (
+                "tail flag on loaded endpoint",
+                LookupWitness {
+                    tail: 1,
+                    ..LookupWitness::canonical(TABLE16_SPREAD_TABLE_ROWS as u16 - 1)
+                },
+            ),
+            (
+                "non-Boolean tail flag",
+                LookupWitness {
+                    tail: 2,
+                    ..canonical_last
+                },
+            ),
+            (
+                "wrong tail tag",
+                LookupWitness {
+                    tag: 5,
+                    ..canonical_last
+                },
+            ),
+            (
+                "wrong tail spread",
+                LookupWitness {
+                    spread: LAST_SPREAD - 1,
+                    ..canonical_last
+                },
+            ),
+        ] {
+            let prover = MockProver::run(
+                16,
+                &LookupCircuit {
+                    rows: vec![witness],
+                },
+                vec![],
+            )
+            .unwrap_or_else(|error| panic!("{name} synthesis failed unexpectedly: {error:?}"));
+            assert!(prover.verify().is_err(), "{name} must be rejected");
+        }
+    }
 
-        impl Circuit<Fp> for BadTagCircuit {
+    #[test]
+    fn spread_var_assigns_the_tail_flag_for_the_top_word() {
+        #[derive(Clone)]
+        struct SpreadVarCircuit;
+
+        impl Circuit<Fp> for SpreadVarCircuit {
             type Config = SpreadTableConfig;
             type FloorPlanner = V1;
             type Params = ();
 
             fn without_witnesses(&self) -> Self {
-                Self
+                self.clone()
             }
 
             fn configure(meta: &mut ConstraintSystem<Fp>) -> Self::Config {
@@ -538,18 +666,22 @@ mod tests {
             ) -> Result<(), Error> {
                 SpreadTableChip::load(config.clone(), &mut layouter)?;
                 layouter.assign_region(
-                    || "wrong 4-bit tag",
+                    || "assign top spread word",
                     |mut region| {
-                        region.assign_advice(config.input.tag, 0, Value::known(Fp::from(1)));
-                        region.assign_advice(config.input.dense, 0, Value::known(Fp::from(15)));
-                        region.assign_advice(config.input.spread, 0, Value::known(Fp::from(0x55)));
+                        SpreadVar::<16, 32, Fp>::with_lookup(
+                            &mut region,
+                            &config.input,
+                            0,
+                            Value::known(SpreadWord::new(i2lebsp::<16>(u64::from(u16::MAX)))),
+                        )?;
                         Ok(())
                     },
                 )
             }
         }
 
-        let prover = MockProver::run(17, &BadTagCircuit, vec![]).expect("bad-tag test synthesis");
-        assert!(prover.verify().is_err());
+        MockProver::run(16, &SpreadVarCircuit, vec![])
+            .expect("top-word tail synthesis")
+            .assert_satisfied();
     }
 }

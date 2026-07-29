@@ -166,44 +166,52 @@ from them, so it does not retain the key-generation constraint graph beside a
 processed proving key.
 Candidate verifier- and proving-key generation extracts or validates those
 breakpoints after synthesis and drops the populated circuit before key
-assembly. Proving-key assembly reuses the supplied verifier-key domain and
-stages compact permutation scratch instead of retaining a domain-by-column
-factor grid or parallel coefficient-clone fan-out. Empty-bootstrap permutation
-assembly keeps identity mappings implicit and materializes union-find state
-only on the first nontrivial copy, avoiding 17,301,504 bytes for the reviewed
-k16, 11-column mapping. Verifier-key construction also builds, commits, and
-drops one permutation polynomial at a time. Because the VK retains only
-commitments, this removes 20,971,520 bytes of retained permutation columns and
-lowers the first commitment's live field payload by approximately 18 MiB after
-accounting for the shared omega and delta tables. Those streamed permutation
-commitments now finish before assigned fixed columns and bit-packed selectors
-expand into ten degree-sized field polynomials. That removes another
-11,468,800 bytes from the reviewed first-MSM peak. These changes affect
-allocation lifetimes only; compressed and uncompressed canonical processed key
-bytes remain unchanged.
-Proof generation then transfers ownership of that live circuit and one parsed
-processed key into the prover. The circuit is released after witness synthesis;
-domain-sized fixed-value and permutation Lagrange preprocessing is released
-after its last commitment; and the consumed key yields only its embedded VK
-for immediate proof verification before that VK is dropped. A live circuit and
-full processed key therefore do not remain borrowed through transcript
-finalization or overlap a separately reparsed verifier domain.
-The consuming quotient evaluator additionally transforms one
-copy-permutation sigma chunk at a time rather than retaining all 11 transformed
-columns. It preserves canonical proof bytes while removing roughly 18 MiB of
-transient field storage from the reviewed shape. Evaluation domains initialize
-only the base FFT table eagerly and leave unused 2n/4n tables lazy (roughly
-24 MiB at k16); quotient parts are written directly into the final interleaved
-polynomial (roughly 8 MiB); and cached recursive FFT scratch is evicted before
-h-piece commitments (roughly 8 MiB). The outer lifecycle remains in a
-disposable one-worker Rayon pool. Large MSMs alone acquire process-wide
-admission before scalar/base preprocessing and use a fixed two-worker window
-pool, so concurrent outer commitments and host core count cannot multiply
-preprocessing buffers, bucket tables, or allocator caches. Accumulator order is
-unchanged. The checked static admission estimate is 232 MiB, not a
-physical-memory prediction; the 256 MiB userspace supervisor remains
-authoritative. Production candidate and physical-device peak-memory evidence
-remain required before promotion.
+assembly. The reciprocal point audit no longer allocates the generic
+variable-base MSM in the Base graph. It canonicalizes and combines all 248
+source coefficients there, then copy-binds the points and normalized GLV
+segments into a source-major dense machine. That machine needs 41,667 rows, 38
+advice columns, one fixed enable column, one equality column, no selectors, and
+no lookups. Its fixed start tag, non-identity offset, canonical decomposition,
+affine exceptional-case checks, and final offset equality make a forged initial
+mode or non-zero aggregate unsatisfiable. The five authenticated Table16 SHA
+lanes use 65,527 table rows so the complete k16 circuit stays inside its 65,527
+usable-row budget.
+
+The authenticated complete-circuit envelope is degree 16 with `[360]` advice
+columns, `[37, 0, 0]` lookup-advice columns, one parameter fixed column, and
+one instance column. The trailing zero lookup phases are the exact
+`BaseCircuitBuilder` shape; they do not allocate speculative advice phases.
+Processed-key serialization disables selector compression; the configured
+circuit therefore authenticates 918 fixed-plus-permutation polynomials per
+parity. The exact unframed lengths are 4,194,372 bytes for `ParamsIPA`, 29,386
+bytes for the processed verifier key, and 3,856,699,286 bytes for the processed
+proving key. The proving key remains below the non-raiseable 4 GiB artifact
+corridor.
+
+Proving-key assembly reuses the supplied verifier-key domain and stages compact
+permutation scratch instead of retaining a domain-by-column factor grid or
+parallel coefficient-clone fan-out. Verifier-key construction builds, commits,
+and drops one permutation polynomial at a time. Proof generation transfers
+ownership of the live circuit and one parsed processed key into the prover. The
+circuit is released after witness synthesis; domain-sized fixed-value and
+permutation Lagrange preprocessing is released after its last commitment; and
+the consumed key yields only its embedded VK for immediate proof verification
+before that VK is dropped. The quotient evaluator transforms one
+copy-permutation sigma chunk at a time. Evaluation domains initialize only the
+base FFT table eagerly, quotient parts are written directly into the final
+interleaved polynomial, and cached recursive FFT scratch is evicted before
+h-piece commitments. The outer lifecycle remains in a disposable one-worker
+Rayon pool; large MSMs alone use the admitted fixed two-worker window.
+Accumulator order is unchanged.
+
+The checked static admission estimate for this complete shape is
+8,271,167,488 bytes (7.703125 GiB), not a physical-memory prediction. The
+userspace supervisor enforces the lower of 16 GiB or half of installed physical
+memory and cannot be raised by an operator option. The guarded output parent
+must also retain at least 16 GiB of free disk before generation so both raw
+proving-key spools and the framed copy cannot exhaust the filesystem.
+Production candidate and
+physical-device peak-memory evidence remain required before promotion.
 Semantic construction loads one authenticated role at a time and drops each raw
 carrier after parsing; it never assembles the six-role verifier or eight-role
 prover payload inventory in memory. Runtime verifiers are transient rather

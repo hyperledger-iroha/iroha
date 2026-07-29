@@ -22623,7 +22623,7 @@ fn multisig_asset_transfer_control_operation(
 ) -> Option<(&'static str, IrohaJson)> {
     if let Some(isi) = instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::SetAssetTransferFreeze>()
+        .downcast_ref::<iroha_data_model::isi::SetAssetTransferAvailability>()
     {
         let mut payload = Map::new();
         payload.insert("account_id".into(), Value::from(isi.account_id.to_string()));
@@ -22631,7 +22631,24 @@ fn multisig_asset_transfer_control_operation(
             "asset_definition_id".into(),
             Value::from(isi.asset_definition_id.to_string()),
         );
-        payload.insert("outgoing_frozen".into(), Value::from(isi.outgoing_frozen));
+        payload.insert(
+            "expected_revision".into(),
+            Value::from(isi.expected_revision),
+        );
+        payload.insert(
+            "incoming".into(),
+            Value::from(match isi.incoming {
+                iroha_data_model::asset::AssetTransferAvailability::Enabled => "Enabled",
+                iroha_data_model::asset::AssetTransferAvailability::Disabled => "Disabled",
+            }),
+        );
+        payload.insert(
+            "outgoing".into(),
+            Value::from(match isi.outgoing {
+                iroha_data_model::asset::AssetTransferAvailability::Enabled => "Enabled",
+                iroha_data_model::asset::AssetTransferAvailability::Disabled => "Disabled",
+            }),
+        );
         payload.insert(
             "reason".into(),
             isi.reason
@@ -22639,7 +22656,7 @@ fn multisig_asset_transfer_control_operation(
                 .map_or(Value::Null, |reason| Value::from(reason.clone())),
         );
         return Some((
-            "ASSET_TRANSFER_FREEZE",
+            "ASSET_TRANSFER_AVAILABILITY",
             IrohaJson::new(Value::Object(payload)),
         ));
     }
@@ -26208,10 +26225,12 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::SetAssetTransferFreeze::new(
+                dm::SetAssetTransferAvailability::new(
                     signer_two_id.clone(),
                     asset_definition_id.clone(),
-                    true,
+                    3,
+                    dm::AssetTransferAvailability::Disabled,
+                    dm::AssetTransferAvailability::Disabled,
                     Some("risk review".to_owned()),
                 )
                 .into(),
@@ -26238,8 +26257,8 @@ mod multisig_selector_tests {
             .proposals
             .iter()
             .find(|item| item.instructions_hash == freeze_hash)
-            .expect("freeze proposal in query");
-        assert_eq!(query_item.operation_type, "ASSET_TRANSFER_FREEZE");
+            .expect("availability proposal in query");
+        assert_eq!(query_item.operation_type, "ASSET_TRANSFER_AVAILABILITY");
         let query_intent = query_item
             .intent
             .clone()
@@ -26250,7 +26269,9 @@ mod multisig_selector_tests {
             query_intent["account_id"].as_str(),
             Some(signer_two_id.to_string().as_str())
         );
-        assert_eq!(query_intent["outgoing_frozen"].as_bool(), Some(true));
+        assert_eq!(query_intent["expected_revision"].as_u64(), Some(3));
+        assert_eq!(query_intent["incoming"].as_str(), Some("Disabled"));
+        assert_eq!(query_intent["outgoing"].as_str(), Some("Disabled"));
         assert_eq!(query_intent["reason"].as_str(), Some("risk review"));
 
         let JsonBody(resolve_response) = handle_post_multisig_proposals_resolve(
@@ -26263,7 +26284,10 @@ mod multisig_selector_tests {
         )
         .await
         .expect("resolve proposal");
-        assert_eq!(resolve_response.operation_type, "ASSET_TRANSFER_FREEZE");
+        assert_eq!(
+            resolve_response.operation_type,
+            "ASSET_TRANSFER_AVAILABILITY"
+        );
         let resolve_intent = resolve_response
             .intent
             .expect("freeze get intent")
@@ -26273,7 +26297,7 @@ mod multisig_selector_tests {
             resolve_intent["asset_definition_id"].as_str(),
             Some(asset_definition_id.to_string().as_str())
         );
-        assert_eq!(resolve_intent["outgoing_frozen"].as_bool(), Some(true));
+        assert_eq!(resolve_intent["outgoing"].as_str(), Some("Disabled"));
     }
 
     #[tokio::test]
@@ -26543,7 +26567,10 @@ mod multisig_selector_tests {
 
         let record = dm::AssetTransferControlRecord {
             asset_definition_id: asset_definition_id.clone(),
-            outgoing_frozen: true,
+            availability_revision: 5,
+            incoming_availability: dm::AssetTransferAvailability::Disabled,
+            outgoing_availability: dm::AssetTransferAvailability::Enabled,
+            availability_reason: Some("inbound review".to_owned()),
             blacklisted: false,
             holding_limit: Some(1_000_u32.into()),
             limits: vec![
@@ -26585,7 +26612,19 @@ mod multisig_selector_tests {
         .await
         .expect("load stored control");
 
-        assert!(response.control.outgoing_frozen);
+        assert_eq!(response.control.availability_revision, 5);
+        assert_eq!(
+            response.control.incoming,
+            dm::AssetTransferAvailability::Disabled
+        );
+        assert_eq!(
+            response.control.outgoing,
+            dm::AssetTransferAvailability::Enabled
+        );
+        assert_eq!(
+            response.control.availability_reason.as_deref(),
+            Some("inbound review")
+        );
         assert!(!response.control.blacklisted);
         assert_eq!(response.control.limits.len(), 2);
         assert_eq!(response.control.limits[0].window, "DAY");
@@ -29032,7 +29071,8 @@ pub async fn handle_post_asset_transfer_control_get(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<AssetTransferControlGetRequestDto>,
 ) -> Result<JsonBody<AssetTransferControlGetResponseDto>> {
-    let world = state.world_view();
+    let view = state.view();
+    let world = &view.world;
     let account = world
         .account(&req.account_id)
         .map_err(|_| conversion_error(format!("account not found: {}", req.account_id)))?;
@@ -29046,17 +29086,24 @@ pub async fn handle_post_asset_transfer_control_get(
         })?;
 
     let store = load_asset_transfer_control_store(account.id(), account.metadata())?;
-    let record = store.find(&req.asset_definition_id).cloned().unwrap_or(
-        iroha_data_model::asset::AssetTransferControlRecord {
-            asset_definition_id: req.asset_definition_id.clone(),
-            outgoing_frozen: false,
-            blacklisted: false,
-            holding_limit: None,
-            limits: Vec::new(),
-            usages: Vec::new(),
-            updated_at_ms: None,
-        },
-    );
+    let record = store
+        .find(&req.asset_definition_id)
+        .cloned()
+        .unwrap_or_else(|| {
+            iroha_data_model::asset::AssetTransferControlRecord::new(
+                req.asset_definition_id.clone(),
+            )
+        });
+    let checkpoint = view
+        .latest_block_hash()
+        .map(|block_hash| -> Result<AssetTransferControlCheckpointDto> {
+            Ok(AssetTransferControlCheckpointDto {
+                block_height: u64::try_from(view.height())
+                    .map_err(|_| conversion_error("ledger height exceeds u64".to_owned()))?,
+                block_hash: block_hash.to_string(),
+            })
+        })
+        .transpose()?;
 
     let cap_by_window = record
         .limits
@@ -29095,7 +29142,10 @@ pub async fn handle_post_asset_transfer_control_get(
         control: AssetTransferControlDto {
             account_id: req.account_id,
             asset_definition_id: req.asset_definition_id,
-            outgoing_frozen: record.outgoing_frozen,
+            availability_revision: record.availability_revision,
+            incoming: record.incoming_availability,
+            outgoing: record.outgoing_availability,
+            availability_reason: record.availability_reason,
             blacklisted: record.blacklisted,
             holding_limit: record.holding_limit,
             limits,
@@ -29105,6 +29155,7 @@ pub async fn handle_post_asset_transfer_control_get(
                 .transpose()?,
         },
         usages,
+        checkpoint,
     }))
 }
 
@@ -31891,7 +31942,11 @@ pub struct AssetTransferUsageBucketDto {
 pub struct AssetTransferControlDto {
     pub account_id: iroha_data_model::account::AccountId,
     pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
-    pub outgoing_frozen: bool,
+    pub availability_revision: u64,
+    pub incoming: iroha_data_model::asset::AssetTransferAvailability,
+    pub outgoing: iroha_data_model::asset::AssetTransferAvailability,
+    #[norito(default)]
+    pub availability_reason: Option<String>,
     pub blacklisted: bool,
     #[norito(default)]
     pub holding_limit: Option<Quantity>,
@@ -31902,11 +31957,21 @@ pub struct AssetTransferControlDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Ledger tip at which an asset-transfer control read was observed.
+pub struct AssetTransferControlCheckpointDto {
+    pub block_height: u64,
+    pub block_hash: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload for asset-transfer control reads.
 pub struct AssetTransferControlGetResponseDto {
     pub control: AssetTransferControlDto,
     #[norito(default)]
     pub usages: Vec<AssetTransferUsageBucketDto>,
+    #[norito(default)]
+    pub checkpoint: Option<AssetTransferControlCheckpointDto>,
 }
 
 #[cfg(feature = "app_api")]

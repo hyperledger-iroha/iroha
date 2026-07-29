@@ -1187,6 +1187,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             startup_directive.locked_subject(),
             startup_directive.decided_subject(),
         )?;
+        if startup_directive.decided_subject().is_none()
+            && let Some((locked_round, locked)) = startup_directive.locked_body()
+        {
+            let _ = lane_work.mark_global_body_locked(locked_round, locked)?;
+        }
         dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
         // Startup recovery and durable constructor work must not consume the
         // live height cadence. Constructor repair already emitted the first
@@ -1544,6 +1549,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                                 .to_owned(),
                         )
                     })?;
+                let _ = lane_work
+                    .recover_decided_canonical_lane_body(&durable_receipt, &durable_artifact)?;
                 lane_work.persist_anchored_sessions()?;
                 let Some(durable_lane_authority) =
                     lane_work.durable_lane_rollover_authority(&durable_artifact)?
@@ -1774,6 +1781,34 @@ fn replayed_proposal_sign(effects: &[AdapterEffect]) -> Option<ReplayedProposalS
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LockedBodyRecoveryPlan {
+    request: Option<(EventTag, wire::ConsensusRound, wire::BlockSubject)>,
+    may_repropose: bool,
+}
+
+fn locked_body_recovery_plan(
+    directive: LocalProposalDirective,
+    local_validator: wire::ValidatorIndex,
+    attempted: Option<LocalProposalOwner>,
+    can_admit_local_proposal: bool,
+) -> LockedBodyRecoveryPlan {
+    let owner = LocalProposalOwner::from(directive);
+    let request = directive
+        .decided_subject()
+        .is_none()
+        .then(|| directive.locked_body())
+        .flatten()
+        .map(|(round, subject)| (directive.tag(), round, subject));
+    LockedBodyRecoveryPlan {
+        request,
+        may_repropose: request.is_some()
+            && directive.leader() == local_validator
+            && attempted != Some(owner)
+            && can_admit_local_proposal,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn schedule_local_proposal(
     candidate_limits: CandidateLimits,
@@ -1798,36 +1833,20 @@ fn schedule_local_proposal(
     };
     let directive = executor.local_proposal_directive()?;
     let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
-    if directive.decided_subject().is_some() {
-        return Ok(());
-    }
-    // Every validator drives its independently selected lane-author slots.
-    // Once a global lock exists, this height instead waits for the exact
-    // immutable body so its current leader can re-propose it unchanged.
-    if directive.locked_body().is_none() {
-        lane_work.schedule_autonomous_lane_production(directive.tag().view(), candidate_limits)?;
-    }
-    if directive.leader() != local_validator
-        || proposal_state.attempted == Some(owner)
-        || (directive.tag().view() == 0
-            && height_started_at.elapsed() < block_cadence
-            && context.height > 1)
-    {
-        return Ok(());
-    }
-    // Do not consume a fresh or retained candidate until the executor can
-    // reserve its local StoreBody owner. Timers, retransmission, and
-    // completions continue while this producer waits.
-    if !executor.can_admit_local_proposal() {
-        return Ok(());
-    }
+    let recovery_plan = locked_body_recovery_plan(
+        directive,
+        local_validator,
+        proposal_state.attempted,
+        executor.can_admit_local_proposal(),
+    );
     // Bind immutable locked-body acquisition to the current reducer
-    // incarnation before observing readiness. A TC may advance the view after
-    // the worker completes its one exact-subject load; the current leader may
-    // re-propose only bytes which still match the exact durable lock.
-    if let Some((locked_round, locked)) = directive.locked_body() {
+    // incarnation before observing proposal eligibility. Every validator must
+    // authenticate and bind the exact carrier even when it is not the current
+    // global leader or has already attempted that proposal; only the later
+    // unchanged reproposal remains leader-gated.
+    if let Some((tag, locked_round, locked)) = recovery_plan.request {
         services
-            .request_locked_candidate(directive.tag(), locked_round, locked)
+            .request_locked_candidate(tag, locked_round, locked)
             .map_err(V2RunnerError::Service)?;
     }
     while let Some(loaded) = services.take_loaded_candidate() {
@@ -1848,13 +1867,6 @@ fn schedule_local_proposal(
             );
             continue;
         }
-        let current_owner = proposal_state.reconcile(LocalProposalOwner::from(current));
-        if current.leader() != local_validator
-            || proposal_state.attempted == Some(current_owner)
-            || !executor.can_admit_local_proposal()
-        {
-            continue;
-        }
         let canonical_wire = loaded.into_canonical_wire();
         let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
@@ -1869,6 +1881,16 @@ fn schedule_local_proposal(
         };
         if lane_binding == V2LaneIngressOutcome::Rejected {
             return Err(V2RunnerError::LaneCandidateBinding);
+        }
+        let current_owner = proposal_state.reconcile(LocalProposalOwner::from(current));
+        let current_recovery_plan = locked_body_recovery_plan(
+            current,
+            local_validator,
+            proposal_state.attempted,
+            executor.can_admit_local_proposal(),
+        );
+        if !current_recovery_plan.may_repropose {
+            continue;
         }
         // Keep the immutable bytes available under the PrepareQC round before
         // minting the later-round proposal. This preserves both admissible
@@ -1899,6 +1921,29 @@ fn schedule_local_proposal(
             local_validator,
             "submitted exact locked body for local Sumeragi v2 reproposal"
         );
+        return Ok(());
+    }
+    if directive.decided_subject().is_some() {
+        return Ok(());
+    }
+    // Every validator drives its independently selected lane-author slots.
+    // Once a global lock exists, this height instead waits for the exact
+    // immutable body so its current leader can re-propose it unchanged.
+    if directive.locked_body().is_none() {
+        lane_work.schedule_autonomous_lane_production(directive.tag().view(), candidate_limits)?;
+    }
+    if directive.leader() != local_validator
+        || proposal_state.attempted == Some(owner)
+        || (directive.tag().view() == 0
+            && height_started_at.elapsed() < block_cadence
+            && context.height > 1)
+    {
+        return Ok(());
+    }
+    // Do not consume a fresh or retained candidate until the executor can
+    // reserve its local StoreBody owner. Timers, retransmission, and
+    // completions continue while this producer waits.
+    if !executor.can_admit_local_proposal() {
         return Ok(());
     }
     // A locked directive can only consume its exact retained body. It must
@@ -2192,6 +2237,23 @@ fn drain_v2_ingress(
     limit: usize,
 ) -> Result<(), V2RunnerError> {
     for turn in outer_ingress_turns(limit) {
+        if turn == OuterIngressTurn::Completion {
+            if services
+                .certified_serve_barrier_request_hash()
+                .map_err(V2RunnerError::Service)?
+                .is_some()
+            {
+                // A provisional or prepared exact target owns this turn. The
+                // outer runner services it before any queued completion.
+                continue;
+            }
+            // I/O completion is a separate producer from the serialized
+            // reducer. Service it before every ingress occurrence so a
+            // completed durable store cannot remain hidden for the duration
+            // of a large authenticated ingress batch.
+            services.drain_completions(executor)?;
+            continue;
+        }
         if turn == OuterIngressTurn::Runtime {
             if services
                 .certified_serve_barrier_request_hash()
@@ -2203,9 +2265,9 @@ fn drain_v2_ingress(
                 continue;
             }
             // A whole authenticated ingress batch can be expensive. Give the
-            // serialized runtime one service turn before every outer
-            // occurrence so trusted completions and timers cannot remain
-            // hidden behind that batch.
+            // serialized runtime one service turn after completions and before
+            // every outer occurrence so trusted timers and reducer work cannot
+            // remain hidden behind that batch.
             let was_terminal = executor
                 .local_proposal_directive()?
                 .decided_subject()
@@ -2632,12 +2694,19 @@ fn drain_decided_lane_recovery_ingress(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OuterIngressTurn {
+    Completion,
     Runtime,
     Ingress,
 }
 
 fn outer_ingress_turns(limit: usize) -> impl Iterator<Item = OuterIngressTurn> {
-    (0..limit.max(1)).flat_map(|_| [OuterIngressTurn::Runtime, OuterIngressTurn::Ingress])
+    (0..limit.max(1)).flat_map(|_| {
+        [
+            OuterIngressTurn::Completion,
+            OuterIngressTurn::Runtime,
+            OuterIngressTurn::Ingress,
+        ]
+    })
 }
 
 fn v2_ingress_head_can_drain(
@@ -5592,6 +5661,56 @@ mod tests {
     }
 
     #[test]
+    fn locked_body_recovery_is_independent_of_reproposal_gates() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(18));
+        let subject = proposal_subject(b"nonleader locked-body recovery");
+        let locked_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 3,
+        };
+        let leader = context.leader(tag.view());
+        let nonleader = if leader == 0 { 1 } else { 0 };
+        let directive =
+            LocalProposalDirective::for_test(tag, leader, Some(locked_round), Some(subject), None);
+        let owner = LocalProposalOwner::from(directive);
+        let expected_request = Some((tag, locked_round, subject));
+
+        for (local_validator, attempted, can_admit) in [
+            (nonleader, None, true),
+            (leader, Some(owner), true),
+            (leader, None, false),
+        ] {
+            let plan = locked_body_recovery_plan(directive, local_validator, attempted, can_admit);
+            assert_eq!(plan.request, expected_request);
+            assert!(
+                !plan.may_repropose,
+                "body recovery must survive every local reproposal gate"
+            );
+        }
+
+        let eligible = locked_body_recovery_plan(directive, leader, None, true);
+        assert_eq!(eligible.request, expected_request);
+        assert!(eligible.may_repropose);
+
+        let decided = LocalProposalDirective::for_test(
+            tag,
+            leader,
+            Some(locked_round),
+            Some(subject),
+            Some(subject),
+        );
+        assert_eq!(
+            locked_body_recovery_plan(decided, leader, None, true),
+            LockedBodyRecoveryPlan {
+                request: None,
+                may_repropose: false,
+            }
+        );
+    }
+
+    #[test]
     fn same_tag_higher_lock_retires_all_local_proposal_owners() {
         let (context, _) = context();
         let tag = EventTag::new(context.height, 5, Generation::new(11));
@@ -6016,22 +6135,29 @@ mod tests {
     }
 
     #[test]
-    fn outer_ingress_batch_gives_runtime_every_preceding_turn() {
+    fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
         assert_eq!(
             outer_ingress_turns(3).collect::<Vec<_>>(),
             vec![
+                OuterIngressTurn::Completion,
                 OuterIngressTurn::Runtime,
                 OuterIngressTurn::Ingress,
+                OuterIngressTurn::Completion,
                 OuterIngressTurn::Runtime,
                 OuterIngressTurn::Ingress,
+                OuterIngressTurn::Completion,
                 OuterIngressTurn::Runtime,
                 OuterIngressTurn::Ingress,
             ]
         );
         assert_eq!(
             outer_ingress_turns(0).collect::<Vec<_>>(),
-            vec![OuterIngressTurn::Runtime, OuterIngressTurn::Ingress],
-            "a zero-sized batch still owes one runtime service opportunity"
+            vec![
+                OuterIngressTurn::Completion,
+                OuterIngressTurn::Runtime,
+                OuterIngressTurn::Ingress,
+            ],
+            "a zero-sized batch still owes completion and runtime service opportunities"
         );
     }
 

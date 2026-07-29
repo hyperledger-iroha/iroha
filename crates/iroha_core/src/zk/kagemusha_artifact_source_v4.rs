@@ -2,8 +2,9 @@
 //!
 //! Production runtimes retain pinned artifact handles instead of materializing
 //! the complete Eq/Ep inventory.  A source can only lend a seekable framed
-//! reader: descriptor selection, release binding, both digest passes, exact
-//! payload consumption, and trailing-byte rejection remain owned by core.
+//! reader: descriptor selection, release binding, complete-frame digest
+//! authentication, exact parser-pass consumption, and trailing-byte rejection
+//! remain owned by core.
 
 use std::{
     fmt,
@@ -17,14 +18,18 @@ use iroha_data_model::offline::{
 };
 
 use super::kagemusha_artifact_v4::{
-    KagemushaRecursiveSpendPastaCycleArtifactHeaderV4, kagemusha_artifact_descriptor_v4,
+    KagemushaAuthenticatedArtifactInspectionV4, KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
+    kagemusha_artifact_descriptor_v4,
+    with_kagemusha_pasta_cycle_artifact_payload_after_inspection_v4,
     with_kagemusha_pasta_cycle_artifact_payload_v4,
 };
 
 /// Object-safe seekable reader lent by an authenticated artifact source.
 ///
 /// The source must keep the underlying handle pinned for the complete callback.
-/// Core rewinds and authenticates it twice while the callback is active.
+/// Core either authenticates it before and during the callback or consumes a
+/// pinned source's retained complete-frame inspection and reauthenticates the
+/// exact bytes seen by the callback.
 pub trait KagemushaArtifactReadSeekV4: Read + Seek {}
 
 impl<T: Read + Seek + ?Sized> KagemushaArtifactReadSeekV4 for T {}
@@ -47,6 +52,20 @@ pub trait KagemushaAuthenticatedArtifactSourceV4: Send + Sync {
         kind: KagemushaPastaCycleArtifactKindV4,
         consume: &mut dyn FnMut(&mut dyn KagemushaArtifactReadSeekV4) -> Result<(), String>,
     ) -> Result<(), String>;
+
+    /// Return a prior complete-frame authentication retained by this source.
+    ///
+    /// Sources which cannot pin immutable file identity should keep the safe
+    /// default. Core then performs both authentication and parser passes for
+    /// every access. A returned inspection never replaces the parser pass or
+    /// either manifest digest check.
+    fn authenticated_inspection(
+        &self,
+        _parity: KagemushaPastaCycleParityV1,
+        _kind: KagemushaPastaCycleArtifactKindV4,
+    ) -> Result<Option<KagemushaAuthenticatedArtifactInspectionV4>, String> {
+        Ok(None)
+    }
 }
 
 /// Lightweight, release-bound semantic identity for one qualified parity.
@@ -63,6 +82,9 @@ pub struct KagemushaQualifiedParityMetadataV4 {
     processed_verifying_key_len: u64,
     processed_verifying_key_sha256: [u8; 32],
     verifying_key_commitment: [u8; 32],
+    proving_key_embedded_verifying_key_sha256: [u8; 32],
+    proving_key_fixed_columns: usize,
+    proving_key_permutation_columns: usize,
 }
 
 impl KagemushaQualifiedParityMetadataV4 {
@@ -73,6 +95,9 @@ impl KagemushaQualifiedParityMetadataV4 {
         processed_verifying_key_len: u64,
         processed_verifying_key_sha256: [u8; 32],
         verifying_key_commitment: [u8; 32],
+        proving_key_embedded_verifying_key_sha256: [u8; 32],
+        proving_key_fixed_columns: usize,
+        proving_key_permutation_columns: usize,
     ) -> Result<Self, String> {
         circuit_params.validate().map_err(|error| {
             format!("invalid qualified Kagemusha V4 circuit parameters: {error}")
@@ -81,6 +106,9 @@ impl KagemushaQualifiedParityMetadataV4 {
             || processed_verifying_key_len == 0
             || processed_verifying_key_sha256 == [0; 32]
             || verifying_key_commitment == [0; 32]
+            || proving_key_embedded_verifying_key_sha256 != processed_verifying_key_sha256
+            || proving_key_fixed_columns == 0
+            || proving_key_permutation_columns == 0
         {
             return Err("Kagemusha V4 qualified parity identity is empty".to_owned());
         }
@@ -91,6 +119,9 @@ impl KagemushaQualifiedParityMetadataV4 {
             processed_verifying_key_len,
             processed_verifying_key_sha256,
             verifying_key_commitment,
+            proving_key_embedded_verifying_key_sha256,
+            proving_key_fixed_columns,
+            proving_key_permutation_columns,
         })
     }
 
@@ -128,6 +159,18 @@ impl KagemushaQualifiedParityMetadataV4 {
     #[must_use]
     pub const fn verifying_key_commitment(&self) -> [u8; 32] {
         self.verifying_key_commitment
+    }
+
+    pub(crate) const fn proving_key_embedded_verifying_key_sha256(&self) -> [u8; 32] {
+        self.proving_key_embedded_verifying_key_sha256
+    }
+
+    pub(crate) const fn proving_key_fixed_columns(&self) -> usize {
+        self.proving_key_fixed_columns
+    }
+
+    pub(crate) const fn proving_key_permutation_columns(&self) -> usize {
+        self.proving_key_permutation_columns
     }
 }
 
@@ -250,6 +293,14 @@ impl KagemushaAuthenticatedArtifactSourceV4 for KagemushaQualifiedArtifactSource
     ) -> Result<(), String> {
         self.source.with_framed_artifact(parity, kind, consume)
     }
+
+    fn authenticated_inspection(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+        kind: KagemushaPastaCycleArtifactKindV4,
+    ) -> Result<Option<KagemushaAuthenticatedArtifactInspectionV4>, String> {
+        self.source.authenticated_inspection(parity, kind)
+    }
 }
 
 /// Semantically qualify all eight roles of one authenticated production source.
@@ -323,8 +374,10 @@ impl<T> KagemushaSourceCallbackStateV4<T> {
 /// Authenticate and parse one exact payload from a source-backed release.
 ///
 /// The callback sees a bounded hashing reader and must consume it completely.
-/// The selected file is authenticated once before parsing and again over the
-/// exact bytes consumed by `parse`.  The source callback must run exactly once.
+/// The selected file is authenticated before parsing unless its pinned source
+/// retains a complete prior inspection. In both cases the exact bytes consumed
+/// by `parse` are authenticated again. The source callback must run exactly
+/// once.
 pub fn with_kagemusha_authenticated_artifact_payload_from_source_v4<T, F>(
     source: &dyn KagemushaAuthenticatedArtifactSourceV4,
     parity: KagemushaPastaCycleParityV1,
@@ -339,6 +392,7 @@ where
 {
     let release = source.authenticated_release();
     let descriptor = kagemusha_artifact_descriptor_v4(release.manifest(), parity, kind)?;
+    let authenticated_inspection = source.authenticated_inspection(parity, kind)?;
     let mut parse = Some(parse);
     let mut state = KagemushaSourceCallbackStateV4::new();
 
@@ -351,12 +405,22 @@ where
         // value, allowing the existing generic core authenticator to retain its
         // concrete-reader API without weakening any checks.
         let mut pinned_reader = reader;
-        let parsed = with_kagemusha_pasta_cycle_artifact_payload_v4(
-            &mut pinned_reader,
-            release,
-            descriptor,
-            parse,
-        );
+        let parsed = if let Some(authenticated) = authenticated_inspection.as_ref() {
+            with_kagemusha_pasta_cycle_artifact_payload_after_inspection_v4(
+                &mut pinned_reader,
+                release,
+                descriptor,
+                authenticated,
+                parse,
+            )
+        } else {
+            with_kagemusha_pasta_cycle_artifact_payload_v4(
+                &mut pinned_reader,
+                release,
+                descriptor,
+                parse,
+            )
+        };
         state.record(parsed)
     });
     state.finish(source_result)

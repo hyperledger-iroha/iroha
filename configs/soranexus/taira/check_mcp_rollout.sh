@@ -10,6 +10,7 @@ PUBLIC_MCP_URL="${PUBLIC_MCP_URL:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
+ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE="${ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE:-}"
 WRITE_CONFIG_EXPLICIT=0
 if [[ -n "$WRITE_CONFIG" ]]; then
   WRITE_CONFIG_EXPLICIT=1
@@ -59,6 +60,7 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
                             [--skip-local] [--skip-public]
                             [--validator-root LABEL=URL]... [--require-all-validators]
                             [--write-config PATH] [--write-target local|public|URL]
+                            [--onboarding-token-file ABSOLUTE_PATH]
                             [--faucet-asset-id ASSET_DEFINITION_ID]
                             [--fee-program PROGRAM_ID] [--fee-program-revision REVISION]
                             [--offline-asset-definition-id ASSET_DEFINITION_ID]
@@ -96,8 +98,9 @@ The check fails unless:
     handler (the no-hash probe returns HTTP 400), while the retired
     /v1/transactions/status alias remains unmounted (HTTP 404)
   - when validator roots are supplied, every labeled validator reports the same
-    protocol/build/config/context/commit tuple and the same exact live offline
-    block/release identity across repeated advancing samples
+    protocol/build/config/context/commit tuple, `/status.blocks` exactly matches
+    `last_committed_height`, and the exact live offline block/release identity
+    agrees across repeated advancing samples
   - public rollout mode is fail-closed: exactly four distinct validator roots,
     --require-all-validators, a full 40-character expected git SHA, and at
     least three advancing fleet samples are mandatory. For non-release local
@@ -115,14 +118,16 @@ evidence. Do not use `/status.peers` as validator-set size; it is the queried
 node's current remote-peer count.
 
 For final public rollout, use a runtime-only canary signer config. When
-`--write-config` is omitted, the script bootstraps a runtime-only canary config
-automatically, preferring `/run/secrets/taira-canary-client.toml` when that
-directory is writable and otherwise falling back to `${TMPDIR:-/tmp}`. It
-reuses an existing config at the automatic path. An explicit `--write-config`
-must already exist and is read without modification; the script never
-overwrites operator-supplied signing material. Automatic bootstrap posts the
-current universal-account DTO to `/v1/accounts/onboard`, requires `HTTP 202`
-with a `QUEUED` receipt, and follows that receipt through
+`--write-config` is omitted, the script reuses the automatically selected
+runtime-only config path, preferring `/run/secrets/taira-canary-client.toml`
+when that directory is writable and otherwise falling back to
+`${TMPDIR:-/tmp}`. If that file does not exist, automatic bootstrap additionally
+requires `--onboarding-token-file ABSOLUTE_PATH`; the credential remains in its
+owner-private source file and is passed only to the bootstrap subprocess. An
+explicit `--write-config` must already exist and is read without modification;
+the script never overwrites operator-supplied signing material. Automatic
+bootstrap posts the current universal-account DTO to `/v1/accounts/onboard`,
+requires `HTTP 202` with a `QUEUED` receipt, and follows that receipt through
 `/v1/pipeline/transactions/status` before using the signer. Onboarding fees are
 sponsored by the configured Torii onboarding authority. The write canary gets
 an exact `/v1/fees/quote` and signs the returned intent for the configured
@@ -286,6 +291,14 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       WRITE_TARGET="$2"
+      shift 2
+      ;;
+    --onboarding-token-file)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --onboarding-token-file" >&2
+        exit 1
+      }
+      ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE="$2"
       shift 2
       ;;
     --faucet-asset-id)
@@ -1804,6 +1817,16 @@ for name in ("height", "view", "leader", "last_committed_height"):
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise SystemExit(f"validator {label}: invalid {name}: {value!r}")
 context = status["height_context"]
+status_blocks = node_status.get("blocks")
+if not isinstance(status_blocks, int) or isinstance(status_blocks, bool) or status_blocks < 0:
+    raise SystemExit(
+        f"validator {label}: /status reported an invalid block counter: {status_blocks!r}"
+    )
+if status_blocks != status["last_committed_height"]:
+    raise SystemExit(
+        f"validator {label}: /status.blocks {status_blocks} does not match "
+        f"the durable committed height {status['last_committed_height']}"
+    )
 
 offline_height = offline_summary.get("block_height")
 offline_hash = offline_summary.get("block_hash")
@@ -1869,6 +1892,7 @@ record = {
     "mode": canonical(context["mode"]),
     "validator_count": context["validator_count"],
     "quorum": canonical(context["quorum"]),
+    "status_blocks": status_blocks,
     "committed_height": status["last_committed_height"],
     "committed_subject": canonical(status.get("last_committed_subject")),
     "commit_qc": canonical(status.get("last_commit_qc")),
@@ -1911,6 +1935,7 @@ for record in records[1:]:
         "mode",
         "validator_count",
         "quorum",
+        "status_blocks",
         "offline_block_height",
         "offline_block_hash",
         "offline_release",
@@ -1933,6 +1958,7 @@ summary = {
     "mode": baseline["mode"],
     "validator_count": baseline["validator_count"],
     "quorum": baseline["quorum"],
+    "status_blocks": baseline["status_blocks"],
     "committed_height": baseline["committed_height"],
     "committed_subject": baseline["committed_subject"],
     "commit_qc": baseline["commit_qc"],
@@ -1991,6 +2017,11 @@ if current["committed_height"] <= previous["committed_height"]:
     raise SystemExit(
         "validator fleet did not advance a common committed height: "
         f"{current['committed_height']} <= {previous['committed_height']}"
+    )
+if current["status_blocks"] <= previous["status_blocks"]:
+    raise SystemExit(
+        "validator fleet /status.blocks did not advance with durable commits: "
+        f"{current['status_blocks']} <= {previous['status_blocks']}"
     )
 if current["committed_subject"] == previous["committed_subject"]:
     raise SystemExit("validator fleet advanced height without changing the common block hash")
@@ -2190,7 +2221,7 @@ account = source.get("account") or {}
 public_key = account.get("public_key")
 private_key = account.get("private_key")
 chain_discriminant = account.get("chain_discriminant")
-domain = account.get("domain", "wonderland.universal")
+domain = account.get("domain", "universal")
 basic_auth = source.get("basic_auth")
 transaction = source.get("transaction") or {}
 nonce = transaction.get("nonce", False)
@@ -2212,10 +2243,10 @@ if chain_discriminant is not None and not isinstance(chain_discriminant, int):
     raise SystemExit("write canary config `account.chain_discriminant` must be an integer")
 if chain_discriminant is not None and chain_discriminant != 369:
     raise SystemExit("write canary config must use Taira chain discriminant 369")
-if not isinstance(domain, str) or not domain:
-    domain = "wonderland.universal"
-elif "." not in domain:
-    domain = f"{domain}.universal"
+if not isinstance(domain, str) or not domain.strip():
+    domain = "universal"
+else:
+    domain = domain.strip()
 if not isinstance(nonce, bool):
     raise SystemExit("write canary config `transaction.nonce` must be a boolean when present")
 
@@ -2321,11 +2352,20 @@ ensure_write_canary_config() {
     echo "write canary config not found: ${WRITE_CONFIG}" >&2
     exit 1
   fi
+  if [[ -z "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE" ]]; then
+    echo "automatic canary bootstrap requires --onboarding-token-file ABSOLUTE_PATH" >&2
+    exit 1
+  fi
+  if [[ "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE" != /* ]]; then
+    echo "--onboarding-token-file must be an absolute path" >&2
+    exit 1
+  fi
 
   local bootstrap_cmd=(
     python3
     "${REPO_ROOT}/scripts/taira_bootstrap_canary.py"
     --torii-root "$target_url"
+    --onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"
     --output-config "$WRITE_CONFIG"
     --chain-id "$EXPECTED_TAIRA_CHAIN_ID"
     --alias-prefix "$ROLLOUT_CANARY_ALIAS_PREFIX"

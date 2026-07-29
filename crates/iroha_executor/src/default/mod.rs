@@ -11,7 +11,8 @@ pub use account::{
 /// Re-export asset visitor helpers used by the default executor.
 pub use asset::{
     visit_burn_asset_quantity, visit_mint_asset_quantity, visit_remove_asset_key_value,
-    visit_set_asset_key_value, visit_set_asset_transfer_control, visit_set_asset_transfer_freeze,
+    visit_set_asset_holding_limit, visit_set_asset_key_value,
+    visit_set_asset_transfer_availability, visit_set_asset_transfer_control,
     visit_transfer_asset_quantity,
 };
 /// Re-export asset-definition visitor helpers used by the default executor.
@@ -1022,12 +1023,16 @@ impl InstructionDispatch for InstructionBox {
             asset_definition::visit_set_asset_definition_balance_policy(executor, isi);
             return;
         }
-        if let Some(isi) = any.downcast_ref::<SetAssetTransferFreeze>() {
-            asset::visit_set_asset_transfer_freeze(executor, isi);
+        if let Some(isi) = any.downcast_ref::<SetAssetTransferAvailability>() {
+            asset::visit_set_asset_transfer_availability(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetAssetTransferControl>() {
             asset::visit_set_asset_transfer_control(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAssetHoldingLimit>() {
+            asset::visit_set_asset_holding_limit(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<RemoveAssetKeyValue>() {
@@ -3183,10 +3188,13 @@ pub mod domain {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 asset_definition_matches_domain(permission.asset.definition())
             }
-            AnyPermission::CanSetAssetTransferFreeze(permission) => {
+            AnyPermission::CanSetAssetTransferAvailability(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
+                asset_definition_matches_domain(&permission.asset_definition)
+            }
+            AnyPermission::CanSetAssetHoldingLimit(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
@@ -3499,6 +3507,10 @@ pub mod account {
             AnyPermission::CanInvokeContractEntrypoint(permission) => {
                 permission.contract.subject_id() == *account_id
             }
+            AnyPermission::CanSetAssetTransferAvailability(permission) => {
+                permission.account == *account_id
+            }
+            AnyPermission::CanSetAssetHoldingLimit(permission) => permission.account == *account_id,
             AnyPermission::CanRegisterTrigger(permission) => permission.authority == *account_id,
             AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -3520,7 +3532,6 @@ pub mod account {
             | AnyPermission::CanBurnAssetWithDefinition(_)
             | AnyPermission::CanTransferAssetWithDefinition(_)
             | AnyPermission::CanModifyAssetMetadataWithDefinition(_)
-            | AnyPermission::CanSetAssetTransferFreeze(_)
             | AnyPermission::CanSetAssetTransferDailyLimit(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -3804,10 +3815,13 @@ pub mod asset_definition {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.definition() == asset_definition_id
             }
-            AnyPermission::CanSetAssetTransferFreeze(permission) => {
+            AnyPermission::CanSetAssetTransferAvailability(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
+                &permission.asset_definition == asset_definition_id
+            }
+            AnyPermission::CanSetAssetHoldingLimit(permission) => {
                 &permission.asset_definition == asset_definition_id
             }
             AnyPermission::CanUnregisterAccount(_)
@@ -3883,8 +3897,8 @@ pub mod asset_definition {
 pub mod asset {
     use iroha_executor_data_model::permission::asset::{
         CanBurnAsset, CanBurnAssetWithDefinition, CanMintAsset, CanMintAssetWithDefinition,
-        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition,
-        CanSetAssetTransferDailyLimit, CanSetAssetTransferFreeze, CanTransferAsset,
+        CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition, CanSetAssetHoldingLimit,
+        CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit, CanTransferAsset,
         CanTransferAssetWithDefinition,
     };
     use iroha_smart_contract::data_model::isi::{
@@ -3931,10 +3945,10 @@ pub mod asset {
         ))
     }
 
-    /// Sets an account transfer freeze when genesis or the asset-definition owner invokes it.
-    pub fn visit_set_asset_transfer_freeze<V: Execute + Visit + ?Sized>(
+    /// Sets account transfer availability when genesis or the asset-definition owner invokes it.
+    pub fn visit_set_asset_transfer_availability<V: Execute + Visit + ?Sized>(
         executor: &mut V,
-        isi: &SetAssetTransferFreeze,
+        isi: &SetAssetTransferAvailability,
     ) {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
@@ -3949,22 +3963,16 @@ pub mod asset {
             Ok(false) => {}
         }
 
-        let (account_domain, account_dataspace) =
-            match target_account_scope(executor, isi.account_id()) {
-                Ok(scope) => scope,
-                Err(err) => deny!(executor, ValidationFail::NotPermitted(err)),
-            };
-        let permission = CanSetAssetTransferFreeze {
+        let permission = CanSetAssetTransferAvailability {
+            account: isi.account_id().clone(),
             asset_definition: isi.asset_definition_id().clone(),
-            account_domain,
-            account_dataspace,
         };
         if permission.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
         deny!(
             executor,
-            "transfer freeze requires an asset- and account-domain-scoped permission"
+            "transfer availability requires an exact account-and-asset permission"
         );
     }
 
@@ -4009,6 +4017,38 @@ pub mod asset {
         deny!(
             executor,
             "daily limit requires an asset- and account-domain-scoped permission"
+        );
+    }
+
+    /// Sets a native holding limit when invoked by genesis, the asset-definition
+    /// owner, or an explicitly provisioned exact account-and-asset authority.
+    pub fn visit_set_asset_holding_limit<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAssetHoldingLimit,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_asset_definition_owner(
+            isi.asset_definition_id(),
+            &executor.context().authority,
+            executor.host(),
+        ) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+
+        let permission = CanSetAssetHoldingLimit {
+            account: isi.account_id().clone(),
+            asset_definition: isi.asset_definition_id().clone(),
+        };
+        if permission.is_owned_by(&executor.context().authority, executor.host()) {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "holding limit requires an exact account-and-asset permission"
         );
     }
 
@@ -5304,8 +5344,9 @@ pub mod trigger {
             | AnyPermission::CanBurnAsset(_)
             | AnyPermission::CanModifyAssetMetadata(_)
             | AnyPermission::CanTransferAsset(_)
-            | AnyPermission::CanSetAssetTransferFreeze(_)
+            | AnyPermission::CanSetAssetTransferAvailability(_)
             | AnyPermission::CanSetAssetTransferDailyLimit(_)
+            | AnyPermission::CanSetAssetHoldingLimit(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)

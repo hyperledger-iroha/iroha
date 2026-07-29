@@ -1180,8 +1180,9 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
             | syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
             | syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
-            | syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY
             | syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT
             | syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
             | syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
             | syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
@@ -1193,6 +1194,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
         number,
         syscalls::SYSCALL_EXIT
             | syscalls::SYSCALL_ABORT
+            | syscalls::SYSCALL_CONTRACT_ABORT
             | syscalls::SYSCALL_DEBUG_PRINT
             | syscalls::SYSCALL_DEBUG_LOG
             | syscalls::SYSCALL_GET_PRIVATE_INPUT
@@ -1694,9 +1696,10 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
     };
 
     let quote = match number {
-        syscalls::SYSCALL_DEBUG_PRINT | syscalls::SYSCALL_EXIT | syscalls::SYSCALL_ABORT => {
-            DEBUG_GAS
-        }
+        syscalls::SYSCALL_DEBUG_PRINT
+        | syscalls::SYSCALL_EXIT
+        | syscalls::SYSCALL_ABORT
+        | syscalls::SYSCALL_CONTRACT_ABORT => DEBUG_GAS,
         syscalls::SYSCALL_DEBUG_LOG => {
             let pointer = vm.register(10);
             if pointer == 0 {
@@ -3196,9 +3199,11 @@ impl IVMHost for DefaultHost {
                 Ok(DEBUG_GAS)
             }
             crate::syscalls::SYSCALL_ABORT => {
-                // Preserve r10 so language-level `require` error codes remain
-                // observable in deterministic execution diagnostics.
                 vm.request_abort();
+                Ok(DEBUG_GAS)
+            }
+            crate::syscalls::SYSCALL_CONTRACT_ABORT => {
+                vm.request_contract_abort(vm.register(10));
                 Ok(DEBUG_GAS)
             }
             crate::syscalls::SYSCALL_CURRENT_TIME_MS

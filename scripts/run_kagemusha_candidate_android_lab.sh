@@ -280,6 +280,7 @@ LIFECYCLE_CLASS="$PACKAGE.KagemushaCandidateLifecycleInstrumentedTest"
 EXPORT_CLASS="$PACKAGE.KagemushaCandidateArtifactExportInstrumentedTest"
 REMOTE_EVIDENCE="/sdcard/Android/data/$PACKAGE/files/evidence"
 SOURCE_SEAL="$ROOT_DIR/scripts/kagemusha_source_tree_seal.py"
+ARTIFACT_STAGER="$ROOT_DIR/scripts/stage_kagemusha_candidate_android_artifacts.py"
 
 sha256_file() {
   local output
@@ -328,6 +329,8 @@ source_snapshot() {
 
 [[ -f "$STAGE_MANIFEST" && ! -L "$STAGE_MANIFEST" ]] || fail \
   "missing regular candidate stage manifest: $STAGE_MANIFEST"
+[[ -f "$ARTIFACT_STAGER" && ! -L "$ARTIFACT_STAGER" && -x "$ARTIFACT_STAGER" ]] || fail \
+  "candidate app-private artifact stager is unavailable"
 [[ "$(sha256_file "$STAGE_MANIFEST")" == "$STAGE_SHA256" ]] || fail \
   "candidate stage manifest digest does not match --stage-sha256"
 "$PYTHON3_BINARY" -I - "$ROOT_DIR" "$EVIDENCE_ROOT" "$CANDIDATE_SHA256" "$STAGE_SHA256" \
@@ -798,6 +801,19 @@ gradle_command = [
     ":kagemusha-candidate-evidence-lab:stageCandidateLabApk",
     ":kagemusha-candidate-evidence-lab:stageCandidateLabTestApk",
 ]
+artifact_stage_command = [
+    python_path, "-I", str(root / "scripts/stage_kagemusha_candidate_android_artifacts.py"),
+    "--adb", adb_path,
+    "--evidence-root", str(
+        root / "artifacts/kagemusha-candidate-evidence" / candidate_sha / stage_sha
+    ),
+    "--candidate-sha256", candidate_sha,
+    "--stage-sha256", stage_sha,
+    "--source-commit", source_commit,
+    "--source-tree-sha256", source_tree_sha,
+]
+if serial:
+    artifact_stage_command += ["--serial", serial]
 validated = mode == "full"
 validator_command = None
 confirmation_command = None
@@ -905,6 +921,9 @@ payload = {
     "executed_commands": {
         "native_build": {"cwd": str(root), "argv": native_command},
         "gradle_build": {"cwd": str(root / "kotlin"), "argv": gradle_command},
+        "artifact_stage": (
+            {"cwd": str(root), "argv": artifact_stage_command} if validated else None
+        ),
         "trusted_slot_validator": (
             {"cwd": str(root), "redacted_argv_template": validator_command}
             if validator_command else None
@@ -1259,6 +1278,19 @@ verify_installed_apks() {
 
 verify_installed_apks immediately_after_install
 "${ADB[@]}" shell pm clear "$PACKAGE" >/dev/null
+ARTIFACT_STAGE_ARGS=(
+  --adb "$ADB_BINARY"
+  --evidence-root "$EVIDENCE_ROOT"
+  --candidate-sha256 "$CANDIDATE_SHA256"
+  --stage-sha256 "$STAGE_SHA256"
+  --source-commit "$SOURCE_COMMIT"
+  --source-tree-sha256 "$SOURCE_TREE_SHA256"
+)
+if [[ -n "$SERIAL" ]]; then
+  ARTIFACT_STAGE_ARGS+=( --serial "$SERIAL" )
+fi
+"$PYTHON3_BINARY" -I "$ARTIFACT_STAGER" "${ARTIFACT_STAGE_ARGS[@]}" || fail \
+  "failed to stream the authenticated KRV4 set into app-private storage"
 
 mkdir -p "$EVIDENCE_ROOT/evidence"
 LIFECYCLE_COMMAND=(

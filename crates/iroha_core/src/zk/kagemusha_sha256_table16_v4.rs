@@ -25,6 +25,12 @@ pub(crate) use table16::util;
 #[allow(unused_imports)]
 pub use table16::{Table16Chip, Table16Config};
 
+/// Number of canonical spread-table rows that fit at `k = 16`.
+///
+/// Halo2 reserves nine rows for blinding and argument bookkeeping, so the
+/// final nine 16-bit words are handled by the constrained tail relation.
+pub(crate) const TABLE16_SPREAD_TABLE_ROWS: usize = (1 << 16) - 9;
+
 /// Number of 32-bit words in one SHA-256 block.
 pub const BLOCK_SIZE: usize = 16;
 /// Number of bytes in one SHA-256 block.

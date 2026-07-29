@@ -61,7 +61,11 @@ pub mod kagemusha_artifact_v4;
 /// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_cycle_loader;
+/// Dense normalized-GLV MSM used by the reciprocal Kagemusha point audit.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_dense_msm;
 /// Offline-verifiable consensus finality for Kagemusha top-up anchors.
+#[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_finality;
 /// Fixed-shape ABI-21/V4 Eq/Ep recursive verifier and terminal IPA decisions.
 #[cfg(feature = "zk-halo2-ipa")]

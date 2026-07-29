@@ -13,9 +13,7 @@
 //! remains unavailable until the segmented AIR and exact Merkle/FRI wire close
 //! every enumerated gap.
 
-use iroha_data_model::privacy::{
-    IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1,
-};
+use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1};
 use thiserror::Error;
 
 use super::{
@@ -36,8 +34,7 @@ use crate::privacy_state::{
     PrivacyZkX509AuthoritativeStateV1, validate_privacy_zk_x509_statement_state_v1,
 };
 
-const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha.zk-x509.provisional-compiled-profile.v1";
+const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.provisional-compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
 
 /// Frozen digest of the exact currently compiled, fail-closed native profile.

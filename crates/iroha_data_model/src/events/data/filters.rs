@@ -228,6 +228,10 @@ mod model {
         pub(super) id_matcher: Option<super::AssetId>,
         /// If specified matches only events for assets belonging to this asset definition
         pub(super) asset_definition_matcher: Option<super::AssetDefinitionId>,
+        /// If specified matches only transfer events debiting this account.
+        pub(super) transfer_source_account_matcher: Option<super::AccountId>,
+        /// If specified matches only transfer events crediting this account.
+        pub(super) transfer_destination_account_matcher: Option<super::AccountId>,
         /// Matches only event from this set
         pub(super) event_set: AssetEventSet,
     }
@@ -1204,6 +1208,8 @@ impl AssetEventFilter {
         Self {
             id_matcher: None,
             asset_definition_matcher: None,
+            transfer_source_account_matcher: None,
+            transfer_destination_account_matcher: None,
             event_set: AssetEventSet::all(),
         }
     }
@@ -1219,6 +1225,20 @@ impl AssetEventFilter {
     #[must_use]
     pub fn for_asset_definition(mut self, asset_definition_matcher: AssetDefinitionId) -> Self {
         self.asset_definition_matcher = Some(asset_definition_matcher);
+        self
+    }
+
+    /// Match only transfer events whose source belongs to `account`.
+    #[must_use]
+    pub fn for_transfer_source_account(mut self, account: AccountId) -> Self {
+        self.transfer_source_account_matcher = Some(account);
+        self
+    }
+
+    /// Match only transfer events whose destination belongs to `account`.
+    #[must_use]
+    pub fn for_transfer_destination_account(mut self, account: AccountId) -> Self {
+        self.transfer_destination_account_matcher = Some(account);
         self
     }
 
@@ -1248,6 +1268,25 @@ impl super::EventFilter for AssetEventFilter {
                 .asset_definition_matcher
                 .as_ref()
                 .is_none_or(|definition| definition == &event.origin().definition)
+            && self
+                .transfer_source_account_matcher
+                .as_ref()
+                .is_none_or(|account| {
+                    matches!(
+                        event,
+                        AssetEvent::Transferred(transfer) if transfer.source().account() == account
+                    )
+                })
+            && self
+                .transfer_destination_account_matcher
+                .as_ref()
+                .is_none_or(|account| {
+                    matches!(
+                        event,
+                        AssetEvent::Transferred(transfer)
+                            if transfer.destination().account() == account
+                    )
+                })
             && self.event_set.matches(event)
     }
 }
@@ -1902,6 +1941,43 @@ mod tests {
         let filter = AssetEventFilter::new().for_events(AssetEventSet::Added);
         assert!(filter.matches(&added));
         assert!(!filter.matches(&created));
+    }
+
+    #[test]
+    fn asset_transfer_filter_matches_both_exact_participants() {
+        let source = checked_random_account_id();
+        let destination = checked_random_account_id();
+        let other = checked_random_account_id();
+        let definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let event = AssetEvent::Transferred(AssetTransferred {
+            source: AssetId::new(definition.clone(), source.clone()),
+            destination: AssetId::new(definition.clone(), destination.clone()),
+            amount: 7_u32.into(),
+        });
+
+        let matching = AssetEventFilter::new()
+            .for_events(AssetEventSet::Transferred)
+            .for_asset_definition(definition)
+            .for_transfer_source_account(source)
+            .for_transfer_destination_account(destination);
+        assert!(matching.matches(&event));
+        assert!(
+            !AssetEventFilter::new()
+                .for_events(AssetEventSet::Transferred)
+                .for_transfer_destination_account(other)
+                .matches(&event)
+        );
+        assert!(
+            !AssetEventFilter::new()
+                .for_transfer_source_account(event.origin().account().clone())
+                .matches(&AssetEvent::Added(AssetChanged {
+                    asset: event.origin().clone(),
+                    amount: 7_u32.into(),
+                }))
+        );
     }
 
     #[test]

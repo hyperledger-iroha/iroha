@@ -1765,7 +1765,6 @@ pub mod isi {
     const OFFLINE_ATTESTATION_ANDROID_TAG_USAGE_COUNT_LIMIT: u32 = 405;
     const OFFLINE_ATTESTATION_ANDROID_TAG_ALL_APPLICATIONS: u32 = 600;
     const OFFLINE_ATTESTATION_ANDROID_TAG_ATTESTATION_APPLICATION_ID: u32 = 709;
-    #[cfg(test)]
     const APPLE_APP_ATTESTATION_ROOT_CA_DER_B64: &str = concat!(
         "MIICITCCAaegAwIBAgIQC/O+DvHN0uD7jG5yH2IXmDAKBggqhkjOPQQDAzBSMSYw",
         "JAYDVQQDDB1BcHBsZSBBcHAgQXR0ZXN0YXRpb24gUm9vdCBDQTETMBEGA1UECgwK",
@@ -1780,7 +1779,6 @@ pub mod isi {
         "53O5+FRXgeLhpJ06ysC5PrOyAjEAp5U4xDgEgllF7En3VcE3iexZZtKeYnpqtijV",
         "oyFraWVIyd/dganmrduC1bmTBGwD"
     );
-    #[cfg(test)]
     const ANDROID_KEY_ATTESTATION_ROOT_CA_DER_B64: &str = concat!(
         "MIIFHDCCAwSgAwIBAgIJAPHBcqaZ6vUdMA0GCSqGSIb3DQEBCwUAMBsxGTAXBgNV",
         "BAUTEGY5MjAwOWU4NTNiNmIwNDUwHhcNMjIwMzIwMTgwNzQ4WhcNNDIwMzE1MTgw",
@@ -1811,7 +1809,6 @@ pub mod isi {
         "vaI47gC+TNpkgYGkkBT6B/m/U01BuOBBTzhIlMEZq9qkDWuM2cA5kW5V3FJUcfHn",
         "w1IdYIg2Wxg7yHcQZemFQg=="
     );
-    #[cfg(test)]
     const ANDROID_KEY_ATTESTATION_CA_DER_B64: &str = concat!(
         "MIICIjCCAaigAwIBAgIRAISp0Cl7DrWK5/8OgN52BgUwCgYIKoZIzj0EAwMwUjEc",
         "MBoGA1UEAwwTS2V5IEF0dGVzdGF0aW9uIENBMTEQMA4GA1UECwwHQW5kcm9pZDET",
@@ -2137,11 +2134,104 @@ pub mod isi {
         hasher.finalize().into()
     }
 
-    #[cfg(test)]
     fn decode_trusted_root_der(root_b64: &str) -> Result<Vec<u8>, Error> {
         BASE64_STANDARD.decode(root_b64).map_err(|_| {
             labeled_invariant("invalid_attestation", "trusted root DER is invalid").into()
         })
+    }
+
+    /// Build the canonical fail-closed production device policy used by a
+    /// Kagemusha release activation.
+    ///
+    /// The platform roots are the built-in Apple App Attest and Android
+    /// KeyMint roots used by the native verifier. App identities and signing
+    /// digests remain explicit operator input; this helper never invents or
+    /// relaxes them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an app identity, allowlist, signing digest, or
+    /// built-in root does not satisfy the production activation policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn production_offline_device_attestation_policy_v1(
+        ios_team_id: String,
+        ios_bundle_id: String,
+        mut ios_validation_categories: Vec<u32>,
+        mut ios_bundle_versions: Vec<String>,
+        android_package_name: String,
+        mut android_signing_certificate_sha256: Vec<[u8; 32]>,
+        evaluation_time_ms: u64,
+    ) -> Result<OfflineDeviceAttestationPolicy, String> {
+        let original_category_count = ios_validation_categories.len();
+        ios_validation_categories.sort_unstable();
+        ios_validation_categories.dedup();
+        if ios_validation_categories.len() != original_category_count {
+            return Err("iOS validation categories must not contain duplicates".to_owned());
+        }
+
+        let original_version_count = ios_bundle_versions.len();
+        ios_bundle_versions.sort();
+        ios_bundle_versions.dedup();
+        if ios_bundle_versions.len() != original_version_count {
+            return Err("iOS bundle versions must not contain duplicates".to_owned());
+        }
+
+        let original_signer_count = android_signing_certificate_sha256.len();
+        android_signing_certificate_sha256.sort_unstable();
+        android_signing_certificate_sha256.dedup();
+        if android_signing_certificate_sha256.len() != original_signer_count {
+            return Err(
+                "Android signing certificate digests must not contain duplicates".to_owned(),
+            );
+        }
+
+        let policy = OfflineDeviceAttestationPolicy {
+            version: 1,
+            trusted_roots: vec![
+                OfflineDeviceAttestationTrustedRoot {
+                    platform: OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST.to_owned(),
+                    der: decode_trusted_root_der(APPLE_APP_ATTESTATION_ROOT_CA_DER_B64)
+                        .map_err(|error| error.to_string())?,
+                    not_before_ms: None,
+                    not_after_ms: None,
+                },
+                OfflineDeviceAttestationTrustedRoot {
+                    platform: OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT.to_owned(),
+                    der: decode_trusted_root_der(ANDROID_KEY_ATTESTATION_ROOT_CA_DER_B64)
+                        .map_err(|error| error.to_string())?,
+                    not_before_ms: None,
+                    not_after_ms: None,
+                },
+                OfflineDeviceAttestationTrustedRoot {
+                    platform: OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT.to_owned(),
+                    der: decode_trusted_root_der(ANDROID_KEY_ATTESTATION_CA_DER_B64)
+                        .map_err(|error| error.to_string())?,
+                    not_before_ms: None,
+                    not_after_ms: None,
+                },
+            ],
+            revoked_certificate_sha256: Vec::new(),
+            ios_apps: vec![OfflineIosAppAttestationPolicy {
+                team_id: ios_team_id,
+                bundle_id: ios_bundle_id,
+                environment: OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION.to_owned(),
+                allowed_validation_categories: ios_validation_categories,
+                allowed_bundle_versions: ios_bundle_versions,
+                allow_legacy_auth_data_without_extensions: false,
+            }],
+            android_apps: vec![OfflineAndroidAppAttestationPolicy {
+                package_name: android_package_name,
+                signing_certificate_sha256: android_signing_certificate_sha256
+                    .into_iter()
+                    .map(|digest| digest.to_vec())
+                    .collect(),
+            }],
+            require_ios_app_policy: true,
+            require_android_app_policy: true,
+        };
+        validate_offline_attestation_policy_for_release_activation(&policy, evaluation_time_ms)
+            .map_err(|error| error.to_string())?;
+        Ok(policy)
     }
 
     #[cfg(test)]
@@ -9276,6 +9366,51 @@ pub mod isi {
                 validate_offline_attestation_policy_for_release_activation(&legacy_ios, 0).is_err(),
                 "activation must not publish a legacy App Attest fallback",
             );
+        }
+
+        #[test]
+        fn production_device_policy_constructor_binds_explicit_apps_and_builtin_roots() {
+            let policy = production_offline_device_attestation_policy_v1(
+                "TEAMID1234".to_owned(),
+                "io.soramitsu.pk".to_owned(),
+                vec![10, 4],
+                vec!["42".to_owned(), "41".to_owned()],
+                "com.pk.retailwallet".to_owned(),
+                vec![[0x66; 32], [0x55; 32]],
+                1_800_000_000_000,
+            )
+            .expect("explicit production app identities should build a fail-closed policy");
+
+            assert_eq!(policy.trusted_roots.len(), 3);
+            assert!(policy.require_ios_app_policy);
+            assert!(policy.require_android_app_policy);
+            assert_eq!(
+                policy.ios_apps[0].allowed_validation_categories,
+                vec![4, 10]
+            );
+            assert_eq!(
+                policy.ios_apps[0].allowed_bundle_versions,
+                vec!["41".to_owned(), "42".to_owned()]
+            );
+            assert_eq!(
+                policy.android_apps[0].signing_certificate_sha256,
+                vec![vec![0x55; 32], vec![0x66; 32]]
+            );
+        }
+
+        #[test]
+        fn production_device_policy_constructor_rejects_duplicate_operator_input() {
+            let error = production_offline_device_attestation_policy_v1(
+                "TEAMID1234".to_owned(),
+                "io.soramitsu.pk".to_owned(),
+                vec![4, 4],
+                vec!["42".to_owned()],
+                "com.pk.retailwallet".to_owned(),
+                vec![[0x55; 32]],
+                1_800_000_000_000,
+            )
+            .expect_err("duplicate policy input must not be silently normalized");
+            assert!(error.contains("must not contain duplicates"));
         }
 
         #[test]

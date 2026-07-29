@@ -230,9 +230,12 @@ public enum KagemushaRecursiveSpend {
         "step-ep.verifying-key.krv4",
         "step-ep.bootstrap-witness.krv4",
     ]
-    public static let absoluteMaximumProofPairBytesV4: UInt32 = 21_764
+    public static let absoluteMaximumProofPairBytesV4: UInt32 = 256 * 1024
     public static let maximumProofSteps: UInt32 = 128
-    public static let artifactMaximumFileBytes = 256 * 1024 * 1024
+    /// Maximum size of one streamed `KRV4KEY` artifact.
+    public static let artifactMaximumStreamedFileBytesV4: UInt64 = 4 * 1024 * 1024 * 1024
+    /// Maximum size of an archive materialized as one Swift `Data` value.
+    public static let artifactMaximumInMemoryArchiveBytes = 256 * 1024 * 1024
     public static let artifactMaximumChunkBytes = 1 * 1024 * 1024
     public static let topUpFinalityProofMaximumArchiveBytes = 2 * 1_024 * 1_024
     public static let topUpFinalityRosterMaximumArchiveBytes = 2 * 1_024 * 1_024
@@ -591,7 +594,7 @@ public enum KagemushaRecursiveSpend {
     static func requireArchive(_ archive: Data, schema: String, field: String) throws {
         guard let requiredPaddingLength = requiredHeaderPaddingLength(forWireName: schema),
               !archive.isEmpty,
-              archive.count <= artifactMaximumFileBytes,
+              archive.count <= artifactMaximumInMemoryArchiveBytes,
               let frame = noritoDecodeFrame(archive),
               frame.header.schema == noritoSchemaHash(forTypeName: schema),
               frame.header.compression == .none,

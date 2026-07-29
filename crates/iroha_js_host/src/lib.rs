@@ -11,6 +11,8 @@
     clippy::unnecessary_wraps
 )]
 
+mod secure_private_fs;
+
 macro_rules! norito_json {
     ({ $($key:literal : $value:expr),+ $(,)? }) => {{
         let mut object = norito::json::Map::new();
@@ -83,9 +85,10 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
-        AssetDefinitionAlias,
+        AssetDefinitionAlias, AssetTransferAvailability,
         definition::{AssetDefinition, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
+        validate_asset_transfer_availability_reason,
     },
     block::{
         BlockHeader,
@@ -106,6 +109,7 @@ use iroha_data_model::{
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
         Unregister, UnregisterBox,
+        asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
@@ -8677,6 +8681,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 || map.contains_key("Settlement")
                 || map.contains_key("CancelSmartContractCodeUpload")
                 || map.contains_key("CancelAssetLock")
+                || map.contains_key("SetAssetTransferAvailability")
                 || map.contains_key("ProposeValidationFeePolicy")
     );
     if !requires_explicit_parser {
@@ -8686,6 +8691,118 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
     match value {
         json::Value::Object(mut map) => {
+            if let Some(payload) = map.remove("SetAssetTransferAvailability") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferAvailability instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut fields) = payload else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "SetAssetTransferAvailability must be an object",
+                    ));
+                };
+                let account_id = parse_account_id_value(
+                    required_value(&mut fields, "account_id", "SetAssetTransferAvailability")?,
+                    "SetAssetTransferAvailability.account_id",
+                )?;
+                let asset_definition_literal = parse_string_value(
+                    required_value(
+                        &mut fields,
+                        "asset_definition_id",
+                        "SetAssetTransferAvailability",
+                    )?,
+                    "SetAssetTransferAvailability.asset_definition_id",
+                )?;
+                let asset_definition_id = AssetDefinitionId::parse_address_literal(
+                    &asset_definition_literal,
+                )
+                .map_err(|error| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "invalid SetAssetTransferAvailability.asset_definition_id: {error}"
+                        ),
+                    )
+                })?;
+                let expected_revision = parse_u64_value(
+                    required_value(
+                        &mut fields,
+                        "expected_revision",
+                        "SetAssetTransferAvailability",
+                    )?,
+                    "SetAssetTransferAvailability.expected_revision",
+                )?;
+                let parse_availability =
+                    |value: json::Value,
+                     context: &str|
+                     -> napi::Result<AssetTransferAvailability> {
+                        match value {
+                            json::Value::String(value) if value == "Enabled" => {
+                                Ok(AssetTransferAvailability::Enabled)
+                            }
+                            json::Value::String(value) if value == "Disabled" => {
+                                Ok(AssetTransferAvailability::Disabled)
+                            }
+                            other => Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!(
+                                    "{context} must be exactly \"Enabled\" or \"Disabled\" (found {other:?})"
+                                ),
+                            )),
+                        }
+                    };
+                let incoming = parse_availability(
+                    required_value(&mut fields, "incoming", "SetAssetTransferAvailability")?,
+                    "SetAssetTransferAvailability.incoming",
+                )?;
+                let outgoing = parse_availability(
+                    required_value(&mut fields, "outgoing", "SetAssetTransferAvailability")?,
+                    "SetAssetTransferAvailability.outgoing",
+                )?;
+                let reason = match fields.remove("reason") {
+                    None | Some(json::Value::Null) => None,
+                    Some(json::Value::String(value))
+                        if !value.is_empty() && value.trim() == value =>
+                    {
+                        Some(value)
+                    }
+                    Some(other) => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "SetAssetTransferAvailability.reason must be non-empty exact text or null (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                validate_asset_transfer_availability_reason(reason.as_deref()).map_err(
+                    |error| napi::Error::new(napi::Status::InvalidArg, error.to_string()),
+                )?;
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferAvailability contains unexpected field(s): {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                return Ok(SetAssetTransferAvailability::new(
+                    account_id,
+                    asset_definition_id,
+                    expected_revision,
+                    incoming,
+                    outgoing,
+                    reason,
+                )
+                .into());
+            }
             if let Some(payload) = map.remove("DeploySoracloudService") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -10495,6 +10612,59 @@ fn exact_json_object_fields(
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(availability) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetTransferAvailability>()
+    {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "account_id".to_owned(),
+            json::to_value(&availability.account_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "asset_definition_id".to_owned(),
+            json::to_value(&availability.asset_definition_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "expected_revision".to_owned(),
+            json::Value::String(availability.expected_revision.to_string()),
+        );
+        inner.insert(
+            "incoming".to_owned(),
+            json::Value::String(
+                match availability.incoming {
+                    AssetTransferAvailability::Enabled => "Enabled",
+                    AssetTransferAvailability::Disabled => "Disabled",
+                }
+                .to_owned(),
+            ),
+        );
+        inner.insert(
+            "outgoing".to_owned(),
+            json::Value::String(
+                match availability.outgoing {
+                    AssetTransferAvailability::Enabled => "Enabled",
+                    AssetTransferAvailability::Disabled => "Disabled",
+                }
+                .to_owned(),
+            ),
+        );
+        inner.insert(
+            "reason".to_owned(),
+            availability
+                .reason
+                .as_ref()
+                .map_or(json::Value::Null, |value| {
+                    json::Value::String(value.clone())
+                }),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetTransferAvailability".to_owned(),
+            json::Value::Object(inner),
+        );
+        return Ok(json::Value::Object(outer));
+    }
     if let Some(cancel) = instruction_ref.as_any().downcast_ref::<CancelAssetLock>() {
         if cancel.expected_remaining_amount.is_zero() {
             return Err(napi::Error::new(

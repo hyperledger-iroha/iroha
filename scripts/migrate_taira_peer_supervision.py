@@ -40,7 +40,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Sequence
 
 PEER_COUNT = 4
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 CONFIRMATION = "ADOPT-EXISTING-TAIRA-STORAGE"
 DEFAULT_LABEL_PREFIX = "io.soramitsu.taira.validator"
 SUPERVISOR_SOURCE = Path(__file__).with_name("taira_peer_supervisor.py")
@@ -109,6 +109,8 @@ class PathIdentity:
     gid: int
     mode: int
     size: int | None = None
+    mtime_ns: int | None = None
+    ctime_ns: int | None = None
     sha256: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -148,11 +150,13 @@ def read_regular_file(path: Path) -> tuple[bytes, os.stat_result]:
         before.st_ino,
         before.st_size,
         before.st_mtime_ns,
+        before.st_ctime_ns,
     ) != (
         after.st_dev,
         after.st_ino,
         after.st_size,
         after.st_mtime_ns,
+        after.st_ctime_ns,
     ):
         raise MigrationError(f"file changed while it was read: {path}")
     return b"".join(chunks), after
@@ -173,8 +177,55 @@ def file_identity(path: Path, *, executable: bool = False) -> PathIdentity:
         gid=info.st_gid,
         mode=stat.S_IMODE(info.st_mode),
         size=info.st_size,
+        mtime_ns=info.st_mtime_ns,
+        ctime_ns=info.st_ctime_ns,
         sha256=sha256_bytes(body),
     )
+
+
+def require_root_controlled_executable_chain(path: Path) -> None:
+    """Require a root-owned executable path the runtime user cannot replace."""
+
+    if not path.is_absolute() or ".." in path.parts:
+        raise MigrationError(
+            f"stat-sealed validator binary path is not canonical and absolute: {path}"
+        )
+    components = [*reversed(path.parents), path]
+    for index, component in enumerate(components):
+        info = component.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise MigrationError(
+                f"stat-sealed validator binary path contains a symlink: {component}"
+            )
+        if index + 1 == len(components):
+            if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+                raise MigrationError(
+                    "stat-sealed validator binary is not an executable regular "
+                    f"file: {component}"
+                )
+        elif not stat.S_ISDIR(info.st_mode):
+            raise MigrationError(
+                f"stat-sealed validator binary ancestor is not a directory: {component}"
+            )
+        if info.st_uid != 0:
+            raise MigrationError(
+                f"stat-sealed validator binary path is not root-owned: {component}"
+            )
+        if stat.S_IMODE(info.st_mode) & 0o022:
+            raise MigrationError(
+                "stat-sealed validator binary path is group/world writable: "
+                f"{component}"
+            )
+
+
+def binary_supports_fast_stat_seal(path: Path) -> bool:
+    """Return whether repeated starts can authenticate ``path`` in O(1)."""
+
+    try:
+        require_root_controlled_executable_chain(path)
+    except (MigrationError, OSError):
+        return False
+    return True
 
 
 def directory_identity(path: Path) -> PathIdentity:
@@ -487,6 +538,20 @@ def launchd_plist(
         "--stable-uptime-seconds",
         str(runtime["stable_uptime_seconds"]),
     ]
+    if runtime["binary_stat_sealed"]:
+        binary = manifest["binary"]
+        program_arguments[6:6] = [
+            "--binary-device",
+            str(binary["device"]),
+            "--binary-inode",
+            str(binary["inode"]),
+            "--binary-size",
+            str(binary["size"]),
+            "--binary-mtime-ns",
+            str(binary["mtime_ns"]),
+            "--binary-ctime-ns",
+            str(binary["ctime_ns"]),
+        ]
     payload = {
         "Label": peer["label"],
         "ProgramArguments": program_arguments,
@@ -525,7 +590,9 @@ def create_plan(
     require_descendant(genesis, base, "canonical genesis")
     genesis_identity = file_identity(genesis)
     binary = normalize_absolute(args.irohad or base / "bin" / "irohad", resolve=True)
-    require_descendant(binary, base, "--irohad")
+    binary_stat_sealed = binary_supports_fast_stat_seal(binary)
+    if not binary_stat_sealed:
+        require_descendant(binary, base, "--irohad")
     binary_identity = file_identity(binary, executable=True)
     python_path = normalize_absolute(args.python, resolve=True)
     python_identity = file_identity(python_path, executable=True)
@@ -711,6 +778,7 @@ def create_plan(
             "launchd_throttle_seconds": args.launchd_throttle_seconds,
             "termination_timeout_seconds": args.termination_timeout_seconds,
             "health_timeout_seconds": args.health_timeout_seconds,
+            "binary_stat_sealed": binary_stat_sealed,
             "rust_log": args.rust_log,
             "zk_halo2_enabled": args.zk_halo2_enabled,
         },
@@ -856,10 +924,19 @@ def validate_manifest_path_identity(
         if (
             not isinstance(identity.size, int)
             or identity.size < 0
+            or not isinstance(identity.mtime_ns, int)
+            or identity.mtime_ns < 0
+            or not isinstance(identity.ctime_ns, int)
+            or identity.ctime_ns < 0
             or not is_sha256(identity.sha256)
         ):
-            raise MigrationError("manifest file digest/size is invalid")
-    elif identity.size is not None or identity.sha256 is not None:
+            raise MigrationError("manifest file digest/stat seal is invalid")
+    elif (
+        identity.size is not None
+        or identity.mtime_ns is not None
+        or identity.ctime_ns is not None
+        or identity.sha256 is not None
+    ):
         raise MigrationError("manifest directory unexpectedly carries file metadata")
     return identity
 
@@ -1077,15 +1154,25 @@ def validate_manifest_shape(manifest: object) -> dict[str, Any]:
                 manifest[key], expected_kind="file"
             )
             if key == "binary":
-                require_descendant(
-                    Path(identity.path), base, "manifest validator binary"
-                )
+                binary_stat_sealed = manifest["runtime"]["binary_stat_sealed"]
+                if not isinstance(binary_stat_sealed, bool):
+                    raise MigrationError(
+                        "manifest binary stat-seal policy is invalid"
+                    )
+                if binary_stat_sealed:
+                    require_root_controlled_executable_chain(Path(identity.path))
+                else:
+                    require_descendant(
+                        Path(identity.path), base, "manifest validator binary"
+                    )
     except (KeyError, TypeError, ValueError) as exc:
         raise MigrationError("manifest structure is invalid") from exc
     return manifest
 
 
-def read_manifest(path: Path, expected_sha256: str) -> tuple[dict[str, Any], Path]:
+def read_manifest(
+    path: Path, expected_sha256: str
+) -> tuple[dict[str, Any], Path, dict[str, bytes]]:
     """Read and authenticate a staged manifest plus all rendered assets."""
 
     if not is_sha256(expected_sha256):
@@ -1102,6 +1189,7 @@ def read_manifest(path: Path, expected_sha256: str) -> tuple[dict[str, Any], Pat
         raise MigrationError(f"invalid manifest JSON: {path}") from exc
     manifest = validate_manifest_shape(manifest)
     stage = path.parent
+    authenticated_assets: dict[str, bytes] = {}
     for relative, expected in manifest["assets"].items():
         asset_body, _ = read_regular_file(safe_stage_asset(stage, relative))
         if (
@@ -1109,7 +1197,8 @@ def read_manifest(path: Path, expected_sha256: str) -> tuple[dict[str, Any], Pat
             or sha256_bytes(asset_body) != expected["sha256"]
         ):
             raise MigrationError(f"staged asset identity changed: {relative}")
-    return manifest, stage
+        authenticated_assets[relative] = asset_body
+    return manifest, stage, authenticated_assets
 
 
 def run_checked(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -1138,11 +1227,10 @@ def ensure_install_directory(path: Path, *, uid: int, gid: int, mode: int) -> No
 
 
 def copy_new_file(
-    source: Path, destination: Path, *, uid: int, gid: int, mode: int
+    body: bytes, destination: Path, *, uid: int, gid: int, mode: int
 ) -> None:
-    """Install one new file and refuse overwrite or symlink traversal."""
+    """Install authenticated bytes and refuse overwrite or symlink traversal."""
 
-    body, _ = read_regular_file(source)
     if destination.exists() or destination.is_symlink():
         raise MigrationError(f"refusing to replace installed file: {destination}")
     atomic_write(destination, body, mode)
@@ -1295,7 +1383,9 @@ def apply_plan(args: argparse.Namespace) -> None:
     if os.geteuid() != 0:
         raise MigrationError("apply requires root to install LaunchDaemons")
     manifest_path = normalize_absolute(args.manifest)
-    manifest, stage = read_manifest(manifest_path, args.expected_manifest_sha256)
+    manifest, stage, authenticated_assets = read_manifest(
+        manifest_path, args.expected_manifest_sha256
+    )
     validate_apply_preflight(manifest)
 
     runtime_user = manifest["runtime_user"]
@@ -1328,7 +1418,7 @@ def apply_plan(args: argparse.Namespace) -> None:
     ensure_install_directory(logs_dir, uid=uid, gid=gid, mode=0o700)
     installed_supervisor = Path(manifest["install"]["supervisor"])
     copy_new_file(
-        stage / SUPERVISOR_SOURCE.name,
+        authenticated_assets[SUPERVISOR_SOURCE.name],
         installed_supervisor,
         uid=uid,
         gid=gid,
@@ -1337,7 +1427,14 @@ def apply_plan(args: argparse.Namespace) -> None:
     for peer in manifest["peers"]:
         source = stage / "launchd" / f"{peer['label']}.plist"
         destination = launch_daemons_dir / source.name
-        copy_new_file(source, destination, uid=0, gid=0, mode=0o644)
+        relative = f"launchd/{source.name}"
+        copy_new_file(
+            authenticated_assets[relative],
+            destination,
+            uid=0,
+            gid=0,
+            mode=0o644,
+        )
 
     controller = dict_to_sealed_process_identity(manifest["legacy"]["controller"])
     legacy_peers = [

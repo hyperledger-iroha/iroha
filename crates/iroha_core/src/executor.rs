@@ -7820,6 +7820,13 @@ fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
             );
             VMError::DecodeError
         }
+        ValidationFail::ContractRejected(rejection) => {
+            debug!(
+                ?rejection,
+                "executor migrate entrypoint returned a declared contract rejection"
+            );
+            VMError::PermissionDenied
+        }
         ValidationFail::QueryFailed(err) => {
             debug!(
                 err = ?err,
@@ -8807,8 +8814,8 @@ fn initial_permission_resource_authority(
                 &token.asset_definition,
             )?
         }
-        "CanSetAssetTransferFreeze" => {
-            let token = decode!(executor_permission::asset::CanSetAssetTransferFreeze);
+        "CanSetAssetTransferAvailability" => {
+            let token = decode!(executor_permission::asset::CanSetAssetTransferAvailability);
             authority_owns_asset_definition(
                 &state_transaction.world,
                 authority,
@@ -8817,6 +8824,14 @@ fn initial_permission_resource_authority(
         }
         "CanSetAssetTransferDailyLimit" => {
             let token = decode!(executor_permission::asset::CanSetAssetTransferDailyLimit);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanSetAssetHoldingLimit" => {
+            let token = decode!(executor_permission::asset::CanSetAssetHoldingLimit);
             authority_owns_asset_definition(
                 &state_transaction.world,
                 authority,
@@ -9458,7 +9473,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     if is_any!(
         iroha_data_model::isi::SetAssetKeyValue,
         iroha_data_model::isi::RemoveAssetKeyValue,
-        iroha_data_model::isi::SetAssetTransferFreeze,
+        iroha_data_model::isi::SetAssetTransferAvailability,
         iroha_data_model::isi::SetAssetTransferControl,
         iroha_data_model::isi::SetAssetHoldingLimit,
         iroha_data_model::isi::SetAssetTransferBlacklist,
@@ -10568,8 +10583,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanTransferAsset",
     "CanModifyAssetMetadataWithDefinition",
     "CanModifyAssetMetadata",
-    "CanSetAssetTransferFreeze",
+    "CanSetAssetTransferAvailability",
     "CanSetAssetTransferDailyLimit",
+    "CanSetAssetHoldingLimit",
     "CanRegisterNft",
     "CanUnregisterNft",
     "CanTransferNft",
@@ -11216,9 +11232,9 @@ mod tests {
     use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        asset::AssetTransferControlWindow,
+        asset::{AssetTransferAvailability, AssetTransferControlWindow},
         executor::{self as data_model_executor, ExecutorDataModel},
-        isi::{Grant, SetAssetTransferControl, SetAssetTransferFreeze},
+        isi::{Grant, SetAssetTransferAvailability, SetAssetTransferControl},
         name::Name,
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
@@ -17426,11 +17442,13 @@ mod tests {
                 .expect("commit bootstrap block");
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let instruction = match instruction_kind {
-                "freeze" => InstructionBox::from(SetAssetTransferFreeze::new(
+                "availability" => InstructionBox::from(SetAssetTransferAvailability::new(
                     target,
                     asset_definition_id,
-                    true,
-                    Some("branded contract freeze fixture".to_owned()),
+                    0,
+                    AssetTransferAvailability::Enabled,
+                    AssetTransferAvailability::Disabled,
+                    Some("branded contract availability fixture".to_owned()),
                 )),
                 "limit" => InstructionBox::from(SetAssetTransferControl::new(
                     target,
@@ -17467,7 +17485,7 @@ mod tests {
             execute_case(
                 "apps_freeze::sbp",
                 "apply_freeze",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             "unprivileged branded freeze",
@@ -17486,13 +17504,13 @@ mod tests {
             (
                 "apps_freeze::sbp",
                 "wrong",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             (
                 "wrong::sbp",
                 "apply_freeze",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             (
@@ -17504,7 +17522,7 @@ mod tests {
             (
                 "apps_limits_update::sbp",
                 "apply_limits",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             (

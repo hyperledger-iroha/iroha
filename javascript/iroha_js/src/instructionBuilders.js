@@ -13,6 +13,7 @@ import {
   normalizeAccountAliasLiteral,
   normalizeAccountId,
   normalizeAccountIdOrAliasLiteral,
+  normalizeAssetDefinitionId,
   normalizeAssetId,
   normalizeAssetHoldingId,
   normalizeRwaId,
@@ -42,6 +43,8 @@ const DEFAULT_PRIVACY_MAX_AUX_BYTES = 64 * 1024;
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
 export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
+/** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
+export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1 =
   4 * Math.ceil(SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 / 3);
 const ZK_ACE_BACKEND = "stark/fri/sha256-goldilocks";
@@ -10807,6 +10810,115 @@ export function buildCancelAssetLockInstruction(options) {
   };
 }
 
+function normalizeAssetTransferAvailability(value, name) {
+  if (value !== "Enabled" && value !== "Disabled") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be exactly "Enabled" or "Disabled"`,
+      name,
+    );
+  }
+  return value;
+}
+
+function normalizeAssetTransferAvailabilityReason(value, name) {
+  const reason = assertExactNonBlankString(value, name);
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(reason)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must not contain control characters`,
+      name,
+    );
+  }
+  if (
+    Buffer.byteLength(reason, "utf8") >
+    ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1
+  ) {
+    throw new RangeError(`${name} exceeds 512 UTF-8 bytes`);
+  }
+  return reason;
+}
+
+/**
+ * Build the canonical compare-and-set directional asset-availability instruction.
+ *
+ * Both directions are written atomically. `expectedRevision` binds the mutation
+ * to the exact currently observed control record so concurrent operators cannot
+ * silently overwrite each other.
+ *
+ * @param {{
+ *   accountId: string,
+ *   assetDefinitionId: string,
+ *   expectedRevision: number|string|bigint,
+ *   incoming: "Enabled"|"Disabled",
+ *   outgoing: "Enabled"|"Disabled",
+ *   reason?: string|null,
+ * }} options
+ * @returns {{SetAssetTransferAvailability: {
+ *   account_id: string,
+ *   asset_definition_id: string,
+ *   expected_revision: string,
+ *   incoming: "Enabled"|"Disabled",
+ *   outgoing: "Enabled"|"Disabled",
+ *   reason: string|null,
+ * }}}
+ */
+export function buildSetAssetTransferAvailabilityInstruction(options) {
+  const source = assertPlainObject(options, "setAssetTransferAvailability");
+  assertAllowedFields(
+    source,
+    new Set([
+      "accountId",
+      "assetDefinitionId",
+      "expectedRevision",
+      "incoming",
+      "outgoing",
+      "reason",
+    ]),
+    "setAssetTransferAvailability",
+  );
+  const accountLiteral = assertExactNonBlankString(
+    source.accountId,
+    "setAssetTransferAvailability.accountId",
+  );
+  const assetDefinitionLiteral = assertExactNonBlankString(
+    source.assetDefinitionId,
+    "setAssetTransferAvailability.assetDefinitionId",
+  );
+  const reason =
+    source.reason === undefined || source.reason === null
+      ? null
+      : normalizeAssetTransferAvailabilityReason(
+          source.reason,
+          "setAssetTransferAvailability.reason",
+        );
+  return {
+    SetAssetTransferAvailability: {
+      account_id: ensureCanonicalAccountId(
+        accountLiteral,
+        "setAssetTransferAvailability.accountId",
+      ),
+      asset_definition_id: normalizeAssetDefinitionId(
+        assetDefinitionLiteral,
+        "setAssetTransferAvailability.assetDefinitionId",
+      ),
+      expected_revision: normalizeCanonicalU64(
+        source.expectedRevision,
+        "setAssetTransferAvailability.expectedRevision",
+      ),
+      incoming: normalizeAssetTransferAvailability(
+        source.incoming,
+        "setAssetTransferAvailability.incoming",
+      ),
+      outgoing: normalizeAssetTransferAvailability(
+        source.outgoing,
+        "setAssetTransferAvailability.outgoing",
+      ),
+      reason,
+    },
+  };
+}
+
 /**
  * Build a `Mint::Asset` instruction payload.
  * @param {{ assetHoldingId: string, quantity: KotodamaQuantity|string|bigint }} options
@@ -12529,7 +12641,7 @@ export function buildRegisterSmartContractBytesInstruction(options) {
 const SMART_CONTRACT_CODE_CHUNK_BYTES = 65_536;
 const U64_MAX_VALUE = 0xffff_ffff_ffff_ffffn;
 
-function normalizeSmartContractU64(value, name) {
+function normalizeCanonicalU64(value, name) {
   let normalized;
   if (typeof value === "bigint") {
     normalized = value;
@@ -12597,7 +12709,7 @@ function normalizeSmartContractChunk(value, name) {
  */
 export function buildUploadSmartContractCodeChunkInstruction(options) {
   const source = assertPlainObject(options, "uploadSmartContractCodeChunk");
-  const totalSize = normalizeSmartContractU64(
+  const totalSize = normalizeCanonicalU64(
     source.totalSize ?? source.total_size,
     "uploadSmartContractCodeChunk.totalSize",
   );
@@ -12660,7 +12772,7 @@ export function buildUploadSmartContractCodeChunkInstruction(options) {
 /** Build a `FinalizeSmartContractCodeUpload` instruction. */
 export function buildFinalizeSmartContractCodeUploadInstruction(options) {
   const source = assertPlainObject(options, "finalizeSmartContractCodeUpload");
-  const totalSize = normalizeSmartContractU64(
+  const totalSize = normalizeCanonicalU64(
     source.totalSize ?? source.total_size,
     "finalizeSmartContractCodeUpload.totalSize",
   );
@@ -12712,7 +12824,7 @@ export function buildCommitContractDeploymentInstruction(options) {
     source.expected_previous_contract_address;
   return {
     CommitContractDeployment: {
-      expected_deploy_nonce: normalizeSmartContractU64(
+      expected_deploy_nonce: normalizeCanonicalU64(
         source.expectedDeployNonce ?? source.expected_deploy_nonce,
         "commitContractDeployment.expectedDeployNonce",
       ),
@@ -12731,7 +12843,7 @@ export function buildCommitContractDeploymentInstruction(options) {
       lease_expiry_ms:
         leaseExpiry === undefined || leaseExpiry === null
           ? null
-          : normalizeSmartContractU64(
+          : normalizeCanonicalU64(
               leaseExpiry,
               "commitContractDeployment.leaseExpiryMs",
             ),

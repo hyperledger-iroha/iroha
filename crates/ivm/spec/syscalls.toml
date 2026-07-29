@@ -17,6 +17,12 @@ ret = "u64=0"
 gas = "G_debug"
 
 [[syscall]]
+number = "0x04"
+args = "r10=code:u64"
+ret = "u64=0"
+gas = "G_abort"
+
+[[syscall]]
 number = "0x10"
 args = "r10=&DomainId"
 ret = "u64=0"
@@ -1064,13 +1070,19 @@ gas = "G_call_contract + request bytes + return bytes + child gas"
 
 [[syscall]]
 number = "0x010200"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<string>"
 ret = "u64=0"
 gas = "G_sci + bytes"
 
 [[syscall]]
 number = "0x010201"
-args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>"
+ret = "u64=0"
+gas = "G_sci + bytes"
+
+[[syscall]]
+number = "0x010202"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>"
 ret = "u64=0"
 gas = "G_sci + bytes"
 

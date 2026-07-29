@@ -2973,6 +2973,35 @@ impl SumeragiV2Adapter {
         )
     }
 
+    /// Return the body identity whose direct vote lacks a locally validated
+    /// execution commitment.
+    ///
+    /// This is a non-authenticating dequeue hint, but it still applies every
+    /// cheap structural check before retaining fair-ingress ownership.
+    /// Malformed votes and invalid or conflicting commitments return `None`
+    /// so the mutating admission seam can reject them instead of allowing a
+    /// far-future malformed occurrence to pin one source lane.
+    pub(crate) fn wire_ingress_missing_execution_commitment(
+        &self,
+        payload: &wire::ConsensusMessageV2Payload,
+    ) -> Option<(wire::ConsensusRound, wire::BlockSubject)> {
+        let wire::ConsensusMessageV2Payload::Vote(vote) = payload else {
+            return None;
+        };
+        if vote.validate(&self.wire_context).is_err() {
+            return None;
+        }
+        matches!(
+            self.ensure_vote_execution_commitment_bound(
+                vote.proposal_round,
+                vote.subject,
+                vote.execution_commitment,
+            ),
+            Err(AdapterError::MissingExecutionCommitment)
+        )
+        .then_some((vote.proposal_round, vote.subject))
+    }
+
     fn ensure_authenticated_manifest_compatible(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -3062,6 +3091,13 @@ impl SumeragiV2Adapter {
             .is_some_and(|registered| *registered != subject)
         {
             return Err(AdapterError::SubjectCollision);
+        }
+        if self.registry.execution_commitments.iter().any(
+            |((_, registered_subject), registered)| {
+                *registered_subject == core_subject && *registered != commitment
+            },
+        ) {
+            return Err(AdapterError::ConflictingExecutionCommitment);
         }
         match self
             .registry
@@ -16908,7 +16944,7 @@ mod tests {
         .to_vec();
         assert!(matches!(
             adapter.authenticate(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::Vote(conflicting_vote),
+                wire::ConsensusMessageV2Payload::Vote(conflicting_vote.clone()),
             )),
             Err(AdapterError::ConflictingExecutionCommitment)
         ));
@@ -16931,6 +16967,57 @@ mod tests {
         ));
 
         let later_round = wire::ConsensusRound { view: 1, ..round };
+        let mut cross_round_conflicting_vote = wire::Vote {
+            round: later_round,
+            proposal_round: later_round,
+            signature: Vec::new(),
+            ..conflicting_vote
+        };
+        cross_round_conflicting_vote.signature = Signature::new(
+            keys[usize::try_from(cross_round_conflicting_vote.signer).expect("small signer index")]
+                .private_key(),
+            &cross_round_conflicting_vote.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let cross_round_conflicting_payload =
+            wire::ConsensusMessageV2Payload::Vote(cross_round_conflicting_vote.clone());
+        assert_eq!(
+            adapter.wire_ingress_missing_execution_commitment(&cross_round_conflicting_payload),
+            None,
+            "a same-subject cross-round conflict must drain instead of retaining fair-ingress ownership"
+        );
+        assert!(matches!(
+            adapter.authenticate(wire::ConsensusMessageV2::new(
+                cross_round_conflicting_payload,
+            )),
+            Err(AdapterError::ConflictingExecutionCommitment)
+        ));
+
+        let mut cross_round_canonical_vote = wire::Vote {
+            execution_commitment: canonical_commitment,
+            signature: Vec::new(),
+            ..cross_round_conflicting_vote
+        };
+        cross_round_canonical_vote.signature = Signature::new(
+            keys[usize::try_from(cross_round_canonical_vote.signer).expect("small signer index")]
+                .private_key(),
+            &cross_round_canonical_vote.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let cross_round_canonical_payload =
+            wire::ConsensusMessageV2Payload::Vote(cross_round_canonical_vote);
+        assert_eq!(
+            adapter.wire_ingress_missing_execution_commitment(&cross_round_canonical_payload),
+            Some((later_round, bound_subject)),
+            "the same commitment on another round remains unbound until exact-round validation"
+        );
+        assert!(matches!(
+            adapter.authenticate(wire::ConsensusMessageV2::new(cross_round_canonical_payload,)),
+            Err(AdapterError::MissingExecutionCommitment)
+        ));
+
         let mut cross_round_conflict = wire::QuorumCertificate {
             round: later_round,
             proposal_round: later_round,

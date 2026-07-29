@@ -73,6 +73,7 @@ def _fleet_record(label: str, node: str) -> dict[str, object]:
         "mode": "permissioned",
         "validator_count": 4,
         "quorum": "3/4",
+        "status_blocks": 707,
         "committed_height": 707,
         "committed_subject": "block-707",
         "commit_qc": "qc-707",
@@ -258,6 +259,7 @@ def test_validator_fleet_gate_retains_exact_offline_identity(tmp_path: Path) -> 
 
     assert result.returncode == 0, result.stderr
     summary = json.loads(result.stdout)
+    assert summary["status_blocks"] == summary["committed_height"] == 707
     assert summary["offline_block_height"] == 707
     assert summary["offline_block_hash"] == "ab" * 32
     release = json.loads(summary["offline_release"])
@@ -268,6 +270,12 @@ def test_validator_fleet_gate_rejects_offline_block_and_verifier_mismatches(
     tmp_path: Path,
 ) -> None:
     baseline = _fleet_record("v1", "node-1")
+
+    wrong_status_blocks = _fleet_record("v2", "node-2")
+    wrong_status_blocks["status_blocks"] = 706
+    result = _run_fleet_checker(tmp_path, [baseline, wrong_status_blocks])
+    assert result.returncode == 1
+    assert "status_blocks" in result.stderr
 
     wrong_block = _fleet_record("v2", "node-2")
     wrong_block["offline_block_hash"] = "cd" * 32
@@ -294,6 +302,7 @@ def test_validator_progress_gate_requires_stable_release_and_advancing_offline_b
         "config": "config",
         "nodes": ["node-1", "node-2"],
         "offline_release": "sealed-release",
+        "status_blocks": 707,
         "committed_height": 707,
         "committed_subject": "block-707",
         "offline_block_height": 707,
@@ -301,6 +310,7 @@ def test_validator_progress_gate_requires_stable_release_and_advancing_offline_b
     }
     current = {
         **previous,
+        "status_blocks": 708,
         "committed_height": 708,
         "committed_subject": "block-708",
         "offline_block_height": 708,
@@ -322,6 +332,11 @@ def test_validator_progress_gate_requires_stable_release_and_advancing_offline_b
     rejected = _run_progress_checker(previous, stale_block)
     assert rejected.returncode == 1
     assert "offline readiness did not advance" in rejected.stderr
+
+    stale_status = {**current, "status_blocks": 707}
+    rejected = _run_progress_checker(previous, stale_status)
+    assert rejected.returncode == 1
+    assert "/status.blocks did not advance" in rejected.stderr
 
 
 def test_sumeragi_checker_rejects_legacy_shape(tmp_path: Path) -> None:

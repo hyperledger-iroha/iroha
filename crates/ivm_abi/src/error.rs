@@ -46,6 +46,7 @@ pub enum VmTrapKind {
     NumericFault,
     PointerAbiFault,
     AssertionFailed,
+    ContractAbort,
     ExceededMaxCycles,
     InvalidMetadata,
     UnsupportedProgramVersion,
@@ -175,6 +176,10 @@ pub enum VMError {
     /// A numeric pointer envelope failed stable ABI validation.
     PointerAbiFault(PointerAbiFaultV1),
     AssertionFailed,
+    /// Contract requested an application-level abort with a stable numeric code.
+    ContractAbort {
+        code: u64,
+    },
     ExceededMaxCycles,
     InvalidMetadata,
     /// The fixed header declares a version outside the first-release 1.0/1.1 surface.
@@ -358,6 +363,9 @@ impl fmt::Display for VMError {
                 )
             }
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
+            VMError::ContractAbort { code } => {
+                write!(f, "contract aborted with application error code {code}")
+            }
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),
             VMError::InvalidMetadata => write!(f, "invalid program metadata"),
             VMError::UnsupportedProgramVersion { major, minor } => {

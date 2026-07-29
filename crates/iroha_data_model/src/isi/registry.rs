@@ -27,7 +27,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<BurnBox>,
     InstructionRegistry::register_slice::<TransferAssetBatch>,
     InstructionRegistry::register_slice::<TransferBox>,
-    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferFreeze>,
+    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferAvailability>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferBlacklist>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferControl>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetHoldingLimit>,
@@ -776,9 +776,10 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     registry = registry.register_with_id_slice::<asset_alias::SetAssetDefinitionBalancePolicy>(
         asset_alias::SetAssetDefinitionBalancePolicy::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<asset_transfer_control::SetAssetTransferFreeze>(
-        asset_transfer_control::SetAssetTransferFreeze::WIRE_ID,
-    );
+    registry = registry
+        .register_with_id_slice::<asset_transfer_control::SetAssetTransferAvailability>(
+            asset_transfer_control::SetAssetTransferAvailability::WIRE_ID,
+        );
     registry = registry
         .register_with_id_slice::<asset_transfer_control::SetAssetTransferBlacklist>(
             asset_transfer_control::SetAssetTransferBlacklist::WIRE_ID,

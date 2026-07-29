@@ -6,6 +6,8 @@
 //! this module can construct [`VerifiedPrivacyEffectsV1`], so state handlers
 //! cannot derive ledger effects from unverified caller-controlled bytes.
 
+#[cfg(feature = "zk-stark")]
+use iroha_data_model::zk::ZkAcePrivacyPublicInputsV1;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -23,10 +25,11 @@ use iroha_data_model::{
         PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1, PrivacyVeRangeBitLengthV1,
         VegaExistingCredentialStatementV1,
     },
-    zk::ZkAcePrivacyPublicInputsV1,
 };
 use thiserror::Error;
 
+#[cfg(feature = "zk-stark")]
+use crate::privacy_engines::zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1};
 use crate::{
     privacy_engines::{
         anonymous_pgc::{
@@ -55,7 +58,6 @@ use crate::{
             VeRangeBitLengthV1, VeRangeError, VeRangeParametersV1, VeRangeType1BatchStatementV1,
             verify_batch_encoded,
         },
-        zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1},
         zk_ams::{
             VerifiedZkAmsBatchAdmissionV1, VerifiedZkAmsProvisionAccountV1, ZkAmsErrorV1,
             verify_zk_ams_batch_admission_v1, verify_zk_ams_provision_statement_v1,
@@ -416,6 +418,7 @@ pub(crate) fn verify_privacy_envelope_v1(
         })?;
 
     let ledger = match (&envelope.statement, &envelope.proof) {
+        #[cfg(feature = "zk-stark")]
         (
             PrivacyStatementV1::ZkAcePqAuthorizationV0(statement),
             PrivacyProofV1::ZkAcePqAuthorizationV0(proof),
@@ -999,6 +1002,7 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     #[error(transparent)]
     NativeVega(Box<PrivacyVegaVerificationFailureV1>),
     /// Direct native ZK-ACE decoding or verification failed.
+    #[cfg(feature = "zk-stark")]
     #[error(transparent)]
     NativeZkAce(Box<PrivacyZkAceVerificationFailureV1>),
     /// Native ZK-AMS decoding or verification failed.
@@ -1098,6 +1102,7 @@ pub(crate) struct PrivacyVegaVerificationFailureV1 {
 
 #[derive(Debug, Error)]
 #[error("native ZK-ACE verification failed: {source}")]
+#[cfg(feature = "zk-stark")]
 pub(crate) struct PrivacyZkAceVerificationFailureV1 {
     source: ZkAceNativeErrorV1,
 }

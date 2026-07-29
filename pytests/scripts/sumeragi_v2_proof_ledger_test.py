@@ -18622,6 +18622,13 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "typed deferred event to canonical-envelope comparator declaration, contract, and "
             "complete control flow must match",
         ),
+        (
+            "wire_ingress_missing_execution_commitment",
+            "if vote.validate(&self.wire_context).is_err()",
+            "if false",
+            "structurally validated missing-execution-commitment ingress classifier declaration, "
+            "contract, and complete control flow must match",
+        ),
     )
     for item_name, old, new, expected_error in deferred_owner_adapter_mutations:
         adapter.write_text(
@@ -18821,8 +18828,8 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "can_merge_downstream",
-            "self.runtime_bytes != candidate.runtime_bytes",
-            "self.runtime_bytes == candidate.runtime_bytes",
+            "merged.merge_downstream(candidate.clone()).is_ok()",
+            "merged.merge_downstream(candidate.clone()).is_err()",
             "non-mutating per-source ownership merge preflight declaration and complete control flow must match",
         ),
         (
@@ -18839,8 +18846,8 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "accept_driver_dispatch",
-            "if !self.reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)",
-            "        if false {",
+            ".reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)\n            .is_err()",
+            ".reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)\n            .is_ok()",
             "driver dispatch ownership acceptance declaration and complete control flow must match",
         ),
         (

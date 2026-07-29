@@ -2064,6 +2064,54 @@ mod model {
 }
 
 impl CommittedTransaction {
+    /// Verify this committed transaction's inclusion proofs against its exact carrier block.
+    ///
+    /// Ordinary transactions are checked against the carrier block's entrypoint and result
+    /// Merkle roots. Certified merge transactions are checked against the merge reference
+    /// committed by the carrier block's execution context.
+    #[must_use]
+    pub fn verify_inclusion_in_block(&self, block: &SignedBlock) -> bool {
+        const MAX_MERKLE_HEIGHT: usize = 32;
+
+        if self.merge_inclusion.is_some() {
+            return self.verify_certified_merge_inclusion_in_block(block);
+        }
+
+        if block.hash() != self.block_hash
+            || self.entrypoint_hash != self.entrypoint.hash()
+            || self.result_hash != self.result.hash()
+            || self.entrypoint_proof.leaf_index() != self.result_proof.leaf_index()
+        {
+            return false;
+        }
+
+        let entrypoint_count = block.entrypoint_hashes().len();
+        let result_count = block.result_hashes().len();
+        let leaf_index = self.entrypoint_proof.leaf_index() as usize;
+        if entrypoint_count == 0
+            || entrypoint_count != result_count
+            || leaf_index >= entrypoint_count
+        {
+            return false;
+        }
+
+        let Some(entrypoint_root) = block.full_entry_merkle_root() else {
+            return false;
+        };
+        let Some(result_root) = block.header().result_merkle_root() else {
+            return false;
+        };
+
+        self.entrypoint_proof.clone().verify(
+            &self.entrypoint_hash,
+            &entrypoint_root,
+            MAX_MERKLE_HEIGHT,
+        ) && self
+            .result_proof
+            .clone()
+            .verify(&self.result_hash, &result_root, MAX_MERKLE_HEIGHT)
+    }
+
     /// Verify this transaction's merge proofs against a compact reference from its carrier block.
     ///
     /// Ordinary block transactions return `false`; callers should verify those against the block
@@ -7169,6 +7217,7 @@ mod certified_merge_inclusion_tests {
             let mut block_bound = committed.clone();
             block_bound.block_hash = carrier.hash();
             assert!(block_bound.verify_certified_merge_inclusion_in_block(&carrier));
+            assert!(block_bound.verify_inclusion_in_block(&carrier));
 
             let other_header = BlockHeader::new(
                 core::num::NonZeroU64::new(5).expect("non-zero carrier height"),
@@ -7188,6 +7237,7 @@ mod certified_merge_inclusion_tests {
                 !block_bound.verify_certified_merge_inclusion_in_block(&other_carrier),
                 "a valid proof and copied reference must not verify against a different block hash"
             );
+            assert!(!block_bound.verify_inclusion_in_block(&other_carrier));
         }
 
         let mut wrong_reference = reference.clone();
@@ -7214,6 +7264,59 @@ mod certified_merge_inclusion_tests {
         let mut misaligned = committed;
         misaligned.result_proof = MerkleProof::from_audit_path(1, Vec::new());
         assert!(!misaligned.verify_certified_merge_inclusion(&reference));
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn ordinary_committed_transaction_verifies_against_exact_carrier_block() {
+        let (_, fixture) = certified_merge_fixture();
+        let TransactionEntrypoint::External(signed) = fixture.entrypoint else {
+            panic!("fixture must contain an external transaction");
+        };
+        let result_inner = (*fixture.result).clone();
+        let header = BlockHeader::new(
+            core::num::NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            10,
+            0,
+        );
+        let mut builder = crate::block::builder::BlockBuilder::new(header);
+        builder.push_transaction(signed);
+        builder.push_result(result_inner);
+        let carrier = builder.build(std::collections::BTreeSet::default());
+        let ordinary = CommittedTransaction {
+            block_hash: carrier.hash(),
+            entrypoint_hash: carrier.entrypoint_hashes().next().expect("entrypoint hash"),
+            entrypoint_proof: carrier
+                .entrypoint_proofs()
+                .next()
+                .expect("entrypoint proof"),
+            entrypoint: carrier.entrypoints_cloned().next().expect("entrypoint"),
+            result_hash: carrier.result_hashes().next().expect("result hash"),
+            result_proof: carrier.result_proofs().next().expect("result proof"),
+            result: carrier.results().next().cloned().expect("result"),
+            merge_inclusion: None,
+        };
+
+        assert!(ordinary.verify_inclusion_in_block(&carrier));
+
+        let mut wrong_hash = ordinary.clone();
+        wrong_hash.entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong-entrypoint"));
+        assert!(!wrong_hash.verify_inclusion_in_block(&carrier));
+
+        let other_header = BlockHeader::new(
+            core::num::NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            11,
+            0,
+        );
+        let other_carrier = crate::block::builder::BlockBuilder::new(other_header)
+            .build(std::collections::BTreeSet::default());
+        assert!(!ordinary.verify_inclusion_in_block(&other_carrier));
     }
 }
 

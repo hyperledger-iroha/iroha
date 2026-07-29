@@ -58,9 +58,11 @@ use crate::zk::{
         KagemushaArtifactReadSeekV4, KagemushaAuthenticatedArtifactSourceV4,
         KagemushaQualifiedArtifactSourceV4, KagemushaQualifiedParityMetadataV4,
         qualify_kagemusha_authenticated_artifact_source_v4,
-        with_kagemusha_authenticated_artifact_payload_from_source_v4,
     },
-    kagemusha_artifact_v4::kagemusha_artifact_descriptor_v4,
+    kagemusha_artifact_v4::{
+        KagemushaAuthenticatedArtifactInspectionV4, inspect_kagemusha_pasta_cycle_artifact_v4,
+        kagemusha_artifact_descriptor_v4,
+    },
     kagemusha_recursion_adapter::kagemusha_artifact_encoding_sizes_v4,
     kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
 };
@@ -228,8 +230,10 @@ impl KagemushaReleaseCatalogV4 {
     /// component is opened relative to its already pinned parent and symlinks
     /// are rejected at every level.
     ///
-    /// All filesystem access, hashing, framing checks, and Halo2 verifier
-    /// parsing complete before the returned immutable catalog is published.
+    /// All filesystem access, hashing, framing checks, Halo2 verifier parsing,
+    /// and allocation-free proving-key structural validation complete before
+    /// the returned immutable catalog is published. Full proving-key parsing is
+    /// deferred until an actual prover operation needs that parity.
     pub fn load(policy_path: &Path, artifact_dir: &Path) -> Result<Self, String> {
         Self::load_with_decoded_budget(
             policy_path,
@@ -1103,6 +1107,7 @@ struct KagemushaCatalogPinnedArtifactV4 {
     descriptor: KagemushaPastaCycleArtifactV4,
     file: Mutex<File>,
     snapshot: CatalogFileSnapshot,
+    authenticated_inspection: Option<KagemushaAuthenticatedArtifactInspectionV4>,
 }
 
 #[cfg(all(
@@ -1159,8 +1164,9 @@ fn lock_kagemusha_catalog_source_mutex_v4<T>(mutex: &Mutex<T>) -> std::sync::Mut
 /// Every handle is opened relative to the already pinned release directory and
 /// is never reopened by path. A source-wide permit prevents Eq/Ep or role
 /// readers from overlapping; each file also owns its cursor mutex so clones of
-/// the source cannot race a rewind. Core remains responsible for authenticating
-/// the complete KRV4 frame and its payload on every use.
+/// the source cannot race a rewind. Startup retains one complete-frame
+/// inspection per role, and core still reauthenticates every byte consumed by
+/// each later parser use.
 #[cfg(all(
     unix,
     not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
@@ -1179,6 +1185,15 @@ pub(crate) struct KagemushaCatalogPinnedArtifactSourceV4 {
 ))]
 impl KagemushaCatalogPinnedArtifactSourceV4 {
     fn open(
+        directory: &CatalogDirectory,
+        release: KagemushaAuthenticatedReleaseV4,
+    ) -> Result<Self, String> {
+        let mut source = Self::open_pinned(directory, release)?;
+        source.authenticate_inventory_once()?;
+        Ok(source)
+    }
+
+    fn open_pinned(
         directory: &CatalogDirectory,
         release: KagemushaAuthenticatedReleaseV4,
     ) -> Result<Self, String> {
@@ -1234,6 +1249,7 @@ impl KagemushaCatalogPinnedArtifactSourceV4 {
                 descriptor: descriptor.clone(),
                 snapshot: opened.snapshot,
                 file: Mutex::new(opened.file),
+                authenticated_inspection: None,
             };
             {
                 let file = lock_kagemusha_catalog_source_mutex_v4(&artifact.file);
@@ -1292,64 +1308,25 @@ impl KagemushaCatalogPinnedArtifactSourceV4 {
         Ok(())
     }
 
-    fn authenticate_inventory(&self) -> Result<(), String> {
+    fn authenticate_inventory_once(&mut self) -> Result<(), String> {
         self.validate_snapshot()?;
-        let roles = self
-            .release
-            .manifest()
-            .profiles
-            .iter()
-            .flat_map(|profile| {
-                profile
-                    .artifacts
-                    .iter()
-                    .map(move |descriptor| (profile.parity, descriptor.kind))
-            })
-            .collect::<Vec<_>>();
-        if roles.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4 {
-            return Err("pinned Kagemusha V4 catalog source role count changed".to_owned());
-        }
-        for (parity, kind) in roles {
-            let descriptor =
-                kagemusha_artifact_descriptor_v4(self.release.manifest(), parity, kind)?;
-            let consumed = with_kagemusha_authenticated_artifact_payload_from_source_v4(
-                self,
-                parity,
-                kind,
-                |payload, header| {
-                    if header.parity != parity
-                        || header.kind != kind
-                        || header.payload_size_bytes != descriptor.payload_size_bytes
-                        || header.payload_sha256 != descriptor.payload_sha256
-                    {
-                        return Err(
-                            "pinned Kagemusha V4 catalog source returned the wrong role".to_owned()
-                        );
-                    }
-                    let mut consumed = 0_u64;
-                    let mut scratch = [0_u8; 64 * 1024];
-                    loop {
-                        let read = payload.read(&mut scratch).map_err(|error| {
-                            format!("failed to consume pinned Kagemusha V4 artifact: {error}")
-                        })?;
-                        if read == 0 {
-                            break;
-                        }
-                        consumed = consumed
-                            .checked_add(u64::try_from(read).map_err(|_| {
-                                "pinned Kagemusha V4 artifact read length does not fit u64"
-                                    .to_owned()
-                            })?)
-                            .ok_or_else(|| {
-                                "pinned Kagemusha V4 artifact read length overflowed".to_owned()
-                            })?;
-                    }
-                    Ok(consumed)
-                },
+        for artifact in &mut self.artifacts {
+            let mut file = lock_kagemusha_catalog_source_mutex_v4(&artifact.file);
+            artifact.validate_locked_file(&file)?;
+            file.seek(SeekFrom::Start(0)).map_err(|error| {
+                format!("failed to rewind pinned Kagemusha V4 artifact: {error}")
+            })?;
+            let inspection = inspect_kagemusha_pasta_cycle_artifact_v4(
+                &mut *file,
+                &self.release,
+                &artifact.descriptor,
             )?;
-            if consumed != descriptor.payload_size_bytes {
-                return Err("pinned Kagemusha V4 catalog source payload length mismatch".to_owned());
-            }
+            file.seek(SeekFrom::Start(0)).map_err(|error| {
+                format!("failed to restore pinned Kagemusha V4 artifact cursor: {error}")
+            })?;
+            artifact.validate_locked_file(&file)?;
+            drop(file);
+            artifact.authenticated_inspection = Some(inspection);
         }
         Ok(())
     }
@@ -1395,6 +1372,17 @@ impl KagemushaAuthenticatedArtifactSourceV4 for KagemushaCatalogPinnedArtifactSo
         consume: &mut dyn FnMut(&mut dyn KagemushaArtifactReadSeekV4) -> Result<(), String>,
     ) -> Result<(), String> {
         self.with_selected_file(parity, kind, |file| consume(file))
+    }
+
+    fn authenticated_inspection(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+        kind: KagemushaPastaCycleArtifactKindV4,
+    ) -> Result<Option<KagemushaAuthenticatedArtifactInspectionV4>, String> {
+        let artifact = self.artifact(parity, kind)?;
+        let file = lock_kagemusha_catalog_source_mutex_v4(&artifact.file);
+        artifact.validate_locked_file(&file)?;
+        Ok(artifact.authenticated_inspection.clone())
     }
 }
 
@@ -1831,23 +1819,14 @@ fn load_release_directory(
         .validate_against_authenticated_release(&authenticated)
         .map_err(|error| format!("Kagemusha V4 promotion record mismatch: {error}"))?;
 
-    let descriptors = manifest
+    if manifest
         .profiles
         .iter()
-        .flat_map(|profile| profile.artifacts.iter())
-        .collect::<Vec<_>>();
-    if descriptors.len() != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4 {
+        .map(|profile| profile.artifacts.len())
+        .sum::<usize>()
+        != KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4
+    {
         return Err("Kagemusha V4 manifest does not contain exactly eight artifacts".to_owned());
-    }
-    for descriptor in descriptors {
-        verify_file_descriptor(
-            directory,
-            &descriptor.file_name,
-            descriptor.size_bytes,
-            descriptor.sha256,
-            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
-            &format!("artifact `{}`", descriptor.file_name),
-        )?;
     }
     let roster = &manifest.topup_finality_roster_artifact;
     verify_file_descriptor(
@@ -1862,12 +1841,11 @@ fn load_release_directory(
     // Retain every exact descriptor-relative inode. The qualified wrapper is
     // the sole production owner and the source-backed facade loads only one
     // parity's heavy verifier material at a time.
-    let source = Arc::new(KagemushaCatalogPinnedArtifactSourceV4::open(
+    let pinned_source = Arc::new(KagemushaCatalogPinnedArtifactSourceV4::open(
         directory,
         authenticated.clone(),
     )?);
-    source.authenticate_inventory()?;
-    let source: Arc<dyn KagemushaAuthenticatedArtifactSourceV4> = source;
+    let source: Arc<dyn KagemushaAuthenticatedArtifactSourceV4> = pinned_source.clone();
     let qualified_source = Arc::new(qualify_kagemusha_authenticated_artifact_source_v4(source)?);
     let verifier = Arc::new(
         KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source(Arc::clone(
@@ -1878,6 +1856,7 @@ fn load_release_directory(
         qualified_source,
         verifier,
     };
+    pinned_source.validate_snapshot()?;
     if verify_exact_release_inventory_v4(directory, &manifest)? != inventory_bytes {
         return Err("Kagemusha V4 release inventory byte count changed while loading".to_owned());
     }
@@ -2149,7 +2128,10 @@ mod tests {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
             KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
             KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
+            KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4,
+            KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaPastaCycleArtifactV4,
@@ -2230,8 +2212,8 @@ mod tests {
         let circuit_params = KagemushaStepCircuitParamsV4 {
             version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![8],
-            num_lookup_advice_per_phase: vec![1],
+            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,
@@ -2659,8 +2641,9 @@ mod tests {
         let pinned_directory =
             CatalogDirectory::open_path(&release_directory, "pinned-source release")
                 .expect("pin source release directory");
-        let source = KagemushaCatalogPinnedArtifactSourceV4::open(&pinned_directory, authenticated)
-            .expect("open exact-eight pinned source");
+        let source =
+            KagemushaCatalogPinnedArtifactSourceV4::open_pinned(&pinned_directory, authenticated)
+                .expect("open exact-eight pinned source fixture");
         (temporary, release_directory, source)
     }
 

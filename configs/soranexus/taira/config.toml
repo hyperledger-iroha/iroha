@@ -138,6 +138,9 @@ pow_adaptive_claims_per_extra_bit = 0
 pow_adaptive_max_extra_bits = 0
 pow_vrf_seed_enabled = true
 
+[sorafs.storage]
+enabled = false
+
 [sorafs.discovery]
 discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch", "potr_mldsa"]
@@ -291,6 +294,20 @@ allowed_curve_ids = [1, 3, 4]
 [nexus]
 enabled = true
 lane_count = 4
+
+[nexus.storage]
+# Four validators share one host. Keep aggregate per-node storage bounded so
+# Kura and the other Nexus stores cannot consume restart/fsync headroom.
+local_budget_bytes = 68719476736
+
+[nexus.storage.disk_budget_weights]
+# SoraFS storage is disabled on Taira; allocate its former share to Kura while
+# retaining bounded WSV and network-spool headroom.
+kura_blocks_bps = 7500
+wsv_snapshots_bps = 2000
+sorafs_bps = 0
+soranet_spool_bps = 250
+soravpn_spool_bps = 250
 
 [nexus.registry]
 # Public Taira governance lanes require a manifest with explicit validator

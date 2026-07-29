@@ -97,8 +97,8 @@ use iroha_core::{
         GenesisWithPubKey, InboundBlockMessage, LaneRelayMessage,
         ProductionTwoStageRelayRetryTraceProjection, SumeragiHandle, SumeragiIngressDisposition,
         SumeragiStartArgs, V2StartupReplayInventoryGuard, VotingBlock,
-        filter_validators_from_trusted, network_topology::Topology,
-        check_production_two_stage_relay_retry_transition,
+        check_production_two_stage_relay_retry_transition, filter_validators_from_trusted,
+        network_topology::Topology,
     },
 };
 use iroha_crypto::Algorithm;
@@ -4070,10 +4070,7 @@ fn sumeragi_relay_retain_retry(
     let retry_source = work.source.clone();
     let retry_route = work.reply_route.clone();
     let retry_geometry = work.retention_guard.geometry;
-    let source_depth_before_reinsert = retained
-        .lanes
-        .get(&retry_source)
-        .map_or(0, VecDeque::len);
+    let source_depth_before_reinsert = retained.lanes.get(&retry_source).map_or(0, VecDeque::len);
     if !retained.has_capacity() || source_depth_before_reinsert >= retained.source_capacity {
         return Err(SumeragiRelayRetryRetentionError::Capacity(work));
     }
@@ -4090,8 +4087,7 @@ fn sumeragi_relay_retain_retry(
     let selected_source_rank_after = if source_depth_before_reinsert == 0 {
         retained.ready.len()
     } else {
-        source_rank_before_reinsert
-            .ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?
+        source_rank_before_reinsert.ok_or(SumeragiRelayRetryRetentionError::RefinementViolation)?
     };
     let source_depth_after = source_depth_before_reinsert
         .checked_add(1)
@@ -4135,8 +4131,7 @@ fn sumeragi_relay_retain_retry(
         total_capacity: u64::try_from(retained.capacity)
             .expect("retained total capacity must fit u64"),
     };
-    let Some(checked_transition) =
-        check_production_two_stage_relay_retry_transition(prospective)
+    let Some(checked_transition) = check_production_two_stage_relay_retry_transition(prospective)
     else {
         return Err(SumeragiRelayRetryRetentionError::RefinementViolation);
     };
@@ -8470,42 +8465,8 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
-        let kagemusha_release_catalog = if config.settlement.offline.enabled {
-            match (
-                config
-                    .settlement
-                    .offline
-                    .kagemusha_release_policy_path
-                    .as_deref(),
-                config.settlement.offline.kagemusha_artifact_dir.as_deref(),
-            ) {
-                (None, None) => {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
-                    ));
-                }
-                (Some(policy_path), Some(artifact_dir)) => {
-                    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
-                        policy_path,
-                        artifact_dir,
-                        config.settlement.offline.kagemusha_max_decoded_bytes,
-                    )
-                    .map_err(|error| {
-                        Report::new(StartError::InitKura).attach(format!(
-                            "failed to authenticate Kagemusha V4 release catalog: {error}"
-                        ))
-                    })?
-                }
-                _ => {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "Kagemusha V4 release policy and artifact directory must be configured together",
-                    ));
-                }
-            }
-        } else {
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
-        };
-        state.set_kagemusha_release_catalog(kagemusha_release_catalog);
+        install_configured_kagemusha_release_catalog(&mut state, &config)
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         if !loaded_state_from_snapshot {
             // Snapshot candidates install this at their post-decode,
             // pre-reconciliation boundary. Fresh and Kura-rebuilt state has no
@@ -8515,6 +8476,12 @@ impl Iroha {
         apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
         if !provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
+            // Kura authenticates canonical replay evidence before State exists. Geometry setup
+            // above then publishes the configured lane directories, so refresh only that
+            // auxiliary metadata before planning. Otherwise the new lane paths invalidate the
+            // reusable inventory and force a second complete historical finality audit.
+            kura.refresh_v2_startup_replay_auxiliary_binding()
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
         }
 
         // Resolve the complete replay boundary before selecting any consensus trust source. A
@@ -8724,7 +8691,12 @@ impl Iroha {
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
-        {
+        // Only a genuinely empty local store can defer this gate to the
+        // disposable genesis overlay below. A restart with a pending durable
+        // v2 tip remains on the replayed-state gate and fails closed.
+        let fresh_genesis_staging_pending =
+            state.committed_height() == 0 && block_count.0 == 0 && stored_genesis_block.is_none();
+        if !fresh_genesis_staging_pending {
             iroha_torii::ensure_mandatory_offline_startup_readiness(
                 &state,
                 &config.common.chain,
@@ -9320,6 +9292,19 @@ impl Iroha {
                                 "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
                             )));
                         }
+                        iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
+                            &state_block,
+                            genesis_block.0.header(),
+                            &config.common.chain,
+                            &config.settlement.offline,
+                            config.torii.kagemusha_commands.as_ref(),
+                            &config.nexus.fees.fee_asset_id,
+                        )
+                        .map_err(|error| {
+                            Report::new(StartError::InitKura).attach(format!(
+                                "mandatory offline cash readiness failed in staged genesis: {error}"
+                            ))
+                        })?;
                         let (mode, signed_parameters) =
                             signed_v2_genesis_context_metadata(genesis_block)
                                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -10950,6 +10935,13 @@ pub enum ConfigError {
     NexusMultilaneDisabled,
     /// Joining Sora profile is mandatory but missing.
     SoraProfileRequired,
+    #[cfg(not(feature = "embedded-soracloud-runtime"))]
+    /// Production Soracloud runtime was requested from a binary lacking support.
+    SoracloudRuntimeFeatureRequired,
+    /// Embedded SoraFS storage was enabled without governed gateway compliance.
+    SorafsStorageComplianceRequired,
+    /// SoraFS gateway automation was enabled while embedded storage was disabled.
+    SorafsGatewayRequiresStorage,
     /// Nexus auto-derived storage defaults require a writable config path.
     NexusStorageBudgetPersistenceRequired,
 }
@@ -11015,6 +11007,19 @@ impl core::fmt::Display for ConfigError {
                     "Sora Nexus features require `irohad --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
+            #[cfg(not(feature = "embedded-soracloud-runtime"))]
+            Self::SoracloudRuntimeFeatureRequired => write!(
+                f,
+                "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
+            ),
+            Self::SorafsStorageComplianceRequired => write!(
+                f,
+                "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
+            ),
+            Self::SorafsGatewayRequiresStorage => write!(
+                f,
+                "SoraFS gateway ACME/compliance configuration requires sorafs.storage.enabled"
+            ),
             Self::NexusStorageBudgetPersistenceRequired => write!(
                 f,
                 "Nexus auto-derived storage defaults require a writable configuration file path"
@@ -11126,6 +11131,10 @@ pub fn read_config_and_genesis(
             .change_context(ConfigError::ReadConfig)?;
     }
 
+    let sorafs_storage_enabled_is_explicit =
+        config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
+    let sorafs_discovery_enabled_is_explicit =
+        config.contains_toml_parameter(["sorafs", "discovery", "discovery_enabled"]);
     let mut config = config
         .read_and_complete::<UserConfig>()
         .change_context(ConfigError::ReadConfig)?
@@ -11133,7 +11142,15 @@ pub fn read_config_and_genesis(
         .change_context(ConfigError::ParseConfig)?;
 
     if args.sora {
+        let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
+        let configured_sorafs_discovery_enabled = config.torii.sorafs_discovery.discovery_enabled;
         config.apply_sora_profile();
+        if sorafs_storage_enabled_is_explicit {
+            config.torii.sorafs_storage.enabled = configured_sorafs_storage_enabled;
+        }
+        if sorafs_discovery_enabled_is_explicit {
+            config.torii.sorafs_discovery.discovery_enabled = configured_sorafs_discovery_enabled;
+        }
     }
 
     let sorafs_enabled = config.torii.sorafs_storage.enabled
@@ -12435,6 +12452,40 @@ metadata = {}
     }
 
     #[test]
+    fn sora_flag_preserves_explicitly_disabled_sorafs_storage() {
+        let mut config_file = NamedTempFile::new().expect("create temp config");
+        let mut table = minimal_config_table();
+        iroha_config::base::toml::Writer::new(&mut table)
+            .write(["sorafs", "storage", "enabled"], false);
+        config_file
+            .write_all(
+                toml::to_string(&toml::Value::Table(table))
+                    .expect("render config")
+                    .as_bytes(),
+            )
+            .expect("write config");
+
+        let args = parse_args_from([
+            "irohad",
+            "--sora",
+            "--config",
+            config_file
+                .path()
+                .to_str()
+                .expect("temp config path to string"),
+        ]);
+
+        let (config, _) =
+            read_config_and_genesis(&args).expect("parse config with explicit storage opt-out");
+
+        assert!(config.nexus.enabled);
+        assert!(
+            !config.torii.sorafs_storage.enabled,
+            "--sora must not override an explicit operator storage opt-out"
+        );
+    }
+
+    #[test]
     fn single_lane_config_preserves_defaults_without_sora_flag() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
         let toml_value = toml::Value::Table(minimal_config_table());
@@ -12931,6 +12982,22 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
 }
 
 fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) {
+    #[cfg(not(feature = "embedded-soracloud-runtime"))]
+    if config.soracloud_runtime.production_mode {
+        emitter.emit(Report::new(ConfigError::SoracloudRuntimeFeatureRequired));
+    }
+
+    let sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
+    let sorafs_gateway_compliance_enabled = config.torii.sorafs_gateway.compliance.is_some();
+    if sorafs_storage_enabled && !sorafs_gateway_compliance_enabled {
+        emitter.emit(Report::new(ConfigError::SorafsStorageComplianceRequired));
+    }
+    if !sorafs_storage_enabled
+        && (config.torii.sorafs_gateway.acme.enabled || sorafs_gateway_compliance_enabled)
+    {
+        emitter.emit(Report::new(ConfigError::SorafsGatewayRequiresStorage));
+    }
+
     /// Warnings about unused configuration options are logged via the standard
     /// logger so that they are visible alongside other diagnostic messages.
     #[cfg(not(feature = "telemetry"))]
@@ -13412,6 +13479,7 @@ fn run_main(build_line: BuildLine) -> ReportResult<(), MainError> {
     let tokio_workers = budget.clamp(4, 16);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(tokio_workers)
+        .thread_stack_size(config.concurrency.tokio_stack_bytes)
         .enable_all()
         .build()
         .map_err(Report::from)
@@ -13427,6 +13495,16 @@ fn validate_config_for_check(
     genesis: Option<&GenesisBlock>,
 ) -> ReportResult<(), MainError> {
     validate_config_offline(config).change_context(MainError::Config)?;
+    iroha_torii::ensure_mandatory_offline_configuration_for_chain(
+        &config.common.chain,
+        &config.settlement.offline,
+        config.torii.kagemusha_commands.as_ref(),
+    )
+    .map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "mandatory offline cash configuration failed: {error}"
+        ))
+    })?;
 
     let Some(genesis) = genesis else {
         // A joining node may obtain genesis from its trusted peers. Static
@@ -13488,6 +13566,53 @@ fn validate_config_for_check(
         block_cadence_ms,
     )?;
 
+    Ok(())
+}
+
+fn load_configured_kagemusha_release_catalog(
+    config: &Config,
+) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
+    if !config.settlement.offline.enabled {
+        return Ok(iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty());
+    }
+    match (
+        config
+            .settlement
+            .offline
+            .kagemusha_release_policy_path
+            .as_deref(),
+        config
+            .settlement
+            .offline
+            .kagemusha_artifact_dir
+            .as_deref(),
+    ) {
+        (None, None) => Err(
+            "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory"
+                .to_owned(),
+        ),
+        (Some(policy_path), Some(artifact_dir)) => {
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
+                policy_path,
+                artifact_dir,
+                config.settlement.offline.kagemusha_max_decoded_bytes,
+            )
+            .map_err(|error| {
+                format!("failed to authenticate Kagemusha V4 release catalog: {error}")
+            })
+        }
+        _ => Err(
+            "Kagemusha V4 release policy and artifact directory must be configured together"
+                .to_owned(),
+        ),
+    }
+}
+
+fn install_configured_kagemusha_release_catalog(
+    state: &mut State,
+    config: &Config,
+) -> Result<(), String> {
+    state.set_kagemusha_release_catalog(load_configured_kagemusha_release_catalog(config)?);
     Ok(())
 }
 
@@ -13611,6 +13736,11 @@ fn validate_genesis_execution_offline(
             "failed to initialize disposable world state for genesis validation: {error}"
         ))
     })?;
+    install_configured_kagemusha_release_catalog(&mut state, config).map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "failed to install Kagemusha V4 release catalog for offline genesis validation: {error}"
+        ))
+    })?;
     install_zk_config_before_kura_replay(&mut state, config).change_context(MainError::Config)?;
     apply_state_runtime_config_before_snapshot_auth(&mut state, config);
     apply_state_geometry_config_before_kura_replay(&mut state, config)
@@ -13659,6 +13789,19 @@ fn validate_genesis_execution_offline(
             "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {expected_block_cadence_ms} ms"
         )));
     }
+    iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
+        &staged,
+        genesis.0.header(),
+        &config.common.chain,
+        &config.settlement.offline,
+        config.torii.kagemusha_commands.as_ref(),
+        &config.nexus.fees.fee_asset_id,
+    )
+    .map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "mandatory offline cash readiness failed in staged genesis: {error}"
+        ))
+    })?;
     iroha_core::sumeragi::freeze_staged_genesis_v2(
         genesis,
         &staged,
@@ -16917,6 +17060,10 @@ mod tests {
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
         ) -> OfflineSemanticGenesisFixture {
             let mut config = sample_config();
+            // These fixtures exercise generic staged-genesis semantics. The
+            // authenticated ABI-21/V4 catalog path has its own Torii readiness
+            // fixtures and cannot be represented by this minimal genesis.
+            config.settlement.offline.enabled = false;
             let chain_id = ChainId::from("offline-genesis-validation-test");
             let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
                 b"offline-genesis-validation-authority".to_vec(),
@@ -16999,6 +17146,92 @@ mod tests {
                 fixture.cadence_ms,
             )
             .expect("valid genesis should execute in the disposable overlay");
+        }
+
+        #[test]
+        fn check_config_installs_offline_catalog_before_genesis_activation() {
+            let source = include_str!("main.rs");
+            let check_path = source
+                .split_once("fn validate_genesis_execution_offline(")
+                .expect("offline genesis validator")
+                .1
+                .split_once("fn enforce_build_line(")
+                .expect("end offline genesis validator")
+                .0;
+            let install = check_path
+                .find("install_configured_kagemusha_release_catalog(&mut state, config)")
+                .expect("check-config catalog installation");
+            let execute = check_path
+                .find("ValidBlock::validate_signed_genesis_keep_voting_block(")
+                .expect("offline genesis execution");
+            let readiness = check_path
+                .find("ensure_mandatory_offline_staged_genesis_readiness(")
+                .expect("staged offline readiness gate");
+            let freeze = check_path
+                .find("freeze_staged_genesis_v2(")
+                .expect("staged genesis freeze");
+            assert!(install < execute);
+            assert!(execute < readiness);
+            assert!(readiness < freeze);
+
+            let runtime_path = source
+                .split_once("pub async fn start_with_runtime_deps(")
+                .expect("runtime startup")
+                .1
+                .split_once("// Resolve the complete replay boundary")
+                .expect("end runtime catalog setup")
+                .0;
+            assert!(
+                runtime_path
+                    .contains("install_configured_kagemusha_release_catalog(&mut state, &config)")
+            );
+        }
+
+        #[test]
+        fn check_config_rejects_public_taira_without_offline_cash_before_genesis_bootstrap() {
+            let mut config = sample_config();
+            config.common.chain = ChainId::from("taira");
+            config.confidential.enabled = true;
+            config.confidential.assume_valid = false;
+            config.settlement.offline.enabled = false;
+
+            let error = validate_config_for_check(&config, None)
+                .expect_err("public Taira check-config must require offline cash");
+            let rendered = format!("{error:?}");
+            assert!(
+                rendered.contains("requires settlement.offline.enabled=true"),
+                "unexpected public Taira check-config error: {rendered}"
+            );
+        }
+
+        #[test]
+        fn configured_kagemusha_catalog_loader_requires_both_paths() {
+            let mut config = sample_config();
+            config.settlement.offline.enabled = false;
+            assert!(
+                load_configured_kagemusha_release_catalog(&config)
+                    .expect("disabled offline settlement uses an empty catalog")
+                    .is_empty()
+            );
+
+            config.settlement.offline.enabled = true;
+            config.settlement.offline.kagemusha_release_policy_path = None;
+            config.settlement.offline.kagemusha_artifact_dir = None;
+            assert!(
+                load_configured_kagemusha_release_catalog(&config)
+                    .err()
+                    .expect("mandatory offline settlement requires catalog paths")
+                    .contains("cannot start without")
+            );
+
+            config.settlement.offline.kagemusha_release_policy_path =
+                Some(PathBuf::from("/tmp/policy.norito"));
+            assert!(
+                load_configured_kagemusha_release_catalog(&config)
+                    .err()
+                    .expect("catalog paths must be configured together")
+                    .contains("configured together")
+            );
         }
 
         #[test]
@@ -17984,6 +18217,50 @@ mod tests {
         }
 
         #[test]
+        fn check_config_enforces_embedded_soracloud_runtime_feature() -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["soracloud_runtime", "production_mode"], true)
+                        .write(["soracloud_runtime", "inrou", "enabled"], true)
+                        .write(["soracloud_runtime", "inrou", "proxy_only"], false)
+                        .write(["soracloud_runtime", "egress", "default_allow"], false)
+                        .write(
+                            ["soracloud_runtime", "egress", "allowed_hosts"],
+                            Vec::<String>::new(),
+                        )
+                        .write(["soracloud_runtime", "egress", "rate_per_minute"], 60_i64)
+                        .write(
+                            ["soracloud_runtime", "egress", "max_bytes_per_minute"],
+                            1_048_576_i64,
+                        )
+                        .write(
+                            ["soracloud_runtime", "hf", "allow_inference_bridge_fallback"],
+                            false,
+                        );
+                })?;
+            config.settlement.offline.enabled = false;
+
+            let result = validate_config_for_check(&config, None);
+
+            #[cfg(feature = "embedded-soracloud-runtime")]
+            result.expect("featured irohad must accept Soracloud production mode");
+
+            #[cfg(not(feature = "embedded-soracloud-runtime"))]
+            {
+                let report = result.expect_err(
+                    "--check-config must reject production mode without the embedded runtime",
+                );
+                assert_contains!(
+                    format!("{report:#}"),
+                    "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
+                );
+            }
+
+            Ok(())
+        }
+
+        #[test]
         fn stack_budget_mismatch_warns_but_allows_config() -> eyre::Result<()> {
             let (config, _dir, _config_path) =
                 load_config_with_overrides(|table, _genesis_key| {
@@ -18064,6 +18341,45 @@ mod tests {
             assert_contains!(
                 format!("{report:#}"),
                 "validator nodes must enable confidential verification"
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn validate_config_runtime_rejects_sorafs_storage_without_compliance() -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) = load_config_with_overrides(|_, _| {})?;
+            config.torii.sorafs_storage.enabled = true;
+            config.torii.sorafs_gateway.compliance = None;
+
+            let mut emitter = Emitter::new();
+            validate_config_runtime(&mut emitter, &config);
+            let report = emitter
+                .into_result()
+                .expect_err("ungoverned embedded storage must fail before startup");
+            assert_contains!(
+                format!("{report:#}"),
+                "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn validate_config_runtime_rejects_gateway_automation_without_storage() -> eyre::Result<()>
+        {
+            let (mut config, _dir, _config_path) = load_config_with_overrides(|_, _| {})?;
+            config.torii.sorafs_storage.enabled = false;
+            config.torii.sorafs_gateway.acme.enabled = true;
+
+            let mut emitter = Emitter::new();
+            validate_config_runtime(&mut emitter, &config);
+            let report = emitter
+                .into_result()
+                .expect_err("gateway automation without storage must fail before startup");
+            assert_contains!(
+                format!("{report:#}"),
+                "SoraFS gateway ACME/compliance configuration requires sorafs.storage.enabled"
             );
 
             Ok(())

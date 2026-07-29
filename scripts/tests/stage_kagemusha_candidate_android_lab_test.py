@@ -122,7 +122,7 @@ class Fixture:
             "candidate_manifest_sha256": hashlib.sha256(self.manifest).hexdigest(),
             "source_commit": SOURCE.commit,
             "source_tree_sha256": SOURCE.tree_sha256,
-            "source_repo_dirty": False,
+            "source_repo_dirty": True,
             "generation": "candidate.test.v4",
             "bridge_abi_version": 21,
             "artifact_count": 8,
@@ -195,6 +195,20 @@ class CandidateStagerTests(unittest.TestCase):
         assert isinstance(artifacts, list)
         artifacts[0], artifacts[1] = artifacts[1], artifacts[0]
         with self.assertRaisesRegex(stage.StageError, "order or role"):
+            stage.parse_validation_report(self.report_bytes())
+
+    def test_report_parser_accepts_exact_artifact_limit_and_rejects_next_byte(self) -> None:
+        maximum = 4 * 1024 * 1024 * 1024
+        self.assertEqual(stage.MAX_ARTIFACT_BYTES, maximum)
+        artifacts = self.fixture.report["artifacts"]
+        assert isinstance(artifacts, list)
+        artifact = artifacts[0]
+        assert isinstance(artifact, dict)
+        artifact["framed_size_bytes"] = maximum
+        artifact["payload_size_bytes"] = maximum - 1
+        stage.parse_validation_report(self.report_bytes())
+        artifact["framed_size_bytes"] = maximum + 1
+        with self.assertRaisesRegex(stage.StageError, "exceed the V4 corridor"):
             stage.parse_validation_report(self.report_bytes())
 
     def test_source_identity_race_is_rejected(self) -> None:

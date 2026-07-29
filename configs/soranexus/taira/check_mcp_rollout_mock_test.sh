@@ -32,6 +32,13 @@ make_fake_repo() {
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+onboarding_token_args=(
+  --onboarding-token-file
+  "${SCRIPT_DIR}/../../../state/onboarding-token"
+)
+if [[ "${MOCK_OMIT_ONBOARDING_TOKEN_FILE:-0}" == "1" ]]; then
+  onboarding_token_args=()
+fi
 VALIDATOR_ALIGNMENT_ATTEMPTS=1 VALIDATOR_PROGRESS_DELAY_SECONDS=0 \
 exec "${SCRIPT_DIR}/check_mcp_rollout.real.sh" \
   --validator-root validator-1=https://validator-1.test \
@@ -40,8 +47,13 @@ exec "${SCRIPT_DIR}/check_mcp_rollout.real.sh" \
   --validator-root validator-4=https://validator-4.test \
   --require-all-validators \
   --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
+  ${onboarding_token_args[@]+"${onboarding_token_args[@]}"} \
   "$@"
 SH
+
+  printf '%s\n' '0123456789abcdef0123456789ABCDEF' \
+    >"${root}/state/onboarding-token"
+  chmod 600 "${root}/state/onboarding-token"
 
   cat >"${root}/state/offline-readiness.json" <<'JSON'
 {
@@ -167,19 +179,36 @@ PY
 
   cat >"${root}/scripts/taira_bootstrap_canary.py" <<'PY'
 #!/usr/bin/env python3
+import os
+from pathlib import Path
 import sys
 
 output_path = None
+onboarding_token_file = None
 chain_id = "fc56984b-2be7-431d-840e-21514d1883f0"
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
         output_path = args[index + 1]
+    elif value == "--onboarding-token-file" and index + 1 < len(args):
+        onboarding_token_file = args[index + 1]
     elif value == "--chain-id" and index + 1 < len(args):
         chain_id = args[index + 1]
 
 if output_path is None:
     raise SystemExit("missing --output-config")
+if onboarding_token_file is None:
+    raise SystemExit("missing --onboarding-token-file")
+token_path = Path(onboarding_token_file)
+if not token_path.is_absolute() or not token_path.is_file():
+    raise SystemExit("invalid --onboarding-token-file")
+if token_path.stat().st_mode & 0o077:
+    raise SystemExit("unsafe --onboarding-token-file")
+state_dir = os.environ.get("MOCK_STATE_DIR")
+if state_dir:
+    Path(state_dir, "onboarding_token_seen").write_text(
+        str(token_path) + "\n", encoding="utf-8"
+    )
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
@@ -347,14 +376,17 @@ print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 PY
 )"
 elif [[ -n "$validator_index" && "$method" == "GET" && "$url" == "https://validator-${validator_index}.test/status" ]]; then
-  body="$(python3 - "$validator_height" <<'PY'
+  body="$(python3 - "$validator_height" "$scenario" <<'PY'
 import json
 import sys
 
+height = int(sys.argv[1])
+if sys.argv[2] == "fleet_lagging_status_blocks":
+    height -= 1
 print(json.dumps({
     "build": {"git_commit_sha": "490dacc287f00d490dacc287f00d490dacc287f0"},
     "peers": 4,
-    "blocks": int(sys.argv[1]),
+    "blocks": height,
     "queue_size": 0,
     "teu_dataspace_backlog": [{"backlog": 0}],
 }, separators=(",", ":")))
@@ -699,7 +731,9 @@ run_invalid_canary_identity_case() {
   make_fake_repo "$root"
   output_file="${root}/invalid-${mutation}.log"
   config_path="${root}/canary.toml"
-  "${root}/scripts/taira_bootstrap_canary.py" --output-config "$config_path"
+  "${root}/scripts/taira_bootstrap_canary.py" \
+    --onboarding-token-file "${root}/state/onboarding-token" \
+    --output-config "$config_path"
   python3 - "$config_path" "$mutation" <<'PY'
 import pathlib
 import sys
@@ -768,6 +802,7 @@ run_case fleet_block_mismatch 'disagrees with validator-1 on offline_block_hash'
 run_case fleet_verifier_mismatch 'live release identity does not match the external operator-reviewed identity'
 run_case fleet_release_changes_between_samples 'live release identity does not match the external operator-reviewed identity'
 run_case fleet_stale_offline_progress 'validator fleet offline readiness did not advance a common evaluated block'
+run_case fleet_lagging_status_blocks '/status.blocks 706 does not match the durable committed height 707'
 run_invalid_canary_identity_case \
   archived-chain \
   'write canary config must target the expected Taira chain'
@@ -780,6 +815,7 @@ cleanup_paths+=("$root")
 make_fake_repo "$root"
 archived_chain_id="809574f5-fee7-5e69-bfcf-52451e42d50f"
 "${root}/scripts/taira_bootstrap_canary.py" \
+  --onboarding-token-file "${root}/state/onboarding-token" \
   --chain-id "$archived_chain_id" \
   --output-config "${root}/archived-canary.toml"
 if ! PATH="${root}/mockbin:${PATH}" \
@@ -938,7 +974,28 @@ grep -q 'write canary config not found:' "${root}/missing-canary-output.log"
 root="$(mktemp -d)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
+if PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="success" \
+    MOCK_STATE_DIR="${root}/state" \
+    MOCK_OMIT_ONBOARDING_TOKEN_FILE=1 \
+    WRITE_CONFIG_DEFAULT="${root}/automatic-canary.toml" \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/missing-onboarding-token-output.log" 2>&1; then
+  echo "automatic bootstrap without onboarding token unexpectedly succeeded" >&2
+  sed -n '1,200p' "${root}/missing-onboarding-token-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'automatic canary bootstrap requires --onboarding-token-file ABSOLUTE_PATH' \
+  "${root}/missing-onboarding-token-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
 "${root}/scripts/taira_bootstrap_canary.py" \
+  --onboarding-token-file "${root}/state/onboarding-token" \
   --output-config "${root}/explicit-canary.toml"
 before_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
 if ! PATH="${root}/mockbin:${PATH}" \
@@ -964,6 +1021,7 @@ root="$(mktemp -d)"
 cleanup_paths+=("$root")
 make_fake_repo "$root"
 "${root}/scripts/taira_bootstrap_canary.py" \
+  --onboarding-token-file "${root}/state/onboarding-token" \
   --output-config "${root}/asset-retry-canary.toml"
 if ! PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="failed_asset_then_success" \
@@ -1145,5 +1203,6 @@ fi
 grep -q 'Taira MCP rollout checks passed.' "${root}/cargo-output.log"
 test -f "${root}/state/cargo_seen"
 test -f "${root}/tmp/taira-canary-client.toml"
+test -f "${root}/state/onboarding_token_seen"
 
 echo "check_mcp_rollout mock tests passed."

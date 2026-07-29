@@ -30,9 +30,29 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-def _fake_benchmark(tmp_path: Path, body: str = "") -> Path:
+def _fake_benchmark(tmp_path: Path, *, exercise_guard: bool = False) -> Path:
+    """Create a system-shell benchmark double without another Python loader."""
+
     executable = tmp_path / MODULE.BENCHMARK_EXECUTABLE
-    executable.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+    body = ""
+    if exercise_guard:
+        body = """
+auth_fd=${IROHA_RESOURCE_GUARD_AUTH_FD-}
+case "$auth_fd" in
+    ''|*[!0-9]*) exit 91 ;;
+esac
+eval "IFS= read -r auth_record <&$auth_fd"
+expected_auth="IROHA_RESOURCE_GUARD_AUTH_V1:${IROHA_RESOURCE_GUARD_AUTH_TOKEN-}"
+[ "$auth_record" = "$expected_auth" ] || exit 91
+case "${TMPDIR-}" in
+    */.kagemusha-v4-benchmark-scratch-*) ;;
+    *) exit 92 ;;
+esac
+payload="$TMPDIR/guard-payload.$$"
+printf 'disk-backed scratch' > "$payload"
+/bin/rm "$payload"
+"""
+    executable.write_text("#!/bin/sh\nset -eu\n" + body, encoding="utf-8")
     executable.chmod(0o700)
     return executable
 
@@ -95,24 +115,13 @@ def test_runner_executes_an_owned_group_and_writes_reports(
     monkeypatch.setattr(
         MODULE.candidate_guard, "LOCK_PATH", tmp_path / "kagemusha.lock"
     )
+    monkeypatch.setattr(
+        MODULE.candidate_guard,
+        "_physical_memory_bytes",
+        lambda: 12 * MODULE.candidate_guard.BYTES_PER_GIB,
+    )
     monkeypatch.setattr(MODULE, "_filesystem_type", lambda _path: "apfs")
-    consume_capability = """
-import os
-from pathlib import Path
-import tempfile
-fd = int(os.environ["IROHA_RESOURCE_GUARD_AUTH_FD"])
-token = os.environ["IROHA_RESOURCE_GUARD_AUTH_TOKEN"]
-record = os.read(fd, 256)
-expected = f"IROHA_RESOURCE_GUARD_AUTH_V1:{token}\\n".encode("ascii")
-if record != expected:
-    raise SystemExit(91)
-scratch = os.environ["TMPDIR"]
-if not Path(scratch).name.startswith(".kagemusha-v4-benchmark-scratch-"):
-    raise SystemExit(92)
-with tempfile.TemporaryFile(dir=scratch) as payload:
-    payload.write(b"disk-backed scratch")
-"""
-    executable = _fake_benchmark(tmp_path, consume_capability)
+    executable = _fake_benchmark(tmp_path, exercise_guard=True)
 
     assert MODULE.main(_guarded_args(tmp_path, executable)) == 0
     report_root = tmp_path / "resource-report"
@@ -123,11 +132,7 @@ with tempfile.TemporaryFile(dir=scratch) as payload:
     )
     assert summary["exit_reason"] == "completed"
     assert summary["exit_status"] == 0
-    assert (
-        0
-        < summary["memory_limit_bytes"]
-        <= MODULE.candidate_guard.ABSOLUTE_MAX_MEMORY_BYTES
-    )
+    assert summary["memory_limit_bytes"] == 6 * MODULE.candidate_guard.BYTES_PER_GIB
     assert (
         summary["sample_interval_seconds"]
         == MODULE.candidate_guard.SAMPLE_INTERVAL_SECONDS

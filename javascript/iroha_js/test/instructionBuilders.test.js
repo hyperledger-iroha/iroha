@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildBurnAssetInstruction,
   buildCancelAssetLockInstruction,
+  buildSetAssetTransferAvailabilityInstruction,
   CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
@@ -523,6 +524,161 @@ baseTest("buildCancelAssetLockInstruction emits the exact two-field V1 payload",
   assert.equal(
     instruction.CancelAssetLock.escrow_id,
     normalizedHashHex(blake2b256(Buffer.from("merchant-lock-001", "utf8"))),
+  );
+});
+
+baseTest("buildSetAssetTransferAvailabilityInstruction emits exact CAS state", () => {
+  assert.deepEqual(
+    buildSetAssetTransferAvailabilityInstruction({
+      accountId: ACCOUNT_ID,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      expectedRevision: 7,
+      incoming: "Disabled",
+      outgoing: "Enabled",
+      reason: "suspend incoming retail transfers",
+    }),
+    {
+      SetAssetTransferAvailability: {
+        account_id: ACCOUNT_ID,
+        asset_definition_id: ASSET_DEFINITION_ID,
+        expected_revision: "7",
+        incoming: "Disabled",
+        outgoing: "Enabled",
+        reason: "suspend incoming retail transfers",
+      },
+    },
+  );
+  assert.equal(
+    buildSetAssetTransferAvailabilityInstruction({
+      accountId: ACCOUNT_ID,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      expectedRevision: 0n,
+      incoming: "Enabled",
+      outgoing: "Enabled",
+    }).SetAssetTransferAvailability.reason,
+    null,
+  );
+});
+
+baseTest("asset availability builder rejects ambiguous or noncanonical input", () => {
+  const valid = {
+    accountId: ACCOUNT_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    expectedRevision: 0,
+    incoming: "Enabled",
+    outgoing: "Disabled",
+  };
+  for (const [field, value] of [
+    ["incoming", "enabled"],
+    ["outgoing", "Frozen"],
+    ["expectedRevision", -1],
+    ["reason", ""],
+    ["reason", " padded"],
+    ["reason", "line\u000abreached"],
+    ["reason", "ר".repeat(257)],
+    ["accountId", ` ${ACCOUNT_ID}`],
+    ["assetDefinitionId", `${ASSET_DEFINITION_ID} `],
+  ]) {
+    assert.throws(
+      () =>
+        buildSetAssetTransferAvailabilityInstruction({
+          ...valid,
+          [field]: value,
+        }),
+      undefined,
+      `accepted invalid ${field}`,
+    );
+  }
+  assert.throws(
+    () =>
+      buildSetAssetTransferAvailabilityInstruction({
+        ...valid,
+        expected_revision: 0,
+      }),
+    /not supported/u,
+  );
+});
+
+baseTest("pure JS codec roundtrips directional asset availability", () => {
+  const instruction = buildSetAssetTransferAvailabilityInstruction({
+    accountId: ACCOUNT_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    expectedRevision: 3,
+    incoming: "Disabled",
+    outgoing: "Enabled",
+    reason: "operator review",
+  });
+  withPureJsInstructionCodec(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+  });
+});
+
+baseTest("asset availability preserves the complete u64 revision domain", () => {
+  const instruction = buildSetAssetTransferAvailabilityInstruction({
+    accountId: ACCOUNT_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    expectedRevision: 0xffff_ffff_ffff_ffffn,
+    incoming: "Enabled",
+    outgoing: "Disabled",
+  });
+  assert.equal(
+    instruction.SetAssetTransferAvailability.expected_revision,
+    "18446744073709551615",
+  );
+  withPureJsInstructionCodec(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+  });
+  assert.throws(
+    () =>
+      buildSetAssetTransferAvailabilityInstruction({
+        accountId: ACCOUNT_ID,
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        expectedRevision: 0x1_0000_0000_0000_0000n,
+        incoming: "Enabled",
+        outgoing: "Disabled",
+      }),
+    /unsigned 64-bit/u,
+  );
+});
+
+baseTest("pure JS codec rejects noncanonical availability reasons", () => {
+  const base = buildSetAssetTransferAvailabilityInstruction({
+    accountId: ACCOUNT_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    expectedRevision: 0,
+    incoming: "Disabled",
+    outgoing: "Enabled",
+  });
+  withPureJsInstructionCodec(() => {
+    for (const reason of ["line\u000abreached", "ר".repeat(257)]) {
+      assert.throws(
+        () =>
+          noritoEncodeInstruction({
+            SetAssetTransferAvailability: {
+              ...base.SetAssetTransferAvailability,
+              reason,
+            },
+          }),
+        undefined,
+      );
+    }
+  });
+});
+
+test("native and pure JS codecs byte-match for asset availability", () => {
+  const instruction = buildSetAssetTransferAvailabilityInstruction({
+    accountId: ACCOUNT_ID,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    expectedRevision: 3,
+    incoming: "Disabled",
+    outgoing: "Enabled",
+    reason: "operator review",
+  });
+  assertNativeAndPureInstructionParity(
+    instruction,
+    "SetAssetTransferAvailability",
   );
 });
 

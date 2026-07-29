@@ -20,6 +20,7 @@ import sys
 import tempfile
 from typing import Any, Iterable
 import unicodedata
+import zipfile
 
 
 EXPECTED_DIRS: tuple[str, ...] = ("telemetry", "attestation", "queue", "logs")
@@ -175,7 +176,7 @@ KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1: tuple[str, ...] = (
 MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_KAGEMUSHA_WALLET_APK_BYTES = 64 * 1024 * 1024
 MAX_KAGEMUSHA_CANDIDATE_NATIVE_LIBRARY_BYTES = 256 * 1024 * 1024
-MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES = 256 * 1024 * 1024
+MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
 MAX_KAGEMUSHA_KRV4_HEADER_BYTES = 64 * 1024
 MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 16 * 1024 * 1024
 KAGEMUSHA_WALLET_APK_PATH = "evidence/kagemusha-wallet-release.apk"
@@ -230,8 +231,14 @@ def validate_kagemusha_candidate_stage_manifest_v1(
     stage_sha256: str,
     source_commit: str,
     source_tree_sha256: str,
+    verify_entry_digests: bool = True,
 ) -> dict[str, Any]:
-    """Verify the canonical stage manifest and every one of its 44 files."""
+    """Verify the canonical stage manifest and every one of its 44 files.
+
+    ``verify_entry_digests=False`` is reserved for streaming consumers which
+    authenticate every byte against the returned catalog while copying it. The
+    default remains the full promotion-grade validation path.
+    """
 
     def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -241,11 +248,59 @@ def validate_kagemusha_candidate_stage_manifest_v1(
             result[key] = value
         return result
 
-    def file_digest(path: Path) -> str:
+    def file_digest(path: Path, expected: os.stat_result, relative: str) -> str:
         digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            while chunk := handle.read(1024 * 1024):
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as error:
+            raise ValueError(
+                f"candidate stage entry could not be securely opened: {relative}"
+            ) from error
+        try:
+            opened = os.fstat(descriptor)
+            identity = (expected.st_dev, expected.st_ino)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != identity
+                or opened.st_size != expected.st_size
+            ):
+                raise ValueError(
+                    f"candidate stage entry changed while opening: {relative}"
+                )
+            size = 0
+            while chunk := os.read(descriptor, 1024 * 1024):
+                size += len(chunk)
+                if size > expected.st_size:
+                    raise ValueError(
+                        f"candidate stage entry grew while hashing: {relative}"
+                    )
                 digest.update(chunk)
+            final_opened = os.fstat(descriptor)
+            final_path = path.lstat()
+            if (
+                (final_opened.st_dev, final_opened.st_ino) != identity
+                or (final_path.st_dev, final_path.st_ino) != identity
+                or not stat.S_ISREG(final_opened.st_mode)
+                or not stat.S_ISREG(final_path.st_mode)
+                or final_opened.st_nlink != 1
+                or final_path.st_nlink != 1
+                or stat.S_IMODE(final_opened.st_mode) != 0o600
+                or stat.S_IMODE(final_path.st_mode) != 0o600
+                or final_opened.st_uid != expected.st_uid
+                or final_path.st_uid != expected.st_uid
+                or size != expected.st_size
+                or final_opened.st_size != expected.st_size
+                or final_path.st_size != expected.st_size
+                or final_path.st_mtime_ns != expected.st_mtime_ns
+                or final_path.st_ctime_ns != expected.st_ctime_ns
+            ):
+                raise ValueError(
+                    f"candidate stage entry changed while hashing: {relative}"
+                )
+        finally:
+            os.close(descriptor)
         return digest.hexdigest()
 
     if not SHA256_HEX_RE.fullmatch(candidate_sha256) or candidate_sha256 == "0" * 64:
@@ -392,6 +447,17 @@ def validate_kagemusha_candidate_stage_manifest_v1(
         ),
         *(f"scenario/{name}" for name in KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1),
     }
+    parent_paths = sorted(
+        {PurePosixPath(relative).parent.as_posix() for relative in expected_paths},
+        key=lambda path: path.encode("utf-8"),
+    )
+    for relative_parent in parent_paths:
+        parent = root / relative_parent
+        parent_stat = parent.lstat()
+        if not stat.S_ISDIR(parent_stat.st_mode) or parent.resolve(strict=True) != parent:
+            raise ValueError(
+                f"candidate stage entry parent is not a real directory: {relative_parent}"
+            )
     entries = manifest.get("entries")
     if not isinstance(entries, list) or len(entries) != 44:
         raise ValueError("candidate stage manifest entries must contain exactly 44 objects")
@@ -418,7 +484,7 @@ def validate_kagemusha_candidate_stage_manifest_v1(
             raise ValueError(f"candidate stage entry size is not exact: {relative}")
         if not isinstance(digest, str) or not SHA256_HEX_RE.fullmatch(digest):
             raise ValueError(f"candidate stage entry digest is invalid: {relative}")
-        if file_digest(path) != digest:
+        if verify_entry_digests and file_digest(path, current, relative) != digest:
             raise ValueError(f"candidate stage entry digest is not exact: {relative}")
         measured[relative] = (size, digest)
     expected_order = sorted(expected_paths, key=lambda path: path.encode("utf-8"))
@@ -606,6 +672,27 @@ def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
     if normalized_verifier_digests != {measured}:
         raise ValueError("apksigner digest differs from parsed signer certificate DER")
     return measured
+
+
+def _candidate_lab_apk_forbidden_krv4_entries(apk_path: Path) -> list[str]:
+    """Return canonical KRV4 basenames found in a candidate lab APK directory."""
+
+    forbidden_names = set(KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4)
+    try:
+        with zipfile.ZipFile(apk_path) as archive:
+            return sorted(
+                {
+                    entry.filename
+                    for entry in archive.infolist()
+                    if PurePosixPath(entry.filename.replace("\\", "/")).name
+                    in forbidden_names
+                },
+                key=lambda value: value.encode("utf-8"),
+            )
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as error:
+        raise ValueError("candidate lab APK is not a readable bounded ZIP archive") from error
+
+
 STATUS_EVENT_FIELDS: frozenset[str] = frozenset(
     {
         "status",
@@ -979,6 +1066,7 @@ KAGEMUSHA_DEVICE_FAMILY_MODEL_RULES: tuple[
 )
 RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple[str, ...] = (
     "scripts/run_kagemusha_candidate_android_lab.sh",
+    "scripts/stage_kagemusha_candidate_android_artifacts.py",
     "--build-only",
     "--stage-sha256",
     "--attestation-slot",
@@ -1010,6 +1098,11 @@ KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND = (
     '--trusted-signer-public-key "$TRUSTED_SIGNER_PUBLIC_KEY"'
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_LIFECYCLE_COMMAND = (
+    "python3 -I scripts/stage_kagemusha_candidate_android_artifacts.py "
+    '--adb "$ADB_BINARY" --evidence-root "$EVIDENCE_ROOT" '
+    '--candidate-sha256 "$CANDIDATE_SHA256" --stage-sha256 "$STAGE_SHA256" '
+    '--source-commit "$SOURCE_COMMIT" '
+    '--source-tree-sha256 "$SOURCE_TREE_SHA256" && '
     "adb shell am instrument -w -r -e class "
     "org.hyperledger.iroha.sdk.kagemusha.candidate.lab."
     "KagemushaCandidateLifecycleInstrumentedTest "
@@ -6237,6 +6330,12 @@ def _candidate_binding_path(
     return relative
 
 
+def _kagemusha_krv4_size_exceeds_bound(size_bytes: int) -> bool:
+    """Return whether one framed file or streamed payload exceeds the V4 cap."""
+
+    return size_bytes > MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES
+
+
 def _candidate_artifact_measurement(
     slot_path: Path, relative: str, errors: list[str]
 ) -> dict[str, int | str] | None:
@@ -6249,7 +6348,7 @@ def _candidate_artifact_measurement(
         errors.extend(path_errors)
         return None
     assert artifact_path is not None and artifact_stat is not None
-    if artifact_stat.st_size > MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES:
+    if _kagemusha_krv4_size_exceeds_bound(artifact_stat.st_size):
         errors.append(f"candidate artifact {_display_path(relative)} exceeds the KRV4 bound")
         return None
     framed = hashlib.sha256()
@@ -6286,7 +6385,7 @@ def _candidate_artifact_measurement(
             framed.update(header)
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 payload_size += len(chunk)
-                if payload_size > MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES:
+                if _kagemusha_krv4_size_exceeds_bound(payload_size):
                     errors.append(
                         f"candidate artifact {_display_path(relative)} exceeds the KRV4 payload bound"
                     )
@@ -6817,6 +6916,17 @@ def validate_candidate_binding_v2(
             normalized, "evidence"
         ):
             continue
+        try:
+            forbidden_krv4_entries = _candidate_lab_apk_forbidden_krv4_entries(
+                slot_path / normalized
+            )
+        except ValueError as error:
+            errors.append(f"candidate binding {path_key} packaging is invalid: {error}")
+        else:
+            if forbidden_krv4_entries:
+                errors.append(
+                    f"candidate binding {path_key} embeds external KRV4 artifact entries"
+                )
         try:
             measured_certificate = extract_apk_signing_certificate_sha256(
                 slot_path / normalized

@@ -9,7 +9,6 @@ use iroha_data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    events::data::prelude::{AssetChanged, AssetEvent},
     fastpq::TransferDeltaTranscript,
     isi::vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     name::Name,
@@ -27,8 +26,8 @@ use super::{
     Error, Execute,
     asset::isi::{
         NumericAssetTransferSourcePolicy, apply_numeric_asset_transfer_delta,
-        assert_numeric_spec_with, prepare_outbound_asset_transfer_control_update,
-        update_control_record,
+        assert_numeric_spec_with, emit_numeric_asset_transfer_events,
+        prepare_outbound_asset_transfer_control_update, update_control_record,
     },
 };
 use crate::{
@@ -162,16 +161,12 @@ fn transfer_numeric_asset_for_vpn(
         .telemetry
         .observe_tx_amount(amount.as_numeric().to_f64_lossy());
 
-    state_transaction.world.emit_events([
-        AssetEvent::Removed(AssetChanged {
-            asset: source_id,
-            amount: amount.clone(),
-        }),
-        AssetEvent::Added(AssetChanged {
-            asset: destination_id,
-            amount: amount.clone(),
-        }),
-    ]);
+    emit_numeric_asset_transfer_events(
+        state_transaction,
+        source_id,
+        destination_id,
+        amount.clone(),
+    );
 
     Ok(delta)
 }

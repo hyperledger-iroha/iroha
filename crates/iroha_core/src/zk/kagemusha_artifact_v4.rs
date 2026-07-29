@@ -1037,11 +1037,39 @@ where
     reader
         .seek(SeekFrom::Start(0))
         .map_err(|error| format!("failed to rewind Kagemusha V4 artifact: {error}"))?;
+    with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4(
+        reader,
+        descriptor,
+        validate_binding,
+        &authenticated,
+        parse,
+    )
+}
+
+fn with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4<R, T, V, F>(
+    reader: &mut R,
+    descriptor: &KagemushaPastaCycleArtifactV4,
+    validate_binding: V,
+    authenticated: &KagemushaAuthenticatedArtifactInspectionV4,
+    parse: F,
+) -> Result<T, String>
+where
+    R: Read + Seek,
+    V: Copy
+        + Fn(
+            &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
+            &KagemushaPastaCycleArtifactV4,
+        ) -> Result<(), String>,
+    F: FnOnce(
+        &mut dyn Read,
+        &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
+    ) -> Result<T, String>,
+{
     let KagemushaArtifactPrefixV4 {
         inspection,
         framed_hasher,
     } = read_kagemusha_pasta_cycle_artifact_prefix_v4(reader, descriptor, validate_binding)?;
-    if inspection != authenticated {
+    if &inspection != authenticated {
         return Err("Kagemusha V4 artifact header changed after authentication".to_owned());
     }
     let bounded = reader.take(inspection.header.payload_size_bytes);
@@ -1102,6 +1130,38 @@ where
         reader,
         descriptor,
         |header, descriptor| binding.validate_header(header, descriptor),
+        parse,
+    )
+}
+
+/// Parse one pinned artifact whose complete frame was authenticated earlier.
+///
+/// The cached inspection is only an optimization hint: this pass validates the
+/// canonical header against the authenticated release again, hashes every byte
+/// consumed by the parser against both manifest digests, requires exact payload
+/// consumption, and rejects trailing bytes. Consequently a stale or forged
+/// inspection cannot make changed artifact bytes acceptable.
+pub(crate) fn with_kagemusha_pasta_cycle_artifact_payload_after_inspection_v4<R, T, F>(
+    reader: &mut R,
+    release: &KagemushaAuthenticatedReleaseV4,
+    descriptor: &KagemushaPastaCycleArtifactV4,
+    authenticated: &KagemushaAuthenticatedArtifactInspectionV4,
+    parse: F,
+) -> Result<T, String>
+where
+    R: Read + Seek,
+    F: FnOnce(
+        &mut dyn Read,
+        &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
+    ) -> Result<T, String>,
+{
+    let binding = KagemushaArtifactManifestBindingV4::authenticated_release(release);
+    binding.validate()?;
+    with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4(
+        reader,
+        descriptor,
+        |header, descriptor| binding.validate_header(header, descriptor),
+        authenticated,
         parse,
     )
 }
@@ -1637,6 +1697,25 @@ mod tests {
         (bytes, descriptor)
     }
 
+    struct CountingCursor {
+        inner: Cursor<Vec<u8>>,
+        bytes_read: u64,
+    }
+
+    impl std::io::Read for CountingCursor {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(buffer)?;
+            self.bytes_read += u64::try_from(count).expect("fixture read length fits u64");
+            Ok(count)
+        }
+    }
+
+    impl std::io::Seek for CountingCursor {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
     #[derive(Default)]
     struct ShortWriteSink {
         bytes: Vec<u8>,
@@ -1876,5 +1955,52 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn cached_inspection_payload_parse_is_one_authenticated_pass() {
+        let payload = b"cached inspection proving-key payload fixture";
+        let (bytes, descriptor) = framed_fixture(payload);
+        let inspection = inspect_kagemusha_pasta_cycle_artifact_content_v4(
+            &mut Cursor::new(bytes.clone()),
+            &descriptor,
+            accept_test_binding,
+        )
+        .expect("authenticate fixture once");
+        let mut reader = CountingCursor {
+            inner: Cursor::new(bytes),
+            bytes_read: 0,
+        };
+        let parsed = with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4(
+            &mut reader,
+            &descriptor,
+            accept_test_binding,
+            &inspection,
+            |reader, _| {
+                let mut parsed = Vec::new();
+                reader
+                    .read_to_end(&mut parsed)
+                    .map_err(|error| error.to_string())?;
+                Ok(parsed)
+            },
+        )
+        .expect("parse from authenticated inspection");
+        assert_eq!(parsed, payload);
+        assert_eq!(reader.bytes_read, descriptor.size_bytes);
+
+        let mut stale = inspection;
+        stale.header.payload_sha256[0] ^= 1;
+        let error = with_kagemusha_pasta_cycle_artifact_payload_after_inspection_content_v4(
+            &mut CountingCursor {
+                inner: Cursor::new(reader.inner.into_inner()),
+                bytes_read: 0,
+            },
+            &descriptor,
+            accept_test_binding,
+            &stale,
+            |_reader, _| Ok(()),
+        )
+        .expect_err("stale cached inspection must fail closed");
+        assert!(error.contains("header changed"));
     }
 }

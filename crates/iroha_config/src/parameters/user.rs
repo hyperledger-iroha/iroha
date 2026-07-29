@@ -2521,6 +2521,12 @@ pub struct Concurrency {
         default = "defaults::concurrency::RAYON_GLOBAL"
     )]
     pub rayon_global_threads: usize,
+    /// Stack size (bytes) for Tokio runtime and blocking threads.
+    #[config(
+        env = "CONCURRENCY_TOKIO_STACK_BYTES",
+        default = "defaults::concurrency::TOKIO_STACK_BYTES"
+    )]
+    pub tokio_stack_bytes: usize,
     /// Stack size (bytes) for scheduler worker threads.
     #[config(
         env = "CONCURRENCY_SCHEDULER_STACK_BYTES",
@@ -2560,6 +2566,7 @@ impl Concurrency {
             scheduler_min_threads: self.scheduler_min_threads,
             scheduler_max_threads: self.scheduler_max_threads,
             rayon_global_threads: self.rayon_global_threads,
+            tokio_stack_bytes: self.tokio_stack_bytes,
             scheduler_stack_bytes: self.scheduler_stack_bytes,
             prover_stack_bytes: self.prover_stack_bytes,
             sumeragi_stack_bytes: self.sumeragi_stack_bytes,

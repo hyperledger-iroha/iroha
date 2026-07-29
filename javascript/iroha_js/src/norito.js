@@ -67,11 +67,15 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "VerifyingKey.*",
   "Rwa.*",
   "CancelAssetLock",
+  "SetAssetTransferAvailability",
   "SoraFS.ReplicationOrder.*",
   "RecordSccpMessage",
 ];
 const CANCEL_ASSET_LOCK_WIRE_ID =
   "iroha_data_model::isi::escrow::CancelAssetLock";
+const SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID =
+  "iroha.asset.transfer.availability.set";
+const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
@@ -122,6 +126,8 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   "iroha.execute_trigger": "iroha_data_model::isi::transparent::ExecuteTrigger",
   "iroha.rwa": "iroha_data_model::isi::rwa::RwaInstructionBox",
   [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_WIRE_ID,
+  [SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID]:
+    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability",
   [RECORD_SCCP_MESSAGE_WIRE_ID]: RECORD_SCCP_MESSAGE_WIRE_ID,
   [ISSUE_REPLICATION_ORDER_WIRE_ID]: ISSUE_REPLICATION_ORDER_WIRE_ID,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]: COMPLETE_REPLICATION_ORDER_WIRE_ID,
@@ -1747,6 +1753,21 @@ function encodePureJsInstructionPayload(instruction) {
     return encodeCancelAssetLockInstruction(instruction.CancelAssetLock);
   }
   if (
+    Object.prototype.hasOwnProperty.call(
+      instruction,
+      "SetAssetTransferAvailability",
+    )
+  ) {
+    assertOnlyObjectKeys(
+      instruction,
+      ["SetAssetTransferAvailability"],
+      "instruction",
+    );
+    return encodeSetAssetTransferAvailabilityInstruction(
+      instruction.SetAssetTransferAvailability,
+    );
+  }
+  if (
     isPlainObject(instruction.IssueReplicationOrder) ||
     isPlainObject(instruction.CompleteReplicationOrder) ||
     isPlainObject(instruction.ExpireReplicationOrder)
@@ -1886,6 +1907,8 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return decodeRwaInstructionPayload(payload);
     case CANCEL_ASSET_LOCK_WIRE_ID:
       return decodeCancelAssetLockInstructionPayload(payload);
+    case SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID:
+      return decodeSetAssetTransferAvailabilityInstructionPayload(payload);
     case ISSUE_REPLICATION_ORDER_WIRE_ID:
     case COMPLETE_REPLICATION_ORDER_WIRE_ID:
     case EXPIRE_REPLICATION_ORDER_WIRE_ID:
@@ -2151,6 +2174,166 @@ function decodeCancelAssetLockInstructionPayload(payload) {
         "CancelAssetLock.escrow_id",
       ),
       expected_remaining_amount: expectedRemainingAmount,
+    },
+  };
+}
+
+function encodeAssetTransferAvailabilityValue(value, context) {
+  if (value === "Enabled") {
+    return encodeEnumTagValue(0);
+  }
+  if (value === "Disabled") {
+    return encodeEnumTagValue(1);
+  }
+  throw new TypeError(`${context} must be exactly "Enabled" or "Disabled"`);
+}
+
+function decodeAssetTransferAvailabilityValue(payload, context) {
+  const reader = new BufferReader(payload, context);
+  const tag = reader.readU32LE("tag");
+  reader.assertEof();
+  if (tag === 0) {
+    return "Enabled";
+  }
+  if (tag === 1) {
+    return "Disabled";
+  }
+  throw new Error(`${context} uses unsupported availability tag ${tag}`);
+}
+
+function validateAssetTransferAvailabilityReason(reason, context) {
+  if (reason === null) {
+    return;
+  }
+  if (
+    typeof reason !== "string" ||
+    reason.length === 0 ||
+    reason.trim() !== reason
+  ) {
+    throw new TypeError(
+      `${context} must be non-empty unpadded text when provided`,
+    );
+  }
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(reason)) {
+    throw new TypeError(`${context} must not contain control characters`);
+  }
+  if (
+    Buffer.byteLength(reason, "utf8") >
+    ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1
+  ) {
+    throw new RangeError(`${context} exceeds 512 UTF-8 bytes`);
+  }
+}
+
+function encodeSetAssetTransferAvailabilityInstruction(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("SetAssetTransferAvailability must be an object");
+  }
+  const fields = [
+    "account_id",
+    "asset_definition_id",
+    "expected_revision",
+    "incoming",
+    "outgoing",
+    "reason",
+  ];
+  assertOnlyObjectKeys(value, fields, "SetAssetTransferAvailability");
+  for (const field of fields.slice(0, 5)) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) {
+      throw new TypeError(`SetAssetTransferAvailability.${field} is required`);
+    }
+  }
+  const reason = value.reason ?? null;
+  validateAssetTransferAvailabilityReason(
+    reason,
+    "SetAssetTransferAvailability.reason",
+  );
+  const payload = encodeStructValue([
+    [
+      encodeAccountIdValue(
+        value.account_id,
+        "SetAssetTransferAvailability.account_id",
+      ),
+    ],
+    [
+      encodeAssetDefinitionIdValue(
+        value.asset_definition_id,
+        "SetAssetTransferAvailability.asset_definition_id",
+      ),
+    ],
+    [
+      encodeU64NumberValue(
+        value.expected_revision,
+        "SetAssetTransferAvailability.expected_revision",
+      ),
+    ],
+    [
+      encodeAssetTransferAvailabilityValue(
+        value.incoming,
+        "SetAssetTransferAvailability.incoming",
+      ),
+    ],
+    [
+      encodeAssetTransferAvailabilityValue(
+        value.outgoing,
+        "SetAssetTransferAvailability.outgoing",
+      ),
+    ],
+    [
+      encodeOptionValue(
+        reason,
+        encodeStringValue,
+        "SetAssetTransferAvailability.reason",
+      ),
+    ],
+  ]);
+  return encodeInstructionEnvelope(
+    SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID,
+    payload,
+  );
+}
+
+function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
+  const fields = decodeStructFields(payload, "SetAssetTransferAvailability", [
+    "account_id",
+    "asset_definition_id",
+    "expected_revision",
+    "incoming",
+    "outgoing",
+    "reason",
+  ]);
+  const reason = decodeOptionValue(
+    fields.reason,
+    decodeStringValue,
+    "SetAssetTransferAvailability.reason",
+  );
+  validateAssetTransferAvailabilityReason(
+    reason,
+    "SetAssetTransferAvailability.reason",
+  );
+  return {
+    SetAssetTransferAvailability: {
+      account_id: decodeAccountIdValue(
+        fields.account_id,
+        "SetAssetTransferAvailability.account_id",
+      ),
+      asset_definition_id: decodeAssetDefinitionIdValue(
+        fields.asset_definition_id,
+        "SetAssetTransferAvailability.asset_definition_id",
+      ),
+      expected_revision: decodeU64Value(
+        fields.expected_revision,
+        "SetAssetTransferAvailability.expected_revision",
+      ),
+      incoming: decodeAssetTransferAvailabilityValue(
+        fields.incoming,
+        "SetAssetTransferAvailability.incoming",
+      ),
+      outgoing: decodeAssetTransferAvailabilityValue(
+        fields.outgoing,
+        "SetAssetTransferAvailability.outgoing",
+      ),
+      reason,
     },
   };
 }

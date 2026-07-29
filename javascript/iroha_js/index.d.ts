@@ -13093,6 +13093,37 @@ export function buildCancelAssetLockInstruction(options: {
   expectedRemainingAmount: QuantityInput;
 }): CancelAssetLockInstruction;
 
+export type AssetTransferAvailability = "Enabled" | "Disabled";
+
+/** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
+export declare const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1: 512;
+
+export interface SetAssetTransferAvailabilityInstruction {
+  SetAssetTransferAvailability: {
+    account_id: string;
+    asset_definition_id: string;
+    expected_revision: string;
+    incoming: AssetTransferAvailability;
+    outgoing: AssetTransferAvailability;
+    reason: string | null;
+  };
+}
+
+/**
+ * Atomically update both transfer directions for one account and asset
+ * definition. `expectedRevision` is a compare-and-set precondition, and
+ * `reason` is bounded by
+ * {@link ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1}.
+ */
+export function buildSetAssetTransferAvailabilityInstruction(options: {
+  accountId: string;
+  assetDefinitionId: string;
+  expectedRevision: NumericLike;
+  incoming: AssetTransferAvailability;
+  outgoing: AssetTransferAvailability;
+  reason?: string | null;
+}): SetAssetTransferAvailabilityInstruction;
+
 /**
  * Build a `Mint::Asset` instruction payload with deterministic quantity
  * normalisation.

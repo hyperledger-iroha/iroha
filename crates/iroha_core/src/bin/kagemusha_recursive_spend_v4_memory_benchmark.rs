@@ -21,14 +21,15 @@ use iroha_core::zk::kagemusha_v2::{
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
     KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
-    KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
+    KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
+    KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4,
     KagemushaPastaCycleParityV1, KagemushaPastaPublicLayoutV4, KagemushaStepCircuitParamsV4,
 };
 
 const SUBCOMMAND: &str = "measure-compact-k16";
 const EXPECTED_PARAMETERS_BYTES: usize = 4_194_372;
-const EXPECTED_VERIFYING_KEY_BYTES: usize = 682;
-const EXPECTED_PROVING_KEY_BYTES: u64 = 94_372_718;
+const EXPECTED_VERIFYING_KEY_BYTES: usize = 29_386;
+const EXPECTED_PROVING_KEY_BYTES: u64 = 3_856_699_286;
 
 fn benchmark_error(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
@@ -41,8 +42,8 @@ fn compact_k16_params() -> Result<KagemushaStepCircuitParamsV4, io::Error> {
     let params = KagemushaStepCircuitParamsV4 {
         version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
         k,
-        num_advice_per_phase: vec![8],
-        num_lookup_advice_per_phase: vec![1],
+        num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+        num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
         num_fixed: 1,
         lookup_bits: k - 1,
         num_instance_columns: 1,

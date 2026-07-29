@@ -171,39 +171,18 @@ pub(crate) struct BooleanGateAirRowV1 {
 impl BooleanGateAirRowV1 {
     /// Canonical AND witness row.
     pub(crate) fn and(left: bool, right: bool) -> Self {
-        Self::new_selector(
-            [1, 0, 0],
-            left,
-            right,
-            false,
-            left & right,
-            false,
-        )
+        Self::new_selector([1, 0, 0], left, right, false, left & right, false)
     }
 
     /// Canonical XOR witness row.
     pub(crate) fn xor(left: bool, right: bool) -> Self {
-        Self::new_selector(
-            [0, 1, 0],
-            left,
-            right,
-            false,
-            left ^ right,
-            false,
-        )
+        Self::new_selector([0, 1, 0], left, right, false, left ^ right, false)
     }
 
     /// Canonical one-bit full-adder witness row.
     pub(crate) fn full_adder(left: bool, right: bool, carry_in: bool) -> Self {
         let sum = u8::from(left) + u8::from(right) + u8::from(carry_in);
-        Self::new_selector(
-            [0, 0, 1],
-            left,
-            right,
-            carry_in,
-            sum & 1 == 1,
-            sum >= 2,
-        )
+        Self::new_selector([0, 0, 1], left, right, carry_in, sum & 1 == 1, sum >= 2)
     }
 
     fn new_selector(
@@ -347,10 +326,7 @@ mod tests {
         assert_eq!(changed.validate(), Err(ZkX509AirErrorV1::BitGate));
         let mut changed = BooleanGateAirRowV1::and(true, true);
         changed.select_xor = F::ONE;
-        assert_eq!(
-            changed.validate(),
-            Err(ZkX509AirErrorV1::GateSelector)
-        );
+        assert_eq!(changed.validate(), Err(ZkX509AirErrorV1::GateSelector));
         let mut changed = BooleanGateAirRowV1::and(false, false);
         changed.carry_out = F::ONE;
         assert_eq!(changed.validate(), Err(ZkX509AirErrorV1::BitGate));

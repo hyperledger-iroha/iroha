@@ -121,6 +121,28 @@ def test_taira_governance_timing_contract_is_release_pinned() -> None:
     }
 
 
+def test_taira_disables_ungoverned_embedded_sorafs_storage() -> None:
+    config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+
+    assert config["sorafs"]["storage"]["enabled"] is False
+    assert "compliance" not in config["sorafs"].get("gateway", {})
+
+
+def test_taira_bounds_each_shared_host_validator_storage_budget() -> None:
+    config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+    storage = config["nexus"]["storage"]
+
+    assert storage["local_budget_bytes"] == 64 * 1024 * 1024 * 1024
+    assert storage["disk_budget_weights"] == {
+        "kura_blocks_bps": 7_500,
+        "wsv_snapshots_bps": 2_000,
+        "sorafs_bps": 0,
+        "soranet_spool_bps": 250,
+        "soravpn_spool_bps": 250,
+    }
+    assert sum(storage["disk_budget_weights"].values()) == 10_000
+
+
 def _genesis_instructions(payload: dict) -> list[dict]:
     return [
         instruction
