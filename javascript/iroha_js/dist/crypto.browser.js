@@ -28,37 +28,25 @@ export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 export const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
 export const PRIVACY_FFI_VERSION_V1 = 1;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 7;
-export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21;
+export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024;
+export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
+  VALID: 0,
+  NULL_POINTER: 1,
+  EMPTY: 2,
+  ARCHIVE_TOO_LARGE: 3,
+  DECODE_RESOURCE_LIMIT: 4,
+  SCHEMA_MISMATCH: 5,
+  NON_CANONICAL: 6,
+  MALFORMED_ARCHIVE: 7,
+  INVALID_SNAPSHOT: 8,
+});
 export const PRIVACY_FFI_STATUS_ERROR = 1;
 export const PRIVACY_FFI_ERROR_NULL_POINTER = 1;
 export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
 export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
 export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
 export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
-const PRIVACY_NORITO_HEADER_BYTES = 40;
-const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
-const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
-const PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
-const PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
-const PRIVACY_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
-const PRIVACY_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
-const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
-const PRIVACY_CRC64_TABLE = (() => {
-  const table = new Array(256);
-  for (let index = 0; index < 256; index += 1) {
-    let crc = BigInt(index);
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc =
-        (crc & 1n) !== 0n
-          ? (crc >> 1n) ^ PRIVACY_CRC64_REFLECTED_POLY
-          : crc >> 1n;
-    }
-    table[index] = crc;
-  }
-  return table;
-})();
-
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
   SECP256K1: "secp256k1",
@@ -408,15 +396,6 @@ export function deriveConfidentialNoteV2() {
 
 export function deriveConfidentialNullifierV2() {
   return unsupported("deriveConfidentialNullifierV2");
-}
-
-function privacyCrc64(payload) {
-  let crc = PRIVACY_CRC64_MASK;
-  for (const byte of payload) {
-    const index = Number((crc ^ BigInt(byte)) & 0xffn);
-    crc = PRIVACY_CRC64_TABLE[index] ^ (crc >> 8n);
-  }
-  return BigInt.asUintN(64, crc ^ PRIVACY_CRC64_MASK);
 }
 
 export function isPrivacyNativeAvailable() {

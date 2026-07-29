@@ -2,7 +2,7 @@
 lang: zh-hant
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount`（具有共享 RNS 分解的範圍小工具）。
      - `from_balance_after = from_balance_before - amount`。
      - `to_balance_after = to_balance_before + amount`。
-   - 打包到一個自定義門中，因此所有三個方程都消耗一個行組。2. **波塞冬承諾塊**
+   - 打包到一個自定義門中，因此所有三個方程都消耗一個行組。
+
+2. **波塞冬承諾塊**
    - 使用其他小工具中已使用的共享 Poseidon 查找表重新計算 `poseidon_preimage_digest`。跟踪中沒有每次傳輸的波塞冬彈。
 
 3. **默克爾路徑塊**
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. **批量循環**
    - 程序在 `transfer_asset` 構建器循環之前調用 `transfer_v1_batch_begin()`，之後調用 `transfer_v1_batch_end()`。當示波器處於活動狀態時，主機會緩衝每次傳輸並將其作為單個 `TransferAssetBatch` 重播，每批重用一次 Poseidon/SMT 上下文。每個附加增量僅添加算術和兩個葉檢查。轉錄解碼器現在接受多增量批次並將其顯示為 `TransferGadgetInput::deltas`，因此計劃者可以折疊見證人而無需重新讀取 Norito。已經方便使用 Norito 有效負載的合約（例如 CLI/SDK）可以通過調用 `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` 來完全跳過範圍，這會在一個系統調用中向主機提供完全編碼的批次。
 
-# 主機和證明者變更|層|變化|
+# 主機和證明者變更
+
+|層|變化|
 |--------|---------|
 | `ivm::syscalls` |添加 `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`)，以便程序可以將多個 `transfer_v1` 系統調用括起來，而不會發出中間 ISI，再加上 `transfer_v1_batch_apply` (`0x2B`)預編碼批次。 |
 | `ivm::host` 和測試 |當範圍處於活動狀態時，核心/默認主機將 `transfer_v1` 視為批量追加，表面 `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` 和模擬 WSV 主機在提交之前緩衝條目，因此回歸測試可以斷言確定性平衡更新。 【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【板條箱/ivm/tests/wsv_host_pointer_tlv.rs:219】【板條箱/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```發出的 JSON 鏡像了 `iroha_cli audit witness` 現在默認發出的 FASTPQ 批處理工件（通過 `--no-fastpq-batches` 來抑制它們），因此 `scripts/fastpq/check_row_usage.py` 和 CI 門可以在驗證計劃器更改時將合成運行與之前的快照進行比較。
+```
+
+發出的 JSON 鏡像了 `iroha_cli audit witness` 現在默認發出的 FASTPQ 批處理工件（通過 `--no-fastpq-batches` 來抑制它們），因此 `scripts/fastpq/check_row_usage.py` 和 CI 門可以在驗證計劃器更改時將合成運行與之前的快照進行比較。
 
 # 推出計劃
 

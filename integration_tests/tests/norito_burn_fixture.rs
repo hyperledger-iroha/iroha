@@ -116,7 +116,7 @@ fn burn_asset_fixture_matches_rust_encoding() {
         Burn::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(
         "burn_asset_quantity.json",
-        "burn-asset-numeric-v1",
+        "burn-asset-quantity-v1",
         &expected_instruction,
     );
 }
@@ -142,7 +142,7 @@ fn mint_asset_fixture_matches_rust_encoding() {
         Mint::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(
         "mint_asset_quantity.json",
-        "mint-asset-numeric-v1",
+        "mint-asset-quantity-v1",
         &expected_instruction,
     );
 }

@@ -126,6 +126,7 @@ FORBIDDEN_FIRST_RELEASE_EXPORTS = {
 
 required_privacy_ffi = (
     "iroha_privacy_capabilities_v1",
+    "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_free_buffer",
 )
 PRIVACY_EXPORTS = set(required_privacy_ffi)
@@ -311,6 +312,7 @@ if undeclared_privacy_exports:
 
 expected_privacy_signatures = {
     "iroha_privacy_capabilities_v1": 2,
+    "iroha_privacy_validate_capabilities_v1": 2,
     "iroha_privacy_free_buffer": 1,
 }
 for name, expected_parameter_count in expected_privacy_signatures.items():

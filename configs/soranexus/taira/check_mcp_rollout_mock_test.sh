@@ -490,7 +490,7 @@ elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$pa
   status="202"
   body=''
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/mcp" && "$payload" == *'"method":"tools/list"'* ]]; then
-  body='{"result":{"tools":[{"name":"iroha.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.time.now","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
+  body='{"result":{"tools":[{"name":"iroha.health","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.sumeragi.status","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.search","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.release.get","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.musubi.instructions.yank_release","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit","inputSchema":{"type":"object","properties":{}}},{"name":"iroha.transactions.submit_and_wait","inputSchema":{"type":"object","properties":{}}}]}}'
 elif [[ "$method" == "GET" && "$url" == https://taira.sora.org/v1/offline/readiness\?asset_definition_id=* ]]; then
   body="$(cat "${MOCK_STATE_DIR:?}/offline-readiness.json")"
   if [[ "$scenario" == "offline_not_ready" ]]; then
@@ -541,6 +541,14 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/stat
   fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/capabilities" ]]; then
   body='{}'
+elif [[ "$method" == "GET" && "$url" == */v1/time/now ]]; then
+  if [[ "$scenario" == "time_unhealthy" ]]; then
+    body='{"now":1785168000000,"offset_ms":0,"confidence_ms":0,"sample_count":0,"peer_count":3,"enforcement_mode":"reject","fallback":true,"health":{"healthy":false,"min_samples_ok":false,"offset_ok":true,"confidence_ok":true}}'
+  elif [[ "$scenario" == "time_warn_enforcement" ]]; then
+    body='{"now":1785168000000,"offset_ms":1,"confidence_ms":2,"sample_count":3,"peer_count":3,"enforcement_mode":"warn","fallback":false,"health":{"healthy":true,"min_samples_ok":true,"offset_ok":true,"confidence_ok":true}}'
+  else
+    body='{"now":1785168000000,"offset_ms":1,"confidence_ms":2,"sample_count":3,"peer_count":3,"enforcement_mode":"reject","fallback":false,"health":{"healthy":true,"min_samples_ok":true,"offset_ok":true,"confidence_ok":true}}'
+  fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/registry" ]]; then
   body='{"version":1,"lanes":[]}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/zk/proofs/count" ]]; then
@@ -785,6 +793,8 @@ run_case offline_asset_mismatch 'offline readiness gate failed: asset_definition
 run_case offline_scale_mismatch 'offline readiness gate failed: asset_scale is not exact Digital Shekel scale 2'
 run_case offline_release_mismatch 'offline readiness gate failed: live release identity does not match the external operator-reviewed identity'
 run_case offline_verifier_mismatch 'offline readiness gate failed: live release identity does not match the external operator-reviewed identity'
+run_case time_unhealthy '/v1/time/now is not release-ready: sample_count must be a positive integer'
+run_case time_warn_enforcement '/v1/time/now is not release-ready: fail-closed time enforcement is not active'
 run_case status_build_sha_missing '/status did not publish build.git_commit_sha' '' '490dacc'
 run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 40 character hexadecimal SHA prefix' '' '490dacc'
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not exactly match release commit 490dacc287f00d490dacc287f00d490dacc287f0' '' '490dacc'

@@ -33,83 +33,11 @@ import org.junit.Test;
 public final class IrohaPeerTransportV1Tests {
   @Test
   public void wireLimitsCannotExceedV1HardCeilings() {
-    new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_576);
+    new IrohaPeerWireLimitsV1(32 * 1_024, 24_576);
     assertThrows(IllegalArgumentException.class,
-        () -> new IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576, 24_576));
+        () -> new IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576));
     assertThrows(IllegalArgumentException.class,
-        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_577, 24_576));
-    assertThrows(IllegalArgumentException.class,
-        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_577));
-  }
-
-  @Test
-  public void canonicalTextCodecPreservesOfflineNoteExactUtf8() {
-    final String signedWalletText = "pk2off2:eyJsaW5lYWdlIjoiY2Fub25pY2FsIn0.署名";
-    final byte[] encoded = IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-        signedWalletText, IrohaPeerPayloadProfile.OFFLINE_NOTE);
-    assertArrayEquals(signedWalletText.getBytes(StandardCharsets.UTF_8), encoded);
-    assertEquals(
-        signedWalletText,
-        IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(
-            encoded, IrohaPeerPayloadProfile.OFFLINE_NOTE));
-    assertEquals(
-        24_576,
-        IrohaPeerCanonicalTextPayloadCodecV1.maximumCanonicalTextBytes(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> IrohaPeerCanonicalTextPayloadCodecV1.maximumCanonicalTextBytes(
-            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND));
-
-    final IrohaPeerWireLimitsV1 canonicalLimited = new IrohaPeerWireLimitsV1(7, 9, 8);
-    assertEquals(
-        7,
-        IrohaPeerCanonicalTextPayloadCodecV1.maximumCanonicalTextBytes(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE, canonicalLimited));
-  }
-
-  @Test
-  public void canonicalTextCodecRejectsEmptyInvalidUtf8AndProfileOversizeInput() {
-    final IrohaPeerPayloadProfile profile = IrohaPeerPayloadProfile.OFFLINE_NOTE;
-    {
-      assertThrows(
-          IllegalArgumentException.class,
-          () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes("", profile));
-      assertThrows(
-          IllegalArgumentException.class,
-          () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(new byte[0], profile));
-      assertThrows(
-          IllegalArgumentException.class,
-          () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(
-              new byte[] {(byte) 0xc3, 0x28}, profile));
-      final int maximum =
-          IrohaPeerCanonicalTextPayloadCodecV1.maximumCanonicalTextBytes(profile);
-      assertThrows(
-          IllegalArgumentException.class,
-          () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-              "a".repeat(maximum + 1), profile));
-      final byte[] oversized = new byte[maximum + 1];
-      Arrays.fill(oversized, (byte) 'a');
-      assertThrows(
-          IllegalArgumentException.class,
-          () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(oversized, profile));
-    }
-
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-            "not-a-native-archive", IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalText(
-            "not-a-native-archive".getBytes(StandardCharsets.UTF_8),
-            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND));
-
-    // Java String can contain an unpaired surrogate, but it is not exact UTF-8.
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> IrohaPeerCanonicalTextPayloadCodecV1.canonicalBytes(
-            "\uD800", IrohaPeerPayloadProfile.OFFLINE_NOTE));
+        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_577));
   }
 
   @Test
@@ -117,9 +45,9 @@ public final class IrohaPeerTransportV1Tests {
     assertThrows(
         IllegalArgumentException.class,
         () -> new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerPayloadKind.PAYMENT,
-            1,
+            0x0102,
             new byte[0]));
   }
 
@@ -285,86 +213,6 @@ public final class IrohaPeerTransportV1Tests {
   }
 
   @Test
-  @SuppressWarnings("unchecked")
-  public void matchesSharedIpm1AndIqr1GoldenVector() throws Exception {
-    final String fixtureText =
-        new String(Files.readAllBytes(sharedFixture()), StandardCharsets.UTF_8);
-    final Map<String, Object> fixture = (Map<String, Object>) JsonParser.parse(fixtureText);
-    final IrohaPeerCanonicalPayload payload =
-        new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-            1,
-            ((String) fixture.get("canonical_utf8")).getBytes(StandardCharsets.UTF_8));
-    final IrohaPeerWireMessageV1 message = new IrohaPeerWireMessageV1(payload);
-    assertEquals(fixture.get("ipm1_hex"), hex(message.encode()));
-    assertEquals(fixture.get("canonical_hash_hex"), hex(message.canonicalHash()));
-    assertEquals(fixture.get("wire_hash_hex"), hex(message.wireHash()));
-    assertEquals(List.of(fixture.get("iqr1")), IrohaPeerQRCodecV1.encode(message));
-    assertEquals(
-        message,
-        IrohaPeerWireMessageV1.decode(
-            message.encode(), IrohaPeerPayloadProfile.OFFLINE_NOTE, IrohaPeerPayloadKind.PAYMENT));
-    final String canonicalQr = IrohaPeerQRCodecV1.encode(message).get(0);
-    assertEquals(message, new IrohaPeerQRScanSessionV1().ingest(canonicalQr).message());
-    for (final String nonCanonical :
-        List.of(" " + canonicalQr, canonicalQr + "\t", "\n" + canonicalQr)) {
-      assertThrows(
-          IllegalArgumentException.class,
-          () -> new IrohaPeerQRScanSessionV1().ingest(nonCanonical));
-    }
-
-    final Map<String, Object> zlib = (Map<String, Object>) fixture.get("zlib");
-    final byte[] compressedBytes = unhex((String) zlib.get("ipm1_hex"));
-    final IrohaPeerWireMessageV1 compressed = IrohaPeerWireMessageV1.decode(compressedBytes);
-    assertEquals(IrohaPeerContentEncodingV1.ZLIB, compressed.encoding());
-    final byte[] repeated = new byte[1024];
-    Arrays.fill(repeated, (byte) 65);
-    assertArrayEquals(repeated, compressed.canonicalPayload().bytes());
-    assertEquals(
-        zlib.get("iqr1"),
-        IrohaPeerQRCodecV1.encodeFrame(
-            new IrohaPeerQRFrameV1(
-                IrohaPeerQRFrameV1.FrameKind.COMPLETE,
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                IrohaPeerPayloadKind.PAYMENT,
-                compressed.streamId(),
-                0,
-                1,
-                compressedBytes)));
-  }
-
-  @Test
-  @SuppressWarnings("unchecked")
-  public void matchesSharedAnimatedIrqrFrameBytesAndOrder() throws Exception {
-    final Map<String, Object> fixture = (Map<String, Object>) JsonParser.parse(
-        new String(Files.readAllBytes(sharedFixture()), StandardCharsets.UTF_8));
-    final Map<String, Object> animated = (Map<String, Object>) fixture.get("animated");
-    int state = ((Number) animated.get("canonical_seed")).intValue();
-    final byte[] canonical = new byte[((Number) animated.get("canonical_count")).intValue()];
-    for (int index = 0; index < canonical.length; index++) {
-      state = state * 1_664_525 + 1_013_904_223;
-      canonical[index] = (byte) (state >>> 24);
-    }
-    final IrohaPeerWireMessageV1 message = new IrohaPeerWireMessageV1(
-        new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-            1,
-            canonical));
-    assertEquals(animated.get("wire_hash_hex"), hex(message.wireHash()));
-    final List<String> descriptors = new ArrayList<>();
-    final List<String> frameDigests = new ArrayList<>();
-    for (final String text : IrohaPeerQRCodecV1.animatedFrameTexts(message)) {
-      final IrohaPeerQRFrameV1 frame = IrohaPeerQRCodecV1.decodeFrame(text);
-      descriptors.add(frame.frameKind().code() + ":" + frame.index() + ":" + frame.total());
-      frameDigests.add(hex(Blake2b.digest256(frame.encode())));
-    }
-    assertEquals(animated.get("frame_kind_index_total"), descriptors);
-    assertEquals(animated.get("frame_blake2b_256_hex"), frameDigests);
-  }
-
-  @Test
   public void recoversOneMissingAnimatedShardWithHeaderLast() {
     final byte[] payload = new byte[652];
     for (int index = 0; index < payload.length; index++) payload[index] = (byte) index;
@@ -410,10 +258,6 @@ public final class IrohaPeerTransportV1Tests {
     final byte[] tampered = first.encode();
     tampered[tampered.length - 1] ^= 1;
     assertThrows(IllegalArgumentException.class, () -> IrohaPeerWireMessageV1.decode(tampered));
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> IrohaPeerWireMessageV1.decode(
-            first.encode(), IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND, null));
     final byte[] corruptFrame =
         IrohaPeerQRCodecV1.decodeFrame(IrohaPeerQRCodecV1.encode(first).get(0)).encode();
     corruptFrame[corruptFrame.length - 1] ^= 1;
@@ -421,20 +265,23 @@ public final class IrohaPeerTransportV1Tests {
   }
 
   @Test
-  public void enforcesFirstReleaseProfileSchemasAndRetailTwentyFourKiBBodyBound() {
-    assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES);
-    assertEquals(24_576, IrohaPeerWireLimitsV1.PEER_V1.maximumOfflineNoteEncodedBytes());
+  public void enforcesFirstReleaseProfileSchemaAndKagemushaBodyBound() {
     assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES);
+    assertEquals(null, IrohaPeerPayloadProfile.fromCode(1));
+    assertEquals(null, IrohaPeerPayloadProfile.fromCode(0xffff));
 
-    final byte[] boundaryBytes = new byte[24_576];
+    final byte[] boundaryBytes = new byte[24_528];
     Arrays.fill(boundaryBytes, (byte) 0x5a);
+    final byte[] boundaryArchive =
+        kagemushaArchive(IrohaPeerPayloadKind.PAYMENT, boundaryBytes);
+    assertEquals(24_576, boundaryArchive.length);
     final IrohaPeerWireMessageV1 boundary =
         new IrohaPeerWireMessageV1(
             new IrohaPeerCanonicalPayload(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerPayloadKind.PAYMENT,
-                1,
-                boundaryBytes));
+                0x0102,
+                boundaryArchive));
     assertEquals(24_576, boundary.encodedBody().length);
     assertEquals(boundary, IrohaPeerWireMessageV1.decode(boundary.encode()));
     assertThrows(
@@ -442,22 +289,12 @@ public final class IrohaPeerTransportV1Tests {
         () ->
             new IrohaPeerWireMessageV1(
                 new IrohaPeerCanonicalPayload(
-                    IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                    IrohaPeerPayloadKind.PAYMENT,
-                    1,
-                    new byte[24_577])));
-
-    final IllegalArgumentException retailMismatch =
-        assertThrows(
-            IllegalArgumentException.class,
-            () ->
-                new IrohaPeerCanonicalPayload(
-                    IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                    IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                     IrohaPeerPayloadKind.PAYMENT,
                     0x0102,
-                    new byte[] {1}));
-    assertTrue(retailMismatch.getMessage().contains("requires schema 1, received 258"));
-    final IllegalArgumentException kagemushaMismatch =
+                    kagemushaArchive(IrohaPeerPayloadKind.PAYMENT, new byte[24_529]))));
+
+    final IllegalArgumentException schemaMismatch =
         assertThrows(
             IllegalArgumentException.class,
             () ->
@@ -465,23 +302,43 @@ public final class IrohaPeerTransportV1Tests {
                     IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                     IrohaPeerPayloadKind.PAYMENT,
                     1,
-                    new byte[] {1}));
-    assertTrue(kagemushaMismatch.getMessage().contains("requires schema 258, received 1"));
+                    kagemushaArchive(IrohaPeerPayloadKind.PAYMENT, new byte[] {1})));
+    assertTrue(schemaMismatch.getMessage().contains("requires schema 258, received 1"));
 
-    final byte[] hostileHeader = Arrays.copyOf(boundary.encode(), IrohaPeerWireMessageV1.HEADER_LENGTH);
-    hostileHeader[10] = 0x01;
-    hostileHeader[11] = 0x02;
+    final byte[] retiredHeader =
+        Arrays.copyOf(boundary.encode(), IrohaPeerWireMessageV1.HEADER_LENGTH);
+    retiredHeader[6] = 0;
+    retiredHeader[7] = 1;
+    retiredHeader[10] = 0;
+    retiredHeader[11] = 1;
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> IrohaPeerWireMessageV1.decodeHeader(retiredHeader));
+
+    final byte[] unknownHeader =
+        Arrays.copyOf(boundary.encode(), IrohaPeerWireMessageV1.HEADER_LENGTH);
+    unknownHeader[6] = (byte) 0xff;
+    unknownHeader[7] = (byte) 0xff;
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> IrohaPeerWireMessageV1.decodeHeader(unknownHeader));
+
+    final byte[] wrongSchemaHeader =
+        Arrays.copyOf(boundary.encode(), IrohaPeerWireMessageV1.HEADER_LENGTH);
+    wrongSchemaHeader[10] = 0;
+    wrongSchemaHeader[11] = 1;
     final IllegalArgumentException hostile =
         assertThrows(
             IllegalArgumentException.class,
-            () -> IrohaPeerWireMessageV1.decodeHeader(hostileHeader));
-    assertTrue(hostile.getMessage().contains("requires schema 1, received 258"));
+            () -> IrohaPeerWireMessageV1.decodeHeader(wrongSchemaHeader));
+    assertTrue(hostile.getMessage().contains("requires schema 258, received 1"));
   }
 
   @Test
   public void decodesOnlyCanonicallyUsefulZlib() {
-    final byte[] canonical = new byte[1024];
-    Arrays.fill(canonical, (byte) 0x41);
+    final byte[] payload = new byte[1024];
+    Arrays.fill(payload, (byte) 0x41);
+    final byte[] canonical = kagemushaArchive(IrohaPeerPayloadKind.PAYMENT, payload);
     final IrohaPeerWireMessageV1 decoded = IrohaPeerWireMessageV1.decode(zlibMessage(canonical));
     assertEquals(IrohaPeerContentEncodingV1.ZLIB, decoded.encoding());
     assertArrayEquals(canonical, decoded.canonicalPayload().bytes());
@@ -489,18 +346,15 @@ public final class IrohaPeerTransportV1Tests {
         IllegalArgumentException.class,
         () -> IrohaPeerWireMessageV1.decode(zlibMessage(canonical, new byte[] {0})));
 
-    final byte[] small = new byte[100];
-    Arrays.fill(small, (byte) 0x41);
+    final byte[] smallPayload = new byte[100];
+    Arrays.fill(smallPayload, (byte) 0x41);
+    final byte[] small = kagemushaArchive(IrohaPeerPayloadKind.PAYMENT, smallPayload);
     assertThrows(IllegalArgumentException.class, () -> IrohaPeerWireMessageV1.decode(zlibMessage(small)));
   }
 
   private static IrohaPeerWireMessageV1 message(final String text) {
-    return new IrohaPeerWireMessageV1(
-        new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerPayloadKind.PAYMENT,
-            1,
-            text.getBytes(StandardCharsets.UTF_8)));
+    return IrohaPeerKagemushaStructuralTestV1.message(
+        IrohaPeerPayloadKind.PAYMENT, text.getBytes(StandardCharsets.UTF_8));
   }
 
   private static String textFor(
@@ -571,7 +425,7 @@ public final class IrohaPeerTransportV1Tests {
       deflater.end();
     }
     final byte[] body = concat(output.toByteArray(), trailing);
-    final byte[] metadata = {0, 1, 2, 0, 1};
+    final byte[] metadata = {0, 2, 2, 1, 2};
     final byte[] canonicalHash =
         Blake2b.digest256(
             concat(
@@ -583,11 +437,11 @@ public final class IrohaPeerTransportV1Tests {
     prefix[4] = 1;
     prefix[5] = 1;
     prefix[6] = 0;
-    prefix[7] = 1;
+    prefix[7] = 2;
     prefix[8] = 2;
     prefix[9] = 0;
-    prefix[10] = 0;
-    prefix[11] = 1;
+    prefix[10] = 1;
+    prefix[11] = 2;
     IrohaPeerWireMessageV1.writeU32(prefix, 12, canonical.length);
     IrohaPeerWireMessageV1.writeU32(prefix, 16, body.length);
     System.arraycopy(canonicalHash, 0, prefix, 20, canonicalHash.length);
@@ -610,16 +464,6 @@ public final class IrohaPeerTransportV1Tests {
       offset += value.length;
     }
     return out;
-  }
-
-  private static Path sharedFixture() {
-    Path current = Paths.get("").toAbsolutePath();
-    while (current != null) {
-      final Path candidate = current.resolve("fixtures/offline/peer_transport_v1.json");
-      if (Files.isRegularFile(candidate)) return candidate;
-      current = current.getParent();
-    }
-    throw new AssertionError("peer_transport_v1.json was not found");
   }
 
   private static Path sharedKagemushaFixture() {

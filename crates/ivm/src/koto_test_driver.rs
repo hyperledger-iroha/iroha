@@ -1350,7 +1350,7 @@ impl KotoTestHost {
                 String::from_utf8(tlv.payload.to_vec()).map_err(|_| crate::VMError::DecodeError)
             }
             PointerType::Name => {
-                let name: Name = norito::decode_from_bytes(tlv.payload)
+                let name: Name = norito::decode_canonical(tlv.payload)
                     .map_err(|_| crate::VMError::DecodeError)?;
                 Ok(name.as_ref().to_string())
             }
@@ -1369,7 +1369,7 @@ impl KotoTestHost {
         let tlv = vm.validate_tlv(ptr)?;
         match tlv.type_id {
             PointerType::Json | PointerType::NoritoBytes | PointerType::Blob => {
-                norito::decode_from_bytes(tlv.payload).map_err(|_| crate::VMError::DecodeError)
+                norito::decode_canonical(tlv.payload).map_err(|_| crate::VMError::DecodeError)
             }
             _ => Err(crate::VMError::NoritoInvalid),
         }
@@ -1594,8 +1594,8 @@ impl IVMHost for KotoTestHost {
                 let Some(actor) = self.actors.get(&alias) else {
                     return self.fail_test(format!("unknown actor `{alias}`"));
                 };
-                let payload =
-                    norito::to_bytes(&actor.account).map_err(|_| crate::VMError::NoritoInvalid)?;
+                let payload = norito::encode_canonical(&actor.account)
+                    .map_err(|_| crate::VMError::NoritoInvalid)?;
                 let ptr = Self::alloc_pointer_result(vm, PointerType::AccountId, &payload)?;
                 vm.set_register(10, ptr);
                 Ok(0)
@@ -1966,9 +1966,9 @@ fn encode_state_leaf(kind: StateValueKindV1, atom: StateValueAtomV1) -> Result<V
     if !schema.validate_atoms(std::slice::from_ref(&atom)) {
         return Err(format!("invalid {kind:?} state fixture atom"));
     }
-    let schema_bytes = norito::to_bytes(&schema)
+    let schema_bytes = norito::encode_canonical(&schema)
         .map_err(|error| format!("failed to encode state fixture schema: {error}"))?;
-    norito::to_bytes(&StateValueRecordV1 {
+    norito::encode_canonical(&StateValueRecordV1 {
         schema_hash: state_value_schema_hash_v1(&schema_bytes),
         atoms: vec![atom],
     })
@@ -1994,7 +1994,7 @@ fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
             let payload = eval_json_payload(args)?;
             let value = Json::from_str_norito(&payload)
                 .map_err(|error| format!("invalid JSON fixture value: {error}"))?;
-            let encoded = norito::to_bytes(&value)
+            let encoded = norito::encode_canonical(&value)
                 .map_err(|error| format!("failed to encode JSON fixture value: {error}"))?;
             Ok(make_tlv(PointerType::Json, &encoded))
         }
@@ -2003,7 +2003,7 @@ fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
                 return Err(format!("`{name}` expects exactly one argument"));
             }
             let account = eval_account_expr(expr)?;
-            let bytes = norito::to_bytes(&account)
+            let bytes = norito::encode_canonical(&account)
                 .map_err(|err| format!("failed to encode account id: {err}"))?;
             Ok(make_tlv(PointerType::AccountId, &bytes))
         }
@@ -2012,7 +2012,7 @@ fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
                 return Err("`AssetDefinitionId::parse` expects exactly one argument".to_string());
             }
             let asset = eval_asset_definition_expr(expr)?;
-            let bytes = norito::to_bytes(&asset)
+            let bytes = norito::encode_canonical(&asset)
                 .map_err(|err| format!("failed to encode asset definition id: {err}"))?;
             Ok(make_tlv(PointerType::AssetDefinitionId, &bytes))
         }
@@ -2021,7 +2021,7 @@ fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
                 return Err(format!("`{name}` expects exactly one argument"));
             }
             let domain = eval_domain_expr(expr)?;
-            let bytes = norito::to_bytes(&domain)
+            let bytes = norito::encode_canonical(&domain)
                 .map_err(|err| format!("failed to encode domain id: {err}"))?;
             Ok(make_tlv(PointerType::DomainId, &bytes))
         }
@@ -2030,8 +2030,8 @@ fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
                 return Err("`Name::parse` expects exactly one argument".to_string());
             }
             let name = eval_name_expr(expr)?;
-            let bytes =
-                norito::to_bytes(&name).map_err(|err| format!("failed to encode name: {err}"))?;
+            let bytes = norito::encode_canonical(&name)
+                .map_err(|err| format!("failed to encode name: {err}"))?;
             Ok(make_tlv(PointerType::Name, &bytes))
         }
         other => Err(format!("unsupported fixture value expression `{other:?}`")),
@@ -2051,8 +2051,8 @@ fn eval_json_payload(args: &[Expr]) -> Result<String, String> {
 }
 
 fn make_norito_envelope<T: Encode>(value: &T) -> Result<Vec<u8>, String> {
-    let bytes =
-        norito::to_bytes(value).map_err(|err| format!("failed to encode Norito value: {err}"))?;
+    let bytes = norito::encode_canonical(value)
+        .map_err(|err| format!("failed to encode canonical Norito value: {err}"))?;
     Ok(make_tlv(PointerType::NoritoBytes, &bytes))
 }
 
@@ -2682,9 +2682,10 @@ mod tests {
         let schema = StateValueSchemaV1 {
             nodes: vec![StateValueNodeV1::Leaf(kind)],
         };
-        let schema_bytes = norito::to_bytes(&schema).expect("encode state schema");
+        let schema_bytes =
+            norito::encode_canonical(&schema).expect("encode canonical state schema");
         let record: StateValueRecordV1 =
-            norito::decode_from_bytes(payload).expect("decode state record");
+            norito::decode_canonical(payload).expect("decode canonical state record");
         assert_eq!(
             record.schema_hash,
             state_value_schema_hash_v1(&schema_bytes)
@@ -4640,26 +4641,38 @@ mod tests {
 
     #[test]
     fn eval_envelope_expr_encodes_pointer_variants() {
-        let account_ptr = eval_envelope_expr(&Expr::Call {
+        let account_expr = Expr::Call {
             name: "AccountId::parse".to_string(),
             args: vec![Expr::String(DEFAULT_CALLER.to_string())],
             argument_names: None,
             implicit_receiver: false,
-        })
-        .expect("account envelope");
+        };
+        let account_ptr = eval_envelope_expr(&account_expr).expect("account envelope");
         let account_tlv =
             crate::pointer_abi::validate_tlv_bytes(&account_ptr).expect("account tlv");
         assert_eq!(account_tlv.type_id, PointerType::AccountId);
 
-        let name_ptr = eval_envelope_expr(&Expr::Call {
+        let name_expr = Expr::Call {
             name: "Name::parse".to_string(),
             args: vec![Expr::String("cursor".to_string())],
             argument_names: None,
             implicit_receiver: false,
-        })
-        .expect("name envelope");
+        };
+        let name_ptr = eval_envelope_expr(&name_expr).expect("name envelope");
         let name_tlv = crate::pointer_abi::validate_tlv_bytes(&name_ptr).expect("name tlv");
         assert_eq!(name_tlv.type_id, PointerType::Name);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            eval_envelope_expr(&account_expr).expect("ambient account envelope"),
+            account_ptr
+        );
+        assert_eq!(
+            eval_envelope_expr(&name_expr).expect("ambient name envelope"),
+            name_ptr
+        );
     }
 
     #[test]

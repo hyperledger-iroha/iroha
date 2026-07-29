@@ -5,8 +5,12 @@ use iroha_data_model::smart_contract::manifest::{
 };
 use ivm_abi::metadata::{
     CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
-    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateType,
-    KOTO_TEST_RETURN_ENTRYPOINT, ProgramMetadata, mode,
+    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
+    EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, ProgramMetadata, mode,
+};
+use ivm_abi::state_value::{
+    MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_SCHEMA_BYTES,
+    admissible_state_value_schema_for_embedded_type_v1,
 };
 
 use crate::{ContractArtifactError, DecodedOp};
@@ -71,6 +75,10 @@ pub fn validate_contract_interface(
     validate_access_set_hints(contract_interface.access_set_hints.as_ref())?;
     validate_kotoba_entries(&contract_interface.kotoba)?;
     validate_state_descriptors(contract_interface)?;
+    validate_dynamic_access_hint_state_maps(
+        contract_interface.access_set_hints.as_ref(),
+        &contract_interface.states,
+    )?;
     validate_error_codes(contract_interface)?;
 
     if contract_interface.entrypoints.is_empty() {
@@ -982,23 +990,99 @@ fn validate_dynamic_access_hints(
     field: &str,
     hints: &[DynamicAccessHint],
 ) -> Result<(), ContractArtifactError> {
+    let mut unique = BTreeSet::new();
     for hint in hints {
-        if hint.base_key.trim().is_empty() {
+        if !unique.insert(hint) {
             return Err(ContractArtifactError::invalid(format!(
-                "{owner} contains an empty {field}.base_key entry"
-            )));
-        }
-        if !hint.base_key.starts_with("state:") || hint.base_key == "state:*" {
-            return Err(ContractArtifactError::invalid(format!(
-                "{owner} contains unsupported dynamic access base `{}`",
+                "{owner} contains duplicate {field} hint `{}`",
                 hint.base_key
             )));
         }
-        if hint.max_keys == 0 {
-            return Err(ContractArtifactError::invalid(format!(
-                "{owner} contains zero-bound dynamic access hint `{}`",
+        ivm_abi::access_hints::validate_dynamic_access_hint_v1(hint).map_err(|error| {
+            ContractArtifactError::invalid(format!(
+                "{owner} contains invalid {field} hint `{}`: {error}",
                 hint.base_key
-            )));
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn embedded_state_map_key_type_name(ty: &EmbeddedStateType) -> Option<&'static str> {
+    match ty {
+        EmbeddedStateType::Int => Some("int"),
+        EmbeddedStateType::Decimal => Some("decimal"),
+        EmbeddedStateType::Quantity => Some("quantity"),
+        EmbeddedStateType::Bool => Some("bool"),
+        EmbeddedStateType::String => Some("string"),
+        EmbeddedStateType::Bytes => Some("bytes"),
+        EmbeddedStateType::DataSpaceId => Some("DataSpaceId"),
+        EmbeddedStateType::AccountId => Some("AccountId"),
+        EmbeddedStateType::AssetDefinitionId => Some("AssetDefinitionId"),
+        EmbeddedStateType::AssetId => Some("AssetId"),
+        EmbeddedStateType::NftId => Some("NftId"),
+        EmbeddedStateType::DomainId => Some("DomainId"),
+        EmbeddedStateType::Name => Some("Name"),
+        EmbeddedStateType::Json
+        | EmbeddedStateType::Tuple(_)
+        | EmbeddedStateType::Struct { .. }
+        | EmbeddedStateType::StateMap { .. }
+        | EmbeddedStateType::Option(_)
+        | EmbeddedStateType::Result { .. }
+        | EmbeddedStateType::List { .. } => None,
+    }
+}
+
+fn validate_dynamic_access_hint_state_maps(
+    access_set_hints: Option<&AccessSetHints>,
+    states: &[EmbeddedStateDescriptor],
+) -> Result<(), ContractArtifactError> {
+    let Some(access_set_hints) = access_set_hints else {
+        return Ok(());
+    };
+
+    let state_maps = states
+        .iter()
+        .filter_map(|state| {
+            let EmbeddedStateType::StateMap { key, .. } = &state.ty else {
+                return None;
+            };
+            embedded_state_map_key_type_name(key).map(|key_type| (state.name.as_str(), key_type))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for (field, hints) in [
+        (
+            "access_set_hints.dynamic_reads",
+            access_set_hints.dynamic_reads.as_slice(),
+        ),
+        (
+            "access_set_hints.dynamic_writes",
+            access_set_hints.dynamic_writes.as_slice(),
+        ),
+    ] {
+        for hint in hints {
+            let state_name = ivm_abi::access_hints::dynamic_access_hint_state_name_v1(
+                &hint.base_key,
+            )
+            .map_err(|error| {
+                ContractArtifactError::invalid(format!(
+                    "contract contains invalid {field} hint `{}`: {error}",
+                    hint.base_key
+                ))
+            })?;
+            let Some(expected_key_type) = state_maps.get(state_name) else {
+                return Err(ContractArtifactError::invalid(format!(
+                    "contract {field} hint `{}` must reference a declared top-level StateMap",
+                    hint.base_key
+                )));
+            };
+            if hint.key_type != *expected_key_type {
+                return Err(ContractArtifactError::invalid(format!(
+                    "contract {field} hint `{}` declares key_type `{}` but its StateMap key type is `{expected_key_type}`",
+                    hint.base_key, hint.key_type
+                )));
+            }
         }
     }
     Ok(())
@@ -1081,6 +1165,23 @@ fn validate_state_descriptors(
             )));
         }
         validate_state_type(&state.ty, true)?;
+        validate_runtime_state_schema(&state.name, &state.ty)?;
+    }
+    Ok(())
+}
+
+fn validate_runtime_state_schema(
+    state_name: &str,
+    declared_type: &EmbeddedStateType,
+) -> Result<(), ContractArtifactError> {
+    let runtime_value_type = match declared_type {
+        EmbeddedStateType::StateMap { value, .. } => value.as_ref(),
+        ty => ty,
+    };
+    if admissible_state_value_schema_for_embedded_type_v1(runtime_value_type).is_none() {
+        return Err(ContractArtifactError::invalid(format!(
+            "CNTR state descriptor `{state_name}` exceeds the exact V1 runtime StateValueSchema limit of {MAX_STATE_VALUE_NODES} nodes or levels and {MAX_STATE_VALUE_SCHEMA_BYTES} encoded bytes"
+        )));
     }
     Ok(())
 }
@@ -1142,72 +1243,407 @@ fn validate_state_type(
     ty: &EmbeddedStateType,
     allow_state_map: bool,
 ) -> Result<(), ContractArtifactError> {
-    match ty {
-        EmbeddedStateType::Tuple(items) => {
-            if items.len() < 2 {
-                return Err(ContractArtifactError::invalid(
-                    "CNTR durable tuples require at least two elements",
-                ));
-            }
-            for item in items {
-                validate_state_type(item, false)?;
-            }
-        }
-        EmbeddedStateType::Struct { name, fields } => {
-            if !is_canonical_source_type_declaration_name(name) {
-                return Err(ContractArtifactError::invalid(format!(
-                    "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
-                )));
-            }
-            if fields.is_empty() {
-                return Err(ContractArtifactError::invalid(format!(
-                    "CNTR struct `{name}` must contain at least one field"
-                )));
-            }
-            let mut field_names = BTreeSet::new();
-            for field in fields {
+    enum Pending<'a> {
+        Type {
+            ty: &'a EmbeddedStateType,
+            allow_state_map: bool,
+        },
+        StructFields {
+            struct_name: &'a str,
+            fields: &'a [ivm_abi::metadata::EmbeddedStateFieldDescriptor],
+            index: usize,
+            field_names: BTreeSet<&'a str>,
+        },
+    }
+
+    let mut pending = vec![Pending::Type {
+        ty,
+        allow_state_map,
+    }];
+    while let Some(item) = pending.pop() {
+        match item {
+            Pending::StructFields {
+                struct_name,
+                fields,
+                index,
+                mut field_names,
+            } => {
+                let Some(field) = fields.get(index) else {
+                    continue;
+                };
                 if !is_canonical_source_identifier(&field.name) {
                     return Err(ContractArtifactError::invalid(format!(
-                        "CNTR struct `{name}` contains noncanonical field `{}`",
+                        "CNTR struct `{struct_name}` contains noncanonical field `{}`",
                         field.name
                     )));
                 }
-                if !field_names.insert(field.name.clone()) {
+                if !field_names.insert(field.name.as_str()) {
                     return Err(ContractArtifactError::invalid(format!(
-                        "CNTR struct `{name}` contains duplicate field `{}`",
+                        "CNTR struct `{struct_name}` contains duplicate field `{}`",
                         field.name
                     )));
                 }
-                validate_state_type(&field.ty, false)?;
+                pending.push(Pending::StructFields {
+                    struct_name,
+                    fields,
+                    index: index + 1,
+                    field_names,
+                });
+                pending.push(Pending::Type {
+                    ty: &field.ty,
+                    allow_state_map: false,
+                });
             }
+            Pending::Type {
+                ty,
+                allow_state_map,
+            } => match ty {
+                EmbeddedStateType::Tuple(items) => {
+                    if items.len() < 2 {
+                        return Err(ContractArtifactError::invalid(
+                            "CNTR durable tuples require at least two elements",
+                        ));
+                    }
+                    pending.extend(items.iter().rev().map(|item| Pending::Type {
+                        ty: item,
+                        allow_state_map: false,
+                    }));
+                }
+                EmbeddedStateType::Struct { name, fields } => {
+                    if !is_canonical_source_type_declaration_name(name) {
+                        return Err(ContractArtifactError::invalid(format!(
+                            "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
+                        )));
+                    }
+                    if fields.is_empty() {
+                        return Err(ContractArtifactError::invalid(format!(
+                            "CNTR struct `{name}` must contain at least one field"
+                        )));
+                    }
+                    pending.push(Pending::StructFields {
+                        struct_name: name,
+                        fields,
+                        index: 0,
+                        field_names: BTreeSet::new(),
+                    });
+                }
+                EmbeddedStateType::StateMap { key, value } => {
+                    if !allow_state_map {
+                        return Err(ContractArtifactError::invalid(
+                            "CNTR StateMap is a top-level durable collection and cannot be nested",
+                        ));
+                    }
+                    if !is_supported_state_map_key(key) {
+                        return Err(ContractArtifactError::invalid(
+                            "CNTR StateMap key must be a supported canonical scalar type",
+                        ));
+                    }
+                    pending.push(Pending::Type {
+                        ty: value,
+                        allow_state_map: false,
+                    });
+                }
+                EmbeddedStateType::Option(value) => pending.push(Pending::Type {
+                    ty: value,
+                    allow_state_map: false,
+                }),
+                EmbeddedStateType::Result { ok, err } => {
+                    pending.push(Pending::Type {
+                        ty: err,
+                        allow_state_map: false,
+                    });
+                    pending.push(Pending::Type {
+                        ty: ok,
+                        allow_state_map: false,
+                    });
+                }
+                EmbeddedStateType::List { element, capacity } => {
+                    if !(1..=64).contains(capacity) {
+                        return Err(ContractArtifactError::invalid(
+                            "CNTR List capacity must be in 1..=64",
+                        ));
+                    }
+                    pending.push(Pending::Type {
+                        ty: element,
+                        allow_state_map: false,
+                    });
+                }
+                _ => {}
+            },
         }
-        EmbeddedStateType::StateMap { key, value } => {
-            if !allow_state_map {
-                return Err(ContractArtifactError::invalid(
-                    "CNTR StateMap is a top-level durable collection and cannot be nested",
-                ));
-            }
-            if !is_supported_state_map_key(key) {
-                return Err(ContractArtifactError::invalid(
-                    "CNTR StateMap key must be a supported canonical scalar type",
-                ));
-            }
-            validate_state_type(value, false)?;
-        }
-        EmbeddedStateType::Option(value) => validate_state_type(value, false)?,
-        EmbeddedStateType::Result { ok, err } => {
-            validate_state_type(ok, false)?;
-            validate_state_type(err, false)?;
-        }
-        EmbeddedStateType::List { element, capacity } => {
-            if !(1..=64).contains(capacity) {
-                return Err(ContractArtifactError::invalid(
-                    "CNTR List capacity must be in 1..=64",
-                ));
-            }
-            validate_state_type(element, false)?;
-        }
-        _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use ivm_abi::metadata::EmbeddedStateFieldDescriptor;
+
+    use super::*;
+
+    fn dynamic_hint(
+        base_key: &str,
+        key_type: &str,
+        bound_kind: &str,
+        max_keys: u32,
+    ) -> DynamicAccessHint {
+        DynamicAccessHint {
+            base_key: base_key.to_owned(),
+            key_type: key_type.to_owned(),
+            bound_kind: bound_kind.to_owned(),
+            max_keys,
+        }
+    }
+
+    fn dynamic_read_hints(hints: Vec<DynamicAccessHint>) -> AccessSetHints {
+        AccessSetHints {
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            dynamic_reads: hints,
+            dynamic_writes: Vec::new(),
+        }
+    }
+
+    fn state_map(
+        name: &str,
+        key: EmbeddedStateType,
+        value: EmbeddedStateType,
+    ) -> EmbeddedStateDescriptor {
+        EmbeddedStateDescriptor {
+            name: name.to_owned(),
+            ty: EmbeddedStateType::StateMap {
+                key: Box::new(key),
+                value: Box::new(value),
+            },
+        }
+    }
+
+    #[test]
+    fn dynamic_hint_key_type_mapping_matches_the_exact_shared_v1_order() {
+        let mapped = [
+            EmbeddedStateType::Int,
+            EmbeddedStateType::Decimal,
+            EmbeddedStateType::Quantity,
+            EmbeddedStateType::Bool,
+            EmbeddedStateType::String,
+            EmbeddedStateType::Bytes,
+            EmbeddedStateType::DataSpaceId,
+            EmbeddedStateType::AccountId,
+            EmbeddedStateType::AssetDefinitionId,
+            EmbeddedStateType::AssetId,
+            EmbeddedStateType::NftId,
+            EmbeddedStateType::DomainId,
+            EmbeddedStateType::Name,
+        ]
+        .iter()
+        .map(|ty| embedded_state_map_key_type_name(ty).expect("supported key type"))
+        .collect::<Vec<_>>();
+        assert_eq!(
+            mapped,
+            ivm_abi::access_hints::DYNAMIC_ACCESS_HINT_KEY_TYPES_V1
+        );
+    }
+
+    #[test]
+    fn dynamic_hints_resolve_exact_declared_state_maps() {
+        for (index, (key, key_type)) in [
+            (EmbeddedStateType::Int, "int"),
+            (EmbeddedStateType::Decimal, "decimal"),
+            (EmbeddedStateType::Quantity, "quantity"),
+            (EmbeddedStateType::Bool, "bool"),
+            (EmbeddedStateType::String, "string"),
+            (EmbeddedStateType::Bytes, "bytes"),
+            (EmbeddedStateType::DataSpaceId, "DataSpaceId"),
+            (EmbeddedStateType::AccountId, "AccountId"),
+            (EmbeddedStateType::AssetDefinitionId, "AssetDefinitionId"),
+            (EmbeddedStateType::AssetId, "AssetId"),
+            (EmbeddedStateType::NftId, "NftId"),
+            (EmbeddedStateType::DomainId, "DomainId"),
+            (EmbeddedStateType::Name, "Name"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let state_name = if index == 0 {
+                "amount".to_owned()
+            } else {
+                format!("Map{index}")
+            };
+            let hints = dynamic_read_hints(vec![dynamic_hint(
+                &format!("state:{state_name}"),
+                key_type,
+                "range",
+                64,
+            )]);
+            let states = [state_map(&state_name, key, EmbeddedStateType::Bool)];
+            validate_access_set_hints(Some(&hints)).expect("exact hint must validate");
+            validate_dynamic_access_hint_state_maps(Some(&hints), &states)
+                .expect("hint must resolve to its exact declared StateMap");
+        }
+    }
+
+    #[test]
+    fn dynamic_hint_shape_aliases_duplicates_and_overflow_reject() {
+        let valid = dynamic_hint("state:Orders", "int", "range", 1);
+        let invalid = [
+            dynamic_hint("state:", "int", "range", 1),
+            dynamic_hint("state:Orders/child", "int", "range", 1),
+            dynamic_hint("state:Orders", "Numeric", "range", 1),
+            dynamic_hint("state:Orders", "int", "bounded", 1),
+            dynamic_hint("state:Orders", "int", "range", 0),
+            dynamic_hint("state:Orders", "int", "range", 65),
+        ];
+        for hint in invalid {
+            validate_access_set_hints(Some(&dynamic_read_hints(vec![hint])))
+                .expect_err("noncanonical dynamic hint must reject");
+        }
+        validate_access_set_hints(Some(&dynamic_read_hints(vec![valid.clone(), valid])))
+            .expect_err("duplicate dynamic hints must reject");
+    }
+
+    #[test]
+    fn identical_hint_is_allowed_once_in_each_independent_list() {
+        let hint = dynamic_hint("state:amount", "quantity", "take", 1);
+        let hints = AccessSetHints {
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            dynamic_reads: vec![hint.clone()],
+            dynamic_writes: vec![hint],
+        };
+        let states = [state_map(
+            "amount",
+            EmbeddedStateType::Quantity,
+            EmbeddedStateType::Bool,
+        )];
+
+        validate_access_set_hints(Some(&hints))
+            .expect("read/write lists have independent duplicate domains");
+        validate_dynamic_access_hint_state_maps(Some(&hints), &states)
+            .expect("the same exact StateMap hint may appear once in each list");
+    }
+
+    #[test]
+    fn same_base_with_distinct_bound_fields_is_not_a_duplicate() {
+        let hints = dynamic_read_hints(vec![
+            dynamic_hint("state:Orders", "int", "range", 1),
+            dynamic_hint("state:Orders", "int", "range", 2),
+            dynamic_hint("state:Orders", "int", "take", 1),
+        ]);
+        let states = [state_map(
+            "Orders",
+            EmbeddedStateType::Int,
+            EmbeddedStateType::Bool,
+        )];
+
+        validate_access_set_hints(Some(&hints))
+            .expect("duplicate identity is the complete four-field record");
+        validate_dynamic_access_hint_state_maps(Some(&hints), &states)
+            .expect("every distinct record resolves to the same exact StateMap");
+    }
+
+    #[test]
+    fn dynamic_hints_reject_unknown_scalar_and_mismatched_state_targets() {
+        let hints = dynamic_read_hints(vec![dynamic_hint("state:Orders", "int", "take", 1)]);
+
+        for states in [
+            Vec::new(),
+            vec![EmbeddedStateDescriptor {
+                name: "Orders".to_owned(),
+                ty: EmbeddedStateType::Int,
+            }],
+            vec![state_map(
+                "Orders",
+                EmbeddedStateType::Quantity,
+                EmbeddedStateType::Bool,
+            )],
+        ] {
+            validate_dynamic_access_hint_state_maps(Some(&hints), &states)
+                .expect_err("hint must resolve to a StateMap with an identical key type");
+        }
+    }
+
+    fn wide_struct(field_count: usize) -> EmbeddedStateType {
+        EmbeddedStateType::Struct {
+            name: "Wide".to_owned(),
+            fields: (0..field_count)
+                .map(|index| EmbeddedStateFieldDescriptor {
+                    name: format!("field_{index}"),
+                    ty: EmbeddedStateType::Bool,
+                })
+                .collect(),
+        }
+    }
+
+    fn nested_lists(wrapper_count: usize) -> EmbeddedStateType {
+        (0..wrapper_count).fold(EmbeddedStateType::Bool, |element, _| {
+            EmbeddedStateType::List {
+                element: Box::new(element),
+                capacity: 1,
+            }
+        })
+    }
+
+    fn validate_declared_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactError> {
+        validate_state_type(ty, true)?;
+        validate_runtime_state_schema("value", ty)
+    }
+
+    #[test]
+    fn exact_runtime_state_schema_node_boundary_is_admitted() {
+        validate_declared_state_type(&wide_struct(MAX_STATE_VALUE_NODES - 1))
+            .expect("one struct plus 255 leaves is exactly 256 runtime schema nodes");
+
+        let error = validate_declared_state_type(&wide_struct(MAX_STATE_VALUE_NODES))
+            .expect_err("one struct plus 256 leaves must exceed the runtime schema limit");
+        assert!(
+            error
+                .to_string()
+                .contains("256 nodes or levels and 65536 encoded bytes")
+        );
+    }
+
+    #[test]
+    fn state_map_applies_the_exact_runtime_limit_to_its_value_only() {
+        let state_map = |value| EmbeddedStateType::StateMap {
+            key: Box::new(EmbeddedStateType::AccountId),
+            value: Box::new(value),
+        };
+
+        validate_declared_state_type(&state_map(wide_struct(MAX_STATE_VALUE_NODES - 1)))
+            .expect("the StateMap resource and key are not part of its value schema");
+        validate_declared_state_type(&state_map(wide_struct(MAX_STATE_VALUE_NODES)))
+            .expect_err("an oversized StateMap value schema must reject at admission");
+    }
+
+    #[test]
+    fn recursive_list_element_nodes_share_the_outer_schema_budget() {
+        let list = |element| EmbeddedStateType::List {
+            element: Box::new(element),
+            capacity: 64,
+        };
+
+        validate_declared_state_type(&list(wide_struct(MAX_STATE_VALUE_NODES - 2)))
+            .expect("List + struct + 254 leaves is exactly 256 nodes");
+        validate_declared_state_type(&list(wide_struct(MAX_STATE_VALUE_NODES - 1)))
+            .expect_err("List element schemas must not receive a fresh 256-node budget");
+
+        validate_declared_state_type(&nested_lists(MAX_STATE_VALUE_NODES - 1))
+            .expect("255 nested Lists plus one leaf is the exact depth and node boundary");
+        validate_declared_state_type(&nested_lists(MAX_STATE_VALUE_NODES))
+            .expect_err("256 nested Lists plus one leaf exceeds both exact runtime limits");
+    }
+
+    #[test]
+    fn canonical_runtime_schema_byte_limit_is_enforced_at_admission() {
+        let ty = EmbeddedStateType::Struct {
+            name: "S".repeat(MAX_STATE_VALUE_SCHEMA_BYTES),
+            fields: vec![EmbeddedStateFieldDescriptor {
+                name: "value".to_owned(),
+                ty: EmbeddedStateType::Bool,
+            }],
+        };
+
+        validate_declared_state_type(&ty)
+            .expect_err("a CNTR type whose canonical runtime schema exceeds 64 KiB must reject");
+    }
 }

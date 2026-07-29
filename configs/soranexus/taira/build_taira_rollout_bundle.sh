@@ -10,6 +10,24 @@ SKIP_BUILD=0
 SKIP_LOCAL_REGRESSIONS=0
 KAGEMUSHA_RELEASE_POLICY="${KAGEMUSHA_V4_RELEASE_POLICY_PATH:-}"
 KAGEMUSHA_ARTIFACT_ROOT="${KAGEMUSHA_V4_ARTIFACT_ROOT:-}"
+IROHAD_RELEASE_FEATURES="embedded-soracloud-runtime,zk-stark"
+PRIVACY_RELEASE_EVIDENCE_FEATURE="privacy-release-evidence"
+PRIVACY_RELEASE_RUNNER_PACKAGE="iroha_test_network"
+PRIVACY_RELEASE_RUNNER_BIN="taira_privacy_release_runner"
+PRIVACY_EXACT12_MATRIX="${REPO_ROOT}/fixtures/privacy/exact12_v1.tsv"
+PRIVACY_EXPECTATIONS_NORITO="${REPO_ROOT}/fixtures/privacy/native_release_expectations_v1.norito"
+PRIVACY_EXPECTATIONS_JSON="${REPO_ROOT}/fixtures/privacy/native_release_expectations_v1.json"
+WORKSPACE_SOURCE_MANIFEST_SCRIPT="${REPO_ROOT}/scripts/compute_workspace_source_manifest.py"
+TAIRA_RELEASE_AUTHORITY_SCRIPT="${REPO_ROOT}/scripts/taira_release_authority.py"
+RELEASE_ARTIFACT_CONTRACT_SCRIPT="${REPO_ROOT}/scripts/release_artifact_contract.py"
+RELEASE_MANIFEST_GENERATOR="${REPO_ROOT}/scripts/generate_release_manifest.py"
+RELEASE_MANIFEST_SIGNING_HELPER="${REPO_ROOT}/scripts/release_manifest_signing.py"
+RELEASE_CHECKSUM_WRITER="${REPO_ROOT}/scripts/write_release_sha256sums.py"
+TAIRA_RELEASE_EXTERNAL_SIGNER_PATH="${TAIRA_RELEASE_EXTERNAL_SIGNER_PATH:-}"
+TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH="${TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH:-}"
+TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT="${TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT:-}"
+TAIRA_RELEASE_MANIFEST_VERIFIER_PATH="${TAIRA_RELEASE_MANIFEST_VERIFIER_PATH:-}"
+TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256="${TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256:-}"
 
 usage() {
   cat <<'EOF'
@@ -34,6 +52,9 @@ dirty source tree, and supplies reviewed build provenance to this script.
 The bundle contains:
   - `irohad` and `iroha` from `target/<profile>/`
   - `sorafs_manifest_builder` and `sorafs_tx_stdin_builder` from `target/<profile>/`
+  - the feature-separated `taira_privacy_release_runner`
+  - authoritative native-privacy receipt, command-manifest, stage-artifact,
+    and frozen-expectation Norito files with deterministic JSON projections
   - the checked-in `configs/soranexus/taira/` operator bundle
   - `scripts/render_taira_validator_bundle.py`
   - `scripts/render_taira_edge_nginx_conf.py`
@@ -46,6 +67,26 @@ The bundle contains:
 The authenticated ABI-21/V4 Kagemusha policy and artifact root are mandatory.
 They are verified by the production promotion corridor and copied into the
 bundle; there is no build or rollout path that omits offline cash.
+
+`--skip-build` is a debug-only convenience. Release bundles always rebuild
+every packaged binary from the exact source tree exercised by the gates.
+
+Native privacy evidence is generated only after the ordinary validator build.
+The validator uses the production feature set above; the separate evidence
+runner alone is built with `privacy-release-evidence`. The canonical workspace
+source manifest is checked before build, after build/evidence, and immediately
+before archiving so a pre-build report cannot masquerade as release evidence.
+
+Release builds also require these externally provisioned authority inputs:
+  TAIRA_RELEASE_EXTERNAL_SIGNER_PATH
+  TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH
+  TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT
+  TAIRA_RELEASE_MANIFEST_VERIFIER_PATH
+  TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256
+
+The signer, public key, and independently reviewed native verifier must be
+absolute non-symlink regular files outside this checkout. The private signing
+key is never accepted by this script.
 EOF
 }
 
@@ -116,6 +157,117 @@ case "$PROFILE" in
     ;;
 esac
 
+if [[ "$PROFILE" == "release" && $SKIP_BUILD -eq 1 ]]; then
+  echo "refusing --skip-build with --profile release: release binaries must be rebuilt from the exact tested source" >&2
+  exit 1
+fi
+if [[ "$PROFILE" == "release" && $SKIP_LOCAL_REGRESSIONS -eq 1 ]]; then
+  echo "refusing --skip-local-regressions with --profile release: every release gate is mandatory" >&2
+  exit 1
+fi
+
+require_external_release_authority_file() {
+  local label="$1"
+  local path="$2"
+  if [[ -z "$path" || "$path" != /* ]]; then
+    echo "$label must be an explicit absolute path" >&2
+    exit 1
+  fi
+  if [[ ! -f "$path" || -L "$path" ]]; then
+    echo "$label must be a non-symlink regular file" >&2
+    exit 1
+  fi
+  local canonical_path
+  local canonical_repo_root
+  canonical_path="$(
+    python3 -S -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$path"
+  )"
+  canonical_repo_root="$(
+    python3 -S -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$REPO_ROOT"
+  )"
+  if [[ "$canonical_path" != "$path" ]]; then
+    echo "$label must use its canonical physical path without symlink or parent aliases" >&2
+    exit 1
+  fi
+  if [[ "$canonical_path" == "$canonical_repo_root" || "$canonical_path" == "$canonical_repo_root/"* ]]; then
+    echo "$label must be provisioned outside the Iroha checkout" >&2
+    exit 1
+  fi
+}
+
+if [[ "$PROFILE" == "release" ]]; then
+  require_external_release_authority_file \
+    "Taira release external signer" \
+    "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH"
+  require_external_release_authority_file \
+    "Taira release raw Ed25519 public key" \
+    "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH"
+  require_external_release_authority_file \
+    "Taira pinned native release-manifest verifier" \
+    "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH"
+  require_canonical_release_digest() {
+    local label="$1"
+    local digest="$2"
+    if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "$label must be exactly 64 lowercase hexadecimal characters" >&2
+      exit 1
+    fi
+  }
+  require_canonical_release_digest \
+    "Taira trusted release signing fingerprint" \
+    "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT"
+  require_canonical_release_digest \
+    "Taira trusted native release-manifest verifier SHA-256" \
+    "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+fi
+
+python3 - "${SCRIPT_DIR}/config.toml" <<'PY'
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError as error:
+        raise SystemExit(
+            "python3 must provide tomllib (Python 3.11+) or tomli to validate Taira NTS policy"
+        ) from error
+
+config_path = sys.argv[1]
+try:
+    with open(config_path, "rb") as handle:
+        config = tomllib.load(handle)
+except (OSError, tomllib.TOMLDecodeError) as error:
+    raise SystemExit(f"failed to load canonical Taira config {config_path}: {error}") from error
+
+expected = {
+    "sample_interval_ms": 5_000,
+    "sample_cap_per_round": 8,
+    "max_rtt_ms": 500,
+    "trim_percent": 10,
+    "per_peer_buffer": 16,
+    "smoothing_enabled": False,
+    "smoothing_alpha": 0.2,
+    "max_adjust_ms_per_min": 50,
+    "min_samples": 3,
+    "max_offset_ms": 1_000,
+    "max_confidence_ms": 500,
+    "enforcement_mode": "reject",
+}
+nts = config.get("nts")
+if not isinstance(nts, dict):
+    raise SystemExit("canonical Taira config must contain the explicit [nts] release policy")
+if set(nts) != set(expected):
+    raise SystemExit("canonical Taira [nts] release policy has missing or unknown fields")
+for field, expected_value in expected.items():
+    actual = nts[field]
+    if type(actual) is not type(expected_value) or actual != expected_value:
+        raise SystemExit(
+            f"canonical Taira [nts].{field} must be exactly {expected_value!r}, got {actual!r}"
+        )
+PY
+
 if [[ -z "$KAGEMUSHA_RELEASE_POLICY" || ! -f "$KAGEMUSHA_RELEASE_POLICY" || -L "$KAGEMUSHA_RELEASE_POLICY" ]]; then
   echo "an authenticated regular Kagemusha release policy is mandatory; set --kagemusha-release-policy" >&2
   exit 1
@@ -141,6 +293,32 @@ sha256_file() {
     sha256sum "$path" | awk '{print $1}'
   else
     echo "missing shasum/sha256sum for checksum generation" >&2
+    exit 1
+  fi
+}
+
+require_canonical_sha256() {
+  local label="$1"
+  local digest="$2"
+  if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "$label is not one canonical lowercase SHA-256 digest: $digest" >&2
+    exit 1
+  fi
+}
+
+compute_workspace_source_manifest() {
+  python3 -I -S "$WORKSPACE_SOURCE_MANIFEST_SCRIPT" --root "$REPO_ROOT"
+}
+
+assert_workspace_source_manifest_unchanged() {
+  local phase="$1"
+  local current_manifest
+  current_manifest="$(compute_workspace_source_manifest)"
+  require_canonical_sha256 "workspace source manifest at ${phase}" "$current_manifest"
+  if [[ "$current_manifest" != "$workspace_source_manifest_sha256" ]]; then
+    echo "workspace source changed after the release identity was frozen (${phase})" >&2
+    echo "expected: $workspace_source_manifest_sha256" >&2
+    echo "actual:   $current_manifest" >&2
     exit 1
   fi
 }
@@ -241,15 +419,75 @@ if [[ "$reference_validator_source_mode" == "attested" ]]; then
   python3 "$validator_source_verifier" verify --repo "$REPO_ROOT" --bundle-dir "$validator_source_bundle"
 fi
 
+for release_input in \
+  "$WORKSPACE_SOURCE_MANIFEST_SCRIPT" \
+  "$TAIRA_RELEASE_AUTHORITY_SCRIPT" \
+  "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" \
+  "$RELEASE_MANIFEST_GENERATOR" \
+  "$RELEASE_MANIFEST_SIGNING_HELPER" \
+  "$RELEASE_CHECKSUM_WRITER" \
+  "$PRIVACY_EXACT12_MATRIX" \
+  "$PRIVACY_EXPECTATIONS_NORITO" \
+  "$PRIVACY_EXPECTATIONS_JSON"; do
+  if [[ ! -f "$release_input" || -L "$release_input" ]]; then
+    echo "native privacy release input is missing or not a regular file: $release_input" >&2
+    exit 1
+  fi
+done
+
+if [[ "$PROFILE" == "release" ]]; then
+  release_verifier_actual_sha256="$(
+    sha256_file "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH"
+  )"
+  if [[ "$release_verifier_actual_sha256" != "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" ]]; then
+    echo "Taira native release-manifest verifier does not match its reviewed SHA-256" >&2
+    echo "expected: $TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" >&2
+    echo "actual:   $release_verifier_actual_sha256" >&2
+    exit 1
+  fi
+fi
+
+workspace_source_manifest_sha256="$(compute_workspace_source_manifest)"
+require_canonical_sha256 "pre-build workspace source manifest" "$workspace_source_manifest_sha256"
+if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]; then
+  echo "validator Cargo.lock changed after its release checksum was verified" >&2
+  exit 1
+fi
+
 irohad_core_feature_graph="$(
   cd "$REPO_ROOT"
   cargo tree --locked -e features,no-dev -p irohad \
-    --features embedded-soracloud-runtime -i iroha_core
+    --features "$IROHAD_RELEASE_FEATURES" -i iroha_core
 )"
 if [[ "$irohad_core_feature_graph" == *'iroha-core-tests'* \
   || "$irohad_core_feature_graph" == *'finality-test-fixtures'* ]]; then
   echo "refusing to build validator with finality test-fixture capabilities" >&2
   printf '%s\n' "$irohad_core_feature_graph" >&2
+  exit 1
+fi
+if [[ "$irohad_core_feature_graph" != *'irohad feature "zk-stark"'* \
+  || "$irohad_core_feature_graph" != *'iroha_core feature "zk-stark"'* ]]; then
+  echo "refusing to build a Taira validator whose exact feature graph omits zk-stark" >&2
+  printf '%s\n' "$irohad_core_feature_graph" >&2
+  exit 1
+fi
+if [[ "$irohad_core_feature_graph" == *"$PRIVACY_RELEASE_EVIDENCE_FEATURE"* ]]; then
+  echo "refusing to compile the native privacy evidence feature into irohad" >&2
+  printf '%s\n' "$irohad_core_feature_graph" >&2
+  exit 1
+fi
+
+privacy_runner_core_feature_graph="$(
+  cd "$REPO_ROOT"
+  cargo tree --locked -e features,no-dev \
+    -p "$PRIVACY_RELEASE_RUNNER_PACKAGE" \
+    --features "$PRIVACY_RELEASE_EVIDENCE_FEATURE" \
+    -i iroha_core
+)"
+if [[ "$privacy_runner_core_feature_graph" != *"$PRIVACY_RELEASE_RUNNER_PACKAGE feature \"$PRIVACY_RELEASE_EVIDENCE_FEATURE\""* \
+  || "$privacy_runner_core_feature_graph" != *"iroha_core feature \"$PRIVACY_RELEASE_EVIDENCE_FEATURE\""* ]]; then
+  echo "native privacy runner feature graph does not enable the isolated evidence feature" >&2
+  printf '%s\n' "$privacy_runner_core_feature_graph" >&2
   exit 1
 fi
 
@@ -279,7 +517,7 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
     -p iroha_cli
     --bin irohad
     --bin iroha
-    --features embedded-soracloud-runtime
+    --features "$IROHAD_RELEASE_FEATURES"
   )
   sorafs_build_args=(build --locked -p sorafs_car --features cli --bin sorafs_manifest_builder --bin sorafs_tx_stdin_builder)
   if [[ "$PROFILE" == "release" ]]; then
@@ -291,18 +529,97 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
     cargo "${core_build_args[@]}"
     cargo "${sorafs_build_args[@]}"
   )
+
+  privacy_runner_build_args=(
+    build
+    --locked
+    -p "$PRIVACY_RELEASE_RUNNER_PACKAGE"
+    --bin "$PRIVACY_RELEASE_RUNNER_BIN"
+    --features "$PRIVACY_RELEASE_EVIDENCE_FEATURE"
+  )
+  if [[ "$PROFILE" == "release" ]]; then
+    privacy_runner_build_args+=(--release)
+  fi
+  (
+    cd "$REPO_ROOT"
+    cargo "${privacy_runner_build_args[@]}"
+  )
 fi
 
 if [[ "$reference_validator_source_mode" == "attested" ]]; then
   python3 "$validator_source_verifier" verify --repo "$REPO_ROOT" --bundle-dir "$validator_source_bundle"
 fi
 
-for binary in irohad iroha sorafs_manifest_builder sorafs_tx_stdin_builder; do
+assert_workspace_source_manifest_unchanged "post-build"
+if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]; then
+  echo "validator Cargo.lock changed during the binary builds" >&2
+  exit 1
+fi
+
+for binary in irohad iroha sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   if [[ ! -x "${binary_dir}/${binary}" ]]; then
     echo "missing built binary: ${binary_dir}/${binary}" >&2
     echo "run without --skip-build or build the ${PROFILE} profile first" >&2
     exit 1
   fi
+done
+
+privacy_evidence_tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/taira-privacy-native-release.XXXXXX")"
+trap 'rm -rf -- "$privacy_evidence_tmp_dir"' EXIT
+privacy_command_manifest_norito_tmp="${privacy_evidence_tmp_dir}/command-manifest-v1.norito"
+privacy_command_manifest_json_tmp="${privacy_evidence_tmp_dir}/command-manifest-v1.json"
+privacy_stage_artifacts_norito_tmp="${privacy_evidence_tmp_dir}/stage-artifacts-v1.norito"
+privacy_stage_artifacts_json_tmp="${privacy_evidence_tmp_dir}/stage-artifacts-v1.json"
+privacy_receipt_norito_tmp="${privacy_evidence_tmp_dir}/receipt-v1.norito"
+privacy_receipt_json_tmp="${privacy_evidence_tmp_dir}/receipt-v1.json"
+privacy_runner_path="${binary_dir}/${PRIVACY_RELEASE_RUNNER_BIN}"
+privacy_runner_common_args=(
+  --build-profile "$PROFILE"
+  --source-sha256 "$workspace_source_manifest_sha256"
+  --exact12-matrix "$PRIVACY_EXACT12_MATRIX"
+  --expectations-norito "$PRIVACY_EXPECTATIONS_NORITO"
+  --expectations-json "$PRIVACY_EXPECTATIONS_JSON"
+  --cargo-lock "$validator_lock_path"
+  --validator-binary "${binary_dir}/irohad"
+)
+"$privacy_runner_path" generate \
+  "${privacy_runner_common_args[@]}" \
+  --command-manifest-norito-out "$privacy_command_manifest_norito_tmp" \
+  --command-manifest-json-out "$privacy_command_manifest_json_tmp" \
+  --stage-artifacts-norito-out "$privacy_stage_artifacts_norito_tmp" \
+  --stage-artifacts-json-out "$privacy_stage_artifacts_json_tmp" \
+  --receipt-norito-out "$privacy_receipt_norito_tmp" \
+  --receipt-json-out "$privacy_receipt_json_tmp"
+
+for evidence_path in \
+  "$privacy_command_manifest_norito_tmp" \
+  "$privacy_command_manifest_json_tmp" \
+  "$privacy_stage_artifacts_norito_tmp" \
+  "$privacy_stage_artifacts_json_tmp" \
+  "$privacy_receipt_norito_tmp" \
+  "$privacy_receipt_json_tmp"; do
+  if [[ ! -s "$evidence_path" || -L "$evidence_path" ]]; then
+    echo "native privacy runner emitted no regular evidence artifact: $evidence_path" >&2
+    exit 1
+  fi
+done
+
+"$privacy_runner_path" verify \
+  "${privacy_runner_common_args[@]}" \
+  --command-manifest-norito "$privacy_command_manifest_norito_tmp" \
+  --command-manifest-json "$privacy_command_manifest_json_tmp" \
+  --stage-artifacts-norito "$privacy_stage_artifacts_norito_tmp" \
+  --stage-artifacts-json "$privacy_stage_artifacts_json_tmp" \
+  --receipt-norito "$privacy_receipt_norito_tmp" \
+  --receipt-json "$privacy_receipt_json_tmp"
+
+assert_workspace_source_manifest_unchanged "post-evidence"
+if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]; then
+  echo "validator Cargo.lock changed while native privacy evidence was generated" >&2
+  exit 1
+fi
+
+for binary in irohad iroha sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   cp "${binary_dir}/${binary}" "${bundle_dir}/bin/${binary}"
 done
 
@@ -310,8 +627,67 @@ cp -R "${REPO_ROOT}/configs/soranexus/taira" "${bundle_dir}/configs/soranexus/"
 cp "${REPO_ROOT}/scripts/render_taira_validator_bundle.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/render_taira_edge_nginx_conf.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
+cp "$TAIRA_RELEASE_AUTHORITY_SCRIPT" "${bundle_dir}/scripts/"
+cp "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" "${bundle_dir}/scripts/"
 cp "$validator_lock_path" "${bundle_dir}/provenance/Cargo.lock"
 cp "$validator_build_provenance" "${bundle_dir}/provenance/dpn-validator-build.provenance.json"
+privacy_native_relative_dir="provenance/privacy-native"
+privacy_native_dir="${bundle_dir}/${privacy_native_relative_dir}"
+mkdir -p "$privacy_native_dir"
+privacy_release_norito_relative_path="${privacy_native_relative_dir}/receipt-v1.norito"
+privacy_release_json_relative_path="${privacy_native_relative_dir}/receipt-v1.json"
+privacy_stage_artifacts_norito_relative_path="${privacy_native_relative_dir}/stage-artifacts-v1.norito"
+privacy_stage_artifacts_json_relative_path="${privacy_native_relative_dir}/stage-artifacts-v1.json"
+privacy_command_manifest_norito_relative_path="${privacy_native_relative_dir}/command-manifest-v1.norito"
+privacy_command_manifest_json_relative_path="${privacy_native_relative_dir}/command-manifest-v1.json"
+privacy_expectations_norito_relative_path="${privacy_native_relative_dir}/expectations-v1.norito"
+privacy_expectations_json_relative_path="${privacy_native_relative_dir}/expectations-v1.json"
+privacy_exact12_matrix_relative_path="${privacy_native_relative_dir}/exact12-v1.tsv"
+privacy_workspace_source_manifest_relative_path="${privacy_native_relative_dir}/workspace-source-manifest.sha256"
+cp "$privacy_receipt_norito_tmp" "${bundle_dir}/${privacy_release_norito_relative_path}"
+cp "$privacy_receipt_json_tmp" "${bundle_dir}/${privacy_release_json_relative_path}"
+cp "$privacy_stage_artifacts_norito_tmp" "${bundle_dir}/${privacy_stage_artifacts_norito_relative_path}"
+cp "$privacy_stage_artifacts_json_tmp" "${bundle_dir}/${privacy_stage_artifacts_json_relative_path}"
+cp "$privacy_command_manifest_norito_tmp" "${bundle_dir}/${privacy_command_manifest_norito_relative_path}"
+cp "$privacy_command_manifest_json_tmp" "${bundle_dir}/${privacy_command_manifest_json_relative_path}"
+cp "$PRIVACY_EXPECTATIONS_NORITO" "${bundle_dir}/${privacy_expectations_norito_relative_path}"
+cp "$PRIVACY_EXPECTATIONS_JSON" "${bundle_dir}/${privacy_expectations_json_relative_path}"
+cp "$PRIVACY_EXACT12_MATRIX" "${bundle_dir}/${privacy_exact12_matrix_relative_path}"
+printf '%s\n' "$workspace_source_manifest_sha256" \
+  >"${bundle_dir}/${privacy_workspace_source_manifest_relative_path}"
+
+privacy_release_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_release_norito_relative_path}")"
+privacy_release_json_sha256="$(sha256_file "${bundle_dir}/${privacy_release_json_relative_path}")"
+privacy_stage_artifacts_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_stage_artifacts_norito_relative_path}")"
+privacy_stage_artifacts_json_sha256="$(sha256_file "${bundle_dir}/${privacy_stage_artifacts_json_relative_path}")"
+privacy_command_manifest_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_command_manifest_norito_relative_path}")"
+privacy_command_manifest_json_sha256="$(sha256_file "${bundle_dir}/${privacy_command_manifest_json_relative_path}")"
+privacy_expectations_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_expectations_norito_relative_path}")"
+privacy_expectations_json_sha256="$(sha256_file "${bundle_dir}/${privacy_expectations_json_relative_path}")"
+privacy_exact12_matrix_sha256="$(sha256_file "${bundle_dir}/${privacy_exact12_matrix_relative_path}")"
+privacy_workspace_source_manifest_file_sha256="$(sha256_file "${bundle_dir}/${privacy_workspace_source_manifest_relative_path}")"
+validator_binary_sha256="$(sha256_file "${bundle_dir}/bin/irohad")"
+privacy_runner_binary_sha256="$(sha256_file "${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}")"
+
+bundled_privacy_runner_common_args=(
+  --build-profile "$PROFILE"
+  --source-sha256 "$workspace_source_manifest_sha256"
+  --exact12-matrix "${bundle_dir}/${privacy_exact12_matrix_relative_path}"
+  --expectations-norito "${bundle_dir}/${privacy_expectations_norito_relative_path}"
+  --expectations-json "${bundle_dir}/${privacy_expectations_json_relative_path}"
+  --cargo-lock "${bundle_dir}/provenance/Cargo.lock"
+  --validator-binary "${bundle_dir}/bin/irohad"
+)
+"${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}" verify \
+  "${bundled_privacy_runner_common_args[@]}" \
+  --command-manifest-norito "${bundle_dir}/${privacy_command_manifest_norito_relative_path}" \
+  --command-manifest-json "${bundle_dir}/${privacy_command_manifest_json_relative_path}" \
+  --stage-artifacts-norito "${bundle_dir}/${privacy_stage_artifacts_norito_relative_path}" \
+  --stage-artifacts-json "${bundle_dir}/${privacy_stage_artifacts_json_relative_path}" \
+  --receipt-norito "${bundle_dir}/${privacy_release_norito_relative_path}" \
+  --receipt-json "${bundle_dir}/${privacy_release_json_relative_path}"
+
+assert_workspace_source_manifest_unchanged "post-bundled-runner-verification"
 cp "$KAGEMUSHA_RELEASE_POLICY" "${bundle_dir}/kagemusha/release-policy.norito"
 cp -R "$KAGEMUSHA_ARTIFACT_ROOT"/. "${bundle_dir}/kagemusha/v4/"
 if [[ "$reference_validator_source_mode" == "attested" ]]; then
@@ -341,21 +717,84 @@ GIT_TREE_CLEAN="$git_tree_clean" \
 GENERATED_AT="$timestamp" \
 PROFILE_NAME="$PROFILE" \
 BUNDLE_NAME="$bundle_name" \
-REPO_ROOT="$REPO_ROOT" \
 SKIP_LOCAL_REGRESSIONS="$SKIP_LOCAL_REGRESSIONS" \
 VALIDATOR_LOCK_SHA256="$validator_lock_actual_sha" \
 VALIDATOR_SOURCE_MODE="$reference_validator_source_mode" \
 VALIDATOR_SOURCE_TREE_SHA256="$reference_source_tree_sha" \
 VALIDATOR_TRACKED_PATCH_SHA256="$reference_tracked_patch_sha" \
 VALIDATOR_SOURCE_BUNDLE_PROVENANCE_SHA256="$reference_source_bundle_provenance_sha" \
+IROHAD_RELEASE_FEATURES="$IROHAD_RELEASE_FEATURES" \
+PRIVACY_RELEASE_EVIDENCE_FEATURE="$PRIVACY_RELEASE_EVIDENCE_FEATURE" \
+PRIVACY_RELEASE_RUNNER_BIN="$PRIVACY_RELEASE_RUNNER_BIN" \
+WORKSPACE_SOURCE_MANIFEST_SHA256="$workspace_source_manifest_sha256" \
+PRIVACY_RELEASE_NORITO_PATH="$privacy_release_norito_relative_path" \
+PRIVACY_RELEASE_NORITO_SHA256="$privacy_release_norito_sha256" \
+PRIVACY_RELEASE_JSON_PATH="$privacy_release_json_relative_path" \
+PRIVACY_RELEASE_JSON_SHA256="$privacy_release_json_sha256" \
+PRIVACY_STAGE_ARTIFACTS_NORITO_PATH="$privacy_stage_artifacts_norito_relative_path" \
+PRIVACY_STAGE_ARTIFACTS_NORITO_SHA256="$privacy_stage_artifacts_norito_sha256" \
+PRIVACY_STAGE_ARTIFACTS_JSON_PATH="$privacy_stage_artifacts_json_relative_path" \
+PRIVACY_STAGE_ARTIFACTS_JSON_SHA256="$privacy_stage_artifacts_json_sha256" \
+PRIVACY_COMMAND_MANIFEST_NORITO_PATH="$privacy_command_manifest_norito_relative_path" \
+PRIVACY_COMMAND_MANIFEST_NORITO_SHA256="$privacy_command_manifest_norito_sha256" \
+PRIVACY_COMMAND_MANIFEST_JSON_PATH="$privacy_command_manifest_json_relative_path" \
+PRIVACY_COMMAND_MANIFEST_JSON_SHA256="$privacy_command_manifest_json_sha256" \
+PRIVACY_EXPECTATIONS_NORITO_PATH="$privacy_expectations_norito_relative_path" \
+PRIVACY_EXPECTATIONS_NORITO_SHA256="$privacy_expectations_norito_sha256" \
+PRIVACY_EXPECTATIONS_JSON_PATH="$privacy_expectations_json_relative_path" \
+PRIVACY_EXPECTATIONS_JSON_SHA256="$privacy_expectations_json_sha256" \
+PRIVACY_EXACT12_MATRIX_PATH="$privacy_exact12_matrix_relative_path" \
+PRIVACY_EXACT12_MATRIX_SHA256="$privacy_exact12_matrix_sha256" \
+PRIVACY_WORKSPACE_SOURCE_MANIFEST_PATH="$privacy_workspace_source_manifest_relative_path" \
+PRIVACY_WORKSPACE_SOURCE_MANIFEST_FILE_SHA256="$privacy_workspace_source_manifest_file_sha256" \
+PRIVACY_NATIVE_RELATIVE_DIR="$privacy_native_relative_dir" \
+VALIDATOR_BINARY_SHA256="$validator_binary_sha256" \
+PRIVACY_RUNNER_BINARY_SHA256="$privacy_runner_binary_sha256" \
 python3 - <<'PY' >"$manifest_path"
 import json
 import os
+import re
 
 status = os.environ.get("GIT_STATUS", "")
+
+digest_names = (
+    "WORKSPACE_SOURCE_MANIFEST_SHA256",
+    "PRIVACY_RELEASE_NORITO_SHA256",
+    "PRIVACY_RELEASE_JSON_SHA256",
+    "PRIVACY_STAGE_ARTIFACTS_NORITO_SHA256",
+    "PRIVACY_STAGE_ARTIFACTS_JSON_SHA256",
+    "PRIVACY_COMMAND_MANIFEST_NORITO_SHA256",
+    "PRIVACY_COMMAND_MANIFEST_JSON_SHA256",
+    "PRIVACY_EXPECTATIONS_NORITO_SHA256",
+    "PRIVACY_EXPECTATIONS_JSON_SHA256",
+    "PRIVACY_EXACT12_MATRIX_SHA256",
+    "PRIVACY_WORKSPACE_SOURCE_MANIFEST_FILE_SHA256",
+    "VALIDATOR_BINARY_SHA256",
+    "PRIVACY_RUNNER_BINARY_SHA256",
+)
+for name in digest_names:
+    if re.fullmatch(r"[0-9a-f]{64}", os.environ[name]) is None:
+        raise SystemExit(f"{name} is not a canonical SHA-256 digest")
+
+
+def evidence_pair(prefix: str) -> dict[str, object]:
+    return {
+        "authoritative": {
+            "encoding": "norito",
+            "path": os.environ[f"{prefix}_NORITO_PATH"],
+            "sha256": os.environ[f"{prefix}_NORITO_SHA256"],
+        },
+        "deterministic_json_projection": {
+            "authoritative": False,
+            "path": os.environ[f"{prefix}_JSON_PATH"],
+            "sha256": os.environ[f"{prefix}_JSON_SHA256"],
+            "typed_equal_to_norito": True,
+        },
+    }
+
+
 payload = {
     "generated_at": os.environ["GENERATED_AT"],
-    "repo_root": os.environ["REPO_ROOT"],
     "git_head": os.environ["GIT_HEAD"],
     "git_tree_clean": os.environ["GIT_TREE_CLEAN"] == "true",
     "git_status_lines": [line for line in status.splitlines() if line],
@@ -372,17 +811,100 @@ payload = {
     "validator_source_bundle_provenance_sha256": None
     if os.environ["VALIDATOR_SOURCE_BUNDLE_PROVENANCE_SHA256"] == "-"
     else os.environ["VALIDATOR_SOURCE_BUNDLE_PROVENANCE_SHA256"],
-    "irohad_features": [
-        "embedded-soracloud-runtime",
+    "irohad_features": os.environ["IROHAD_RELEASE_FEATURES"].split(","),
+    "workspace_source_manifest_sha256": os.environ[
+        "WORKSPACE_SOURCE_MANIFEST_SHA256"
     ],
+    "detached_release_authority": {
+        "required": os.environ["PROFILE_NAME"] == "release",
+        "schema": "iroha.taira.exact12_release_authority",
+        "directory_name": os.environ["BUNDLE_NAME"] + ".authority",
+        "manifest": "release_manifest.json",
+        "signature": "release_manifest.json.sig",
+        "raw_public_key": "release_manifest.json.pub",
+        "archive_without_authority_is_admissible": False,
+    },
+    "privacy_native_release_evidence": {
+        "phase": "post_build",
+        "authoritative_encoding": "norito",
+        "workspace_source_manifest": {
+            "algorithm": "sha256",
+            "digest": os.environ["WORKSPACE_SOURCE_MANIFEST_SHA256"],
+            "digest_file": {
+                "path": os.environ["PRIVACY_WORKSPACE_SOURCE_MANIFEST_PATH"],
+                "sha256": os.environ[
+                    "PRIVACY_WORKSPACE_SOURCE_MANIFEST_FILE_SHA256"
+                ],
+            },
+            "toctou_rechecked": True,
+        },
+        "binary_identities": {
+            "validator": {
+                "path": "bin/irohad",
+                "sha256": os.environ["VALIDATOR_BINARY_SHA256"],
+            },
+            "evidence_runner": {
+                "path": f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
+                "sha256": os.environ["PRIVACY_RUNNER_BINARY_SHA256"],
+            },
+            "also_bound_by_typed_receipt": True,
+        },
+        "runner": {
+            "path": f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
+            "sha256": os.environ["PRIVACY_RUNNER_BINARY_SHA256"],
+            "feature": os.environ["PRIVACY_RELEASE_EVIDENCE_FEATURE"],
+            "feature_isolated_from_irohad": True,
+            "bundled_verify_passed": True,
+        },
+        "receipt": evidence_pair("PRIVACY_RELEASE"),
+        "stage_artifacts": {
+            **evidence_pair("PRIVACY_STAGE_ARTIFACTS"),
+            "fixed_stage_block_count": 48,
+            "contains_witnesses": False,
+            "contains_canonical_proof_artifacts": True,
+        },
+        "command_manifest": evidence_pair("PRIVACY_COMMAND_MANIFEST"),
+        "expectations": {
+            **evidence_pair("PRIVACY_EXPECTATIONS"),
+            "peak_rss_and_elapsed_ceilings_enforced": True,
+        },
+        "exact12_matrix": {
+            "path": os.environ["PRIVACY_EXACT12_MATRIX_PATH"],
+            "sha256": os.environ["PRIVACY_EXACT12_MATRIX_SHA256"],
+        },
+    },
     "bundle_name": os.environ["BUNDLE_NAME"],
     "binaries": [
         "bin/irohad",
         "bin/iroha",
         "bin/sorafs_manifest_builder",
         "bin/sorafs_tx_stdin_builder",
+        f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
     ],
-    "prebundle_checks": [
+    "release_checks": [
+        {
+            "name": "taira_validator_privacy_feature_isolation",
+            "commands": [
+                "cargo tree --locked -e features,no-dev -p irohad --features "
+                + os.environ["IROHAD_RELEASE_FEATURES"]
+                + " -i iroha_core",
+                "cargo tree --locked -e features,no-dev -p iroha_test_network "
+                "--features "
+                + os.environ["PRIVACY_RELEASE_EVIDENCE_FEATURE"]
+                + " -i iroha_core",
+            ],
+            "validator_evidence_feature_present": False,
+            "runner_evidence_feature_present": True,
+            "skipped": False,
+        },
+        {
+            "name": "taira_native_privacy_post_build_release_evidence",
+            "command": f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]} verify '
+            "<authoritative bundled evidence paths>",
+            "phase": "post_build",
+            "bundled_runner": True,
+            "skipped": False,
+        },
         {
             "name": "soraswap_smart_contract_deploy_router_regression",
             "command": "cargo test --locked -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib",
@@ -390,7 +912,7 @@ payload = {
         },
         {
             "name": "soraswap_three_hop_nested_transfer_canary",
-            "command": "cargo test --locked -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib",
+            "command": "cargo test --locked -p iroha_core call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts --lib",
             "skipped": os.environ["SKIP_LOCAL_REGRESSIONS"] == "1",
         },
         {
@@ -411,8 +933,12 @@ payload = {
         "scripts/render_taira_validator_bundle.py",
         "scripts/render_taira_edge_nginx_conf.py",
         "scripts/taira_faucet_canary.py",
+        "scripts/taira_release_authority.py",
+        "scripts/release_artifact_contract.py",
         "provenance/Cargo.lock",
         "provenance/dpn-validator-build.provenance.json",
+        f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
+        os.environ["PRIVACY_NATIVE_RELATIVE_DIR"] + "/",
         *(
             ["provenance/source-bundle/"]
             if os.environ["VALIDATOR_SOURCE_MODE"] == "attested"
@@ -420,6 +946,7 @@ payload = {
         ),
     ],
     "required_followup": [
+        "before installation, rerun the bundled native privacy verifier against provenance/privacy-native; the Norito files are authoritative and all JSON files are mandatory deterministic typed projections",
         "install the native Inrou prerequisites reported by configs/soranexus/taira/check_inrou_host_prereqs.sh or run the CONFIG_PROFILE=taira container image",
         "install the bundled binaries/config on each public Taira validator",
         "render and install the shared-edge nginx config from the same validator roster before public cutover, preferably with "
@@ -448,12 +975,123 @@ PY
     done >"$checksums_path"
 )
 
+assert_workspace_source_manifest_unchanged "pre-archive"
+if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]; then
+  echo "validator Cargo.lock changed before the rollout archive was created" >&2
+  exit 1
+fi
+
 mkdir -p "$OUTPUT_DIR"
 tar -C "$OUTPUT_DIR" -czf "$archive_path" "$bundle_name"
 printf '%s  %s\n' "$(sha256_file "$archive_path")" "$(basename "$archive_path")" >"${archive_path}.sha256"
+assert_workspace_source_manifest_unchanged "post-archive"
+
+release_authority_dir="${OUTPUT_DIR}/${bundle_name}.authority"
+release_authority_artifacts_dir="${release_authority_dir}/artifacts"
+release_authority_payload_name="taira-exact12-release-authority-v1.json"
+release_authority_manifest="${release_authority_dir}/release_manifest.json"
+release_authority_signature="${release_authority_dir}/release_manifest.json.sig"
+release_authority_public_key="${release_authority_dir}/release_manifest.json.pub"
+
+if [[ "$PROFILE" == "release" ]]; then
+  if [[ -e "$release_authority_dir" || -L "$release_authority_dir" ]]; then
+    echo "refusing to replace existing Taira release authority: $release_authority_dir" >&2
+    exit 1
+  fi
+  mkdir -m 0700 "$release_authority_dir"
+  mkdir -m 0755 "$release_authority_artifacts_dir"
+  install -m 0555 \
+    "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
+    "${release_authority_artifacts_dir}/sorafs-validate"
+  install -m 0555 \
+    "$TAIRA_RELEASE_AUTHORITY_SCRIPT" \
+    "${release_authority_artifacts_dir}/taira_release_authority.py"
+  install -m 0444 \
+    "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" \
+    "${release_authority_artifacts_dir}/release_artifact_contract.py"
+
+  python3 -S "$TAIRA_RELEASE_AUTHORITY_SCRIPT" create \
+    --evidence-root "$bundle_dir" \
+    --commit "$git_head" \
+    --signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+    --native-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
+    --archive "$archive_path" \
+    --output "${release_authority_artifacts_dir}/${release_authority_payload_name}"
+
+  python3 -S "$RELEASE_CHECKSUM_WRITER" \
+    --artifacts-dir "$release_authority_artifacts_dir" \
+    --output "${release_authority_artifacts_dir}/SHA256SUMS" \
+    --file "$release_authority_payload_name" \
+    --file release_artifact_contract.py \
+    --file sorafs-validate \
+    --file taira_release_authority.py
+
+  release_source_date_epoch="$(git -C "$REPO_ROOT" show -s --format=%ct "$git_head")"
+  release_os_tag="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  release_arch_tag="$(uname -m | tr '[:upper:]' '[:lower:]')"
+  release_manifest_args=(
+    --artifacts-dir "$release_authority_artifacts_dir"
+    --version "taira-${workspace_source_manifest_sha256:0:16}"
+    --commit "$git_head"
+    --source-date-epoch "$release_source_date_epoch"
+    --os-tag "$release_os_tag"
+    --arch "$release_arch_tag"
+    --artifact "iroha3:taira-exact12:release-evidence:json:${release_authority_payload_name}"
+    --artifact "iroha3:taira-authority:release-evidence:binary:release_artifact_contract.py"
+    --artifact "iroha3:taira-authority:reference-validator:binary:sorafs-validate"
+    --artifact "iroha3:taira-authority:release-evidence:binary:taira_release_authority.py"
+  )
+  python3 -S "$RELEASE_MANIFEST_GENERATOR" \
+    "${release_manifest_args[@]}" \
+    --output "$release_authority_manifest"
+
+  python3 -S "$RELEASE_MANIFEST_SIGNING_HELPER" sign \
+    --manifest "$release_authority_manifest" \
+    --external-signer "$TAIRA_RELEASE_EXTERNAL_SIGNER_PATH" \
+    --signing-public-key "$TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH" \
+    --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+    --signature-output "$release_authority_signature" \
+    --public-key-output "$release_authority_public_key" \
+    --release-manifest-verifier "$TAIRA_RELEASE_MANIFEST_VERIFIER_PATH" \
+    --trusted-release-manifest-verifier-sha256 \
+      "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+
+  python3 -S "$RELEASE_MANIFEST_SIGNING_HELPER" verify \
+    --manifest "$release_authority_manifest" \
+    --signature "$release_authority_signature" \
+    --public-key "$release_authority_public_key" \
+    --trusted-signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+    --release-manifest-verifier \
+      "${release_authority_artifacts_dir}/sorafs-validate" \
+    --trusted-release-manifest-verifier-sha256 \
+      "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+
+  release_authority_manifest_replay="${release_authority_dir}/release_manifest.replay.json"
+  python3 -S "$RELEASE_MANIFEST_GENERATOR" \
+    "${release_manifest_args[@]}" \
+    --output "$release_authority_manifest_replay"
+  cmp "$release_authority_manifest" "$release_authority_manifest_replay"
+  rm -f -- "$release_authority_manifest_replay"
+
+  python3 -S \
+    "${release_authority_artifacts_dir}/taira_release_authority.py" verify \
+    --evidence-root "$bundle_dir" \
+    --commit "$git_head" \
+    --signing-fingerprint "$TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT" \
+    --native-verifier-sha256 "$TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256" \
+    --archive "$archive_path" \
+    --authority \
+      "${release_authority_artifacts_dir}/${release_authority_payload_name}"
+
+  assert_workspace_source_manifest_unchanged "post-signed-release-authority"
+fi
 
 echo "Taira rollout bundle ready:"
 echo "  manifest: $manifest_path"
 echo "  checksums: $checksums_path"
 echo "  archive: $archive_path"
 echo "  archive checksum: ${archive_path}.sha256"
+if [[ "$PROFILE" == "release" ]]; then
+  echo "  signed authority: $release_authority_dir"
+  echo "  signed authority manifest SHA-256: $(sha256_file "$release_authority_manifest")"
+fi

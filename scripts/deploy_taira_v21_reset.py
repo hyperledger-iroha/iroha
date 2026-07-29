@@ -1403,6 +1403,8 @@ def render_plist(
     log_file = runtime_root / "logs" / f"validator-{peer.number}-supervisor.log"
     arguments = [
         str(sources.python),
+        "-I",
+        "-S",
         str(installed_supervisor),
         "--binary",
         str(installed_binary),
@@ -1570,6 +1572,43 @@ def rewrite_release_tree_ownership(
             os.close(descriptor)
 
 
+def require_release_tree_content_seals(
+    root: Path, seals: Sequence[ReleaseTreeSeal]
+) -> None:
+    """Recheck content identities after hardening, ignoring expected metadata changes."""
+
+    paths = sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix())
+    if [path.relative_to(root).as_posix() for path in paths] != [
+        seal.relative_path for seal in seals[1:]
+    ]:
+        fail("Kagemusha release inventory changed during ownership hardening")
+    for seal in seals:
+        path = root if seal.relative_path == "." else root / seal.relative_path
+        info = path.lstat()
+        expected = seal.identity
+        immutable_identity = (
+            info.st_dev,
+            info.st_ino,
+            stat.S_IFMT(info.st_mode),
+            info.st_nlink,
+            info.st_size,
+            info.st_mtime_ns,
+        )
+        expected_identity = (
+            expected[0],
+            expected[1],
+            stat.S_IFMT(expected[2]),
+            expected[5],
+            expected[6],
+            expected[7],
+        )
+        if immutable_identity != expected_identity:
+            fail(
+                "Kagemusha release content changed during ownership hardening: "
+                f"{seal.relative_path}"
+            )
+
+
 def move_release_to_root_store(bundle: BundlePlan) -> Path:
     """Move and harden the sole release copy in its content-addressed root store."""
 
@@ -1581,6 +1620,7 @@ def move_release_to_root_store(bundle: BundlePlan) -> Path:
         fail(f"content-addressed release destination already exists: {destination}")
     if source.stat().st_dev != release_store.stat().st_dev:
         fail("Kagemusha release move crossed filesystems")
+    moved = False
     try:
         rewrite_release_tree_ownership(
             source,
@@ -1589,10 +1629,23 @@ def move_release_to_root_store(bundle: BundlePlan) -> Path:
             file_mode=0o440,
             directory_mode=0o550,
         )
+        require_release_tree_content_seals(source, bundle.release.tree_seals)
         os.rename(source, destination)
+        moved = True
+        destination_info = destination.lstat()
+        expected_root = bundle.release.tree_seals[0].identity
+        if (
+            destination_info.st_dev != expected_root[0]
+            or destination_info.st_ino != expected_root[1]
+        ):
+            fail("Kagemusha release root changed during its atomic move")
         fsync_directory(source.parent)
         fsync_directory(release_store)
     except BaseException:
+        if moved and destination.exists() and not source.exists():
+            os.rename(destination, source)
+            fsync_directory(destination.parent)
+            fsync_directory(source.parent)
         if source.exists() and not source.is_symlink():
             rewrite_release_tree_ownership(
                 source,
@@ -1879,8 +1932,10 @@ def validate_peer_health(
         commit_validators != PEER_COUNT
         or commit_min_signers != 3
         or not 3 <= commit_signers <= PEER_COUNT
+        or commit_total_power != context_total_power
         or commit_signed_power > commit_total_power
         or commit_signed_power * 3 <= commit_total_power * 2
+        or (mode == "permissioned" and commit_signed_power != commit_signers)
     ):
         fail(f"{peer.label} durable CommitQC lacks the exact four-validator quorum")
     context = sumeragi.get("height_context_id")
@@ -2088,7 +2143,7 @@ def verify_managed_peer(
 
     supervisor_pid = launchd_pid(ops.launchd_print(peer.label), peer.label)
     supervisor = ops.inspect_process(supervisor_pid)
-    if supervisor.uid != bundle.owner_uid:
+    if supervisor.ppid != 1 or supervisor.uid != bundle.owner_uid:
         fail(f"{peer.label} supervisor has an unexpected owner")
     if supervisor.argv != expected_supervisor_argv(plist_body):
         fail(f"{peer.label} supervisor command differs from the generated plist")
@@ -2266,6 +2321,8 @@ def apply_reset(
     )
     os.chmod(binary_dir, 0o555)
     os.chmod(supervisor_dir, 0o555)
+    fsync_directory(binary_dir)
+    fsync_directory(supervisor_dir)
     fsync_directory(binary_store)
     fsync_directory(supervisor_store)
     require_root_controlled_file(installed_binary, executable=True)
@@ -2389,6 +2446,14 @@ def apply_reset(
         # A second termination request must not interrupt the rollback itself.
         for signum in guarded_signals:
             signal.signal(signum, signal.SIG_IGN)
+        if (
+            not release_moved
+            and bundle.release.installed_root.exists()
+            and not bundle.release.source_root.exists()
+        ):
+            # Close the signal-delivery window between a successful rename and
+            # storing the local ``release_moved`` flag.
+            release_moved = True
         rollback_error: BaseException | None = None
         if cohort_mutated:
             try:

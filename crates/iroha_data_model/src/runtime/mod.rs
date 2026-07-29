@@ -147,7 +147,7 @@ impl RuntimeUpgradeManifest {
     /// Compute the canonical Norito bytes for this manifest.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        norito::to_bytes(self).expect("runtime upgrade manifest encoding should succeed")
+        norito::encode_canonical(self).expect("runtime upgrade manifest encoding should succeed")
     }
 
     /// Compute the content-addressable identifier for this manifest.
@@ -165,7 +165,7 @@ impl RuntimeUpgradeManifest {
     /// Encode the canonical signing payload into Norito bytes.
     #[must_use]
     pub fn signature_payload_bytes(&self) -> Vec<u8> {
-        norito::to_bytes(&self.signature_payload())
+        norito::encode_canonical(&self.signature_payload())
             .expect("runtime upgrade signature payload encoding should succeed")
     }
 
@@ -431,12 +431,33 @@ mod tests {
             created_height: 999_900,
         };
         let expected_id = manifest.id();
+        let expected_signature_payload = manifest.signature_payload_bytes();
         assert_eq!(
             expected_id,
             RuntimeUpgradeId::from_manifest_bytes(&manifest.canonical_bytes())
         );
         let framed_manifest = norito::to_bytes(&manifest).expect("encode manifest");
         assert_eq!(manifest.canonical_bytes(), framed_manifest);
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                manifest.canonical_bytes(),
+                framed_manifest,
+                "manifest identity bytes must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                manifest.id(),
+                expected_id,
+                "runtime upgrade identity must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                manifest.signature_payload_bytes(),
+                expected_signature_payload,
+                "manifest signature bytes must ignore the caller's ambient Norito layout"
+            );
+        }
         let rbytes = norito::to_bytes(&rec).expect("encode record");
         let m2: RuntimeUpgradeManifest =
             norito::decode_from_bytes(&framed_manifest).expect("decode manifest");

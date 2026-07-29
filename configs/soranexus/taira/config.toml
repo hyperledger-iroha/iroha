@@ -29,7 +29,9 @@ beep = true
 [network]
 address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:taira-validator-1.sora.org:1337#D426"
-max_frame_bytes_tx_gossip = 1048576
+max_frame_bytes = 23068700
+max_frame_bytes_block_sync = 23068672
+max_frame_bytes_tx_gossip = 11534336
 p2p_queue_cap_high = 65536
 p2p_queue_cap_low = 32768
 p2p_post_queue_cap = 65536
@@ -41,12 +43,26 @@ deferred_send_max_bytes_per_peer = 268435456
 deferred_send_max_bytes_total = 134217728
 disconnect_on_post_overflow = false
 
+[nts]
+sample_interval_ms = 5_000
+sample_cap_per_round = 8
+max_rtt_ms = 500
+trim_percent = 10
+per_peer_buffer = 16
+smoothing_enabled = false
+smoothing_alpha = 0.2
+max_adjust_ms_per_min = 50
+min_samples = 3
+max_offset_ms = 1_000
+max_confidence_ms = 500
+enforcement_mode = "reject"
+
 [torii]
 address = "addr:0.0.0.0:18080#2F16"
 preauth_allow_cidrs = ["127.0.0.1/32", "207.254.29.242/32"]
 max_content_len = 1_073_741_824
-deploy_rate_per_origin_per_sec = 1000
-deploy_burst_per_origin = 2000
+deploy_rate_per_origin_per_sec = 4
+deploy_burst_per_origin = 8
 query_rate_per_authority_per_sec = 160
 query_burst_per_authority = 320
 webhooks_enabled = false
@@ -106,8 +122,8 @@ max_tx_value = "1000000000"
 enabled = true
 escrow_required = true
 escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
-kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
-kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+kagemusha_release_policy_path = "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
+kagemusha_artifact_dir = "/var/lib/iroha/taira-validator/kagemusha/v4"
 kagemusha_max_decoded_bytes = 268435456
 
 [torii.account_onboarding]
@@ -146,6 +162,8 @@ discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch", "potr_mldsa"]
 
 [sorafs.discovery.admission]
+# Rendered validator bundles rewrite this to their co-located
+# `sorafs_admission` directory under the canonical install root.
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
 trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
 signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
@@ -204,7 +222,7 @@ max_bytes_per_minute = 104857600
 
 [sumeragi.block]
 max_transactions = 96
-max_payload_bytes = 16777216
+max_payload_bytes = 22020096
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
@@ -213,8 +231,8 @@ proposal_queue_scan_multiplier = 4
 # The validator-bundle renderer scales body_bytes to at least
 # (N + authenticated_non_validator_sources + 1) * body_source_bytes.
 authenticated_non_validator_sources = 2
-body_bytes = 242221056
-body_source_bytes = 34603008
+body_bytes = 315621376
+body_source_bytes = 45088768
 
 [confidential]
 enabled = true

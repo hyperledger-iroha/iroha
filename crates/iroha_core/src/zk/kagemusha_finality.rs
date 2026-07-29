@@ -338,7 +338,7 @@ impl KagemushaTopUpFinalityVerifier {
         }
 
         let roster_reference = &manifest.topup_finality_roster_artifact;
-        let roster_bytes = norito::to_bytes(roster_artifact)
+        let roster_bytes = norito::encode_canonical(roster_artifact)
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
         let roster_size = u64::try_from(roster_bytes.len())
             .map_err(|_| KagemushaTopUpFinalityVerifyError::ArtifactDigestMismatch)?;
@@ -483,8 +483,8 @@ pub fn verify_kagemusha_topup_finality_candidate_evidence_lab_v4(
 fn canonical_sha256<T: norito::codec::Encode>(
     value: &T,
 ) -> Result<[u8; 32], KagemushaTopUpFinalityVerifyError> {
-    let bytes =
-        norito::to_bytes(value).map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
+    let bytes = norito::encode_canonical(value)
+        .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
     Ok(Sha256::digest(bytes).into())
 }
 
@@ -825,7 +825,7 @@ mod tests {
             windows: vec![window],
         };
         mutate_roster(&mut roster);
-        let roster_bytes = norito::to_bytes(&roster).expect("roster bytes");
+        let roster_bytes = norito::encode_canonical(&roster).expect("roster bytes");
         let roster_digest = Sha256::digest(&roster_bytes).into();
         let source_commit = "0123456789abcdef0123456789abcdef01234567";
         let source_tree_sha256 = [0x52; 32];
@@ -1190,6 +1190,30 @@ mod tests {
         )
         .expect("epoch-boundary aggregate signature");
         proof
+    }
+
+    #[test]
+    fn finality_manifest_and_roster_identities_ignore_ambient_norito_layout() {
+        let fixture = fixture();
+        let expected_manifest =
+            canonical_sha256(&fixture.manifest).expect("canonical manifest digest");
+        let expected_roster =
+            norito::encode_canonical(&fixture.roster).expect("canonical roster frame");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&fixture.roster).expect("alternate-layout roster frame"),
+            expected_roster
+        );
+        assert_eq!(
+            norito::encode_canonical(&fixture.roster).expect("ambient-independent roster frame"),
+            expected_roster
+        );
+        assert_eq!(
+            canonical_sha256(&fixture.manifest).expect("ambient-independent manifest digest"),
+            expected_manifest
+        );
     }
 
     #[test]

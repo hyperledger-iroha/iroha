@@ -8,6 +8,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
+
 use super::{
     abi_schema::{json_construction_schema, state_value_kind_for_type, state_value_schema},
     ast::{BinaryOp, PatternBinding, STATE_MAP_GET_INTRINSIC, SumVariant, UnaryOp},
@@ -1006,7 +1008,7 @@ pub enum Instr {
     CoreQueryPage {
         /// Raw `List<View, 64>` handle returned in syscall register r10.
         items_dest: Temp,
-        /// Raw `Option<i64>` next-offset handle returned in syscall register r11.
+        /// Raw `Option<int>` next-offset handle returned in syscall register r11.
         next_offset_dest: Temp,
         entity: ivm_abi::core_query::CoreQueryEntityTagV1,
         offset: Temp,
@@ -1075,6 +1077,12 @@ pub enum Instr {
         prefix: Temp,
         offset: Temp,
         limit: Temp,
+        /// Exact source scan provenance retained through SSA optimization.
+        ///
+        /// Direct `state::keys` calls carry `None`; only a semantically
+        /// validated bounded scan of a declared top-level StateMap carries a
+        /// manifest hint.
+        dynamic_access_hint: Option<DynamicAccessHint>,
     },
     /// Decode a canonical map key from a page returned by `STATE_KEYS`.
     StateMapKeyAt {
@@ -1423,7 +1431,7 @@ fn key_codec_for_type(ty: &Type) -> Option<KeyCodec> {
 
 fn emit_state_value_schema_ref(ctx: &mut LowerCtx, ty: &Type) -> Option<Temp> {
     let schema = state_value_schema(ty)?;
-    let encoded = norito::to_bytes(&schema).ok()?;
+    let encoded = ivm_abi::codec::encode_canonical_norito(&schema).ok()?;
     if encoded.len() > ivm_abi::state_value::MAX_STATE_VALUE_SCHEMA_BYTES {
         return None;
     }
@@ -3524,7 +3532,13 @@ fn lower_function_named(
     }
 
     let tail = lower_block_tail_with_live_after(&mut ctx, &func.body, &mut vars, &BTreeSet::new());
-    if let Some(value) = tail {
+    if semantic::typed_block_diverges(&func.body) {
+        // Explicit returns already terminate every reachable path. Seal the
+        // compiler-only continuation created so lowering can keep walking
+        // unreachable source. SSA validates and budgets the full lowering IR
+        // before removing this dead self-loop.
+        seal_unreachable_continuation(&mut ctx);
+    } else if let Some(value) = tail {
         let tail_ty = func
             .body
             .tail
@@ -3595,7 +3609,7 @@ fn lower_entrypoint_wrapper(
                 func.name
             )
         })?;
-        let encoded_schema = norito::to_bytes(&schema)
+        let encoded_schema = ivm_abi::codec::encode_canonical_norito(&schema)
             .map_err(|error| format!("failed to encode entrypoint argument schema: {error}"))?;
         let schema_temp = ctx.new_temp();
         ctx.current_instr(Instr::DataRef {
@@ -4457,15 +4471,30 @@ fn lower_expression_block(
     ctx: &mut LowerCtx,
     block: &TypedBlock,
     vars: &mut HashMap<String, Temp>,
-) -> Temp {
-    lower_block_tail_with_live_after(ctx, block, vars, &BTreeSet::new()).unwrap_or_else(|| {
-        let unit = ctx.new_temp();
-        ctx.current_instr(Instr::Const {
-            dest: unit,
-            value: 0,
-        });
-        unit
-    })
+) -> Option<Temp> {
+    let value = lower_block_tail_with_live_after(ctx, block, vars, &BTreeSet::new());
+    if semantic::typed_block_diverges(block) {
+        // `return`, `break`, `continue`, or recursively divergent expression
+        // lowering leaves a deliberately unreachable continuation current.
+        // It must not become a fake branch value or a predecessor of the join.
+        // Seal it so every constructed edge remains valid until SSA removes
+        // the dead subgraph after enforcing the raw-lowering budget.
+        seal_unreachable_continuation(ctx);
+        return None;
+    }
+    if value.is_none() {
+        ctx.record_error(
+            "internal error: non-divergent expression block has no value-producing tail".into(),
+        );
+        ctx.current = None;
+    }
+    value
+}
+
+fn seal_unreachable_continuation(ctx: &mut LowerCtx) {
+    if let Some(label) = ctx.current.as_ref().map(|block| block.label) {
+        ctx.finish_current(Terminator::Jump(label));
+    }
 }
 
 fn finish_value_return(ctx: &mut LowerCtx, value: Temp, ty: &Type) {
@@ -4723,7 +4752,7 @@ fn lower_statement(
             body,
             start,
             bound,
-            ..
+            bound_kind,
         } => {
             if let Some(base_name) = state_map_base_name(map)
                 && let Some(spec) = ctx.state_map_configs.get(&base_name).cloned()
@@ -4737,6 +4766,7 @@ fn lower_statement(
                     body,
                     *start,
                     *bound,
+                    *bound_kind,
                     &base_name,
                     &spec.key,
                     &spec.value,
@@ -4886,26 +4916,52 @@ fn lower_state_foreach_map(
     value: &Option<String>,
     _map: &TypedExpr,
     body: &TypedBlock,
-    start: usize,
+    start: u64,
     bound: Option<usize>,
+    bound_kind: semantic::StateMapIterationBoundKind,
     base_name: &str,
     key_ty: &Type,
     value_ty: &Type,
     vars: &mut HashMap<String, Temp>,
     live_after: &BTreeSet<String>,
 ) {
+    // A statically empty scan is a source-level no-op. In particular, do not
+    // issue STATE_KEYS with limit zero: the host would still traverse and
+    // charge for the matching durable-state prefix.
+    if bound == Some(0) {
+        return;
+    }
     let offset = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: offset,
-        value: start.min(i64::MAX as usize) as i64,
+        value: i64::from_le_bytes(start.to_le_bytes()),
     });
     let limit = ctx.new_temp();
     ctx.current_instr(Instr::Const {
         dest: limit,
         value: bound.unwrap_or(0).min(i64::MAX as usize) as i64,
     });
+    let dynamic_access_hint = DynamicAccessHint {
+        base_key: format!("{}{base_name}", semantic::V1_DYNAMIC_ACCESS_BASE_PREFIX),
+        key_type: semantic::type_name(key_ty),
+        bound_kind: bound_kind.as_str().to_owned(),
+        max_keys: bound
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or_default(),
+    };
     lower_state_foreach_page(
-        ctx, key, value, body, offset, limit, base_name, key_ty, value_ty, vars, live_after,
+        ctx,
+        key,
+        value,
+        body,
+        offset,
+        limit,
+        dynamic_access_hint,
+        base_name,
+        key_ty,
+        value_ty,
+        vars,
+        live_after,
     );
 }
 
@@ -4960,6 +5016,7 @@ fn lower_state_foreach_page(
     body: &TypedBlock,
     offset: Temp,
     limit: Temp,
+    dynamic_access_hint: DynamicAccessHint,
     base_name: &str,
     key_ty: &Type,
     value_ty: &Type,
@@ -4973,6 +5030,7 @@ fn lower_state_foreach_page(
         prefix,
         offset,
         limit,
+        dynamic_access_hint: Some(dynamic_access_hint),
     });
 
     let index = ctx.new_temp();
@@ -6045,6 +6103,7 @@ fn lower_surface_builtin_call(
                 prefix,
                 offset,
                 limit,
+                dynamic_access_hint: None,
             });
             dest
         }
@@ -7976,14 +8035,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             });
 
             ctx.start_block(then_label);
-            let then_value = lower_expression_block(ctx, then_branch, &mut vars.clone());
-            copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
-            ctx.finish_current(Terminator::Jump(end_label));
+            if let Some(then_value) = lower_expression_block(ctx, then_branch, &mut vars.clone()) {
+                copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
+                ctx.finish_current(Terminator::Jump(end_label));
+            }
 
             ctx.start_block(else_label);
-            let else_value = lower_expression_block(ctx, else_branch, &mut vars.clone());
-            copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
-            ctx.finish_current(Terminator::Jump(end_label));
+            if let Some(else_value) = lower_expression_block(ctx, else_branch, &mut vars.clone()) {
+                copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
+                ctx.finish_current(Terminator::Jump(end_label));
+            }
 
             ctx.start_block(end_label);
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
@@ -8017,14 +8078,16 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             ctx.start_block(then_label);
             let mut then_vars = vars.clone();
             bind_sum_pattern(ctx, pattern, sum, &mut then_vars);
-            let then_value = lower_expression_block(ctx, then_branch, &mut then_vars);
-            copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
-            ctx.finish_current(Terminator::Jump(end_label));
+            if let Some(then_value) = lower_expression_block(ctx, then_branch, &mut then_vars) {
+                copy_runtime_value_words(ctx, then_value, &expr.ty, &result_words);
+                ctx.finish_current(Terminator::Jump(end_label));
+            }
 
             ctx.start_block(else_label);
-            let else_value = lower_expression_block(ctx, else_branch, &mut vars.clone());
-            copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
-            ctx.finish_current(Terminator::Jump(end_label));
+            if let Some(else_value) = lower_expression_block(ctx, else_branch, &mut vars.clone()) {
+                copy_runtime_value_words(ctx, else_value, &expr.ty, &result_words);
+                ctx.finish_current(Terminator::Jump(end_label));
+            }
 
             ctx.start_block(end_label);
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
@@ -8064,17 +8127,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             ctx.start_block(tag_one_label);
             let mut tag_one_vars = vars.clone();
             bind_sum_pattern(ctx, &tag_one_arm.pattern, sum, &mut tag_one_vars);
-            let tag_one_value = lower_expression_block(ctx, &tag_one_arm.body, &mut tag_one_vars);
-            copy_runtime_value_words(ctx, tag_one_value, &expr.ty, &result_words);
-            ctx.finish_current(Terminator::Jump(end_label));
+            if let Some(tag_one_value) =
+                lower_expression_block(ctx, &tag_one_arm.body, &mut tag_one_vars)
+            {
+                copy_runtime_value_words(ctx, tag_one_value, &expr.ty, &result_words);
+                ctx.finish_current(Terminator::Jump(end_label));
+            }
 
             ctx.start_block(tag_zero_label);
             let mut tag_zero_vars = vars.clone();
             bind_sum_pattern(ctx, &tag_zero_arm.pattern, sum, &mut tag_zero_vars);
-            let tag_zero_value =
-                lower_expression_block(ctx, &tag_zero_arm.body, &mut tag_zero_vars);
-            copy_runtime_value_words(ctx, tag_zero_value, &expr.ty, &result_words);
-            ctx.finish_current(Terminator::Jump(end_label));
+            if let Some(tag_zero_value) =
+                lower_expression_block(ctx, &tag_zero_arm.body, &mut tag_zero_vars)
+            {
+                copy_runtime_value_words(ctx, tag_zero_value, &expr.ty, &result_words);
+                ctx.finish_current(Terminator::Jump(end_label));
+            }
 
             ctx.start_block(end_label);
             rebuild_runtime_value(ctx, &expr.ty, &result_words)
@@ -11209,6 +11277,65 @@ fn either(bool value) -> bool { return value || rhs(); }
     }
 
     #[test]
+    fn state_map_range_offsets_preserve_all_u64_bits() {
+        for (start, end) in [(1_u64 << 63, (1_u64 << 63) + 1), (u64::MAX - 1, u64::MAX)] {
+            let source = format!(
+                r#"
+seiyaku RangeOffsetBits {{
+  state StateMap<int, int> Values;
+
+  view fn scan() -> int {{
+    var int total = 0;
+    for (key, value) in Values.range({start}, {end}) {{
+      total = total + key + value;
+    }}
+    return total;
+  }}
+}}
+"#
+            );
+            let typed = analyze(&parse(&source).expect("parse u64 range offset"))
+                .expect("analyze u64 range offset");
+            let ir = lower(&typed).expect("lower u64 range offset");
+            let function = ir
+                .functions
+                .iter()
+                .find(|function| function.name == "scan")
+                .expect("scan function");
+            let (offset, hint) = function
+                .blocks
+                .iter()
+                .flat_map(|block| block.instrs.iter())
+                .find_map(|instruction| match instruction {
+                    Instr::StateKeys {
+                        offset,
+                        dynamic_access_hint: Some(hint),
+                        ..
+                    } => Some((*offset, hint)),
+                    _ => None,
+                })
+                .expect("bounded StateMap scan");
+            let encoded_offset = function
+                .blocks
+                .iter()
+                .flat_map(|block| block.instrs.iter())
+                .find_map(|instruction| match instruction {
+                    Instr::Const { dest, value } if *dest == offset => Some(*value),
+                    _ => None,
+                })
+                .expect("range offset constant");
+
+            assert_eq!(
+                encoded_offset,
+                i64::from_le_bytes(start.to_le_bytes()),
+                "STATE_KEYS must receive the exact u64 bit pattern"
+            );
+            assert_eq!(hint.bound_kind, "range");
+            assert_eq!(hint.max_keys, 1);
+        }
+    }
+
+    #[test]
     fn nested_loops_do_not_carry_outer_invariants() {
         let src = r#"
             fn f() -> int {
@@ -11255,8 +11382,11 @@ fn either(bool value) -> bool { return value || rhs(); }
         assert_eq!(
             function.blocks.len(),
             2,
-            "return creates one dead continuation"
+            "return creates one sealed dead continuation"
         );
+        assert!(function.blocks.iter().any(|block| {
+            matches!(block.terminator, Terminator::Jump(target) if target == block.label)
+        }));
         assert!(function.blocks.iter().all(|block| {
             block
                 .instrs
@@ -11276,13 +11406,94 @@ fn either(bool value) -> bool { return value || rhs(); }
     fn lower_return() {
         let src = "fn f() -> int { return 1; let x = 2; }";
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
-        // Expect at least a Return terminator in one block, and a following unreachable block
+        // Unreachable source stays in raw lowering IR for budget enforcement,
+        // but is sealed so SSA can validate and prune it deterministically.
         let f = &ir.functions[0];
+        assert_eq!(f.blocks.len(), 2);
         assert!(
             f.blocks
                 .iter()
                 .any(|b| matches!(b.terminator, Terminator::Return(_)))
         );
+    }
+
+    #[test]
+    fn mixed_value_and_divergent_function_tails_have_no_reachable_unit_return() {
+        let source = r#"
+            fn via_if(bool flag) -> int {
+                if flag { 7 } else { return 9; }
+            }
+            fn via_if_let(Option<int> value) -> int {
+                if let Option::some(item) = value { item } else { return 0; }
+            }
+            fn via_match(Option<int> value) -> int {
+                match value {
+                    Option::some(item) => item,
+                    Option::none => { return 0; },
+                }
+            }
+            fn wholly_divergent(bool flag) -> int {
+                if flag { return 1; } else { return 2; }
+            }
+        "#;
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse mixed flow tails"))
+                .expect("analyze mixed flow tails"),
+        )
+        .expect("lower mixed flow tails");
+
+        for name in ["via_if", "via_if_let", "via_match", "wholly_divergent"] {
+            let function = lowered
+                .functions
+                .iter()
+                .find(|function| function.name == name)
+                .expect("lowered mixed-flow function");
+            assert!(
+                function
+                    .blocks
+                    .iter()
+                    .all(|block| !matches!(block.terminator, Terminator::Return(None))),
+                "{name} must not retain even an unreachable synthetic unit return"
+            );
+            let mut pending = vec![function.entry];
+            let mut visited = std::collections::HashSet::new();
+            let mut reachable_returns = 0_usize;
+            while let Some(label) = pending.pop() {
+                if !visited.insert(label) {
+                    continue;
+                }
+                let block = function
+                    .blocks
+                    .iter()
+                    .find(|block| block.label == label)
+                    .expect("CFG edge references a known block");
+                match &block.terminator {
+                    Terminator::Return(None) => {
+                        panic!("{name} has a reachable unit return at {label:?}")
+                    }
+                    Terminator::Return(Some(_))
+                    | Terminator::Return2(_, _)
+                    | Terminator::ReturnN(_) => reachable_returns += 1,
+                    Terminator::Jump(next) => {
+                        assert_ne!(
+                            block.label, *next,
+                            "{name} exposes a compiler-only dead continuation"
+                        );
+                        pending.push(*next);
+                    }
+                    Terminator::Branch {
+                        then_bb, else_bb, ..
+                    } => {
+                        pending.push(*then_bb);
+                        pending.push(*else_bb);
+                    }
+                }
+            }
+            assert!(
+                reachable_returns >= 2,
+                "{name} must preserve both the yielding and explicit-return paths"
+            );
+        }
     }
 
     #[test]

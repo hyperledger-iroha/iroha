@@ -90,7 +90,10 @@ pub struct TouchManifest {
 }
 
 impl TouchManifest {
-    /// Construct a touch manifest from read/write key prefixes with deterministic ordering.
+    /// Construct a canonical touch manifest from read/write key prefixes.
+    ///
+    /// Paths are trimmed, empty paths are discarded, and the remaining paths
+    /// are sorted and deduplicated.
     #[must_use]
     pub fn from_read_write<R, W>(read: R, write: W) -> Self
     where
@@ -104,7 +107,12 @@ impl TouchManifest {
             I: IntoIterator,
             I::Item: Into<String>,
         {
-            let mut values: Vec<String> = iter.into_iter().map(Into::into).collect();
+            let mut values: Vec<String> = iter
+                .into_iter()
+                .map(Into::into)
+                .map(|path: String| path.trim().to_owned())
+                .filter(|path| !path.is_empty())
+                .collect();
             values.sort();
             values.dedup();
             values
@@ -179,10 +187,11 @@ impl AxtDescriptorBuilder {
         W: IntoIterator,
         W::Item: Into<String>,
     {
+        let manifest = TouchManifest::from_read_write(read, write);
         let touch = AxtTouchSpec {
             dsid,
-            read: TouchManifest::from_read_write(read, Vec::<String>::new()).read,
-            write: TouchManifest::from_read_write(Vec::<String>::new(), write).write,
+            read: manifest.read,
+            write: manifest.write,
         };
         self.dsids.insert(dsid);
         self.touches.insert(dsid, touch);
@@ -240,20 +249,20 @@ pub fn proof_matches_manifest(
     if manifest_root.iter().all(|byte| *byte == 0) {
         return false;
     }
-    if let Ok(envelope) = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload) {
-        let Some(binding) = envelope.fastpq_binding.as_ref() else {
-            return false;
-        };
-        return envelope.dsid == dsid
-            && envelope.manifest_root == manifest_root
-            && envelope.manifest_root.iter().any(|byte| *byte != 0)
-            && !envelope.proof.is_empty()
-            && binding.source_dsid == dsid.as_u64()
-            && binding.verifier_id == "fastpq"
-            && binding.verifier_version == "v1"
-            && fastpq_binding_shape_is_concrete(binding);
-    }
-    false
+    let Ok(envelope) = norito::decode_canonical::<AxtProofEnvelope>(&proof.payload) else {
+        return false;
+    };
+    let Some(binding) = envelope.fastpq_binding.as_ref() else {
+        return false;
+    };
+    envelope.dsid == dsid
+        && envelope.manifest_root == manifest_root
+        && envelope.manifest_root.iter().any(|byte| *byte != 0)
+        && !envelope.proof.is_empty()
+        && binding.source_dsid == dsid.as_u64()
+        && binding.verifier_id == "fastpq"
+        && binding.verifier_version == "v1"
+        && fastpq_binding_shape_is_concrete(binding)
 }
 
 fn fastpq_binding_shape_is_concrete(binding: &AxtFastpqBinding) -> bool {
@@ -644,9 +653,8 @@ pub struct AxtEnvelopeRecord {
     /// Handle fragments recorded during execution.
     #[norito(default)]
     pub handles: Vec<AxtHandleFragment>,
-    /// Optional commit height marker for block persistence.
-    #[norito(default)]
-    pub commit_height: Option<u64>,
+    /// Exact height of the block that persists this envelope.
+    pub commit_height: u64,
 }
 
 /// Per-dataspace policy snapshot sourced from the Space Directory/WSV.
@@ -689,11 +697,35 @@ pub struct AxtPolicyBinding {
 )]
 pub struct AxtPolicySnapshot {
     /// Hash-derived snapshot version (truncated to u64 for gauges/telemetry).
-    #[norito(default)]
     pub version: u64,
     /// Ordered bindings for each dataspace.
-    #[norito(default)]
     pub entries: Vec<AxtPolicyBinding>,
+}
+
+/// Errors returned when validating an AXT policy snapshot.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum AxtPolicySnapshotValidationError {
+    /// Snapshot repeats a dataspace identifier.
+    #[error("duplicate policy binding for dataspace {0}")]
+    DuplicateDataspaceId(DataSpaceId),
+    /// Snapshot bindings are not strictly increasing by dataspace identifier.
+    #[error(
+        "policy bindings must be strictly ordered: dataspace {previous} appears before {current}"
+    )]
+    EntriesNotStrictlyOrdered {
+        /// Dataspace identifier immediately before the ordering violation.
+        previous: DataSpaceId,
+        /// Dataspace identifier at the ordering violation.
+        current: DataSpaceId,
+    },
+    /// Snapshot version does not bind the exact canonical entries.
+    #[error("policy snapshot version mismatch: expected {expected}, found {actual}")]
+    VersionMismatch {
+        /// Version computed from the snapshot entries.
+        expected: u64,
+        /// Version advertised by the snapshot.
+        actual: u64,
+    },
 }
 
 impl AxtPolicySnapshot {
@@ -703,20 +735,59 @@ impl AxtPolicySnapshot {
         if entries.is_empty() {
             return 0;
         }
-        let mut sorted_entries = entries.to_vec();
-        sorted_entries.sort_by_key(|binding| binding.dsid);
-        let encoded = encode_adaptive(&sorted_entries);
+        let canonical_entries = entries.to_vec();
+        let encoded = encode_adaptive(&canonical_entries);
         let hash = Hash::new(&encoded);
         let mut truncated = [0u8; 8];
         truncated.copy_from_slice(&hash.as_ref()[..8]);
         u64::from_le_bytes(truncated)
     }
 
-    /// Populate the version field based on the snapshot entries.
-    #[must_use]
-    pub fn with_computed_version(mut self) -> Self {
+    /// Populate the version field and reject non-canonical snapshot entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when entries are duplicated
+    /// or not strictly ordered.
+    pub fn with_computed_version(mut self) -> Result<Self, AxtPolicySnapshotValidationError> {
         self.version = Self::compute_version(&self.entries);
-        self
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Validate canonical binding order and the exact derived snapshot version.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when entries are duplicated,
+    /// not strictly ordered, or do not match the advertised version.
+    pub fn validate(&self) -> Result<(), AxtPolicySnapshotValidationError> {
+        for pair in self.entries.windows(2) {
+            let previous = pair[0].dsid;
+            let current = pair[1].dsid;
+            if previous == current {
+                return Err(AxtPolicySnapshotValidationError::DuplicateDataspaceId(
+                    current,
+                ));
+            }
+            if previous > current {
+                return Err(
+                    AxtPolicySnapshotValidationError::EntriesNotStrictlyOrdered {
+                        previous,
+                        current,
+                    },
+                );
+            }
+        }
+
+        let expected = Self::compute_version(&self.entries);
+        if self.version != expected {
+            return Err(AxtPolicySnapshotValidationError::VersionMismatch {
+                expected,
+                actual: self.version,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -735,9 +806,9 @@ pub struct AxtRejectContext {
     /// Lane associated with the rejection (if known).
     #[norito(default)]
     pub lane: Option<LaneId>,
-    /// Snapshot version advertised by the policy map used for validation.
+    /// Snapshot version advertised by the policy map used for validation, when one was installed.
     #[norito(default)]
-    pub snapshot_version: u64,
+    pub snapshot_version: Option<u64>,
     /// Human-readable detail string for operators.
     #[norito(default)]
     pub detail: String,
@@ -753,9 +824,12 @@ impl core::fmt::Display for AxtRejectContext {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "{} (snapshot={}, lane={:?}, dsid={:?}",
-            self.detail, self.snapshot_version, self.lane, self.dataspace
+            "{} (lane={:?}, dsid={:?}",
+            self.detail, self.lane, self.dataspace
         )?;
+        if let Some(snapshot_version) = self.snapshot_version {
+            write!(f, ", snapshot={snapshot_version}")?;
+        }
         if let Some(era) = self.next_min_handle_era {
             write!(f, ", next_min_handle_era={era}")?;
         }
@@ -876,33 +950,136 @@ pub enum AxtValidationError {
     /// Descriptor repeats a dataspace identifier.
     #[error("duplicate dataspace id {0}")]
     DuplicateDataspaceId(DataSpaceId),
+    /// Descriptor dataspace identifiers are not strictly increasing.
+    #[error("dataspace ids must be strictly ordered: {previous} appears before {current}")]
+    DataspaceIdsNotStrictlyOrdered {
+        /// Dataspace identifier immediately before the ordering violation.
+        previous: DataSpaceId,
+        /// Dataspace identifier at the ordering violation.
+        current: DataSpaceId,
+    },
     /// Touch specification references a dataspace not present in `dsids`.
     #[error("touch references undeclared dataspace {0}")]
     TouchUndeclaredDataspace(DataSpaceId),
     /// Touch specification is duplicated for the same dataspace.
     #[error("duplicate touch entry for dataspace {0}")]
     DuplicateTouch(DataSpaceId),
+    /// Touch specifications are not strictly increasing by dataspace identifier.
+    #[error(
+        "touch entries must be strictly ordered: dataspace {previous} appears before {current}"
+    )]
+    TouchesNotStrictlyOrdered {
+        /// Dataspace identifier immediately before the ordering violation.
+        previous: DataSpaceId,
+        /// Dataspace identifier at the ordering violation.
+        current: DataSpaceId,
+    },
+    /// A declared read path is empty or contains only whitespace.
+    #[error("read path {index} for dataspace {dsid} must not be empty")]
+    EmptyReadPath {
+        /// Dataspace containing the invalid path.
+        dsid: DataSpaceId,
+        /// Zero-based path index.
+        index: usize,
+    },
+    /// A declared read path has leading or trailing whitespace.
+    #[error("read path {index} for dataspace {dsid} must be trimmed")]
+    UntrimmedReadPath {
+        /// Dataspace containing the invalid path.
+        dsid: DataSpaceId,
+        /// Zero-based path index.
+        index: usize,
+    },
+    /// A declared read path duplicates an earlier path.
+    #[error("read path {duplicate_index} for dataspace {dsid} duplicates path {first_index}")]
+    DuplicateReadPath {
+        /// Dataspace containing the duplicate path.
+        dsid: DataSpaceId,
+        /// Zero-based index of the first occurrence.
+        first_index: usize,
+        /// Zero-based index of the duplicate occurrence.
+        duplicate_index: usize,
+    },
+    /// Declared read paths are not strictly lexicographically increasing.
+    #[error(
+        "read paths for dataspace {dsid} must be strictly ordered: path {previous_index} appears before path {current_index}"
+    )]
+    ReadPathsNotStrictlyOrdered {
+        /// Dataspace containing the ordering violation.
+        dsid: DataSpaceId,
+        /// Zero-based index immediately before the ordering violation.
+        previous_index: usize,
+        /// Zero-based index at the ordering violation.
+        current_index: usize,
+    },
+    /// A declared write path is empty or contains only whitespace.
+    #[error("write path {index} for dataspace {dsid} must not be empty")]
+    EmptyWritePath {
+        /// Dataspace containing the invalid path.
+        dsid: DataSpaceId,
+        /// Zero-based path index.
+        index: usize,
+    },
+    /// A declared write path has leading or trailing whitespace.
+    #[error("write path {index} for dataspace {dsid} must be trimmed")]
+    UntrimmedWritePath {
+        /// Dataspace containing the invalid path.
+        dsid: DataSpaceId,
+        /// Zero-based path index.
+        index: usize,
+    },
+    /// A declared write path duplicates an earlier path.
+    #[error("write path {duplicate_index} for dataspace {dsid} duplicates path {first_index}")]
+    DuplicateWritePath {
+        /// Dataspace containing the duplicate path.
+        dsid: DataSpaceId,
+        /// Zero-based index of the first occurrence.
+        first_index: usize,
+        /// Zero-based index of the duplicate occurrence.
+        duplicate_index: usize,
+    },
+    /// Declared write paths are not strictly lexicographically increasing.
+    #[error(
+        "write paths for dataspace {dsid} must be strictly ordered: path {previous_index} appears before path {current_index}"
+    )]
+    WritePathsNotStrictlyOrdered {
+        /// Dataspace containing the ordering violation.
+        dsid: DataSpaceId,
+        /// Zero-based index immediately before the ordering violation.
+        previous_index: usize,
+        /// Zero-based index at the ordering violation.
+        current_index: usize,
+    },
 }
 
-/// Validate basic invariants of an AXT descriptor.
+/// Validate the canonical invariants of an AXT descriptor.
 ///
 /// # Errors
 ///
-/// Returns [`AxtValidationError`] when the descriptor is empty, contains duplicate
-/// dataspaces, or references undeclared/duplicate touches.
+/// Returns [`AxtValidationError`] when dataspace or touch entries are empty,
+/// undeclared, duplicated, or out of order, or when read/write paths are empty,
+/// untrimmed, duplicated, or out of order.
 pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), AxtValidationError> {
     if descriptor.dsids.is_empty() {
         return Err(AxtValidationError::EmptyDataspaceList);
     }
 
-    let mut seen_dsids = std::collections::BTreeSet::new();
+    let mut seen_dsids = BTreeSet::new();
     for dsid in &descriptor.dsids {
         if !seen_dsids.insert(*dsid) {
             return Err(AxtValidationError::DuplicateDataspaceId(*dsid));
         }
     }
+    for pair in descriptor.dsids.windows(2) {
+        if pair[0] >= pair[1] {
+            return Err(AxtValidationError::DataspaceIdsNotStrictlyOrdered {
+                previous: pair[0],
+                current: pair[1],
+            });
+        }
+    }
 
-    let mut seen_touches = std::collections::BTreeSet::new();
+    let mut seen_touches = BTreeSet::new();
     for touch in &descriptor.touches {
         if !seen_dsids.contains(&touch.dsid) {
             return Err(AxtValidationError::TouchUndeclaredDataspace(touch.dsid));
@@ -911,7 +1088,77 @@ pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), AxtValidati
             return Err(AxtValidationError::DuplicateTouch(touch.dsid));
         }
     }
+    for pair in descriptor.touches.windows(2) {
+        if pair[0].dsid >= pair[1].dsid {
+            return Err(AxtValidationError::TouchesNotStrictlyOrdered {
+                previous: pair[0].dsid,
+                current: pair[1].dsid,
+            });
+        }
+    }
+    for touch in &descriptor.touches {
+        validate_read_paths(touch.dsid, &touch.read)?;
+        validate_write_paths(touch.dsid, &touch.write)?;
+    }
 
+    Ok(())
+}
+
+fn validate_read_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtValidationError> {
+    let mut first_indices = BTreeMap::new();
+    for (index, path) in paths.iter().enumerate() {
+        if path.trim().is_empty() {
+            return Err(AxtValidationError::EmptyReadPath { dsid, index });
+        }
+        if path.trim() != path {
+            return Err(AxtValidationError::UntrimmedReadPath { dsid, index });
+        }
+        if let Some(first_index) = first_indices.insert(path.as_str(), index) {
+            return Err(AxtValidationError::DuplicateReadPath {
+                dsid,
+                first_index,
+                duplicate_index: index,
+            });
+        }
+    }
+    for (previous_index, pair) in paths.windows(2).enumerate() {
+        if pair[0] >= pair[1] {
+            return Err(AxtValidationError::ReadPathsNotStrictlyOrdered {
+                dsid,
+                previous_index,
+                current_index: previous_index + 1,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_write_paths(dsid: DataSpaceId, paths: &[String]) -> Result<(), AxtValidationError> {
+    let mut first_indices = BTreeMap::new();
+    for (index, path) in paths.iter().enumerate() {
+        if path.trim().is_empty() {
+            return Err(AxtValidationError::EmptyWritePath { dsid, index });
+        }
+        if path.trim() != path {
+            return Err(AxtValidationError::UntrimmedWritePath { dsid, index });
+        }
+        if let Some(first_index) = first_indices.insert(path.as_str(), index) {
+            return Err(AxtValidationError::DuplicateWritePath {
+                dsid,
+                first_index,
+                duplicate_index: index,
+            });
+        }
+    }
+    for (previous_index, pair) in paths.windows(2).enumerate() {
+        if pair[0] >= pair[1] {
+            return Err(AxtValidationError::WritePathsNotStrictlyOrdered {
+                dsid,
+                previous_index,
+                current_index: previous_index + 1,
+            });
+        }
+    }
     Ok(())
 }
 
@@ -950,6 +1197,32 @@ mod tests {
             target_dsids: vec![dsid.as_u64()],
             effect_binding: None,
         }
+    }
+
+    fn descriptor_with_paths(read: &[&str], write: &[&str]) -> AxtDescriptor {
+        let dsid = DataSpaceId::new(1);
+        AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![AxtTouchSpec {
+                dsid,
+                read: read.iter().map(|path| (*path).to_owned()).collect(),
+                write: write.iter().map(|path| (*path).to_owned()).collect(),
+            }],
+        }
+    }
+
+    #[test]
+    fn touch_manifest_constructor_canonicalizes_paths() {
+        let manifest = TouchManifest::from_read_write(
+            [" zebra ", "", "alpha", "alpha", " \t "],
+            [" zeta", "\n", "beta ", "beta", "alpha"],
+        );
+
+        assert_eq!(manifest.read, vec!["alpha".to_owned(), "zebra".to_owned()]);
+        assert_eq!(
+            manifest.write,
+            vec!["alpha".to_owned(), "beta".to_owned(), "zeta".to_owned()]
+        );
     }
 
     #[test]
@@ -1007,6 +1280,114 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_validation_rejects_noncanonical_entry_order() {
+        let first = DataSpaceId::new(2);
+        let second = DataSpaceId::new(1);
+        let unsorted_dsids = AxtDescriptor {
+            dsids: vec![first, second],
+            touches: Vec::new(),
+        };
+        assert_eq!(
+            validate_descriptor(&unsorted_dsids),
+            Err(AxtValidationError::DataspaceIdsNotStrictlyOrdered {
+                previous: first,
+                current: second,
+            })
+        );
+
+        let unsorted_touches = AxtDescriptor {
+            dsids: vec![second, first],
+            touches: vec![
+                AxtTouchSpec {
+                    dsid: first,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                },
+                AxtTouchSpec {
+                    dsid: second,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                },
+            ],
+        };
+        assert_eq!(
+            validate_descriptor(&unsorted_touches),
+            Err(AxtValidationError::TouchesNotStrictlyOrdered {
+                previous: first,
+                current: second,
+            })
+        );
+    }
+
+    #[test]
+    fn descriptor_validation_rejects_noncanonical_read_paths() {
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&[" \t "], &[])),
+            Err(AxtValidationError::EmptyReadPath {
+                dsid: DataSpaceId::new(1),
+                index: 0,
+            })
+        );
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&[" orders "], &[])),
+            Err(AxtValidationError::UntrimmedReadPath {
+                dsid: DataSpaceId::new(1),
+                index: 0,
+            })
+        );
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&["orders", "orders"], &[])),
+            Err(AxtValidationError::DuplicateReadPath {
+                dsid: DataSpaceId::new(1),
+                first_index: 0,
+                duplicate_index: 1,
+            })
+        );
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&["zebra", "alpha"], &[])),
+            Err(AxtValidationError::ReadPathsNotStrictlyOrdered {
+                dsid: DataSpaceId::new(1),
+                previous_index: 0,
+                current_index: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn descriptor_validation_rejects_noncanonical_write_paths() {
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&[], &["\n"])),
+            Err(AxtValidationError::EmptyWritePath {
+                dsid: DataSpaceId::new(1),
+                index: 0,
+            })
+        );
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&[], &[" ledger "])),
+            Err(AxtValidationError::UntrimmedWritePath {
+                dsid: DataSpaceId::new(1),
+                index: 0,
+            })
+        );
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&[], &["ledger", "ledger"])),
+            Err(AxtValidationError::DuplicateWritePath {
+                dsid: DataSpaceId::new(1),
+                first_index: 0,
+                duplicate_index: 1,
+            })
+        );
+        assert_eq!(
+            validate_descriptor(&descriptor_with_paths(&[], &["zebra", "alpha"])),
+            Err(AxtValidationError::WritePathsNotStrictlyOrdered {
+                dsid: DataSpaceId::new(1),
+                previous_index: 0,
+                current_index: 1,
+            })
+        );
+    }
+
+    #[test]
     fn replay_record_zeroed_slots_are_expired() {
         let record = AxtReplayRecord {
             dataspace: DataSpaceId::new(1),
@@ -1044,6 +1425,16 @@ mod tests {
 
     #[test]
     fn envelope_roundtrips_through_norito() {
+        #[derive(Encode)]
+        struct EnvelopeWithoutCommitHeight {
+            binding: AxtBinding,
+            lane: LaneId,
+            descriptor: AxtDescriptor,
+            touches: Vec<AxtTouchFragment>,
+            proofs: Vec<AxtProofFragment>,
+            handles: Vec<AxtHandleFragment>,
+        }
+
         let dsid = DataSpaceId::new(11);
         let descriptor = sample_descriptor(dsid);
         let binding = AxtBinding::new([0xAB; 32]);
@@ -1116,7 +1507,7 @@ mod tests {
                 amount: Some(Quantity::from(200_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(5),
+            commit_height: 5,
         };
 
         let bytes = to_bytes(&envelope).expect("encode envelope");
@@ -1124,6 +1515,137 @@ mod tests {
         assert_eq!(decoded, envelope);
         assert_eq!(decoded.binding.as_bytes(), &binding.into_array());
         assert_eq!(decoded.descriptor, descriptor);
+
+        let missing_commit_height = EnvelopeWithoutCommitHeight {
+            binding: envelope.binding,
+            lane: envelope.lane,
+            descriptor: envelope.descriptor.clone(),
+            touches: envelope.touches.clone(),
+            proofs: envelope.proofs.clone(),
+            handles: envelope.handles.clone(),
+        };
+        let missing_commit_height_bytes =
+            to_bytes(&missing_commit_height).expect("encode omitted-height fixture");
+        assert!(
+            decode_from_bytes::<AxtEnvelopeRecord>(&missing_commit_height_bytes).is_err(),
+            "commit_height is a required V1 wire field"
+        );
+    }
+
+    #[test]
+    fn policy_snapshot_validation_rejects_order_duplicates_and_stale_versions() {
+        #[derive(Encode)]
+        struct SnapshotWithoutVersion {
+            entries: Vec<AxtPolicyBinding>,
+        }
+
+        #[derive(Encode)]
+        struct SnapshotWithoutEntries {
+            version: u64,
+        }
+
+        let policy = AxtPolicyEntry {
+            manifest_root: [0x42; 32],
+            target_lane: LaneId::new(1),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 1,
+        };
+        let first = AxtPolicyBinding {
+            dsid: DataSpaceId::new(1),
+            policy,
+        };
+        let second = AxtPolicyBinding {
+            dsid: DataSpaceId::new(2),
+            policy,
+        };
+
+        let entries = vec![first, second];
+        let canonical = AxtPolicySnapshot {
+            version: AxtPolicySnapshot::compute_version(&entries),
+            entries,
+        };
+        assert_eq!(canonical.validate(), Ok(()));
+        assert_eq!(AxtPolicySnapshot::default().validate(), Ok(()));
+        assert!(
+            decode_from_bytes::<AxtPolicySnapshot>(
+                &to_bytes(&SnapshotWithoutVersion {
+                    entries: canonical.entries.clone(),
+                })
+                .expect("encode missing-version snapshot")
+            )
+            .is_err(),
+            "snapshot version is a required V1 wire field"
+        );
+        assert!(
+            decode_from_bytes::<AxtPolicySnapshot>(
+                &to_bytes(&SnapshotWithoutEntries {
+                    version: canonical.version,
+                })
+                .expect("encode missing-entries snapshot")
+            )
+            .is_err(),
+            "snapshot entries are a required V1 wire field"
+        );
+
+        let duplicate_entries = vec![first, first];
+        let duplicate = AxtPolicySnapshot {
+            version: AxtPolicySnapshot::compute_version(&duplicate_entries),
+            entries: duplicate_entries,
+        };
+        assert_eq!(
+            duplicate.validate(),
+            Err(AxtPolicySnapshotValidationError::DuplicateDataspaceId(
+                first.dsid
+            ))
+        );
+
+        let reversed_entries = vec![second, first];
+        let reversed = AxtPolicySnapshot {
+            version: AxtPolicySnapshot::compute_version(&reversed_entries),
+            entries: reversed_entries,
+        };
+        assert_ne!(
+            canonical.version, reversed.version,
+            "snapshot versions must bind the exact entry order"
+        );
+        assert_eq!(
+            reversed.validate(),
+            Err(
+                AxtPolicySnapshotValidationError::EntriesNotStrictlyOrdered {
+                    previous: second.dsid,
+                    current: first.dsid,
+                }
+            )
+        );
+        assert!(matches!(
+            reversed.clone().with_computed_version(),
+            Err(AxtPolicySnapshotValidationError::EntriesNotStrictlyOrdered { .. })
+        ));
+
+        let zero_version = AxtPolicySnapshot {
+            version: 0,
+            entries: canonical.entries.clone(),
+        };
+        assert_eq!(
+            zero_version.validate(),
+            Err(AxtPolicySnapshotValidationError::VersionMismatch {
+                expected: canonical.version,
+                actual: 0,
+            })
+        );
+
+        let stale = AxtPolicySnapshot {
+            version: canonical.version.wrapping_add(1),
+            entries: canonical.entries.clone(),
+        };
+        assert_eq!(
+            stale.validate(),
+            Err(AxtPolicySnapshotValidationError::VersionMismatch {
+                expected: canonical.version,
+                actual: stale.version,
+            })
+        );
     }
 
     #[test]
@@ -1170,6 +1692,70 @@ mod tests {
             expiry_slot: Some(5),
         };
         assert!(!proof_matches_manifest(&raw_proof, dsid, manifest_root));
+    }
+
+    #[test]
+    fn proof_matches_manifest_rejects_alternate_layout_and_restores_flags() {
+        let dsid = DataSpaceId::new(21);
+        let manifest_root = [0xD2; 32];
+        let envelope = AxtProofEnvelope {
+            dsid,
+            manifest_root,
+            da_commitment: None,
+            proof: vec![0xCC],
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
+            committed_amount: None,
+            amount_commitment: None,
+        };
+        let default_flags = norito::default_encode_flags();
+        let alternate_flags = default_flags & !norito::core::header_flags::COMPACT_LEN;
+        assert_ne!(alternate_flags, default_flags);
+        let prior_flags = norito::core::effective_decode_flags();
+
+        let canonical_payload = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(default_flags);
+            norito::to_bytes(&envelope).expect("encode canonical envelope")
+        };
+        let alternate_payload = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("encode alternate-layout envelope")
+        };
+        assert_ne!(alternate_payload, canonical_payload);
+
+        let canonical_proof = ProofBlob {
+            payload: canonical_payload,
+            expiry_slot: None,
+        };
+        let alternate_proof = ProofBlob {
+            payload: alternate_payload,
+            expiry_slot: None,
+        };
+        {
+            let _caller_guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                norito::core::effective_decode_flags(),
+                Some(alternate_flags)
+            );
+            assert!(proof_matches_manifest(
+                &canonical_proof,
+                dsid,
+                manifest_root
+            ));
+            assert_eq!(
+                norito::core::effective_decode_flags(),
+                Some(alternate_flags)
+            );
+            assert!(!proof_matches_manifest(
+                &alternate_proof,
+                dsid,
+                manifest_root
+            ));
+            assert_eq!(
+                norito::core::effective_decode_flags(),
+                Some(alternate_flags)
+            );
+        }
+        assert_eq!(norito::core::effective_decode_flags(), prior_flags);
     }
 
     #[test]

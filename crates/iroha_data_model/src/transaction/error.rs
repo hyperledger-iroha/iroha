@@ -142,8 +142,8 @@ mod model {
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for TransactionRejectionReason {
     fn json_serialize(&self, out: &mut String) {
-        let bytes = norito::to_bytes(self)
-            .expect("TransactionRejectionReason Norito serialization must succeed");
+        let bytes = norito::encode_canonical(self)
+            .expect("TransactionRejectionReason canonical Norito serialization must succeed");
         let encoded = STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
@@ -158,9 +158,7 @@ impl norito::json::JsonDeserialize for TransactionRejectionReason {
         let bytes = STANDARD
             .decode(encoded.as_str())
             .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        let archived = norito::from_bytes::<TransactionRejectionReason>(&bytes)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
+        norito::decode_canonical::<TransactionRejectionReason>(&bytes)
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
@@ -235,6 +233,35 @@ pub mod prelude {
 mod tests {
     use super::*;
     use crate::{Level, isi::Log};
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn rejection_reason_json_is_canonical_and_ambient_independent() {
+        let reason = TransactionRejectionReason::IvmExecution(IvmExecutionFail {
+            reason: "deterministic failure".to_owned(),
+        });
+        let canonical_json =
+            norito::json::to_json(&reason).expect("encode canonical rejection JSON");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                norito::json::to_json(&reason)
+                    .expect("encode rejection JSON under alternate ambient layout"),
+                canonical_json
+            );
+        }
+
+        let alternate_frame = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&reason).expect("encode alternate-layout rejection reason")
+        };
+        let alternate_json = norito::json::to_json(&STANDARD.encode(alternate_frame))
+            .expect("encode alternate rejection frame as JSON string");
+        norito::json::from_json::<TransactionRejectionReason>(&alternate_json)
+            .expect_err("alternate-layout rejection JSON must be rejected");
+    }
 
     #[test]
     fn instruction_execution_fail_equality() {

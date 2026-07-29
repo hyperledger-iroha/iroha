@@ -5,8 +5,9 @@
 //! linkable ring-signature group, hash, transcript, and wire unspecified.
 //! This module closes Phase V to an LSAG instance over prime-order
 //! Ristretto255 with SHA3-512 and supplies the holder-possession Schnorr
-//! component composed with the admission relation. It is an Iroha
-//! experimental profile and is not wire-compatible with the paper prototype.
+//! component composed with the admission relation. This module defines the
+//! sole Iroha first-release testnet profile; no paper-prototype or legacy wire
+//! is admitted.
 //!
 //! Batch admission composes an exact low-s ES256 credential relation, a
 //! setup-free masked relaxed-R1CS proof, and one transcript-bound Ristretto
@@ -48,7 +49,10 @@ use sha3::{Digest, Sha3_256, Sha3_512};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
-use super::p256::{P256EngineError, TranscriptBindingV1};
+use super::{
+    p256::{P256EngineError, TranscriptBindingV1},
+    prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
+};
 
 /// Pinned source used for the Iroha ZK-AMS workflow and relation.
 pub const ZK_AMS_SOURCE_PROFILE_V1: &[u8] = b"arxiv:2602.16130v2:algorithms-1-4:appendices-a-c";
@@ -79,8 +83,10 @@ pub const MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1: usize = 256;
 /// Hard cap checked before the composed batch proof is decoded.
 pub const MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1: usize =
     MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1
-        + 8 * MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1
+        + ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 * MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1
         + 4 * 1024;
+/// Largest atomic admission batch in the first-release profile.
+pub const ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1: usize = 8;
 
 const RANDOM_REJECTION_ATTEMPTS: u32 = 1 << 16;
 const TRANSCRIPT_VERSION_V1: u8 = 1;
@@ -129,6 +135,12 @@ pub enum ZkAmsErrorV1 {
     /// The supplied key image does not derive from the selected seed secret.
     #[error("ZK-AMS key image does not match the selected seed secret")]
     KeyImageMismatch,
+    /// The operating-system or caller-supplied cryptographic RNG failed.
+    #[error("ZK-AMS cryptographic random source is unavailable")]
+    RandomnessUnavailable,
+    /// The random source emitted a catastrophic constant or short-period prefix.
+    #[error("ZK-AMS cryptographic random source failed its health check")]
+    RandomnessHealthCheckFailed,
     /// The random source failed to yield a canonical nonzero scalar.
     #[error("ZK-AMS random scalar rejection sampling exhausted its work bound")]
     RandomnessExhausted,
@@ -225,7 +237,8 @@ impl ZkAmsSeedSecretV1 {
     /// Returns an error when the random source does not produce an admitted
     /// canonical scalar within the fixed work bound.
     pub fn generate<R: CryptoRng + RngCore>(rng: &mut R) -> Result<Self, ZkAmsErrorV1> {
-        let scalar = random_nonzero_scalar(rng)?;
+        let mut checked_rng = health_checked_zk_ams_rng_v1(rng)?;
+        let scalar = random_nonzero_scalar(&mut checked_rng)?;
         let mut bytes = scalar.to_bytes();
         let secret = Self::from_bytes(bytes);
         bytes.zeroize();
@@ -287,7 +300,8 @@ impl Zeroize for ZkAmsAdmissionPossessionProofWireV1 {
 struct ZkAmsBatchAdmissionProofWireV1 {
     version: u8,
     relation_proof: Vec<u8>,
-    possession_proofs: Vec<Vec<u8>>,
+    possession_proofs:
+        [Option<ZkAmsAdmissionPossessionProofWireV1>; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
 }
 
 impl Zeroize for ZkAmsBatchAdmissionProofWireV1 {
@@ -296,6 +310,62 @@ impl Zeroize for ZkAmsBatchAdmissionProofWireV1 {
         self.relation_proof.zeroize();
         self.possession_proofs.zeroize();
     }
+}
+
+fn zk_ams_lsag_decode_limits(ring_size: usize, payload_len: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        ring_size,
+        payload_len,
+        ring_size,
+        MAX_ZK_AMS_LSAG_PROOF_BYTES_V1.saturating_mul(4),
+        8,
+    )
+}
+
+fn zk_ams_possession_decode_limits(payload_len: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        0,
+        payload_len,
+        0,
+        MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1.saturating_mul(4),
+        8,
+    )
+}
+
+fn zk_ams_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
+    // The only variable-length member is the masked-relation byte string.
+    // Possession proofs occupy a fixed eight-slot Option array, so no nested
+    // attacker-selected vector count can amplify allocation.
+    norito::DecodeLimits::new(
+        MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+        payload_len,
+        MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
+        MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1.saturating_mul(4),
+        16,
+    )
+}
+
+fn decode_zk_ams_possession_wire_v1(
+    proof_bytes: &[u8],
+) -> Result<ZkAmsAdmissionPossessionProofWireV1, ZkAmsErrorV1> {
+    if proof_bytes.len() > MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1 {
+        return Err(ZkAmsErrorV1::PossessionProofTooLarge {
+            actual: proof_bytes.len(),
+            max: MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1,
+        });
+    }
+    let proof =
+        norito::codec::decode_exact_from_slice_with_limits::<ZkAmsAdmissionPossessionProofWireV1>(
+            proof_bytes,
+            zk_ams_possession_decode_limits(proof_bytes.len()),
+        )
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    if proof.version != ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1
+        || norito::codec::encode_adaptive(&proof) != proof_bytes
+    {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    Ok(proof)
 }
 
 /// Borrowed secret material for one ordered admission anchor.
@@ -502,34 +572,47 @@ pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let relation_context = relation_context(binding);
-    let relation_proof = {
-        let mut adapter = MaskedRandomAdapter(rng);
-        prove_zk_ams_admission_relation_v1(
+    let mut checked_rng = health_checked_zk_ams_rng_v1(rng)?;
+    let (relation_result, randomness_unavailable) = {
+        let mut adapter = MaskedRandomAdapter {
+            source: &mut checked_rng,
+            randomness_unavailable: false,
+        };
+        let result = prove_zk_ams_admission_relation_v1(
             &relation_context,
             &public_inputs,
             &relation_witnesses,
             config,
             &mut adapter,
-        )
-        .map_err(|_| ZkAmsErrorV1::AdmissionRelation)?
+        );
+        (result, adapter.randomness_unavailable)
+    };
+    let relation_proof = match relation_result {
+        Ok(proof) => proof,
+        Err(_) if randomness_unavailable => return Err(ZkAmsErrorV1::RandomnessUnavailable),
+        Err(_) => return Err(ZkAmsErrorV1::AdmissionRelation),
     };
     let relation_digest = relation_proof_digest(&relation_proof);
-    let possession_proofs = witnesses
+    let encoded_possession_proofs = witnesses
         .iter()
         .zip(batch.anchors.iter())
         .enumerate()
         .map(|(index, (witness, anchor))| {
-            prove_zk_ams_admission_possession_v1(
+            prove_zk_ams_admission_possession_with_rng_v1(
                 binding,
                 u32::try_from(index).expect("batch is bounded to eight"),
                 *anchor.phc_hash.as_bytes(),
                 *anchor.seed_public_key.as_bytes(),
                 relation_digest,
                 witness.seed_secret,
-                rng,
+                &mut checked_rng,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut possession_proofs = core::array::from_fn(|_| None);
+    for (slot, encoded) in possession_proofs.iter_mut().zip(encoded_possession_proofs) {
+        *slot = Some(decode_zk_ams_possession_wire_v1(&encoded)?);
+    }
     let proof = Zeroizing::new(ZkAmsBatchAdmissionProofWireV1 {
         version: ZK_AMS_LSAG_PROOF_VERSION_V1,
         relation_proof,
@@ -571,10 +654,19 @@ pub fn verify_zk_ams_batch_admission_v1(
     let (public_inputs, _) = build_admission_public_inputs(statement, binding)?;
     let batch = batch_action(statement)?;
     let proof =
-        norito::codec::decode_exact_from_slice::<ZkAmsBatchAdmissionProofWireV1>(proof_bytes)
-            .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+        norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
+            proof_bytes,
+            zk_ams_batch_decode_limits(proof_bytes.len()),
+        )
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    let anchor_count = batch.anchors.len();
     if proof.version != ZK_AMS_LSAG_PROOF_VERSION_V1
-        || proof.possession_proofs.len() != batch.anchors.len()
+        || proof.possession_proofs[..anchor_count]
+            .iter()
+            .any(Option::is_none)
+        || proof.possession_proofs[anchor_count..]
+            .iter()
+            .any(Option::is_some)
         || norito::codec::encode_adaptive(&proof) != proof_bytes
     {
         return Err(ZkAmsErrorV1::InvalidProofEncoding);
@@ -586,16 +678,18 @@ pub fn verify_zk_ams_batch_admission_v1(
     for (index, (anchor, possession)) in batch
         .anchors
         .iter()
-        .zip(&proof.possession_proofs)
+        .zip(&proof.possession_proofs[..anchor_count])
         .enumerate()
     {
-        verify_zk_ams_admission_possession_v1(
+        verify_zk_ams_admission_possession_wire_v1(
             binding,
             u32::try_from(index).expect("batch is bounded to eight"),
             *anchor.phc_hash.as_bytes(),
             *anchor.seed_public_key.as_bytes(),
             relation_digest,
-            possession,
+            possession
+                .as_ref()
+                .ok_or(ZkAmsErrorV1::InvalidProofEncoding)?,
         )?;
     }
     Ok(VerifiedZkAmsBatchAdmissionV1 {
@@ -649,12 +743,13 @@ pub fn sign_zk_ams_provision_v1<R: CryptoRng + RngCore>(
         return Err(ZkAmsErrorV1::KeyImageMismatch);
     }
 
+    let mut checked_rng = health_checked_zk_ams_rng_v1(rng)?;
     let transcript = LsagTranscriptV1::new(binding, ring, key_image_bytes)?;
-    let mut alpha = Zeroizing::new(random_nonzero_scalar(rng)?);
+    let mut alpha = Zeroizing::new(random_nonzero_scalar(&mut checked_rng)?);
     let mut responses = Zeroizing::new(vec![Scalar::ZERO; ring_size]);
     for (index, response) in responses.iter_mut().enumerate() {
         if index != signer_index {
-            *response = random_nonzero_scalar(rng)?;
+            *response = random_nonzero_scalar(&mut checked_rng)?;
         }
     }
     let mut challenges = Zeroizing::new(vec![Scalar::ZERO; ring_size]);
@@ -744,6 +839,59 @@ pub fn prove_zk_ams_admission_possession_v1<R: CryptoRng + RngCore>(
     secret: &ZkAmsSeedSecretV1,
     rng: &mut R,
 ) -> Result<Vec<u8>, ZkAmsErrorV1> {
+    let secret_scalar = validate_admission_possession_inputs_v1(
+        binding,
+        phc_hash,
+        seed_public_key,
+        relation_proof_digest,
+        secret,
+    )?;
+    let mut checked_rng = health_checked_zk_ams_rng_v1(rng)?;
+    prove_zk_ams_admission_possession_validated_v1(
+        binding,
+        anchor_index,
+        phc_hash,
+        seed_public_key,
+        relation_proof_digest,
+        &secret_scalar,
+        &mut checked_rng,
+    )
+}
+
+fn prove_zk_ams_admission_possession_with_rng_v1<R: CryptoRng + RngCore>(
+    binding: &TranscriptBindingV1<'_>,
+    anchor_index: u32,
+    phc_hash: [u8; 32],
+    seed_public_key: [u8; 32],
+    relation_proof_digest: [u8; 32],
+    secret: &ZkAmsSeedSecretV1,
+    rng: &mut R,
+) -> Result<Vec<u8>, ZkAmsErrorV1> {
+    let secret_scalar = validate_admission_possession_inputs_v1(
+        binding,
+        phc_hash,
+        seed_public_key,
+        relation_proof_digest,
+        secret,
+    )?;
+    prove_zk_ams_admission_possession_validated_v1(
+        binding,
+        anchor_index,
+        phc_hash,
+        seed_public_key,
+        relation_proof_digest,
+        &secret_scalar,
+        rng,
+    )
+}
+
+fn validate_admission_possession_inputs_v1(
+    binding: &TranscriptBindingV1<'_>,
+    phc_hash: [u8; 32],
+    seed_public_key: [u8; 32],
+    relation_proof_digest: [u8; 32],
+    secret: &ZkAmsSeedSecretV1,
+) -> Result<Zeroizing<Scalar>, ZkAmsErrorV1> {
     binding.validate()?;
     if phc_hash == [0; 32] || relation_proof_digest == [0; 32] {
         return Err(ZkAmsErrorV1::InvalidBinding);
@@ -753,6 +901,18 @@ pub fn prove_zk_ams_admission_possession_v1<R: CryptoRng + RngCore>(
     if *secret_scalar * RISTRETTO_BASEPOINT_POINT != public {
         return Err(ZkAmsErrorV1::SignerPublicKeyMismatch);
     }
+    Ok(secret_scalar)
+}
+
+fn prove_zk_ams_admission_possession_validated_v1<R: CryptoRng + RngCore>(
+    binding: &TranscriptBindingV1<'_>,
+    anchor_index: u32,
+    phc_hash: [u8; 32],
+    seed_public_key: [u8; 32],
+    relation_proof_digest: [u8; 32],
+    secret_scalar: &Scalar,
+    rng: &mut R,
+) -> Result<Vec<u8>, ZkAmsErrorV1> {
     let nonce = Zeroizing::new(random_nonzero_scalar(rng)?);
     let commitment = *nonce * RISTRETTO_BASEPOINT_POINT;
     let challenge = admission_possession_challenge(
@@ -801,23 +961,31 @@ pub fn verify_zk_ams_admission_possession_v1(
     relation_proof_digest: [u8; 32],
     proof_bytes: &[u8],
 ) -> Result<(), ZkAmsErrorV1> {
+    let proof = decode_zk_ams_possession_wire_v1(proof_bytes)?;
+    verify_zk_ams_admission_possession_wire_v1(
+        binding,
+        anchor_index,
+        phc_hash,
+        seed_public_key,
+        relation_proof_digest,
+        &proof,
+    )
+}
+
+fn verify_zk_ams_admission_possession_wire_v1(
+    binding: &TranscriptBindingV1<'_>,
+    anchor_index: u32,
+    phc_hash: [u8; 32],
+    seed_public_key: [u8; 32],
+    relation_proof_digest: [u8; 32],
+    proof: &ZkAmsAdmissionPossessionProofWireV1,
+) -> Result<(), ZkAmsErrorV1> {
     binding.validate()?;
     if phc_hash == [0; 32] || relation_proof_digest == [0; 32] {
         return Err(ZkAmsErrorV1::InvalidBinding);
     }
-    if proof_bytes.len() > MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1 {
-        return Err(ZkAmsErrorV1::PossessionProofTooLarge {
-            actual: proof_bytes.len(),
-            max: MAX_ZK_AMS_ADMISSION_POSSESSION_PROOF_BYTES_V1,
-        });
-    }
     let public = decode_nonidentity_point(seed_public_key)?;
-    let proof =
-        norito::codec::decode_exact_from_slice::<ZkAmsAdmissionPossessionProofWireV1>(proof_bytes)
-            .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
-    if proof.version != ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1
-        || norito::codec::encode_adaptive(&proof) != proof_bytes
-    {
+    if proof.version != ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1 {
         return Err(ZkAmsErrorV1::InvalidProofEncoding);
     }
     let commitment = decode_nonidentity_point(proof.commitment)?;
@@ -858,8 +1026,11 @@ pub fn verify_zk_ams_provision_v1(
     }
     let ring_points = validate_ring(ring)?;
     let key_image = decode_nonidentity_point(key_image_bytes)?;
-    let proof = norito::codec::decode_exact_from_slice::<ZkAmsLsagProofWireV1>(proof_bytes)
-        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    let proof = norito::codec::decode_exact_from_slice_with_limits::<ZkAmsLsagProofWireV1>(
+        proof_bytes,
+        zk_ams_lsag_decode_limits(ring.len(), proof_bytes.len()),
+    )
+    .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
     if proof.version != ZK_AMS_LSAG_PROOF_VERSION_V1
         || proof.responses.len() != ring.len()
         || norito::codec::encode_adaptive(&proof) != proof_bytes
@@ -1101,7 +1272,7 @@ fn build_admission_public_inputs(
             .checked_add(1)
             .is_none_or(|epoch| epoch != batch.next_account_registry_root_epoch)
         || batch.anchors.is_empty()
-        || batch.anchors.len() > 8
+        || batch.anchors.len() > ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
     {
         return Err(ZkAmsErrorV1::InvalidStatement);
     }
@@ -1273,13 +1444,29 @@ fn relation_proof_digest(proof_bytes: &[u8]) -> [u8; 32] {
     hash.finalize().into()
 }
 
-struct MaskedRandomAdapter<'a, R>(&'a mut R);
+fn health_checked_zk_ams_rng_v1<R>(
+    rng: &mut R,
+) -> Result<HealthCheckedCryptoRngV1<'_, R>, ZkAmsErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
+        ProverRandomnessErrorV1::Unavailable => ZkAmsErrorV1::RandomnessUnavailable,
+        ProverRandomnessErrorV1::Unhealthy => ZkAmsErrorV1::RandomnessHealthCheckFailed,
+    })
+}
+
+struct MaskedRandomAdapter<'a, R> {
+    source: &'a mut R,
+    randomness_unavailable: bool,
+}
 
 impl<R: CryptoRng + RngCore> MaskedRelaxedRandomSourceV1 for MaskedRandomAdapter<'_, R> {
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
-        self.0
-            .try_fill_bytes(destination)
-            .map_err(|_| MaskedRelaxedRandomErrorV1::Unavailable)
+        self.source.try_fill_bytes(destination).map_err(|_| {
+            self.randomness_unavailable = true;
+            MaskedRelaxedRandomErrorV1::Unavailable
+        })
     }
 }
 
@@ -1290,7 +1477,10 @@ fn scalar_from_canonical(bytes: [u8; 32]) -> Result<Scalar, ZkAmsErrorV1> {
 fn random_nonzero_scalar<R: CryptoRng + RngCore>(rng: &mut R) -> Result<Scalar, ZkAmsErrorV1> {
     for _ in 0..RANDOM_REJECTION_ATTEMPTS {
         let mut candidate = [0_u8; 32];
-        rng.fill_bytes(&mut candidate);
+        if rng.try_fill_bytes(&mut candidate).is_err() {
+            candidate.zeroize();
+            return Err(ZkAmsErrorV1::RandomnessUnavailable);
+        }
         let parsed = scalar_from_canonical(candidate);
         candidate.zeroize();
         if let Ok(scalar) = parsed {
@@ -1411,12 +1601,20 @@ mod tests {
             PrivacyEngineManifestDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
             PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
             PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsSubjectCommitmentV1,
         },
     };
-    use p256::ecdsa::SigningKey as P256SigningKey;
+    use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
     use rand_core_06::Error as RngError;
 
     use super::*;
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyZkAmsBatchAdmissionProofWireV1 {
+        version: u8,
+        relation_proof: Vec<u8>,
+        possession_proofs: Vec<Vec<u8>>,
+    }
 
     #[derive(Clone, Copy)]
     struct TestRng(u64);
@@ -1475,6 +1673,53 @@ mod tests {
     }
 
     impl CryptoRng for ZeroRng {}
+
+    struct PeriodicRng;
+
+    impl RngCore for PeriodicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("ZK-AMS must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("ZK-AMS must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("ZK-AMS must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = ((index % 8) as u8).wrapping_mul(29).wrapping_add(7);
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for PeriodicRng {}
+
+    struct FailingRng;
+
+    impl RngCore for FailingRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("ZK-AMS must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("ZK-AMS must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("ZK-AMS must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), RngError> {
+            Err(RngError::new("injected ZK-AMS RNG failure"))
+        }
+    }
+
+    impl CryptoRng for FailingRng {}
 
     fn seed_secret(value: u8) -> ZkAmsSeedSecretV1 {
         let mut bytes = [0_u8; 32];
@@ -1576,7 +1821,15 @@ mod tests {
         ));
         assert!(matches!(
             ZkAmsSeedSecretV1::generate(&mut ZeroRng),
-            Err(ZkAmsErrorV1::RandomnessExhausted)
+            Err(ZkAmsErrorV1::RandomnessHealthCheckFailed)
+        ));
+        assert!(matches!(
+            ZkAmsSeedSecretV1::generate(&mut PeriodicRng),
+            Err(ZkAmsErrorV1::RandomnessHealthCheckFailed)
+        ));
+        assert!(matches!(
+            ZkAmsSeedSecretV1::generate(&mut FailingRng),
+            Err(ZkAmsErrorV1::RandomnessUnavailable)
         ));
 
         let first = seed_secret(1);
@@ -1626,6 +1879,95 @@ mod tests {
                 proof
             );
         }
+    }
+
+    #[test]
+    fn lsag_decoder_preflights_oversized_and_forged_response_counts() {
+        let (ring, key_image, proof) = sign_fixture(16, 7);
+        let public = ring.iter().map(|(public, _)| *public).collect::<Vec<_>>();
+        let mut decoded = norito::codec::decode_exact_from_slice::<ZkAmsLsagProofWireV1>(&proof)
+            .expect("canonical LSAG");
+        decoded.responses.push([0; 32]);
+        let oversized = norito::codec::encode_adaptive(&decoded);
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &public, key_image, &oversized),
+            Err(ZkAmsErrorV1::InvalidProofEncoding)
+        ));
+
+        let encoded_count = 17_u64.to_le_bytes();
+        let count_offset = oversized
+            .windows(encoded_count.len())
+            .position(|window| window == encoded_count)
+            .expect("oversized response count is present in canonical wire");
+        let mut forged = oversized;
+        forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            verify_zk_ams_provision_v1(&binding(), &public, key_image, &forged),
+            Err(ZkAmsErrorV1::InvalidProofEncoding)
+        ));
+    }
+
+    #[test]
+    fn batch_decoder_preflights_relation_count_and_rejects_inexact_wires() {
+        let empty = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+            relation_proof: Vec::new(),
+            possession_proofs: core::array::from_fn(|_| None),
+        };
+        let canonical = norito::codec::encode_adaptive(&empty);
+        let decode = |bytes: &[u8]| {
+            norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
+                bytes,
+                zk_ams_batch_decode_limits(bytes.len()),
+            )
+        };
+        assert_eq!(decode(&canonical).expect("canonical empty wire"), empty);
+
+        let legacy = LegacyZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+            relation_proof: Vec::new(),
+            possession_proofs: Vec::new(),
+        };
+        let legacy_bytes = norito::codec::encode_adaptive(&legacy);
+        assert_ne!(legacy_bytes, canonical);
+        assert!(
+            decode(&legacy_bytes).is_err(),
+            "the unreleased nested-Vec wire must not survive the first-release schema"
+        );
+
+        assert!(decode(&canonical[..canonical.len() - 1]).is_err());
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert!(decode(&trailing).is_err());
+
+        let oversized_count = MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 + 1;
+        let oversized = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+            relation_proof: vec![0; oversized_count],
+            possession_proofs: core::array::from_fn(|_| None),
+        };
+        let encoded = norito::codec::encode_adaptive(&oversized);
+        assert!(matches!(
+            decode(&encoded),
+            Err(norito::Error::SequenceLengthExceeded { length, limit })
+                if length == oversized_count as u64
+                    && limit == MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 as u64
+        ));
+
+        let encoded_count = (oversized_count as u64).to_le_bytes();
+        let count_offset = encoded
+            .windows(encoded_count.len())
+            .position(|window| window == encoded_count)
+            .expect("oversized relation count is present in canonical wire");
+        let mut forged = encoded;
+        forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            decode(&forged),
+            Err(norito::Error::SequenceLengthExceeded {
+                length: u64::MAX,
+                limit
+            }) if limit == MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 as u64
+        ));
     }
 
     #[test]
@@ -1687,7 +2029,11 @@ mod tests {
         ));
         assert!(matches!(
             sign_zk_ams_provision_v1(&binding(), &public, image, 3, &ring[3].1, &mut ZeroRng),
-            Err(ZkAmsErrorV1::RandomnessExhausted)
+            Err(ZkAmsErrorV1::RandomnessHealthCheckFailed)
+        ));
+        assert!(matches!(
+            sign_zk_ams_provision_v1(&binding(), &public, image, 3, &ring[3].1, &mut PeriodicRng),
+            Err(ZkAmsErrorV1::RandomnessHealthCheckFailed)
         ));
     }
 
@@ -1988,6 +2334,206 @@ mod tests {
             engine_manifest_digest: *statement.context.engine_manifest_digest.as_bytes(),
             generator_digest: zk_ams_generator_digest_v1(),
         }
+    }
+
+    #[test]
+    #[ignore = "release gate: proves the full masked ZK-AMS admission relation"]
+    fn complete_batch_admission_proves_verifies_and_fails_closed() {
+        let issuer_signing_key =
+            P256SigningKey::from_bytes((&[7_u8; 32]).into()).expect("fixed issuer key");
+        let issuer_id = PrivacyIssuerIdV1::new([0x31; 32]);
+        let policy_id = PrivacyPolicyIdV1::new([0x35; 32]);
+        let registry_id = PrivacyZkAmsRegistryIdV1::new([0x33; 32]);
+        let current_root = PrivacyRootV1::new([0x37; 32]);
+        let current_epoch = 9_u64;
+        let next_epoch = current_epoch + 1;
+        let seed_secrets = [seed_secret(41), seed_secret(42)];
+        let credentials = seed_secrets
+            .iter()
+            .enumerate()
+            .map(|(index, secret)| PrivacyZkAmsPersonhoodCredentialV1 {
+                version: ZK_AMS_PHC_VERSION_V1,
+                issuer_id,
+                policy_id,
+                subject_commitment: PrivacyZkAmsSubjectCommitmentV1::new(
+                    [0x41 + u8::try_from(index).expect("bounded fixture"); 32],
+                ),
+                seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(
+                    secret,
+                )),
+                credential_nonce: PrivacyZkAmsCredentialNonceV1::new(
+                    [0x51 + u8::try_from(index).expect("bounded fixture"); 32],
+                ),
+            })
+            .collect::<Vec<_>>();
+        let signatures = credentials
+            .iter()
+            .map(|credential| {
+                let signature: P256Signature = issuer_signing_key
+                    .sign_prehash(credential.digest().as_bytes())
+                    .expect("issuer prehash signature");
+                let signature = signature.normalize_s().unwrap_or(signature);
+                <[u8; 64]>::from(signature.to_bytes())
+            })
+            .collect::<Vec<_>>();
+        let anchors = credentials
+            .iter()
+            .map(|credential| PrivacyZkAmsAdmissionAnchorV1 {
+                phc_hash: credential.digest(),
+                seed_public_key: credential.seed_public_key,
+            })
+            .collect::<Vec<_>>();
+        let batch_size = u32::try_from(anchors.len()).expect("bounded fixture");
+        let next_root = anchors.iter().copied().enumerate().fold(
+            current_root,
+            |prior_root, (index, anchor)| {
+                zk_ams_registry_transition_root_v1(
+                    registry_id,
+                    prior_root,
+                    current_epoch,
+                    next_epoch,
+                    batch_size,
+                    u32::try_from(index).expect("bounded fixture"),
+                    anchor,
+                )
+            },
+        );
+        let statement = IrohaZkAmsStatementV1 {
+            context: typed_context(),
+            issuer_id,
+            issuer_public_key: issuer_key(),
+            issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new([0x32; 32]),
+            registry_id,
+            registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1::new([0x34; 32]),
+            policy_id,
+            policy_digest: PrivacyPolicyDigestV1::new([0x36; 32]),
+            action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
+                account_registry_root: current_root,
+                account_registry_root_epoch: current_epoch,
+                next_account_registry_root: next_root,
+                next_account_registry_root_epoch: next_epoch,
+                anchors: anchors.clone(),
+            }),
+        };
+        let binding = binding_for_statement(&statement);
+        let witnesses = credentials
+            .iter()
+            .zip(&signatures)
+            .zip(&seed_secrets)
+            .map(|((credential, signature), secret)| {
+                ZkAmsBatchCredentialWitnessV1::new(credential, signature, secret)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            prove_zk_ams_batch_admission_v1(
+                &statement,
+                &binding,
+                &witnesses[..1],
+                ZkAmsMaskedProverConfigV1::new(1).expect("worker count"),
+                &mut TestRng::new(1),
+            ),
+            Err(ZkAmsErrorV1::CredentialMismatch)
+        ));
+        let wrong_secret = seed_secret(43);
+        let wrong_secret_witnesses = [
+            ZkAmsBatchCredentialWitnessV1::new(&credentials[0], &signatures[0], &wrong_secret),
+            ZkAmsBatchCredentialWitnessV1::new(&credentials[1], &signatures[1], &seed_secrets[1]),
+        ];
+        assert!(matches!(
+            prove_zk_ams_batch_admission_v1(
+                &statement,
+                &binding,
+                &wrong_secret_witnesses,
+                ZkAmsMaskedProverConfigV1::new(1).expect("worker count"),
+                &mut TestRng::new(2),
+            ),
+            Err(ZkAmsErrorV1::InvalidCredential)
+        ));
+        let mut invalid_signatures = signatures.clone();
+        invalid_signatures[0][0] ^= 1;
+        let invalid_signature_witnesses = [
+            ZkAmsBatchCredentialWitnessV1::new(
+                &credentials[0],
+                &invalid_signatures[0],
+                &seed_secrets[0],
+            ),
+            ZkAmsBatchCredentialWitnessV1::new(
+                &credentials[1],
+                &invalid_signatures[1],
+                &seed_secrets[1],
+            ),
+        ];
+        assert!(matches!(
+            prove_zk_ams_batch_admission_v1(
+                &statement,
+                &binding,
+                &invalid_signature_witnesses,
+                ZkAmsMaskedProverConfigV1::new(1).expect("worker count"),
+                &mut TestRng::new(3),
+            ),
+            Err(ZkAmsErrorV1::InvalidIssuerSignature)
+        ));
+        let low_s = P256Signature::from_slice(&signatures[0]).expect("canonical signature");
+        let (r, s) = low_s.split_scalars();
+        let high_s =
+            P256Signature::from_scalars(r.to_repr(), (-*s).to_repr()).expect("high-s counterpart");
+        assert!(high_s.normalize_s().is_some());
+        let high_s_bytes = <[u8; 64]>::from(high_s.to_bytes());
+        let high_s_witnesses = [
+            ZkAmsBatchCredentialWitnessV1::new(&credentials[0], &high_s_bytes, &seed_secrets[0]),
+            ZkAmsBatchCredentialWitnessV1::new(&credentials[1], &signatures[1], &seed_secrets[1]),
+        ];
+        assert!(matches!(
+            prove_zk_ams_batch_admission_v1(
+                &statement,
+                &binding,
+                &high_s_witnesses,
+                ZkAmsMaskedProverConfigV1::new(1).expect("worker count"),
+                &mut TestRng::new(4),
+            ),
+            Err(ZkAmsErrorV1::HighSIssuerSignature)
+        ));
+
+        let mut rng = TestRng::new(0x1a2b_3c4d_5e6f_7788);
+        let proof = prove_zk_ams_batch_admission_v1(
+            &statement,
+            &binding,
+            &witnesses,
+            ZkAmsMaskedProverConfigV1::new(1).expect("worker count"),
+            &mut rng,
+        )
+        .expect("complete batch admission proof");
+        let effect = verify_zk_ams_batch_admission_v1(&statement, &binding, &proof)
+            .expect("complete batch admission verification");
+        assert_eq!(effect.issuer_id, issuer_id);
+        assert_eq!(effect.policy_id, policy_id);
+        assert_eq!(effect.registry_id, registry_id);
+        assert_eq!(effect.current_root, current_root);
+        assert_eq!(effect.current_epoch, current_epoch);
+        assert_eq!(effect.next_root, next_root);
+        assert_eq!(effect.next_epoch, next_epoch);
+        assert_eq!(effect.anchors, anchors);
+
+        let mut replay_binding = binding;
+        replay_binding.action_index += 1;
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &replay_binding, &proof),
+            Err(ZkAmsErrorV1::BindingMismatch)
+        ));
+        let mut trailing = proof.clone();
+        trailing.push(0);
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &trailing),
+            Err(ZkAmsErrorV1::InvalidProofEncoding)
+        ));
+        let mut corrupted = proof;
+        let offset = corrupted.len() / 2;
+        corrupted[offset] ^= 0x80;
+        assert!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &corrupted).is_err(),
+            "one-bit proof corruption must fail closed"
+        );
     }
 
     #[test]

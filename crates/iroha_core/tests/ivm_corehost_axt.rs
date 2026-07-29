@@ -35,8 +35,8 @@ use iroha_data_model::{
     block::BlockHeader,
     nexus::{
         AxtBinding, AxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey,
-        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtRejectReason, AxtReplayRecord,
-        AxtTouchSpec, LaneId,
+        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
+        AxtRejectReason, AxtReplayRecord, AxtTouchSpec, LaneId,
     },
     prelude::*,
 };
@@ -136,6 +136,24 @@ fn make_policy_snapshot(
         version: AxtPolicySnapshot::compute_version(&[entry]),
         entries: vec![entry],
     }
+}
+
+#[test]
+fn core_host_rejects_noncanonical_policy_snapshot_without_panicking() {
+    let mut snapshot =
+        make_policy_snapshot(DataSpaceId::new(91), [0x91; 32], LaneId::new(1), 1, 1, 1);
+    let expected = snapshot.version;
+    snapshot.version = snapshot.version.wrapping_add(1);
+    let actual = snapshot.version;
+
+    let result = CoreHost::new(fixture_authority()).with_axt_policy_snapshot(&snapshot);
+    assert!(matches!(
+        result,
+        Err(AxtPolicySnapshotValidationError::VersionMismatch {
+            expected: computed,
+            actual: advertised,
+        }) if computed == expected && advertised == actual
+    ));
 }
 
 fn proof_blob_for(
@@ -241,7 +259,9 @@ fn host_with_policy(
     current_slot: u64,
 ) -> CoreHost {
     let snapshot = make_policy_snapshot(dsid, manifest_root, target_lane, 1, 1, current_slot);
-    CoreHost::new(authority).with_axt_policy_snapshot(&snapshot)
+    CoreHost::new(authority)
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical")
 }
 
 #[cfg(feature = "app_api")]
@@ -577,7 +597,9 @@ fn axt_policy_reject_exposes_context() {
             write: vec!["ledger".into()],
         }],
     };
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
 
     // Begin envelope and record a touch for the dataspace.
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
@@ -643,7 +665,7 @@ fn axt_policy_reject_exposes_context() {
     assert_eq!(context.reason, AxtRejectReason::Manifest);
     assert_eq!(context.dataspace, Some(dsid));
     assert_eq!(context.lane, Some(lane));
-    assert_eq!(context.snapshot_version, snapshot.version);
+    assert_eq!(context.snapshot_version, Some(snapshot.version));
     assert!(
         context.detail.contains("manifest"),
         "detail should mention manifest mismatch"
@@ -666,7 +688,9 @@ fn axt_handle_allows_configured_clock_skew_window() {
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 11);
     let mut host = CoreHost::new(authority.clone())
         .with_axt_timing(timing)
-        .with_axt_policy_snapshot(&snapshot);
+        .expect("fixture AXT timing should be accepted")
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -752,7 +776,9 @@ fn axt_handle_rejects_clock_skew_above_config() {
     let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(0), 1, 1, 2);
     let mut host = CoreHost::new(authority.clone())
         .with_axt_timing(timing)
-        .with_axt_policy_snapshot(&snapshot);
+        .expect("fixture AXT timing should be accepted")
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -960,7 +986,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             amount: Some(Quantity::from(10_u64)),
             amount_commitment: None,
         }],
-        commit_height: Some(1),
+        commit_height: 1,
     };
 
     let snapshot = state.view().axt_policy_snapshot();
@@ -980,7 +1006,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
             Vec::new(),
             BTreeMap::new(),
             vec![envelope.clone()],
-            Some(snapshot.clone()),
+            snapshot.clone(),
         )
         .expect("empty test block should attach AXT envelope results");
     let mut state_block = state.block(base_block.header());
@@ -1043,7 +1069,8 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     drop(replay_view);
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), &replay_state);
+    let mut host = CoreHost::from_state(authority.clone(), &replay_state)
+        .expect("replayed fixture state should produce a valid CoreHost");
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
@@ -1200,7 +1227,7 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(1),
+            commit_height: 1,
         };
         stx.record_axt_envelope(envelope);
         stx.apply();
@@ -1219,7 +1246,8 @@ fn axt_replay_ledger_rejects_reuse_after_restart() {
     );
 
     let mut vm = IVM::new(10_000);
-    let mut host = CoreHost::from_state(authority.clone(), &state);
+    let mut host = CoreHost::from_state(authority.clone(), &state)
+        .expect("fixture state should produce a valid CoreHost");
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1377,7 +1405,7 @@ fn axt_replay_ledger_prunes_expired_entries_on_slot_rollover() {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(1),
+            commit_height: 1,
         };
         stx.record_axt_envelope(envelope);
         stx.apply();
@@ -1511,13 +1539,14 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
                 amount: Some(Quantity::from(5_u64)),
                 amount_commitment: None,
             }],
-            commit_height: Some(1),
+            commit_height: 1,
         });
         stx.apply();
     }
     block.commit().expect("commit replay ledger envelope");
 
-    let mut host = CoreHost::from_state(authority.clone(), &state);
+    let mut host = CoreHost::from_state(authority.clone(), &state)
+        .expect("fixture state should produce a valid CoreHost");
     let mut vm = IVM::new(1_000_000);
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
@@ -1577,7 +1606,8 @@ fn axt_replay_ledger_blocks_reuse_after_host_rebuild() {
         state.push_block_hash_for_testing(typed);
     }
 
-    let mut host = CoreHost::from_state(authority.clone(), &state);
+    let mut host = CoreHost::from_state(authority.clone(), &state)
+        .expect("fixture state should produce a valid CoreHost");
     let mut vm = IVM::new(1_000_000);
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
@@ -1775,7 +1805,7 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
         touches: vec![touch_fragment],
         proofs: vec![proof_fragment],
         handles: vec![handle_fragment.clone()],
-        commit_height: Some(1),
+        commit_height: 1,
     };
 
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -1798,7 +1828,8 @@ fn axt_replay_ledger_blocks_reuse_after_policy_reset() {
     );
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), &state);
+    let mut host = CoreHost::from_state(authority.clone(), &state)
+        .expect("fixture state should produce a valid CoreHost");
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
@@ -1968,7 +1999,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
         touches: vec![touch_fragment],
         proofs: vec![proof_fragment],
         handles: vec![handle_fragment.clone()],
-        commit_height: Some(1),
+        commit_height: 1,
     };
 
     let entry_hashes: Vec<HashOf<TransactionEntrypoint>> = Vec::new();
@@ -1988,7 +2019,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             Vec::new(),
             BTreeMap::new(),
             envelopes.clone(),
-            None,
+            state.axt_policy_snapshot(),
         )
         .expect("empty test block should attach AXT envelope results");
     let mut state_block = state.block(base_block.header());
@@ -2003,7 +2034,7 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
             Vec::new(),
             BTreeMap::new(),
             envelopes.clone(),
-            None,
+            state.axt_policy_snapshot(),
         )
         .expect("empty committed test block should attach AXT envelope results");
     assert_eq!(
@@ -2029,7 +2060,8 @@ fn axt_replay_ledger_persists_across_apply_without_execution() {
     );
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), &state);
+    let mut host = CoreHost::from_state(authority.clone(), &state)
+        .expect("fixture state should produce a valid CoreHost");
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
@@ -2185,7 +2217,8 @@ fn axt_replay_entries_expire_after_retention_window() {
     state.prune_axt_replay_ledger_for_tests(5, retention_slots);
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), &state);
+    let mut host = CoreHost::from_state(authority.clone(), &state)
+        .expect("fixture state should produce a valid CoreHost");
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
@@ -2398,7 +2431,9 @@ fn core_host_requires_proof_for_all_dataspaces() {
     };
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm));
@@ -2498,7 +2533,9 @@ fn core_host_requires_proof_for_all_dataspaces() {
 
     // Omit proof for ds_b to confirm rejection
     let mut vm_fail = IVM::new(1_000_000);
-    let mut host_fail = CoreHost::new(authority).with_axt_policy_snapshot(&snapshot);
+    let mut host_fail = CoreHost::new(authority)
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
     let desc_ptr_fail = store_tlv_codec(&mut vm_fail, PointerType::AxtDescriptor, &descriptor);
     vm_fail.set_register(10, desc_ptr_fail);
     assert_ok_gas!(host_fail.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm_fail));
@@ -2756,7 +2793,9 @@ fn use_handle_with_snapshot(
     mut handle: AssetHandle,
 ) -> Result<u64, VMError> {
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(snapshot);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -2962,7 +3001,8 @@ fn use_handle_with_state_policy(
     mut handle: AssetHandle,
 ) -> Result<u64, VMError> {
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), state);
+    let mut host = CoreHost::from_state(authority.clone(), state)
+        .expect("fixture state should produce a valid CoreHost");
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, descriptor);
     vm.set_register(10, desc_ptr);
@@ -3255,7 +3295,9 @@ fn core_host_binds_proof_to_manifest_root() {
     };
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -3419,7 +3461,7 @@ fn core_host_exports_axt_envelopes_to_state_block() {
     assert_eq!(envelopes.len(), 1);
     let record = &envelopes[0];
     assert_eq!(record.lane, lane);
-    assert_eq!(record.commit_height, Some(1));
+    assert_eq!(record.commit_height, 1);
     assert_eq!(record.descriptor.dsids, descriptor.dsids);
     assert_eq!(record.touches.len(), 1);
     assert_eq!(record.proofs.len(), 1);
@@ -3453,7 +3495,9 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         version: AxtPolicySnapshot::compute_version(&entries_current),
         entries: entries_current,
     };
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot_current);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot_current)
+        .expect("current AXT policy snapshot should be canonical");
 
     let mut vm = IVM::new(1_000_000);
     let descriptor = axt::AxtDescriptor {
@@ -3501,7 +3545,51 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
         version: AxtPolicySnapshot::compute_version(&entries_v2),
         entries: entries_v2,
     };
-    host.refresh_axt_policy_snapshot(&snapshot_v2);
+
+    let mut noncanonical_snapshot_v2 = snapshot_v2.clone();
+    let expected_v2 = noncanonical_snapshot_v2.version;
+    noncanonical_snapshot_v2.version = expected_v2.wrapping_add(1);
+    let advertised_v2 = noncanonical_snapshot_v2.version;
+    assert!(matches!(
+        host.refresh_axt_policy_snapshot(&noncanonical_snapshot_v2),
+        Err(AxtPolicySnapshotValidationError::VersionMismatch {
+            expected,
+            actual,
+        }) if expected == expected_v2 && actual == advertised_v2
+    ));
+
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_v1_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
+        .expect("rejected refresh must preserve the current policy and proof cache");
+    assert!(
+        host.axt_recorded_proof_payload(dsid).is_some(),
+        "rejected refresh must preserve the active envelope"
+    );
+
+    host.refresh_axt_policy_snapshot(&snapshot_v2)
+        .expect("rotated AXT policy snapshot should be canonical");
+    assert!(
+        host.axt_recorded_proof_payload(dsid).is_none(),
+        "successful refresh must abort proofs recorded under the prior policy"
+    );
+    assert!(
+        host.axt_cached_proof_status(dsid).is_none(),
+        "successful refresh must clear proofs cached under the prior policy"
+    );
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied),
+        "an envelope accepted under the prior policy must not commit"
+    );
+
+    vm.set_register(10, desc_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
+        .expect("restart envelope after policy refresh");
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, manifest_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
+        .expect("touch after policy refresh");
 
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v1_ptr);
@@ -3515,6 +3603,85 @@ fn core_host_rejects_cached_proof_after_manifest_rotation() {
     vm.set_register(10, ds_ptr);
     vm.set_register(11, proof_v2_ptr);
     assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
+}
+
+#[test]
+fn core_host_timing_change_aborts_active_envelope() {
+    let authority = fixture_authority();
+    let dsid = DataSpaceId::new(56);
+    let manifest_root = [0x33; 32];
+    let snapshot = make_policy_snapshot(dsid, manifest_root, LaneId::new(1), 1, 1, 7);
+    let mut host = CoreHost::new(authority)
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("AXT policy snapshot should be canonical");
+
+    let mut vm = IVM::new(1_000_000);
+    let descriptor = axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders/timing".into()],
+            write: vec!["ledger/timing".into()],
+        }],
+    };
+    let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
+    vm.set_register(10, desc_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
+        .expect("begin");
+
+    let ds_ptr = store_tlv_codec(&mut vm, PointerType::DataSpaceId, &dsid);
+    let manifest = TouchManifest {
+        read: vec!["orders/timing".into()],
+        write: vec!["ledger/timing".into()],
+    };
+    let manifest_ptr = store_tlv_norito(&mut vm, PointerType::NoritoBytes, &manifest);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, manifest_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
+        .expect("touch");
+
+    let proof = proof_blob_for(dsid, manifest_root, b"timing-change".to_vec(), 20);
+    let proof_ptr = store_tlv_norito(&mut vm, PointerType::ProofBlob, &proof);
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm)
+        .expect("proof matches current timing");
+    assert!(host.axt_recorded_proof_payload(dsid).is_some());
+
+    let timing = ActualAxtTiming {
+        slot_length_ms: NonZeroU64::new(2).expect("slot length"),
+        max_clock_skew_ms: 1,
+        proof_cache_ttl_slots: NonZeroU64::new(1).expect("ttl slots"),
+        replay_retention_slots: NonZeroU64::new(1).expect("replay slots"),
+    };
+    host.set_axt_timing(timing)
+        .expect("replacement timing should accept the installed snapshot");
+    assert!(
+        host.axt_recorded_proof_payload(dsid).is_none(),
+        "timing replacement must abort proofs recorded under the prior timing"
+    );
+    assert!(
+        host.axt_cached_proof_status(dsid).is_none(),
+        "timing replacement must clear proofs cached under the prior timing"
+    );
+    assert_eq!(
+        host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm),
+        Err(VMError::PermissionDenied),
+        "an envelope accepted under the prior timing must not commit"
+    );
+
+    vm.set_register(10, desc_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_BEGIN, &mut vm)
+        .expect("restart envelope after timing replacement");
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, manifest_ptr);
+    host.syscall(ivm::syscalls::SYSCALL_AXT_TOUCH, &mut vm)
+        .expect("touch after timing replacement");
+    vm.set_register(10, ds_ptr);
+    vm.set_register(11, proof_ptr);
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm));
+    assert_ok_gas!(host.syscall(ivm::syscalls::SYSCALL_AXT_COMMIT, &mut vm));
 }
 
 #[cfg(feature = "app_api")]
@@ -3550,7 +3717,9 @@ fn core_host_records_multi_dataspace_envelope() {
         version: AxtPolicySnapshot::compute_version(&entries),
         entries,
     };
-    let mut host = CoreHost::new(authority.clone()).with_axt_policy_snapshot(&snapshot);
+    let mut host = CoreHost::new(authority.clone())
+        .with_axt_policy_snapshot(&snapshot)
+        .expect("fixture AXT policy snapshot should be canonical");
     let mut vm = IVM::new(1_000_000);
 
     let descriptor = axt::AxtDescriptor {
@@ -3846,7 +4015,7 @@ fn axt_sub_nonce_floor_persists_across_restart() {
             amount: Some(Quantity::from(10_u64)),
             amount_commitment: None,
         }],
-        commit_height: Some(1),
+        commit_height: 1,
     };
 
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -3869,7 +4038,8 @@ fn axt_sub_nonce_floor_persists_across_restart() {
     assert_eq!(cached_policy.min_handle_era, 2);
 
     let mut vm = IVM::new(1_000_000);
-    let mut host = CoreHost::from_state(authority.clone(), &state);
+    let mut host = CoreHost::from_state(authority.clone(), &state)
+        .expect("fixture state should produce a valid CoreHost");
 
     let desc_ptr = store_tlv_codec(&mut vm, PointerType::AxtDescriptor, &descriptor);
     vm.set_register(10, desc_ptr);

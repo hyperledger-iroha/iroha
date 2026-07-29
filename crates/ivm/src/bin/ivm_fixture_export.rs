@@ -167,8 +167,8 @@ fn contract_manifest_fixture_types()
 
 fn render_contract_manifest_v1_fixture() -> Result<String, String> {
     let (event_filter, manifest, signed_manifest) = contract_manifest_fixture_types()?;
-    let event_filter_frame = norito::to_bytes(&event_filter)
-        .map_err(|error| format!("encode event-filter fixture frame: {error}"))?;
+    let event_filter_frame = norito::encode_canonical(&event_filter)
+        .map_err(|error| format!("encode canonical event-filter fixture frame: {error}"))?;
     let document = ContractManifestFixtureDocument {
         event_filter_frame_hex: hex::encode(event_filter_frame),
         manifest: &manifest,
@@ -377,6 +377,16 @@ mod tests {
             render_contract_manifest_v1_fixture().expect("render fixture again"),
             rendered
         );
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                render_contract_manifest_v1_fixture()
+                    .expect("render fixture under alternate ambient layout"),
+                rendered
+            );
+        }
         assert!(rendered.ends_with('\n'));
         assert!(rendered.contains(&hex::encode(norito::codec::Encode::encode(&manifest))));
         assert!(

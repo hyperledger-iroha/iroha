@@ -628,7 +628,7 @@ pub mod isi {
     }
 
     fn verified_lane_relay_contract_map_state_key(relay_state_key: &Name) -> Result<Name, Error> {
-        let key_payload = norito::to_bytes(relay_state_key).map_err(|err| {
+        let key_payload = norito::encode_canonical(relay_state_key).map_err(|err| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 format!("verified lane relay map key encode failed: {err}"),
             ))
@@ -1102,15 +1102,23 @@ pub mod isi {
         if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
             return None;
         }
-        norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
+        norito::decode_canonical::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
     }
 
     struct VotePublicInputs {
         columns: Vec<Vec<[u8; 32]>>,
-        envelope: Option<ZkOpenVerifyEnvelope>,
+        envelope: ZkOpenVerifyEnvelope,
     }
 
     fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
+        if raw.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+            || !iroha_data_model::zk::open_verify_circuit_id_is_portable(raw)
+            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                raw,
+            )
+        {
+            return None;
+        }
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return None;
@@ -1136,6 +1144,16 @@ pub mod isi {
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
+        let is_admissible = |circuit_id: &str| {
+            circuit_id.len() <= iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+                && iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+                && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                    circuit_id,
+                )
+        };
+        if !is_admissible(record_id) || !is_admissible(env_id) {
+            return false;
+        }
         if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
             match (
                 normalize_halo2_circuit_id(record_id),
@@ -1383,7 +1401,7 @@ pub mod isi {
         profile: SoracloudFheStarkVerifierProfile,
         vk: &VerifyingKeyBox,
     ) -> Result<(), Error> {
-        let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = norito::decode_from_bytes(&vk.bytes)
+        let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
             .map_err(|_| {
                 invalid_smart_contract_parameter(format!(
                     "{} verifying key has invalid STARK payload",
@@ -1413,7 +1431,41 @@ pub mod isi {
         .into()
     }
 
+    fn ensure_generic_open_verify_circuit_id_is_not_reserved_for_privacy_v1(
+        circuit_id: &str,
+    ) -> Result<(), Error> {
+        if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+            || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+        {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "generic OpenVerify circuit_id must be a bounded portable identifier".into(),
+                ),
+            )
+            .into());
+        }
+        if iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+            circuit_id,
+        ) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "generic OpenVerify circuit_id uses a reserved privacy protocol label".into(),
+                ),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
+        if raw.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+            || !iroha_data_model::zk::open_verify_circuit_id_is_portable(raw)
+            || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
+                raw,
+            )
+        {
+            return None;
+        }
         let trimmed = raw.trim();
         if trimmed.is_empty() || trimmed == backend {
             return None;
@@ -1487,7 +1539,7 @@ pub mod isi {
         vk_record: &VerifyingKeyRecord,
         expected_public_inputs: &[u8],
     ) -> Result<(), Error> {
-        let envelope: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
+        let envelope: ZkOpenVerifyEnvelope = norito::decode_canonical(&attachment.proof.bytes)
             .map_err(|_| {
                 InstructionExecutionError::InvariantViolation(
                     format!("{label} proof must use OpenVerifyEnvelope payload").into(),
@@ -2068,7 +2120,7 @@ pub mod isi {
     ) -> Result<VotePublicInputs, Error> {
         if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
             let env: ZkOpenVerifyEnvelope =
-                norito::decode_from_bytes(proof_bytes).map_err(|_| {
+                norito::decode_canonical(proof_bytes).map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
                         "invalid OpenVerifyEnvelope payload".into(),
                     )
@@ -2086,13 +2138,13 @@ pub mod isi {
                 })?;
             return Ok(VotePublicInputs {
                 columns,
-                envelope: Some(env),
+                envelope: env,
             });
         }
 
         if crate::zk::is_stark_fri_v1_backend(backend) {
             let env: ZkOpenVerifyEnvelope =
-                norito::decode_from_bytes(proof_bytes).map_err(|_| {
+                norito::decode_canonical(proof_bytes).map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
                         "invalid OpenVerifyEnvelope payload".into(),
                     )
@@ -2103,7 +2155,7 @@ pub mod isi {
                 ));
             }
             let open: StarkFriOpenProofV1 =
-                norito::decode_from_bytes(&env.proof_bytes).map_err(|_| {
+                norito::decode_canonical(&env.proof_bytes).map_err(|_| {
                     InstructionExecutionError::InvariantViolation(
                         "invalid STARK open proof payload".into(),
                     )
@@ -2116,20 +2168,11 @@ pub mod isi {
             let columns = open.public_inputs;
             return Ok(VotePublicInputs {
                 columns,
-                envelope: Some(env),
+                envelope: env,
             });
         }
 
-        let columns =
-            crate::zk::extract_pasta_instance_columns_bytes(proof_bytes).ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "failed to extract vote public inputs".into(),
-                )
-            })?;
-        Ok(VotePublicInputs {
-            columns,
-            envelope: None,
-        })
+        Err(unsupported_proof_backend_error())
     }
 
     fn ballot_inputs_from_columns(
@@ -2489,7 +2532,7 @@ pub mod isi {
     fn compute_parliament_roster_root(
         bodies: &iroha_data_model::governance::types::ParliamentBodies,
     ) -> Result<[u8; 32], Error> {
-        let encoded = norito::to_bytes(bodies).map_err(|_| {
+        let encoded = norito::encode_canonical(bodies).map_err(|_| {
             InstructionExecutionError::InvariantViolation(
                 "failed to encode parliament roster commitment".into(),
             )
@@ -3059,6 +3102,9 @@ pub mod isi {
 
             let id = self.id().clone();
             let record = self.record().clone();
+            ensure_generic_open_verify_circuit_id_is_not_reserved_for_privacy_v1(
+                &record.circuit_id,
+            )?;
             if matches!(record.status, ConfidentialStatus::Withdrawn) {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -3152,14 +3198,14 @@ pub mod isi {
                                 ),
                             ));
                         };
-                        let payload: StarkFriVerifyingKeyV1 = norito::decode_from_bytes(&vk.bytes)
+                        let payload: StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
                             .map_err(|_| {
-                                InstructionExecutionError::InvalidParameter(
-                                    InvalidParameterError::SmartContract(
-                                        "invalid STARK verifying key payload".into(),
-                                    ),
-                                )
-                            })?;
+                            InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "invalid STARK verifying key payload".into(),
+                                ),
+                            )
+                        })?;
                         if payload.version != 1 {
                             return Err(InstructionExecutionError::InvalidParameter(
                                 InvalidParameterError::SmartContract(
@@ -5220,28 +5266,26 @@ pub mod isi {
                     return Err(err);
                 }
             };
-            if let Some(envelope) = inputs.envelope.as_ref() {
-                if let Err(err) =
-                    validate_open_verify_envelope_metadata("ballot", backend, envelope, &vk_rec)
-                {
-                    let _ = governance_slash_percent(
-                        &self.election_id,
-                        authority,
-                        state_transaction.gov.slash_invalid_proof_bps,
-                        GovernanceSlashReason::Misconduct,
-                        "invalid_proof_inputs",
-                        state_transaction,
-                    )?;
-                    state_transaction.world.emit_events(Some(
-                        iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
-                            iroha_data_model::events::data::governance::GovernanceBallotRejected {
-                                referendum_id: self.election_id.clone(),
-                                reason: "invalid proof inputs".into(),
-                            },
-                        ),
-                    ));
-                    return Err(err);
-                }
+            if let Err(err) =
+                validate_open_verify_envelope_metadata("ballot", backend, &inputs.envelope, &vk_rec)
+            {
+                let _ = governance_slash_percent(
+                    &self.election_id,
+                    authority,
+                    state_transaction.gov.slash_invalid_proof_bps,
+                    GovernanceSlashReason::Misconduct,
+                    "invalid_proof_inputs",
+                    state_transaction,
+                )?;
+                state_transaction.world.emit_events(Some(
+                    iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
+                        iroha_data_model::events::data::governance::GovernanceBallotRejected {
+                            referendum_id: self.election_id.clone(),
+                            reason: "invalid proof inputs".into(),
+                        },
+                    ),
+                ));
+                return Err(err);
             }
             let (commit_bytes, root_bytes) = match ballot_inputs_from_columns(&inputs.columns) {
                 Ok(v) => v,
@@ -10010,17 +10054,20 @@ pub mod isi {
         bytes: &[u8],
     ) -> Result<(iroha_data_model::runtime::RuntimeUpgradeManifest, Vec<u8>), Error> {
         let manifest: iroha_data_model::runtime::RuntimeUpgradeManifest =
-            norito::decode_from_bytes(bytes).map_err(|e| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("invalid manifest: {e}").into(),
-                )
+            norito::decode_canonical(bytes).map_err(|e| {
+                if matches!(&e, norito::Error::NonCanonicalEncoding) {
+                    InstructionExecutionError::InvariantViolation(
+                        "manifest bytes must use canonical Norito framing".into(),
+                    )
+                } else {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid manifest: {e}").into(),
+                    )
+                }
             })?;
-        let canonical_bytes = manifest.canonical_bytes();
-        if canonical_bytes != *bytes {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "manifest bytes must use canonical Norito framing".into(),
-            ));
-        }
+        // `decode_canonical` proves these exact admission bytes are the unique V1 frame.
+        // Retain them directly so ambient encode flags cannot alter the upgrade identity.
+        let canonical_bytes = bytes.to_vec();
         if manifest.end_height <= manifest.start_height {
             return Err(InstructionExecutionError::InvariantViolation(
                 "invalid window: end_height must be > start_height".into(),
@@ -10315,6 +10362,7 @@ pub mod isi {
                 "verifying key backend cannot change".into(),
             ));
         }
+        ensure_generic_open_verify_circuit_id_is_not_reserved_for_privacy_v1(&new.circuit_id)?;
         let id_backend = id.backend.as_str();
         match new.backend {
             BackendTag::Halo2IpaPasta => {
@@ -10399,7 +10447,7 @@ pub mod isi {
                             ),
                         ));
                     };
-                    let payload: StarkFriVerifyingKeyV1 = norito::decode_from_bytes(&vk.bytes)
+                    let payload: StarkFriVerifyingKeyV1 = norito::decode_canonical(&vk.bytes)
                         .map_err(|_| {
                             InstructionExecutionError::InvalidParameter(
                                 InvalidParameterError::SmartContract(
@@ -11244,6 +11292,11 @@ pub mod isi {
                 ),
             ));
         }
+        if expects_envelope && let Some(envelope) = envelope_meta {
+            ensure_generic_open_verify_circuit_id_is_not_reserved_for_privacy_v1(
+                &envelope.circuit_id,
+            )?;
+        }
         if expects_envelope
             && let Some(envelope) = envelope_meta
             && !open_verify_backend_tag_matches(attachment.backend.as_str(), envelope.backend)
@@ -11961,6 +12014,17 @@ pub mod isi {
         find_overlapping_bridge_range(state_transaction, backend, new_range)
     }
 
+    fn encode_bridge_proof_identity(
+        proof: &iroha_data_model::bridge::BridgeProof,
+    ) -> Result<Vec<u8>, Error> {
+        norito::encode_canonical(proof).map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("failed to encode bridge proof: {err}"),
+            ))
+            .into()
+        })
+    }
+
     fn encode_and_validate_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -12006,11 +12070,7 @@ pub mod isi {
             zk_cfg.bridge_proof_max_future_drift_blocks,
         )?;
 
-        let encoded = norito::to_bytes(proof).map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                format!("failed to encode bridge proof: {err}"),
-            ))
-        })?;
+        let encoded = encode_bridge_proof_identity(proof)?;
         let proof_size = encoded.len();
         let size_bytes = canonical_bridge_proof_size_bytes(proof_size)?;
         let is_closed_sccp = matches!(
@@ -15568,14 +15628,14 @@ pub mod isi {
                 // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
-                let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
+                let env: ZkOpenVerifyEnvelope = norito::decode_canonical(&attachment.proof.bytes)
                     .map_err(|_| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "invalid OpenVerifyEnvelope payload".into(),
-                            ),
-                        )
-                    })?;
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "invalid OpenVerifyEnvelope payload".into(),
+                        ),
+                    )
+                })?;
                 if env.backend != BackendTag::Stark {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "unexpected OpenVerifyEnvelope backend tag".into(),
@@ -16118,14 +16178,14 @@ pub mod isi {
                 // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
                 // can validate metadata against the configured verifying key.
-                let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
+                let env: ZkOpenVerifyEnvelope = norito::decode_canonical(&attachment.proof.bytes)
                     .map_err(|_| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "invalid OpenVerifyEnvelope payload".into(),
-                            ),
-                        )
-                    })?;
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "invalid OpenVerifyEnvelope payload".into(),
+                        ),
+                    )
+                })?;
                 if env.backend != BackendTag::Stark {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "unexpected OpenVerifyEnvelope backend tag".into(),
@@ -16454,6 +16514,9 @@ pub mod isi {
                     "not permitted: CanManageParliament".into(),
                 ));
             }
+            let options = *self.options();
+            let tally_slots = zk::validate_election_options_v1(options)
+                .map_err(|error| invalid_smart_contract_parameter(error.to_string()))?;
             // Insert a new election if it doesn't exist.
             let id = self.election_id().clone();
             if state_transaction.world.elections.get(&id).is_some() {
@@ -16461,12 +16524,6 @@ pub mod isi {
                     "election id already exists".into(),
                 ));
             }
-            let options = *self.options();
-            let tally_slots = usize::try_from(options).map_err(|_| {
-                InstructionExecutionError::InvariantViolation(
-                    "election options exceed platform limits".into(),
-                )
-            })?;
             if self.end_ts() < self.start_ts() {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "end_ts must be >= start_ts".into(),
@@ -16630,9 +16687,7 @@ pub mod isi {
                 ));
             }
             let inputs = extract_vote_public_inputs(backend, &self.ballot_proof.proof.bytes)?;
-            if let Some(envelope) = inputs.envelope.as_ref() {
-                validate_open_verify_envelope_metadata("ballot", backend, envelope, &vk_rec)?;
-            }
+            validate_open_verify_envelope_metadata("ballot", backend, &inputs.envelope, &vk_rec)?;
             let (commit_bytes, root_bytes) = ballot_inputs_from_columns(&inputs.columns)?;
             if root_bytes != st.eligible_root {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -16692,32 +16747,30 @@ pub mod isi {
                 ));
             }
             let id = self.election_id().clone();
-            let mut st = state_transaction
-                .world
-                .elections
-                .get(&id)
-                .cloned()
-                .ok_or_else(|| {
-                    InstructionExecutionError::InvariantViolation("unknown election id".into())
-                })?;
-            if st.finalized {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "election already finalized".into(),
-                ));
-            }
             let now_ms = u64::try_from(state_transaction._curr_block.creation_time().as_millis())
                 .unwrap_or(u64::MAX);
-            if now_ms < st.end_ts {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "election still active".into(),
-                ));
-            }
-            // Tally shape must match options
-            let expected_tally_len = usize::try_from(st.options).map_err(|_| {
-                InstructionExecutionError::InvariantViolation(
-                    "election options exceed platform limits".into(),
-                )
-            })?;
+            let (mut st, expected_tally_len) = {
+                let st = state_transaction.world.elections.get(&id).ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation("unknown election id".into())
+                })?;
+                if st.finalized {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "election already finalized".into(),
+                    ));
+                }
+                if now_ms < st.end_ts {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "election still active".into(),
+                    ));
+                }
+                let expected_tally_len = zk::validate_election_tally_v1(st.options, st.tally.len())
+                    .map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("invalid stored election shape: {error}").into(),
+                        )
+                    })?;
+                ((*st).clone(), expected_tally_len)
+            };
             if self.tally().len() != expected_tally_len {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "tally length does not match options".into(),
@@ -16752,9 +16805,7 @@ pub mod isi {
                 ));
             }
             let inputs = extract_vote_public_inputs(backend, &att.proof.bytes)?;
-            if let Some(envelope) = inputs.envelope.as_ref() {
-                validate_open_verify_envelope_metadata("tally", backend, envelope, &vk_rec)?;
-            }
+            validate_open_verify_envelope_metadata("tally", backend, &inputs.envelope, &vk_rec)?;
             let expected_tally = tally_from_columns(&inputs.columns, expected_tally_len)?;
             if expected_tally != *self.tally() {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -18129,7 +18180,7 @@ pub mod isi {
                 )
                 .into());
             }
-            let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload)
+            let proof_envelope = norito::decode_canonical::<AxtProofEnvelope>(&proof_blob.payload)
                 .map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(format!(
@@ -18409,7 +18460,7 @@ pub mod isi {
                     "verified fee sponsor vault allocation proof expired at slot {expiry_slot}",
                 )));
             }
-            let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload)
+            let proof_envelope = norito::decode_canonical::<AxtProofEnvelope>(&proof_blob.payload)
                 .map_err(|err| {
                     invalid_fee_sponsor_program(format!(
                         "verified fee sponsor vault allocation proof decode failed: {err}",
@@ -20711,6 +20762,7 @@ pub mod isi {
                 LaneCatalog, LaneConfig, LaneId,
             },
             permission::Permission,
+            privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
             proof::{
                 ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
             },
@@ -21705,8 +21757,37 @@ pub mod isi {
         }
 
         fn bridge_proof_hash_for_test(proof: &BridgeProof) -> [u8; 32] {
-            let encoded = norito::to_bytes(proof).expect("bridge proof fixture must encode");
+            let encoded =
+                encode_bridge_proof_identity(proof).expect("bridge proof fixture must encode");
             hash_bridge_proof(&proof.backend_label(), &encoded)
+        }
+
+        #[test]
+        fn bridge_proof_identity_encoding_ignores_ambient_norito_layout() {
+            let proof = bridge_proof_fixture(4);
+            let canonical =
+                encode_bridge_proof_identity(&proof).expect("encode canonical bridge proof");
+            let canonical_hash = hash_bridge_proof(&proof.backend_label(), &canonical);
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let alternate = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&proof).expect("encode alternate-layout bridge proof")
+            };
+            assert_ne!(
+                alternate, canonical,
+                "fixture must exercise a distinct advertised Norito layout"
+            );
+
+            let (ambient_encoded, ambient_hash) = {
+                let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                let encoded = encode_bridge_proof_identity(&proof)
+                    .expect("canonical bridge identity encoding under ambient flags");
+                let hash = hash_bridge_proof(&proof.backend_label(), &encoded);
+                (encoded, hash)
+            };
+            assert_eq!(ambient_encoded, canonical);
+            assert_eq!(ambient_hash, canonical_hash);
         }
 
         #[test]
@@ -25137,10 +25218,7 @@ seiyaku GovernanceLifecycle {
 
         #[test]
         fn normalize_halo2_circuit_id_and_match_variants() {
-            assert_eq!(
-                normalize_halo2_circuit_id(" halo2/pasta/ipa/foo "),
-                Some("halo2/pasta/ipa/foo".to_string())
-            );
+            assert_eq!(normalize_halo2_circuit_id(" halo2/pasta/ipa/foo "), None);
             assert_eq!(
                 normalize_halo2_circuit_id("halo2/pasta/foo"),
                 Some("halo2/pasta/ipa/foo".to_string())
@@ -25258,6 +25336,138 @@ seiyaku GovernanceLifecycle {
                 "stark/fri/sha256-goldilocks:vote-tally",
                 "vote-ballot"
             ));
+        }
+
+        #[test]
+        fn world_open_verify_admission_reserves_every_privacy_protocol_label() {
+            fn attachment_for(circuit_id: &str) -> (ProofAttachment, ZkOpenVerifyEnvelope) {
+                let envelope = ZkOpenVerifyEnvelope::new(
+                    BackendTag::Halo2IpaPasta,
+                    circuit_id,
+                    [0x55; 32],
+                    vec![0x01],
+                    vec![0x02],
+                );
+                let proof = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::encode_canonical(&envelope).expect("encode OpenVerify envelope"),
+                );
+                (
+                    ProofAttachment::new_ref(
+                        "halo2/ipa".into(),
+                        proof,
+                        VerifyingKeyId::new("halo2/ipa", "vk"),
+                    ),
+                    envelope,
+                )
+            }
+
+            fn assert_reserved(label: &str) {
+                for circuit_id in [
+                    label.to_owned(),
+                    format!("halo2/ipa::{label}"),
+                    format!("stark/fri/sha256-goldilocks:{label}"),
+                    format!("generic/namespace/{label}"),
+                ] {
+                    let error =
+                        ensure_generic_open_verify_circuit_id_is_not_reserved_for_privacy_v1(
+                            &circuit_id,
+                        )
+                        .expect_err("reserved privacy circuit id must fail");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("reserved privacy protocol label"),
+                        "unexpected reservation error for {circuit_id:?}: {error}"
+                    );
+                    assert!(normalize_halo2_circuit_id(&circuit_id).is_none());
+                    assert!(normalize_stark_fri_circuit_id("stark/fri", &circuit_id).is_none());
+                    assert!(!circuit_id_matches("halo2/ipa", &circuit_id, &circuit_id));
+
+                    let (attachment, envelope) = attachment_for(&circuit_id);
+                    let error = validate_proof_attachment(
+                        &attachment,
+                        &attachment.proof,
+                        true,
+                        Some(&envelope),
+                    )
+                    .expect_err("VerifyProof admission must reject privacy circuit labels");
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("reserved privacy protocol label"),
+                        "unexpected VerifyProof error for {circuit_id:?}: {error}"
+                    );
+                }
+
+                for malformed_alias in [
+                    format!(" {label}"),
+                    format!("{label} "),
+                    label.to_ascii_uppercase(),
+                ] {
+                    let error =
+                        ensure_generic_open_verify_circuit_id_is_not_reserved_for_privacy_v1(
+                            &malformed_alias,
+                        )
+                        .expect_err("non-portable privacy alias must fail");
+                    assert!(
+                        error.to_string().contains("bounded portable identifier"),
+                        "unexpected shape error for {malformed_alias:?}: {error}"
+                    );
+                    assert!(normalize_halo2_circuit_id(&malformed_alias).is_none());
+                    assert!(
+                        normalize_stark_fri_circuit_id("stark/fri", &malformed_alias).is_none()
+                    );
+                    assert!(!circuit_id_matches(
+                        "halo2/ipa",
+                        &malformed_alias,
+                        &malformed_alias
+                    ));
+
+                    let (attachment, envelope) = attachment_for(&malformed_alias);
+                    let error = validate_proof_attachment(
+                        &attachment,
+                        &attachment.proof,
+                        true,
+                        Some(&envelope),
+                    )
+                    .expect_err("VerifyProof must reject non-portable privacy aliases");
+                    assert!(
+                        error.to_string().contains("bounded portable identifier"),
+                        "unexpected VerifyProof shape error for {malformed_alias:?}: {error}"
+                    );
+                }
+
+                for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+                    ensure_generic_open_verify_circuit_id_is_not_reserved_for_privacy_v1(
+                        &near_miss,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("portable near miss {near_miss:?} failed: {error}")
+                    });
+                    assert!(normalize_halo2_circuit_id(&near_miss).is_some());
+                    assert!(normalize_stark_fri_circuit_id("stark/fri", &near_miss).is_some());
+                    assert!(circuit_id_matches("halo2/ipa", &near_miss, &near_miss));
+
+                    let (attachment, envelope) = attachment_for(&near_miss);
+                    validate_proof_attachment(
+                        &attachment,
+                        &attachment.proof,
+                        true,
+                        Some(&envelope),
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!("VerifyProof near miss {near_miss:?} failed: {error}")
+                    });
+                }
+            }
+
+            for protocol in PrivacyProtocolIdV1::ALL {
+                assert_reserved(protocol.canonical_label());
+            }
+            for label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+                assert_reserved(label);
+            }
         }
 
         #[test]
@@ -25695,11 +25905,11 @@ seiyaku GovernanceLifecycle {
                 b"schema:voting:halo2:v1".to_vec(),
                 proof_bytes,
             );
-            let payload = norito::to_bytes(&envelope).expect("encode envelope");
+            let payload = norito::encode_canonical(&envelope).expect("encode canonical envelope");
 
             let parsed = extract_vote_public_inputs("halo2/ipa", &payload).expect("extract inputs");
             assert_eq!(parsed.columns, columns);
-            assert!(parsed.envelope.is_some());
+            assert_eq!(parsed.envelope.backend, BackendTag::Halo2IpaPasta);
         }
 
         #[test]
@@ -25712,7 +25922,8 @@ seiyaku GovernanceLifecycle {
                 public_inputs: columns.clone(),
                 envelope_bytes: vec![0xAA, 0xBB],
             };
-            let proof_bytes = norito::to_bytes(&open).expect("encode stark open proof");
+            let proof_bytes =
+                norito::encode_canonical(&open).expect("encode canonical STARK open proof");
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Stark,
                 "vote-circuit",
@@ -25720,12 +25931,114 @@ seiyaku GovernanceLifecycle {
                 b"schema:voting:stark:v1".to_vec(),
                 proof_bytes,
             );
-            let payload = norito::to_bytes(&envelope).expect("encode envelope");
+            let payload = norito::encode_canonical(&envelope).expect("encode canonical envelope");
 
             let parsed = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &payload)
                 .expect("extract inputs");
             assert_eq!(parsed.columns, columns);
-            assert!(parsed.envelope.is_some());
+            assert_eq!(parsed.envelope.backend, BackendTag::Stark);
+        }
+
+        #[test]
+        fn extract_vote_public_inputs_rejects_alternate_layout_outer_envelope() {
+            let open = StarkFriOpenProofV1 {
+                version: 1,
+                public_inputs: vec![vec![[0x11; 32]]],
+                envelope_bytes: vec![0xAA],
+            };
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Stark,
+                "vote-circuit",
+                [0u8; 32],
+                b"schema:voting:stark:v1".to_vec(),
+                norito::encode_canonical(&open).expect("encode canonical STARK open proof"),
+            );
+            let canonical =
+                norito::encode_canonical(&envelope).expect("encode canonical outer envelope");
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let alternate = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&envelope).expect("encode alternate-layout outer envelope")
+            };
+            assert_ne!(alternate, canonical);
+            norito::decode_from_bytes::<OpenVerifyEnvelope>(&alternate)
+                .expect("ordinary Norito accepts the advertised alternate layout");
+
+            let error = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &alternate)
+                .err()
+                .expect("alternate-layout outer envelope must fail");
+            assert!(
+                format!("{error:?}").contains("invalid OpenVerifyEnvelope payload"),
+                "unexpected alternate-layout rejection: {error:?}"
+            );
+        }
+
+        #[test]
+        fn extract_vote_public_inputs_rejects_alternate_layout_nested_stark_proof() {
+            let open = StarkFriOpenProofV1 {
+                version: 1,
+                public_inputs: vec![vec![[0x22; 32]]],
+                envelope_bytes: vec![0xBB],
+            };
+            let canonical_nested =
+                norito::encode_canonical(&open).expect("encode canonical STARK open proof");
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let alternate_nested = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&open).expect("encode alternate-layout STARK open proof")
+            };
+            assert_ne!(alternate_nested, canonical_nested);
+            norito::decode_from_bytes::<StarkFriOpenProofV1>(&alternate_nested)
+                .expect("ordinary Norito accepts the advertised alternate layout");
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Stark,
+                "vote-circuit",
+                [0u8; 32],
+                b"schema:voting:stark:v1".to_vec(),
+                alternate_nested,
+            );
+            let canonical_outer = norito::encode_canonical(&envelope)
+                .expect("encode canonical outer around alternate nested proof");
+
+            let error = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &canonical_outer)
+                .err()
+                .expect("alternate-layout nested STARK proof must fail");
+            assert!(
+                format!("{error:?}").contains("invalid STARK open proof payload"),
+                "unexpected nested-layout rejection: {error:?}"
+            );
+        }
+
+        #[test]
+        fn extract_vote_public_inputs_keeps_canonical_backend_errors_distinct() {
+            let envelope = OpenVerifyEnvelope::new(
+                BackendTag::Halo2IpaPasta,
+                "vote-circuit",
+                [0u8; 32],
+                b"schema:voting:v1".to_vec(),
+                vec![0xCC],
+            );
+            let canonical =
+                norito::encode_canonical(&envelope).expect("encode canonical outer envelope");
+
+            let tag_error = extract_vote_public_inputs("stark/fri/sha256-goldilocks", &canonical)
+                .err()
+                .expect("wrong canonical backend tag must fail");
+            assert!(
+                format!("{tag_error:?}").contains("unexpected OpenVerifyEnvelope backend tag"),
+                "wrong canonical tag was reported as a framing error: {tag_error:?}"
+            );
+
+            let registry_error = extract_vote_public_inputs("halo2/kzg", &canonical)
+                .err()
+                .expect("unsupported backend label must fail");
+            assert!(
+                format!("{registry_error:?}")
+                    .contains("unsupported proof backends are not supported"),
+                "unsupported backend was reported as a payload error: {registry_error:?}"
+            );
         }
 
         #[test]
@@ -25852,6 +26165,7 @@ seiyaku GovernanceLifecycle {
                 "vega-existing-credential-zk",
                 "silent-threshold-anoncred",
                 "zk-x509",
+                "sis-hints-anoncred-pq-v0",
                 "sis-with-hints",
             ] {
                 assert!(
@@ -32256,7 +32570,8 @@ seiyaku GovernanceLifecycle {
             };
             VerifyingKeyBox::new(
                 "stark/fri/sha256-goldilocks".into(),
-                norito::to_bytes(&payload).expect("encode Soracloud STARK verifying key"),
+                norito::encode_canonical(&payload)
+                    .expect("encode canonical Soracloud STARK verifying key"),
             )
         }
 
@@ -32308,6 +32623,7 @@ seiyaku GovernanceLifecycle {
             "vega-existing-credential-zk",
             "silent-threshold-anoncred",
             "zk-x509",
+            "sis-hints-anoncred-pq-v0",
             "sis-with-hints",
         ];
 
@@ -34045,9 +34361,9 @@ seiyaku GovernanceLifecycle {
                 let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
                 let vk_box = soracloud_fhe_stark_vk_box_for_test(
                     profile,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
                 );
                 attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
 
@@ -34076,6 +34392,75 @@ seiyaku GovernanceLifecycle {
 
         #[cfg(feature = "zk-stark")]
         #[test]
+        fn registered_and_soracloud_stark_vks_reject_alternate_norito_layout() {
+            let test_profile = soracloud_fhe_stark_vk_test_profiles()[0];
+            let verifier_profile = SORACLOUD_FHE_STARK_VERIFIER_PROFILES
+                .iter()
+                .copied()
+                .find(|profile| profile.circuit_id == test_profile.circuit_id)
+                .expect("matching production Soracloud verifier profile");
+            let canonical_vk = soracloud_fhe_stark_vk_box_for_test(
+                test_profile,
+                crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+            );
+            validate_soracloud_fhe_stark_verifying_key_payload(verifier_profile, &canonical_vk)
+                .expect("canonical Soracloud STARK verifying key must pass");
+            let payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+                norito::decode_canonical(&canonical_vk.bytes)
+                    .expect("decode canonical Soracloud STARK verifying key");
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let alternate_bytes = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&payload)
+                    .expect("encode alternate-layout Soracloud STARK verifying key")
+            };
+            assert_ne!(alternate_bytes, canonical_vk.bytes);
+            norito::decode_from_bytes::<crate::zk_stark::StarkFriVerifyingKeyV1>(&alternate_bytes)
+                .expect("ordinary Norito accepts the advertised alternate layout");
+            let alternate_vk =
+                VerifyingKeyBox::new("stark/fri/sha256-goldilocks".into(), alternate_bytes);
+            let direct_error =
+                validate_soracloud_fhe_stark_verifying_key_payload(verifier_profile, &alternate_vk)
+                    .expect_err("Soracloud validation must reject alternate-layout key bytes");
+            assert!(
+                format!("{direct_error:?}").contains("invalid STARK payload"),
+                "unexpected Soracloud alternate-layout rejection: {direct_error:?}"
+            );
+
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let id = soracloud_fhe_stark_vk_id(test_profile);
+            let mut record =
+                soracloud_fhe_stark_vk_record(test_profile, u32::from(test_profile.version));
+            attach_soracloud_fhe_stark_vk_box(&mut record, alternate_vk);
+            let instruction: InstructionBox =
+                verifying_keys::RegisterVerifyingKey { id, record }.into();
+            let error = Executor::default()
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                .expect_err("registered alternate-layout STARK verifying key must fail");
+            let message = smart_contract_error_message(error);
+            assert!(
+                message.contains("invalid STARK verifying key payload"),
+                "unexpected registered alternate-layout rejection: {message}"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
         fn register_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -34093,12 +34478,12 @@ seiyaku GovernanceLifecycle {
             for profile in soracloud_fhe_stark_vk_test_profiles() {
                 let id = soracloud_fhe_stark_vk_id(profile);
                 let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
-                let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
+                let weak_n_log2 = crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
                 let vk_box = soracloud_fhe_stark_vk_box_for_test(
                     profile,
                     weak_n_log2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                    crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
                 );
                 attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
 
@@ -34149,12 +34534,12 @@ seiyaku GovernanceLifecycle {
             seed_stx.apply();
 
             let mut new_record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
-            let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
+            let weak_n_log2 = crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
             let vk_box = soracloud_fhe_stark_vk_box_for_test(
                 profile,
                 weak_n_log2,
-                crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
-                crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+                crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             );
             attach_soracloud_fhe_stark_vk_box(&mut new_record, vk_box);
 
@@ -34376,6 +34761,130 @@ seiyaku GovernanceLifecycle {
                     stx.world.verifying_keys.get(&id).is_none(),
                     "{backend} must not be admitted to WSV"
                 );
+            }
+        }
+
+        #[test]
+        fn register_vk_reserves_every_active_and_retired_privacy_circuit_label() {
+            fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
+                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
+                let mut record = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    circuit_id,
+                    None,
+                    "test",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    [0x6D; 32],
+                    hash_vk(&vk_box),
+                );
+                record.vk_len = 3;
+                record.status = ConfidentialStatus::Active;
+                record.key = Some(vk_box);
+                record.gas_schedule_id = Some("halo2_default".into());
+                record
+            }
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            grant_manage_verifying_keys(&mut stx);
+            stx.apply();
+
+            let exec = Executor::default();
+            for (label_index, label) in PrivacyProtocolIdV1::ALL
+                .into_iter()
+                .map(PrivacyProtocolIdV1::canonical_label)
+                .chain(PRIVACY_RETIRED_PROTOCOL_LABELS_V1)
+                .enumerate()
+            {
+                for (variant_index, circuit_id) in [
+                    label.to_owned(),
+                    format!("halo2/ipa::{label}"),
+                    format!("stark/fri/sha256-goldilocks:{label}"),
+                    format!("generic/namespace/{label}"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let mut stx = state_block.transaction();
+                    let id = VerifyingKeyId::new(
+                        "halo2/ipa",
+                        format!("vk_privacy_reserved_{label_index}_{variant_index}"),
+                    );
+                    let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record: halo2_record(circuit_id.clone()),
+                    }
+                    .into();
+                    let error = exec
+                        .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                        .expect_err("reserved privacy circuit label must not register");
+                    let message = smart_contract_error_message(error);
+                    assert!(
+                        message.contains("reserved privacy protocol label"),
+                        "unexpected rejection for {circuit_id:?}: {message}"
+                    );
+                    assert!(stx.world.verifying_keys.get(&id).is_none());
+                }
+
+                for (variant_index, circuit_id) in [
+                    format!(" {label}"),
+                    format!("{label} "),
+                    label.to_ascii_uppercase(),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let mut stx = state_block.transaction();
+                    let id = VerifyingKeyId::new(
+                        "halo2/ipa",
+                        format!("vk_privacy_non_portable_{label_index}_{variant_index}"),
+                    );
+                    let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record: halo2_record(circuit_id.clone()),
+                    }
+                    .into();
+                    let error = exec
+                        .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                        .expect_err("non-portable privacy alias must not register");
+                    let message = smart_contract_error_message(error);
+                    assert!(
+                        message.contains("bounded portable identifier"),
+                        "unexpected rejection for {circuit_id:?}: {message}"
+                    );
+                    assert!(stx.world.verifying_keys.get(&id).is_none());
+                }
+
+                for (variant_index, circuit_id) in
+                    [format!("generic-{label}"), format!("{label}-generic")]
+                        .into_iter()
+                        .enumerate()
+                {
+                    let mut stx = state_block.transaction();
+                    let id = VerifyingKeyId::new(
+                        "halo2/ipa",
+                        format!("vk_privacy_near_miss_{label_index}_{variant_index}"),
+                    );
+                    let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                        id: id.clone(),
+                        record: halo2_record(circuit_id.clone()),
+                    }
+                    .into();
+                    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                        .unwrap_or_else(|error| {
+                            panic!("portable near miss {circuit_id:?} failed: {error}")
+                        });
+                    assert!(
+                        stx.world.verifying_keys.get(&id).is_some(),
+                        "portable near miss {circuit_id:?} was not registered"
+                    );
+                }
             }
         }
 

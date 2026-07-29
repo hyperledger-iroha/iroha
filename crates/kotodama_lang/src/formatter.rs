@@ -306,7 +306,7 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
                     self.open_generic()
                 }
                 SyntaxKind::Greater if self.generic_depth != 0 => self.close_generic(),
-                SyntaxKind::Question if next.is_some_and(syntax_kind_starts_expression) => {
+                SyntaxKind::Question if self.question_starts_ternary_at(index) => {
                     self.ternary_question()
                 }
                 SyntaxKind::Colon if self.at_ternary_colon() => self.ternary_colon(),
@@ -319,6 +319,59 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
 
     fn parentheses_exceed_target(&self, open: usize) -> bool {
         self.delimited_exceeds_target(open, SyntaxKind::LParen, SyntaxKind::RParen)
+    }
+
+    fn question_starts_ternary_at(&self, question: usize) -> bool {
+        if self.tokens.get(question).map(|token| token.kind) != Some(SyntaxKind::Question) {
+            return false;
+        }
+        let first = self.tokens[question.saturating_add(1)..]
+            .iter()
+            .find(|token| {
+                !matches!(
+                    token.kind,
+                    SyntaxKind::LineComment | SyntaxKind::BlockComment
+                )
+            })
+            .map(|token| token.kind);
+        if !first.is_some_and(syntax_kind_starts_expression) {
+            return false;
+        }
+
+        let mut paren_depth = 0_usize;
+        let mut bracket_depth = 0_usize;
+        let mut brace_depth = 0_usize;
+        for token in self.tokens.iter().skip(question.saturating_add(1)) {
+            let at_top_level = paren_depth == 0 && bracket_depth == 0 && brace_depth == 0;
+            match token.kind {
+                SyntaxKind::Colon if at_top_level => return true,
+                SyntaxKind::LParen => paren_depth = paren_depth.saturating_add(1),
+                SyntaxKind::LBracket => bracket_depth = bracket_depth.saturating_add(1),
+                SyntaxKind::LBrace => brace_depth = brace_depth.saturating_add(1),
+                SyntaxKind::RParen => {
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                        return false;
+                    }
+                    paren_depth = paren_depth.saturating_sub(1);
+                }
+                SyntaxKind::RBracket => {
+                    if bracket_depth == 0 && paren_depth == 0 && brace_depth == 0 {
+                        return false;
+                    }
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                }
+                SyntaxKind::RBrace => {
+                    if brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                        return false;
+                    }
+                    brace_depth = brace_depth.saturating_sub(1);
+                }
+                SyntaxKind::Semicolon | SyntaxKind::Comma if at_top_level => return false,
+                SyntaxKind::LineComment | SyntaxKind::BlockComment => {}
+                _ => {}
+            }
+        }
+        false
     }
 
     fn delimited_exceeds_target(
@@ -395,7 +448,6 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
             if text.contains('\r') || text.contains('\n') {
                 return None;
             }
-            let next = self.tokens.get(index + 1).map(|token| token.kind);
             let previous_text = index
                 .checked_sub(1)
                 .and_then(|previous| self.tokens.get(previous))
@@ -484,7 +536,7 @@ impl<'source, 'tokens> TokenFormatter<'source, 'tokens> {
                     previous = Some(SyntaxKind::RBracket);
                     previous_was_prefix = false;
                 }
-                SyntaxKind::Question if next.is_some_and(syntax_kind_starts_expression) => {
+                SyntaxKind::Question if self.question_starts_ternary_at(index) => {
                     line.space();
                     line.write("?");
                     line.space();
@@ -1029,7 +1081,11 @@ const fn needs_space(
     if matches!(current, SyntaxKind::LBracket) {
         return !matches!(
             previous,
-            SyntaxKind::Ident | SyntaxKind::RParen | SyntaxKind::RBracket | SyntaxKind::Hash
+            SyntaxKind::Ident
+                | SyntaxKind::RParen
+                | SyntaxKind::RBracket
+                | SyntaxKind::Hash
+                | SyntaxKind::Question
         );
     }
     if matches!(current, SyntaxKind::LBrace) {
@@ -1308,6 +1364,16 @@ mod tests {
             formatted.contains("flag ? value? : fallback"),
             "{formatted}"
         );
+        assert_eq!(format(&formatted), formatted);
+    }
+
+    #[test]
+    fn formats_list_ternary_and_propagation_indexing_without_ambiguity() {
+        let formatted = format(
+            "seiyaku Demo{fn choose(bool flag)->List<int,1>{flag?[1]:[2]}fn head(Option<List<int,1>> value)->Option<int>{Option::some(value?[0])}}",
+        );
+        assert!(formatted.contains("flag ? [1] : [2]"), "{formatted}");
+        assert!(formatted.contains("Option::some(value?[0])"), "{formatted}");
         assert_eq!(format(&formatted), formatted);
     }
 

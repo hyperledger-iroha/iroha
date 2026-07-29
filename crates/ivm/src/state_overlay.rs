@@ -95,6 +95,16 @@ impl DurableStateOverlay {
         Ok(())
     }
 
+    /// Insert an entry while bypassing ingress validation.
+    ///
+    /// This is intentionally test-only and crate-private: runtime tests use it
+    /// to prove scanners reject corrupt state that could only have entered by
+    /// bypassing every supported persistence and mutation path.
+    #[cfg(test)]
+    pub(crate) fn insert_unchecked_for_test(&mut self, path: String, value: Vec<u8>) {
+        self.data.insert(path, value);
+    }
+
     /// Iterate over the stored state paths.
     pub fn keys(&self) -> impl Iterator<Item = &String> {
         self.data.keys()

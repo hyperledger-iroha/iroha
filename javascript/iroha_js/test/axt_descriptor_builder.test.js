@@ -29,6 +29,58 @@ test("buildTouchManifest sorts and deduplicates keys", () => {
   });
 });
 
+test("buildTouchManifest trims Rust whitespace and drops empty keys", () => {
+  const manifest = buildTouchManifest(
+    [
+      "",
+      " ",
+      "\t\n",
+      "\u0085",
+      "\u3000",
+      "  reports/monthly  ",
+      "\u1680reports/monthly\u205f",
+    ],
+    ["\u2003audits/summary\u202f", "\r\n", "audits/summary"],
+  );
+  assert.deepEqual(manifest, {
+    read: ["reports/monthly"],
+    write: ["audits/summary"],
+  });
+});
+
+test("buildTouchManifest uses Rust UTF-8 ordering for Unicode keys", () => {
+  const bmpPrivateUse = "\ue000/bmp-private-use";
+  const astral = "\u{10000}/astral";
+  assert.ok(astral < bmpPrivateUse, "fixture must differ under JavaScript UTF-16 ordering");
+
+  const manifest = buildTouchManifest(
+    [astral, bmpPrivateUse, ` ${astral} `],
+    [],
+  );
+
+  assert.deepEqual(manifest, {
+    read: [bmpPrivateUse, astral],
+    write: [],
+  });
+});
+
+test("buildTouchManifest retains non-Rust BOM code points", () => {
+  const manifest = buildTouchManifest(["\ufeff", "\ufeffpath\ufeff"], []);
+  assert.deepEqual(manifest, {
+    read: ["\ufeff", "\ufeffpath\ufeff"],
+    write: [],
+  });
+});
+
+test("buildTouchManifest rejects unpaired UTF-16 surrogates", () => {
+  for (const invalid of ["\ud800", "prefix\udfff", "\ud800suffix"]) {
+    assert.throws(
+      () => buildTouchManifest([invalid], []),
+      /read\[0\] must contain only Unicode scalar values/u,
+    );
+  }
+});
+
 test("buildTouchManifest accepts array-like inputs", () => {
   const arrayLike = { 0: "alpha", 1: "beta", length: 2 };
   const manifest = buildTouchManifest(arrayLike, { 0: "gamma", length: 1 });
@@ -96,6 +148,35 @@ maybeNativeTest("buildAxtDescriptor canonicalises through the native binding", (
   assert.equal(result.binding?.length, 32);
   assert.ok(Buffer.isBuffer(result.descriptorBytes));
   assert.equal(result.native, true);
+});
+
+maybeNativeTest("buildAxtDescriptor canonicalises adversarial touch paths like Rust", () => {
+  const bmpPrivateUse = "\ue000/bmp-private-use";
+  const astral = "\u{10000}/astral";
+  const result = buildAxtDescriptor({
+    dsids: [7],
+    touches: [
+      {
+        dsid: 7,
+        read: [" ", ` ${astral} `, bmpPrivateUse, astral],
+        write: ["\u3000", "\u2003write/path\u202f"],
+      },
+    ],
+    touchManifest: [
+      {
+        dsid: 7,
+        read: ["\u0085", ` ${astral} `, bmpPrivateUse, astral],
+        write: ["\t", "\u2003write/path\u202f"],
+      },
+    ],
+  });
+
+  const canonical = {
+    read: [bmpPrivateUse, astral],
+    write: ["write/path"],
+  };
+  assert.deepEqual(result.descriptor.touches, [{ dsid: 7, ...canonical }]);
+  assert.deepEqual(result.touchManifest, [{ dsid: 7, manifest: canonical }]);
 });
 
 maybeNativeTest("buildAxtDescriptor accepts array-like iterables", () => {

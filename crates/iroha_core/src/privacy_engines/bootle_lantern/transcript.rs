@@ -7,6 +7,7 @@
 //! coefficient, rejection_counter)`. This makes parallel expansion and random
 //! access byte-for-byte identical and prevents stream-position ambiguity.
 
+use p256::elliptic_curve::bigint::{U512, U1024};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
@@ -14,7 +15,12 @@ use sha3::{
 use thiserror::Error;
 
 use super::{
-    params::{APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1, PROOF_MODULUS_V1},
+    params::{
+        APPLICATION_MODULUS_V1, APPLICATION_RING_DEGREE_V1, CHALLENGE_ETA_V1,
+        CHALLENGE_NORM_POWER_V1, CHALLENGE_NORM_ROOT_DEGREE_V1,
+        MAX_CHALLENGE_CANDIDATE_ATTEMPTS_V1, MAX_PROJECTION_COLUMNS_V1,
+        MAX_UNIFORM_REJECTION_ATTEMPTS_V1, PROOF_MODULUS_V1,
+    },
     ring::{ApplicationPolynomialV1, ProofPolynomialV1},
 };
 
@@ -25,9 +31,50 @@ pub const PUBLIC_PARAMETER_SEED_DOMAIN_V1: &[u8] =
 const PRESENTATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.presentation-challenge.v1";
 const PRESENTATION_STAGE_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.presentation-stage.v1";
-const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: u32 = 4_096;
 const APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 const PROOF_ACCEPTANCE_LIMIT_V1: u64 = 70_931_694_131_122_923;
+const MAX_STAGED_UNIFORM_POLYNOMIALS_V1: usize = 4;
+const MAX_STAGED_UNIFORM_SCALARS_V1: usize = 2_568;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SignedU512V1 {
+    negative: bool,
+    magnitude: U512,
+}
+
+impl SignedU512V1 {
+    const ZERO: Self = Self {
+        negative: false,
+        magnitude: U512::ZERO,
+    };
+
+    fn from_centered(value: i64) -> Self {
+        Self {
+            negative: value < 0,
+            magnitude: U512::from_u64(value.unsigned_abs()),
+        }
+    }
+
+    fn negate(self) -> Self {
+        Self {
+            negative: !self.negative && self.magnitude != U512::ZERO,
+            magnitude: self.magnitude,
+        }
+    }
+}
+
+const fn challenge_eta_power_bound_v1() -> U1024 {
+    let mut bound = U1024::ONE;
+    let eta = U1024::from_u64(CHALLENGE_ETA_V1 as u64);
+    let mut exponent = 0_u8;
+    while exponent < CHALLENGE_NORM_ROOT_DEGREE_V1 {
+        bound = bound.wrapping_mul(&eta);
+        exponent += 1;
+    }
+    bound
+}
+
+const CHALLENGE_ETA_POWER_BOUND_V1: U1024 = challenge_eta_power_bound_v1();
 
 /// Derive the fixed transparent public-parameter seed from the pinned source
 /// profile.
@@ -524,7 +571,7 @@ impl PresentationTranscriptV1 {
     /// # Errors
     ///
     /// Rejects an empty stage tag or a field whose length cannot be encoded.
-    pub fn derive_bytes(
+    pub(crate) fn derive_bytes(
         &self,
         stage: &[u8],
         components: &[&[u8]],
@@ -561,7 +608,7 @@ impl PresentationTranscriptV1 {
     ///
     /// Rejects an empty row, an oversized coordinate, or transcript framing
     /// failure.
-    pub fn derive_ternary_row(
+    pub(crate) fn derive_ternary_row(
         &self,
         stage: &[u8],
         components: &[&[u8]],
@@ -571,6 +618,8 @@ impl PresentationTranscriptV1 {
         if columns == 0 {
             return Err(TranscriptErrorV1::EmptyProjectionRow);
         }
+        let mut output =
+            fixed_capacity_vec_v1(columns, MAX_PROJECTION_COLUMNS_V1, "ternary_columns")?;
         let columns_u32 = u32::try_from(columns).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
         let mut coordinate = [0_u8; 6];
         coordinate[..2].copy_from_slice(&row.to_be_bytes());
@@ -579,7 +628,6 @@ impl PresentationTranscriptV1 {
         absorb_stage_prefix(self, &mut state, stage, components)?;
         absorb_frame_checked(&mut state, &coordinate)?;
         let mut reader = state.finalize_xof();
-        let mut output = Vec::with_capacity(columns);
         while output.len() < columns {
             let mut accepted = None;
             for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
@@ -601,18 +649,22 @@ impl PresentationTranscriptV1 {
     /// # Errors
     ///
     /// Returns transcript framing or bounded uniform-rejection failure.
-    pub fn derive_uniform_polynomials(
+    pub(crate) fn derive_uniform_polynomials(
         &self,
         stage: &[u8],
         components: &[&[u8]],
         count: usize,
     ) -> Result<Vec<ProofPolynomialV1>, TranscriptErrorV1> {
+        let mut output = fixed_capacity_vec_v1(
+            count,
+            MAX_STAGED_UNIFORM_POLYNOMIALS_V1,
+            "uniform_polynomials",
+        )?;
         let count_u32 = u32::try_from(count).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
         let mut state = Shake256::default();
         absorb_stage_prefix(self, &mut state, stage, components)?;
         absorb_frame_checked(&mut state, &count_u32.to_be_bytes())?;
         let mut reader = state.finalize_xof();
-        let mut output = Vec::with_capacity(count);
         for _ in 0..count {
             let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
             for coefficient in &mut coefficients {
@@ -646,7 +698,7 @@ impl PresentationTranscriptV1 {
     /// # Errors
     ///
     /// Returns transcript framing or bounded uniform-rejection failure.
-    pub fn derive_uniform_scalars(
+    pub(crate) fn derive_uniform_scalars(
         &self,
         stage: &[u8],
         components: &[&[u8]],
@@ -654,13 +706,14 @@ impl PresentationTranscriptV1 {
     ) -> Result<Vec<u64>, TranscriptErrorV1> {
         const SCALAR_SHAPE_V1: &[u8] = b"scalar-vector-v1";
 
+        let mut output =
+            fixed_capacity_vec_v1(count, MAX_STAGED_UNIFORM_SCALARS_V1, "uniform_scalars")?;
         let count_u32 = u32::try_from(count).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
         let mut state = Shake256::default();
         absorb_stage_prefix(self, &mut state, stage, components)?;
         absorb_frame_checked(&mut state, SCALAR_SHAPE_V1)?;
         absorb_frame_checked(&mut state, &count_u32.to_be_bytes())?;
         let mut reader = state.finalize_xof();
-        let mut output = Vec::with_capacity(count);
         for _ in 0..count {
             let mut accepted = None;
             for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
@@ -684,20 +737,36 @@ impl PresentationTranscriptV1 {
     /// # Errors
     ///
     /// Rejects empty commitments or framing failure.
-    pub fn derive_final_challenge(
+    pub(crate) fn derive_final_challenge(
         &self,
         pre_challenge_commitments: &[u8],
     ) -> Result<ProofPolynomialV1, TranscriptErrorV1> {
         if pre_challenge_commitments.is_empty() {
             return Err(TranscriptErrorV1::EmptyPreChallengeCommitments);
         }
-        let mut prefixed = Vec::with_capacity(32 * 3 + pre_challenge_commitments.len());
-        prefixed.extend_from_slice(self.matrix_seed.parameter_digest());
-        prefixed.extend_from_slice(self.matrix_seed.public_parameter_seed());
-        prefixed.extend_from_slice(&self.relation_digest);
-        prefixed.extend_from_slice(pre_challenge_commitments);
-        derive_presentation_challenge_v1(self.binding, &prefixed)
+        let commitment_components: [&[u8]; 4] = [
+            self.matrix_seed.parameter_digest(),
+            self.matrix_seed.public_parameter_seed(),
+            &self.relation_digest,
+            pre_challenge_commitments,
+        ];
+        derive_presentation_challenge_from_components_v1(self.binding, &commitment_components)
     }
+}
+
+fn fixed_capacity_vec_v1<T>(
+    capacity: usize,
+    maximum: usize,
+    field: &'static str,
+) -> Result<Vec<T>, TranscriptErrorV1> {
+    if capacity > maximum {
+        return Err(TranscriptErrorV1::FixedProfileCapacityExceeded { field });
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(capacity)
+        .map_err(|_| TranscriptErrorV1::AllocationFailed { field })?;
+    Ok(output)
 }
 
 fn absorb_stage_prefix(
@@ -728,6 +797,130 @@ fn absorb_stage_prefix(
     Ok(())
 }
 
+fn checked_add_u1024_v1(accumulator: &mut U1024, addend: U1024) -> Option<()> {
+    let sum = accumulator.wrapping_add(&addend);
+    if sum < *accumulator {
+        return None;
+    }
+    *accumulator = sum;
+    Some(())
+}
+
+fn signed_difference_u1024_v1(positive: U1024, negative: U1024) -> (bool, U1024) {
+    if positive >= negative {
+        (false, positive.wrapping_sub(&negative))
+    } else {
+        (true, negative.wrapping_sub(&positive))
+    }
+}
+
+fn integer_negacyclic_square_v1(
+    polynomial: &[SignedU512V1; APPLICATION_RING_DEGREE_V1],
+) -> Option<[SignedU512V1; APPLICATION_RING_DEGREE_V1]> {
+    let mut positive = vec![U1024::ZERO; APPLICATION_RING_DEGREE_V1];
+    let mut negative = vec![U1024::ZERO; APPLICATION_RING_DEGREE_V1];
+    for (lhs_index, lhs) in polynomial.iter().copied().enumerate() {
+        for (rhs_index, rhs) in polynomial.iter().copied().enumerate() {
+            let degree = lhs_index + rhs_index;
+            let wraps = degree >= APPLICATION_RING_DEGREE_V1;
+            let destination = degree % APPLICATION_RING_DEGREE_V1;
+            let product: U1024 = lhs.magnitude.mul(&rhs.magnitude);
+            let is_negative = lhs.negative ^ rhs.negative ^ wraps;
+            checked_add_u1024_v1(
+                if is_negative {
+                    &mut negative[destination]
+                } else {
+                    &mut positive[destination]
+                },
+                product,
+            )?;
+        }
+    }
+
+    let mut output = [SignedU512V1::ZERO; APPLICATION_RING_DEGREE_V1];
+    for index in 0..APPLICATION_RING_DEGREE_V1 {
+        let (negative, magnitude) = signed_difference_u1024_v1(positive[index], negative[index]);
+        let (high, low) = magnitude.split();
+        if high != U512::ZERO {
+            return None;
+        }
+        output[index] = SignedU512V1 {
+            negative: negative && low != U512::ZERO,
+            magnitude: low,
+        };
+    }
+    Some(output)
+}
+
+fn challenge_integer_power_v1(
+    challenge: ProofPolynomialV1,
+) -> Option<[SignedU512V1; APPLICATION_RING_DEGREE_V1]> {
+    if !CHALLENGE_NORM_POWER_V1.is_power_of_two() {
+        return None;
+    }
+    let mut power = core::array::from_fn(|index| {
+        SignedU512V1::from_centered(challenge.centered_coefficient(index))
+    });
+    let mut exponent = 1_u8;
+    while exponent < CHALLENGE_NORM_POWER_V1 {
+        power = integer_negacyclic_square_v1(&power)?;
+        exponent = exponent.checked_mul(2)?;
+    }
+    (exponent == CHALLENGE_NORM_POWER_V1).then_some(power)
+}
+
+fn challenge_eta_norm_v1(challenge: ProofPolynomialV1) -> Option<U1024> {
+    let power = challenge_integer_power_v1(challenge)?;
+    let sigma_power: [SignedU512V1; APPLICATION_RING_DEGREE_V1] = core::array::from_fn(|index| {
+        if index == 0 {
+            power[0]
+        } else {
+            power[APPLICATION_RING_DEGREE_V1 - index].negate()
+        }
+    });
+
+    let mut positive = vec![U1024::ZERO; APPLICATION_RING_DEGREE_V1];
+    let mut negative = vec![U1024::ZERO; APPLICATION_RING_DEGREE_V1];
+    for (lhs_index, lhs) in sigma_power.iter().copied().enumerate() {
+        for (rhs_index, rhs) in power.iter().copied().enumerate() {
+            let degree = lhs_index + rhs_index;
+            let wraps = degree >= APPLICATION_RING_DEGREE_V1;
+            let destination = degree % APPLICATION_RING_DEGREE_V1;
+            let product: U1024 = lhs.magnitude.mul(&rhs.magnitude);
+            let is_negative = lhs.negative ^ rhs.negative ^ wraps;
+            checked_add_u1024_v1(
+                if is_negative {
+                    &mut negative[destination]
+                } else {
+                    &mut positive[destination]
+                },
+                product,
+            )?;
+        }
+    }
+
+    let mut norm = U1024::ZERO;
+    for (positive, negative) in positive.into_iter().zip(negative) {
+        let (_, magnitude) = signed_difference_u1024_v1(positive, negative);
+        checked_add_u1024_v1(&mut norm, magnitude)?;
+    }
+    Some(norm)
+}
+
+fn challenge_eta_norm_is_accepted_v1(norm: U1024) -> bool {
+    norm <= CHALLENGE_ETA_POWER_BOUND_V1
+}
+
+/// Check the exact LNP22 equation (19) challenge rejection condition.
+///
+/// All arithmetic is over the integer negacyclic ring
+/// `Z[X]/(X^64 + 1)`, before reduction modulo the proof modulus.  The
+/// challenge is accepted exactly when
+/// `||sigma_-1(c^32) * c^32||_1 <= 140^64`.
+pub(crate) fn challenge_eta_is_valid_v1(challenge: ProofPolynomialV1) -> bool {
+    challenge_eta_norm_v1(challenge).is_some_and(challenge_eta_norm_is_accepted_v1)
+}
+
 /// Derive the unique auto-stable 64-coefficient challenge over the proof
 /// modulus from the exact public binding and pre-challenge commitment wire.
 ///
@@ -738,16 +931,24 @@ fn absorb_stage_prefix(
 ///
 /// # Errors
 ///
-/// Rejects a zero binding digest, empty commitment wire, or a commitment wire
-/// whose length cannot be represented in the canonical frame.
-pub fn derive_presentation_challenge_v1(
+/// Rejects a zero binding digest, empty commitment wire, a commitment wire
+/// whose length cannot be represented in the canonical frame, or fixed-work
+/// candidate rejection exhaustion.
+pub(crate) fn derive_presentation_challenge_v1(
     binding: PresentationChallengeBindingV1,
     pre_challenge_commitments: &[u8],
 ) -> Result<ProofPolynomialV1, TranscriptErrorV1> {
-    binding.validate()?;
     if pre_challenge_commitments.is_empty() {
         return Err(TranscriptErrorV1::EmptyPreChallengeCommitments);
     }
+    derive_presentation_challenge_from_components_v1(binding, &[pre_challenge_commitments])
+}
+
+fn derive_presentation_challenge_from_components_v1(
+    binding: PresentationChallengeBindingV1,
+    pre_challenge_commitment_components: &[&[u8]],
+) -> Result<ProofPolynomialV1, TranscriptErrorV1> {
+    binding.validate()?;
     let mut state = Shake256::default();
     absorb_frame_checked(&mut state, PRESENTATION_CHALLENGE_DOMAIN_V1)?;
     absorb_frame_checked(&mut state, &binding.parameter_digest)?;
@@ -755,37 +956,62 @@ pub fn derive_presentation_challenge_v1(
     absorb_frame_checked(&mut state, &binding.statement_digest)?;
     absorb_frame_checked(&mut state, &binding.issuer_policy_record_digest)?;
     absorb_frame_checked(&mut state, &binding.transaction_intent_digest)?;
-    absorb_frame_checked(&mut state, pre_challenge_commitments)?;
+    absorb_concatenated_frame_checked(&mut state, pre_challenge_commitment_components)?;
     let mut reader = state.finalize_xof();
 
-    let mut challenge = [0_u64; APPLICATION_RING_DEGREE_V1];
-    for coefficient in &mut challenge[..32] {
-        let mut candidate = None;
-        for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
-            let mut byte = [0_u8; 1];
-            reader.read(&mut byte);
-            if byte[0] < 255 {
-                candidate = Some(i16::from(byte[0] % 17) - 8);
-                break;
+    for _ in 0..MAX_CHALLENGE_CANDIDATE_ATTEMPTS_V1 {
+        let mut challenge = [0_u64; APPLICATION_RING_DEGREE_V1];
+        for coefficient in &mut challenge[..32] {
+            let mut candidate = None;
+            for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
+                let mut byte = [0_u8; 1];
+                reader.read(&mut byte);
+                if byte[0] < 255 {
+                    candidate = Some(i16::from(byte[0] % 17) - 8);
+                    break;
+                }
             }
+            let candidate = candidate.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?;
+            *coefficient = if candidate < 0 {
+                PROOF_MODULUS_V1 - u64::try_from(-candidate).expect("challenge magnitude fits u64")
+            } else {
+                u64::try_from(candidate).expect("challenge magnitude fits u64")
+            };
         }
-        let candidate = candidate.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?;
-        *coefficient = if candidate < 0 {
-            PROOF_MODULUS_V1 - u64::try_from(-candidate).expect("challenge magnitude fits u64")
-        } else {
-            u64::try_from(candidate).expect("challenge magnitude fits u64")
-        };
+        challenge[32] = 0;
+        for index in 33..APPLICATION_RING_DEGREE_V1 {
+            let source = APPLICATION_RING_DEGREE_V1 - index;
+            challenge[index] = if challenge[source] == 0 {
+                0
+            } else {
+                PROOF_MODULUS_V1 - challenge[source]
+            };
+        }
+        let challenge =
+            ProofPolynomialV1::new(challenge).map_err(|_| TranscriptErrorV1::InternalInvariant)?;
+        if challenge_eta_is_valid_v1(challenge) {
+            return Ok(challenge);
+        }
     }
-    challenge[32] = 0;
-    for index in 33..APPLICATION_RING_DEGREE_V1 {
-        let source = APPLICATION_RING_DEGREE_V1 - index;
-        challenge[index] = if challenge[source] == 0 {
-            0
-        } else {
-            PROOF_MODULUS_V1 - challenge[source]
-        };
+    Err(TranscriptErrorV1::ChallengeCandidateRejectionExhausted)
+}
+
+fn absorb_concatenated_frame_checked(
+    state: &mut Shake256,
+    components: &[&[u8]],
+) -> Result<(), TranscriptErrorV1> {
+    let length = components.iter().try_fold(0_u32, |length, component| {
+        let component_length =
+            u32::try_from(component.len()).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
+        length
+            .checked_add(component_length)
+            .ok_or(TranscriptErrorV1::FieldTooLarge)
+    })?;
+    state.update(&length.to_be_bytes());
+    for component in components {
+        state.update(component);
     }
-    ProofPolynomialV1::new(challenge).map_err(|_| TranscriptErrorV1::InternalInvariant)
+    Ok(())
 }
 
 fn matrix_index(rows: u16, columns: u16, row: u16, column: u16) -> Option<usize> {
@@ -842,9 +1068,24 @@ pub enum TranscriptErrorV1 {
     /// Uniform coefficient rejection sampling exceeded its fixed work bound.
     #[error("Bootle/Lantern uniform matrix sampling exhausted its fixed work bound")]
     UniformRejectionExhausted,
+    /// Complete challenge candidates all failed the integer-ring eta bound.
+    #[error("Bootle/Lantern challenge candidate rejection exhausted its fixed work bound")]
+    ChallengeCandidateRejectionExhausted,
     /// A transcript field exceeded the fixed 32-bit frame length.
     #[error("Bootle/Lantern transcript field is too large")]
     FieldTooLarge,
+    /// A crate-internal staged derivation exceeded the fixed profile shape.
+    #[error("Bootle/Lantern transcript `{field}` exceeds its fixed-profile capacity")]
+    FixedProfileCapacityExceeded {
+        /// Stable staged-derivation field name.
+        field: &'static str,
+    },
+    /// A bounded staged-derivation allocation could not be reserved.
+    #[error("Bootle/Lantern transcript `{field}` allocation failed")]
+    AllocationFailed {
+        /// Stable staged-derivation field name.
+        field: &'static str,
+    },
     /// No pre-challenge commitment bytes were supplied.
     #[error("Bootle/Lantern pre-challenge commitment wire must not be empty")]
     EmptyPreChallengeCommitments,
@@ -898,8 +1139,39 @@ mod tests {
         }
     }
 
+    fn presentation_seed() -> MatrixSeedV1 {
+        MatrixSeedV1::new(binding().parameter_digest, [0x72; 32])
+            .expect("presentation seed matches its challenge binding")
+    }
+
+    fn challenge_from_first_half(
+        first_half: [i64; APPLICATION_RING_DEGREE_V1 / 2],
+    ) -> ProofPolynomialV1 {
+        let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
+        for (output, centered) in coefficients[..32].iter_mut().zip(first_half) {
+            *output = if centered < 0 {
+                PROOF_MODULUS_V1 - centered.unsigned_abs()
+            } else {
+                u64::try_from(centered).expect("small challenge coefficient fits u64")
+            };
+        }
+        for index in 33..APPLICATION_RING_DEGREE_V1 {
+            let source = APPLICATION_RING_DEGREE_V1 - index;
+            coefficients[index] = if coefficients[source] == 0 {
+                0
+            } else {
+                PROOF_MODULUS_V1 - coefficients[source]
+            };
+        }
+        ProofPolynomialV1::new(coefficients).expect("canonical challenge fixture")
+    }
+
+    fn centered_first_half(challenge: ProofPolynomialV1) -> [i64; APPLICATION_RING_DEGREE_V1 / 2] {
+        core::array::from_fn(|index| challenge.centered_coefficient(index))
+    }
+
     fn presentation_transcript() -> PresentationTranscriptV1 {
-        PresentationTranscriptV1::new(binding(), seed(), [0x95; 32])
+        PresentationTranscriptV1::new(binding(), presentation_seed(), [0x95; 32])
             .expect("fully bound transcript")
     }
 
@@ -1056,6 +1328,15 @@ mod tests {
     fn challenge_is_autostable_canonical_deterministic_and_fully_bound() {
         let challenge = derive_presentation_challenge_v1(binding(), b"canonical commitments")
             .expect("challenge");
+        assert_eq!(
+            centered_first_half(challenge),
+            [
+                -1, 0, -6, -6, 0, 6, -1, -4, 1, 5, 4, -2, 5, -8, -7, -8, -4, 0, -3, -8, -3, 6, -6,
+                -4, 0, 7, 8, -4, -5, -1, 3, 4,
+            ],
+            "cross-language accepted challenge KAT"
+        );
+        assert!(challenge_eta_is_valid_v1(challenge));
         let coefficients = challenge.coefficients();
         for coefficient in &coefficients[..32] {
             let centered = if *coefficient <= PROOF_MODULUS_V1 / 2 {
@@ -1114,6 +1395,83 @@ mod tests {
     }
 
     #[test]
+    fn challenge_eta_integer_norm_has_exact_boundary_and_adversarial_kats() {
+        let threshold = U1024::from_be_hex(
+            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000135917022c83ac72f601fd7feb91854b28ece4c1c0c55bfc320799795f633239ec3bd12172d0f6f950100000000000000000000000000000000",
+        );
+        assert_eq!(CHALLENGE_ETA_POWER_BOUND_V1, threshold);
+        assert!(challenge_eta_norm_is_accepted_v1(threshold));
+        assert!(!challenge_eta_norm_is_accepted_v1(
+            threshold.wrapping_add(&U1024::ONE)
+        ));
+
+        let all_eight = challenge_from_first_half([8; 32]);
+        let all_eight_norm = challenge_eta_norm_v1(all_eight).expect("bounded exact arithmetic");
+        assert_eq!(
+            all_eight_norm,
+            U1024::from_be_hex(
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000635046cf4f8a3d84a044b68b1c7becaf4d576a9f511854c6a8392bcb65f637c32ee4b37fc37bbeb7a68001000000000000000000000000000000000000000000000000"
+            )
+        );
+        assert!(!challenge_eta_is_valid_v1(all_eight));
+
+        let patterned = challenge_from_first_half(core::array::from_fn(|index| {
+            i64::try_from(index % 17).expect("small index") - 8
+        }));
+        assert_eq!(
+            challenge_eta_norm_v1(patterned).expect("bounded exact arithmetic"),
+            U1024::from_be_hex(
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004ab3012ce9d08088eb4a788c6b4cad45c85ec62c27744691a8c55461387b484e6ae9a8c7aeef5eaf0e2e3ee31722a449bb154a85c10000"
+            )
+        );
+        assert!(challenge_eta_is_valid_v1(patterned));
+
+        let all_one = challenge_from_first_half([1; 32]);
+        assert_eq!(
+            challenge_eta_norm_v1(all_one).expect("bounded exact arithmetic"),
+            U1024::from_be_hex(
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000635046cf4f8a3d84a044b68b1c7becaf4d576a9f511854c6a8392bcb65f637c32ee4b37fc37bbeb7a68001"
+            )
+        );
+        assert!(challenge_eta_is_valid_v1(all_one));
+    }
+
+    #[test]
+    fn challenge_eta_rejection_retries_sequentially_in_one_xof() {
+        let rejected = challenge_from_first_half([
+            -3, 5, 6, 6, 2, -7, -7, 8, 5, 8, 7, -5, 4, -1, 7, 8, 5, -5, 8, 3, 7, -4, -5, -2, -3,
+            -6, 3, -8, -7, -4, 5, 3,
+        ]);
+        assert_eq!(
+            challenge_eta_norm_v1(rejected).expect("bounded exact arithmetic"),
+            U1024::from_be_hex(
+                "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000037f055a112ed6f89a668c29c50d5fff240da284be486dea877b97e7d5b9b0e9ab3dd7156f072c8d729ccfbaa23b4bfb37a965101a6f093b2b59"
+            )
+        );
+        assert!(!challenge_eta_is_valid_v1(rejected));
+
+        let expected = [
+            7, 6, 7, 2, -6, 4, 5, -1, 4, -2, 0, -8, -3, 4, 0, -1, 2, 0, 6, -2, -7, 5, -7, 1, 8, -4,
+            -5, -8, 5, -3, 4, 0,
+        ];
+        let accepted = derive_presentation_challenge_v1(binding(), b"eta-retry-136")
+            .expect("second sequential candidate accepts");
+        assert_eq!(centered_first_half(accepted), expected);
+        assert_eq!(
+            challenge_eta_norm_v1(accepted).expect("bounded exact arithmetic"),
+            U1024::from_be_hex(
+                "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010144c07dc530ffb210758e2823201cae6b6441be35e8d1acbdbb7e9881806ec897f32409fba754f154ce0b8467e2652a2fb79"
+            )
+        );
+        assert!(challenge_eta_is_valid_v1(accepted));
+        assert_eq!(
+            accepted,
+            derive_presentation_challenge_v1(binding(), b"eta-retry-136")
+                .expect("retry transcript is deterministic")
+        );
+    }
+
+    #[test]
     fn challenge_rejects_every_zero_binding_and_empty_commitments() {
         let base = binding();
         for field in 0..5 {
@@ -1163,14 +1521,14 @@ mod tests {
         assert_eq!(
             &challenge.coefficients()[..8],
             &[
+                1_125_899_906_843_220,
+                0,
+                1_125_899_906_843_215,
+                1_125_899_906_843_215,
+                0,
+                6,
+                1_125_899_906_843_220,
                 1_125_899_906_843_217,
-                3,
-                4,
-                4,
-                8,
-                1_125_899_906_843_214,
-                1_125_899_906_843_220,
-                1_125_899_906_843_220,
             ]
         );
     }
@@ -1199,14 +1557,15 @@ mod tests {
         let mut changed_binding = binding();
         changed_binding.statement_digest[0] ^= 1;
         let changed =
-            PresentationTranscriptV1::new(changed_binding, seed(), [0x95; 32]).expect("binding");
+            PresentationTranscriptV1::new(changed_binding, presentation_seed(), [0x95; 32])
+                .expect("binding");
         changed
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
         assert_ne!(first, second);
 
-        let changed =
-            PresentationTranscriptV1::new(binding(), seed(), [0x94; 32]).expect("relation binding");
+        let changed = PresentationTranscriptV1::new(binding(), presentation_seed(), [0x94; 32])
+            .expect("relation binding");
         changed
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
@@ -1232,9 +1591,9 @@ mod tests {
         );
 
         let polynomials = transcript
-            .derive_uniform_polynomials(b"weights", &[b"commitment"], 9)
+            .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
             .expect("uniform polynomials");
-        assert_eq!(polynomials.len(), 9);
+        assert_eq!(polynomials.len(), 4);
         assert!(polynomials.iter().all(|polynomial| {
             polynomial
                 .coefficients()
@@ -1244,7 +1603,7 @@ mod tests {
         assert_eq!(
             polynomials,
             transcript
-                .derive_uniform_polynomials(b"weights", &[b"commitment"], 9)
+                .derive_uniform_polynomials(b"weights", &[b"commitment"], 4)
                 .expect("uniform polynomials")
         );
 
@@ -1277,7 +1636,7 @@ mod tests {
             Err(TranscriptErrorV1::MatrixParameterBindingMismatch)
         );
         assert_eq!(
-            PresentationTranscriptV1::new(binding(), seed(), [0; 32]),
+            PresentationTranscriptV1::new(binding(), presentation_seed(), [0; 32]),
             Err(TranscriptErrorV1::ZeroDigest {
                 field: "relation_digest"
             })
@@ -1293,6 +1652,37 @@ mod tests {
         assert_eq!(
             presentation_transcript().derive_final_challenge(b""),
             Err(TranscriptErrorV1::EmptyPreChallengeCommitments)
+        );
+        assert_eq!(
+            presentation_transcript().derive_ternary_row(
+                b"r",
+                &[],
+                0,
+                MAX_PROJECTION_COLUMNS_V1 + 1
+            ),
+            Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
+                field: "ternary_columns"
+            })
+        );
+        assert_eq!(
+            presentation_transcript().derive_uniform_polynomials(
+                b"uniform-polynomials",
+                &[],
+                MAX_STAGED_UNIFORM_POLYNOMIALS_V1 + 1
+            ),
+            Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
+                field: "uniform_polynomials"
+            })
+        );
+        assert_eq!(
+            presentation_transcript().derive_uniform_scalars(
+                b"uniform-scalars",
+                &[],
+                MAX_STAGED_UNIFORM_SCALARS_V1 + 1
+            ),
+            Err(TranscriptErrorV1::FixedProfileCapacityExceeded {
+                field: "uniform_scalars"
+            })
         );
     }
 }

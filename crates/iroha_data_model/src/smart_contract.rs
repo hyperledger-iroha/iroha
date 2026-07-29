@@ -1533,7 +1533,7 @@ pub mod manifest {
         /// Encode the canonical signing payload into Norito bytes.
         #[must_use]
         pub fn signature_payload_bytes(&self) -> Vec<u8> {
-            norito::to_bytes(&self.signature_payload())
+            norito::encode_canonical(&self.signature_payload())
                 .expect("manifest signature payload encoding must succeed")
         }
 
@@ -1712,6 +1712,16 @@ pub mod manifest {
             };
 
             let payload = manifest.signature_payload_bytes();
+            {
+                let alternate_flags =
+                    norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                assert_eq!(
+                    manifest.signature_payload_bytes(),
+                    payload,
+                    "manifest signature identity must ignore the caller's ambient Norito layout"
+                );
+            }
             let signature = Signature::try_new(kp.private_key(), &payload)
                 .expect("checked contract manifest fixture signature");
             manifest.provenance = Some(ManifestProvenance {

@@ -2,7 +2,7 @@
 lang: uz
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -19,7 +19,7 @@ Joriy FASTPQ rejalashtiruvchisi `TransferAsset` ko'rsatmasi bilan bog'liq har bi
 - **Qoʻllanish doirasi**: mavjud Kotodama/IVM `TransferAsset` tizimli qoʻngʻiroq yuzasi orqali chiqariladigan yagona oʻtkazmalar va kichik partiyalar.
 - **Maqsad**: qidiruv jadvallarini almashish va har bir transfer arifmetikasini ixcham cheklov blokiga yig‘ish orqali katta hajmli o‘tkazmalar uchun FFT/LDE ustun izini qisqartirish.
 
-#Arxitektura
+# Arxitektura
 
 ```
 Kotodama builder → IVM syscall (transfer_v1 / transfer_v1_batch)
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ transkript ixtiyoriy maydonlarni o'tkazib yuborsa ham har doim deterministik SMT
      - `from_balance_before >= amount` (umumiy RNS dekompozitsiyasiga ega diapazonli gadjet).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Barcha uchta tenglamalar bitta qatorli guruhni iste'mol qilish uchun maxsus darvoza ichiga o'rnatilgan.2. **Poseidon majburiyat bloki**
+   - Barcha uchta tenglamalar bitta qatorli guruhni iste'mol qilish uchun maxsus darvoza ichiga o'rnatilgan.
+
+2. **Poseidon majburiyat bloki**
    - `poseidon_preimage_digest` ni boshqa gadjetlarda allaqachon qo‘llanilgan Poseidon qidiruv jadvali yordamida qayta hisoblaydi. Izda har bir transfer Poseidon raundlari yo'q.
 
 3. **Merkle Path Block**
@@ -96,7 +98,9 @@ transkript ixtiyoriy maydonlarni o'tkazib yuborsa ham har doim deterministik SMT
 5. **To‘plamli tsikl**
    - Dasturlar `transfer_asset` quruvchilardan oldin `transfer_v1_batch_begin()` ni va keyin `transfer_v1_batch_end()` ni chaqiradi. Qo'llanish doirasi faol bo'lsa, xost har bir uzatishni buferlaydi va ularni bitta `TransferAssetBatch` sifatida takrorlaydi, Poseidon/SMT kontekstini har bir to'plamda bir marta qayta ishlatadi. Har bir qo'shimcha delta faqat arifmetik va ikkita barg tekshiruvini qo'shadi. Transkript dekoderi endi ko'p deltali partiyalarni qabul qiladi va ularni `TransferGadgetInput::deltas` sifatida ko'rsatadi, shuning uchun rejalashtiruvchi Norito ni qayta o'qimasdan guvohlarni yig'ishi mumkin. Norito foydali yukiga ega bo'lgan shartnomalar (masalan, CLI/SDK) `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` raqamiga qo'ng'iroq qilish orqali ko'lamni butunlay o'tkazib yuborishi mumkin, bu esa xostga bitta tizimda to'liq kodlangan to'plamni beradi.
 
-# Xost va prover o'zgarishlari| Qatlam | O'zgarishlar |
+# Xost va prover o'zgarishlari
+
+| Qatlam | O'zgarishlar |
 |-------|---------|
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) qo'shing, shunda dasturlar oraliq ISI0NI0, plus IIS0604 chiqarmasdan bir nechta `transfer_v1` tizim qo'ng'iroqlarini qavslashi mumkin. (`0x2B`) oldindan kodlangan partiyalar uchun. |
 | `ivm::host` & testlar | Asosiy/Standart xostlar `transfer_v1` ni qamrov faol bo‘lganda, `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` yuzasida va soxta WSV xostlari regressiya testlari deterministik muvozanatni ta’minlashi mumkin bo‘lgan yozuvlarni bajarishdan oldin bufer sifatida ko‘radi. yangilanishlar.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```Chiqarilgan JSON hozirda sukut bo'yicha `iroha_cli audit witness` chiqaradigan FASTPQ to'plam artefaktlarini aks ettiradi (ularni bostirish uchun `--no-fastpq-batches` dan o'ting), shuning uchun `scripts/fastpq/check_row_usage.py` va CI gatesi sintetik tortishishlarni oldingi o'zgarishlarni rejalashtirishda farq qilishi mumkin.
+```
+
+Chiqarilgan JSON hozirda sukut bo'yicha `iroha_cli audit witness` chiqaradigan FASTPQ to'plam artefaktlarini aks ettiradi (ularni bostirish uchun `--no-fastpq-batches` dan o'ting), shuning uchun `scripts/fastpq/check_row_usage.py` va CI gatesi sintetik tortishishlarni oldingi o'zgarishlarni rejalashtirishda farq qilishi mumkin.
 
 # Chiqarish rejasi
 

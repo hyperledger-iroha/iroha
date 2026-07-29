@@ -836,8 +836,8 @@ pub struct ProofAttachmentList(
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ProofAttachmentList {
     fn json_serialize(&self, out: &mut String) {
-        let bytes =
-            norito::to_bytes(self).expect("ProofAttachmentList Norito serialization must succeed");
+        let bytes = norito::encode_canonical(self)
+            .expect("ProofAttachmentList canonical Norito serialization must succeed");
         let encoded = STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
@@ -852,9 +852,7 @@ impl norito::json::JsonDeserialize for ProofAttachmentList {
         let bytes = STANDARD
             .decode(encoded.as_str())
             .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        let archived = norito::from_bytes::<ProofAttachmentList>(&bytes)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
+        norito::decode_canonical::<ProofAttachmentList>(&bytes)
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
@@ -1586,6 +1584,38 @@ mod tests {
 
         norito::json::from_str::<ProofAttachmentList>(&json)
             .expect_err("single ProofAttachment wire payload must not decode as a list");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_attachment_list_json_is_canonical_and_ambient_independent() {
+        use base64::Engine as _;
+
+        let list = ProofAttachmentList(vec![ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
+        )]);
+        let canonical_json =
+            norito::json::to_json(&list).expect("encode canonical proof-attachment list JSON");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                norito::json::to_json(&list)
+                    .expect("encode list JSON under alternate ambient layout"),
+                canonical_json
+            );
+        }
+
+        let alternate_frame = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&list).expect("encode alternate-layout proof-attachment list")
+        };
+        let alternate_json = format!("\"{}\"", STANDARD.encode(alternate_frame));
+        norito::json::from_str::<ProofAttachmentList>(&alternate_json)
+            .expect_err("alternate-layout proof-attachment list JSON must be rejected");
     }
 
     #[cfg(feature = "json")]

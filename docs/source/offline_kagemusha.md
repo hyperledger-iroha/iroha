@@ -322,26 +322,36 @@ note can still be redeemed after issuance closes.
 
 Candidate mode requires the complete source, guard, SDK, and test corridor but
 expects production availability to remain false; it does not invent external
-evidence. Promotion mode additionally requires a clean signed candidate commit,
-the authenticated release bundle, independent cryptographic review, measured
-physical Android/iOS evidence within the signed ceilings, signed role-threshold
+evidence. Promotion mode additionally requires a signed candidate commit, an
+independently pinned reviewed source closure, the authenticated release bundle,
+independent cryptographic review, complete signed physical-device evidence for
+every platform slot required by the selected policy, signed role-threshold
 approval, and the production corridor. Any proof-code change after the
-candidate commit invalidates that evidence and requires regeneration.
+reviewed closure invalidates that evidence and requires regeneration. A
+candidate built from a dirty tree is admissible only when the dirty state and
+the complete reviewed closure are explicit and hash-bound throughout the
+candidate, native build, device transcript, and signed evidence.
 
 Physical-device evidence is collected before finalization with the separate,
 off-by-default `kagemusha-candidate-evidence-lab` build. That build accepts only
-the canonical clean unsigned candidate plus its exact ordered eight KRV4
-artifacts and calls the same ABI-21 prover/verifier/recursion implementation.
-Its symbols, registry, JNI class, marker-bearing native library, and APK are
-distinct from production and are rejected by production packaging. The normal
-artifact install and proof entrypoints remain unavailable, and device evidence
-must record that production capability stayed false. Candidate-bound Android
-evidence V2 hashes the candidate, manifest, source commit/tree, lab binaries,
-each framed and payload artifact, the native-accepted inventory, and the exact
-lifecycle transcript; V1/status-only evidence cannot be promoted.
-The marker-bearing candidate-lab APK has its own path and digest in V2; it is
-never relabelled as the separately attested wallet APK used for StrongBox,
-rotation, rollback, and device-to-device transfer evidence.
+the exact reviewed candidate plus its exact ordered eight KRV4 artifacts and
+calls the same ABI-21 prover/verifier/recursion implementation. Its symbols,
+marker-bearing native library, and test host are distinct from production and
+are rejected by production packaging. The normal artifact install and proof
+entrypoints remain unavailable, and device evidence must record that production
+capability stayed false.
+
+The current Taira-testnet evidence policy has one physical-iOS slot and makes
+no Android-parity claim. Its
+[physical-iPhone procedure](sdk/swift/readiness/kagemusha_candidate_ios_lab.md)
+requires two fresh XCTest processes, a durable checkpoint and exact reopen,
+real offline path measurements, a zero URL-request count, the complete
+28-operation lifecycle, full redemption, a fixed resource ceiling, and a
+closed Ed25519-signed raw-artifact inventory. Simulator or status-summary
+output cannot satisfy that slot. Candidate-bound Android evidence remains a
+separate policy slot: its marker-bearing candidate-lab APK is never relabelled
+as the separately attested wallet APK used for StrongBox, rotation, rollback,
+and device-to-device transfer evidence.
 
 Run the repository corridor without external evidence while preparing a
 candidate:
@@ -361,6 +371,28 @@ KAGEMUSHA_V4_RELEASE_POLICY_PATH=/run/iroha/kagemusha/release-policy.norito \
 KAGEMUSHA_V4_ARTIFACT_ROOT=/run/iroha/kagemusha/v4 \
   ci/check_kagemusha_production_readiness.sh promotion
 ```
+
+When the selected policy uses the Taira physical-iOS slot, provide the trusted
+Ed25519 identity and an owner-private evidence root whose child names match the
+release manifest-digest directories. Each child contains the corresponding
+runner's exact `raw/` tree:
+
+```bash
+KAGEMUSHA_V4_RELEASE_POLICY_PATH=/run/iroha/kagemusha/release-policy.norito \
+KAGEMUSHA_V4_ARTIFACT_ROOT=/run/iroha/kagemusha/v4 \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT=/run/iroha/kagemusha/ios-device-evidence \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID="$TRUSTED_KEY_ID" \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-evidence-ed25519.pub.pem \
+  ci/check_kagemusha_production_readiness.sh promotion
+```
+
+The signed JSON itself remains the release's
+`physical-device-benchmark.evidence`. The corridor verifies its exact external
+raw tree, trusted Ed25519 signature, physical-iOS invariants, and then compares
+the signed candidate-record digest with the immutable candidate reconstructed
+by Kagami from the finalized release. All three iOS environment variables are
+an all-or-none input; a simulator, XCTest summary, or raw tree for a different
+manifest digest fails closed.
 
 The policy path is always an explicit runtime input. No build-time environment
 variable or embedded policy selects a Kagemusha trust root.

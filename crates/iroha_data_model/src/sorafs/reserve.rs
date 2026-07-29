@@ -785,7 +785,7 @@ impl ReserveAuthorityPolicyV1 {
     ///
     /// Returns a Norito encoding error if canonical serialization fails.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(RESERVE_AUTHORITY_POLICY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -1302,6 +1302,34 @@ fn prorated_interest(
 mod tests {
     use super::*;
 
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout reserve value")
+    }
+
+    fn assert_canonical_norito_round_trip<T>(value: &T)
+    where
+        T: core::fmt::Debug + PartialEq + norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let encoded = norito::encode_canonical(value).expect("encode canonical reserve value");
+        let decoded: T =
+            norito::decode_canonical(&encoded).expect("decode canonical reserve value");
+        assert_eq!(&decoded, value);
+
+        let alternate = encode_with_alternate_norito_layout(value);
+        assert_ne!(alternate, encoded);
+        let alternate_decoded: T = norito::decode_from_bytes(&alternate)
+            .expect("alternate-layout reserve value remains structurally decodable");
+        assert_eq!(&alternate_decoded, value);
+        assert!(matches!(
+            norito::decode_canonical::<T>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
+    }
+
     #[test]
     fn deal_amount_scale_overflow_preserves_diagnostic_context() {
         let error = ReservePolicyError::from(DealAmountError::ScaleOverflow { scale: 10, max: 9 });
@@ -1670,6 +1698,55 @@ mod tests {
         }
     }
 
+    fn authority_policy() -> ReserveAuthorityPolicyV1 {
+        let custody_account = reserve_account().terms.provider_account;
+        let treasury_account = AccountId::new(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("treasury public key"),
+        );
+        ReserveAuthorityPolicyV1 {
+            version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: ReservePolicyV1::default(),
+            asset_definition: AssetDefinitionId::new(
+                crate::domain::DomainId::try_new("reserve", "universal").expect("reserve domain"),
+                "xor".parse().expect("reserve asset name"),
+            ),
+            custody_account: custody_account.clone(),
+            treasury_account,
+            operations_authority: custody_account.clone(),
+            decision_authority: custody_account,
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
+                .expect("reserve debt cap"),
+            max_pending_movements_per_provider: 8,
+            max_open_appeals_per_provider: 4,
+        }
+    }
+
+    #[test]
+    fn authority_policy_digest_is_canonical_and_ambient_invariant() {
+        let policy = authority_policy();
+        policy.validate().expect("valid authority policy");
+        assert_canonical_norito_round_trip(&policy);
+        let digest = policy.digest().expect("digest authority policy");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_digest = policy
+            .digest()
+            .expect("digest authority policy under alternate ambient layout");
+        drop(ambient);
+        assert_eq!(
+            ambient_digest, digest,
+            "reserve-policy identity must ignore ambient Norito layout"
+        );
+    }
+
     #[test]
     fn rent_due_periods_use_only_the_consensus_anchor_and_reject_time_rollback() {
         let account = reserve_account();
@@ -1791,21 +1868,9 @@ mod tests {
             next_after: Some(event_cursor),
         };
 
-        for encoded in [
-            norito::to_bytes(&finalized_cursor).expect("encode finalized cursor"),
-            norito::to_bytes(&event_cursor).expect("encode event cursor"),
-            norito::to_bytes(&page).expect("encode event page"),
-        ] {
-            assert!(!encoded.is_empty());
-        }
-        let encoded = norito::to_bytes(&page).expect("encode canonical event page");
-        let decoded: ReserveFinalizedEventPageV1 =
-            norito::decode_from_bytes(&encoded).expect("decode canonical event page");
-        assert_eq!(decoded, page);
-        assert_eq!(
-            norito::to_bytes(&decoded).expect("re-encode canonical event page"),
-            encoded
-        );
+        assert_canonical_norito_round_trip(&finalized_cursor);
+        assert_canonical_norito_round_trip(&event_cursor);
+        assert_canonical_norito_round_trip(&page);
 
         #[cfg(feature = "json")]
         {
@@ -1875,14 +1940,7 @@ mod tests {
 
         macro_rules! assert_page_round_trip {
             ($page:expr, $ty:ty) => {{
-                let encoded = norito::to_bytes(&$page).expect("encode canonical reserve page");
-                let decoded: $ty =
-                    norito::decode_from_bytes(&encoded).expect("decode canonical reserve page");
-                assert_eq!(decoded, $page);
-                assert_eq!(
-                    norito::to_bytes(&decoded).expect("re-encode canonical reserve page"),
-                    encoded
-                );
+                assert_canonical_norito_round_trip::<$ty>(&$page);
                 #[cfg(feature = "json")]
                 {
                     let encoded =

@@ -147,11 +147,7 @@ public final class IrohaPeerQRFrameV1 {
   }
 
   private static int maximumEncodedBytes(final IrohaPeerPayloadProfile profile) {
-    return switch (profile) {
-      case OFFLINE_NOTE -> IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES;
-      case KAGEMUSHA_RECURSIVE_SPEND ->
-          IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES;
-    };
+    return IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES;
   }
 
   private static int maximumDataShards(final IrohaPeerPayloadProfile profile) {

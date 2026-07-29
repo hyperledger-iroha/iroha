@@ -4,6 +4,7 @@ import test from "node:test";
 import * as cryptoSurface from "../src/crypto.js";
 import * as rootSurface from "../src/index.js";
 import {
+  PRIVACY_CAPABILITY_VALIDATION_STATUS_V1,
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
@@ -34,13 +35,43 @@ function validCapabilityArchive() {
   return frame;
 }
 
+function crc64Xz(payload) {
+  let crc = 0xffff_ffff_ffff_ffffn;
+  for (const byte of payload) {
+    crc ^= BigInt(byte);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ 0xc96c_5795_d787_0f42n
+          : crc >> 1n;
+    }
+  }
+  return BigInt.asUintN(64, crc ^ 0xffff_ffff_ffff_ffffn);
+}
+
+function crcValidOneByteFake() {
+  const frame = Buffer.alloc(41);
+  frame.write("NRT0", 0, "ascii");
+  frame.fill(0x50, 6, 22);
+  frame.writeBigUInt64LE(1n, 23);
+  frame[40] = 0xa5;
+  frame.writeBigUInt64LE(crc64Xz(frame.subarray(40)), 31);
+  return frame;
+}
+
 function capabilityBinding(overrides = {}) {
+  const canonicalArchive = validCapabilityArchive();
   return {
     connectNoritoBridgeAbiVersion() {
       return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
     },
     privacyCapabilitiesV1() {
-      return Uint8Array.from(validCapabilityArchive());
+      return Uint8Array.from(canonicalArchive);
+    },
+    privacyValidateCapabilitiesV1(archive) {
+      return Buffer.from(archive).equals(canonicalArchive)
+        ? PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.VALID
+        : PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
     },
     ...overrides,
   };
@@ -61,16 +92,28 @@ test("privacy native surface contains only the capability snapshot bridge", () =
   }
 });
 
-test("privacy native availability requires only ABI plus capability archive", () => {
+test("privacy native availability requires exact ABI plus the shared typed validator", () => {
   withNativeBinding({}, () => assert.equal(isPrivacyNativeAvailable(), false));
   withNativeBinding(
     capabilityBinding({ connectNoritoBridgeAbiVersion: undefined }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
   withNativeBinding(
+    capabilityBinding({ privacyValidateCapabilitiesV1: undefined }),
+    () => assert.equal(isPrivacyNativeAvailable(), false),
+  );
+  withNativeBinding(
     capabilityBinding({
       connectNoritoBridgeAbiVersion() {
         return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION - 1;
+      },
+    }),
+    () => assert.equal(isPrivacyNativeAvailable(), false),
+  );
+  withNativeBinding(
+    capabilityBinding({
+      connectNoritoBridgeAbiVersion() {
+        return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION + 1;
       },
     }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
@@ -97,7 +140,7 @@ test("privacyCapabilitiesV1 returns a defensive copy of a valid Norito archive",
   );
 });
 
-test("privacyCapabilitiesV1 rejects malformed, wrong-schema, and oversized outputs", () => {
+test("privacyCapabilitiesV1 rejects every output the shared typed validator rejects", () => {
   const malformed = [
     Buffer.alloc(0),
     Buffer.from([0x50]),
@@ -116,7 +159,12 @@ test("privacyCapabilitiesV1 rejects malformed, wrong-schema, and oversized outpu
   wrongSchema.fill(0x42, 6, 22);
   withNativeBinding(
     capabilityBinding({ privacyCapabilitiesV1: () => wrongSchema }),
-    () => assert.throws(() => privacyCapabilitiesV1(), /unexpected privacy result schema/),
+    () => assert.throws(() => privacyCapabilitiesV1(), /invalid typed privacy capability/),
+  );
+
+  withNativeBinding(
+    capabilityBinding({ privacyCapabilitiesV1: () => crcValidOneByteFake() }),
+    () => assert.throws(() => privacyCapabilitiesV1(), /invalid typed privacy capability/),
   );
 
   withNativeBinding(

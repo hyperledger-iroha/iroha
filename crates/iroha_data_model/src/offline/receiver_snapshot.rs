@@ -395,13 +395,11 @@ impl KagemushaActiveReceiverWitnessProofV1 {
             return false;
         }
         let Ok(commitment) =
-            norito::decode_from_bytes::<KagemushaActiveReceiverSnapshotCommitmentV1>(&self.value)
+            norito::decode_canonical::<KagemushaActiveReceiverSnapshotCommitmentV1>(&self.value)
         else {
             return false;
         };
-        if commitment.version != KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1
-            || norito::to_bytes(&commitment).ok().as_deref() != Some(self.value.as_slice())
-        {
+        if commitment.version != KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1 {
             return false;
         }
         let path = Hash::new(&self.key);
@@ -431,12 +429,13 @@ impl KagemushaActiveReceiverWitnessProofV1 {
     /// Returns an error when the stored value is not a valid canonical Norito
     /// encoding of [`KagemushaActiveReceiverSnapshotCommitmentV1`].
     pub fn commitment(&self) -> Result<KagemushaActiveReceiverSnapshotCommitmentV1, String> {
-        let commitment = norito::decode_from_bytes(&self.value)
-            .map_err(|error| format!("active-receiver commitment is invalid: {error}"))?;
-        if norito::to_bytes(&commitment).map_err(|error| error.to_string())? != self.value {
-            return Err("active-receiver commitment is non-canonical".into());
-        }
-        Ok(commitment)
+        norito::decode_canonical(&self.value).map_err(|error| {
+            if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                "active-receiver commitment is non-canonical".into()
+            } else {
+                format!("active-receiver commitment is invalid: {error}")
+            }
+        })
     }
 }
 
@@ -536,7 +535,7 @@ fn receiver_membership_proof(
 }
 
 fn receiver_leaf_hash(entry: &KagemushaActiveReceiverEntryV1) -> Result<Hash, String> {
-    let encoded = norito::to_bytes(entry).map_err(|error| error.to_string())?;
+    let encoded = norito::encode_canonical(entry).map_err(|error| error.to_string())?;
     Ok(domain_hash(RECEIVER_LEAF_DOMAIN_V1, &[&encoded]))
 }
 
@@ -615,6 +614,27 @@ mod tests {
         }
     }
 
+    fn witness_root(proof: &KagemushaActiveReceiverWitnessProofV1) -> Hash {
+        let path = Hash::new(&proof.key);
+        let value_hash = Hash::new(&proof.value);
+        let mut leaf_preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
+        leaf_preimage.push(0);
+        leaf_preimage.extend_from_slice(path.as_ref());
+        leaf_preimage.extend_from_slice(value_hash.as_ref());
+        let mut current = Hash::new(leaf_preimage);
+        for (level, sibling) in proof.siblings.iter().copied().enumerate() {
+            let path_bit = 255_usize.saturating_sub(level);
+            let byte = path.as_ref()[path_bit / 8];
+            let right = byte & (1_u8 << (path_bit % 8)) != 0;
+            current = if right {
+                ordinary_smt_node_hash(sibling, current)
+            } else {
+                ordinary_smt_node_hash(current, sibling)
+            };
+        }
+        current
+    }
+
     #[test]
     fn membership_binds_canonical_order_and_rejects_tampering() {
         let policy = Hash::new(b"policy");
@@ -667,6 +687,93 @@ mod tests {
             KagemushaActiveReceiverSnapshotV1::available(7, 1_000, policy, vec![ambiguous])
                 .expect("ambiguous snapshot");
         assert!(snapshot.active_membership(&key("same")).is_err());
+    }
+
+    #[test]
+    fn witness_commitment_rejects_alternate_norito_layout() {
+        let commitment = KagemushaActiveReceiverSnapshotV1::unavailable(
+            7,
+            1_000,
+            b"governed receiver policy unavailable",
+        )
+        .expect("snapshot")
+        .commitment;
+        let canonical = norito::encode_canonical(&commitment).expect("encode canonical commitment");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&commitment).expect("encode alternate-layout commitment")
+        };
+        assert_ne!(
+            alternate, canonical,
+            "fixture must exercise a distinct advertised Norito layout"
+        );
+        norito::decode_from_bytes::<KagemushaActiveReceiverSnapshotCommitmentV1>(&alternate)
+            .expect("ordinary Norito accepts the advertised alternate layout");
+
+        let canonical_proof = KagemushaActiveReceiverWitnessProofV1 {
+            key: KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1.to_vec(),
+            value: canonical,
+            siblings: vec![
+                Hash::new(b"receiver witness sibling");
+                KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_SIBLINGS_V1
+            ],
+        };
+        assert_eq!(
+            canonical_proof.commitment().expect("canonical commitment"),
+            commitment
+        );
+        assert!(canonical_proof.verify(witness_root(&canonical_proof)));
+
+        let alternate_proof = KagemushaActiveReceiverWitnessProofV1 {
+            value: alternate,
+            ..canonical_proof
+        };
+        assert_eq!(
+            alternate_proof
+                .commitment()
+                .expect_err("alternate-layout commitment must fail"),
+            "active-receiver commitment is non-canonical"
+        );
+        assert!(!alternate_proof.verify(witness_root(&alternate_proof)));
+    }
+
+    #[test]
+    fn receiver_identity_encoding_ignores_and_restores_ambient_flags() {
+        let policy = Hash::new(b"policy");
+        let entry = KagemushaActiveReceiverEntryV1::Active(KagemushaActiveReceiverActiveEntryV1 {
+            key: key("ambient"),
+            value: value(9, policy),
+        });
+        let canonical = norito::encode_canonical(&entry).expect("encode canonical receiver entry");
+        let baseline_hash = receiver_leaf_hash(&entry).expect("hash canonical receiver entry");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&entry).expect("encode alternate-layout receiver entry")
+        };
+        assert_ne!(alternate, canonical);
+
+        let (ambient_canonical, ambient_hash) = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let before =
+                norito::to_bytes(&entry).expect("encode receiver entry under ambient flags");
+            let encoded = norito::encode_canonical(&entry)
+                .expect("canonicalize receiver entry under ambient flags");
+            let hash = receiver_leaf_hash(&entry)
+                .expect("hash receiver entry canonically under ambient flags");
+            let after =
+                norito::to_bytes(&entry).expect("re-encode receiver entry under ambient flags");
+            assert_eq!(
+                before, after,
+                "canonical helpers must restore the caller's ambient layout"
+            );
+            (encoded, hash)
+        };
+        assert_eq!(ambient_canonical, canonical);
+        assert_eq!(ambient_hash, baseline_hash);
     }
 
     #[test]

@@ -122,7 +122,8 @@ pub fn zk_verify_batch_envs(
     envs: &[iroha_zkp_halo2::OpenVerifyEnvelope],
 ) -> (u64, u64) {
     // Encode as a Vec<T> to satisfy NoritoSerialize; slices [T] are not supported directly.
-    let payload = norito::to_bytes(&envs.to_vec()).expect("encode envelopes");
+    let payload =
+        norito::encode_canonical(&envs.to_vec()).expect("encode canonical proof envelopes");
     let ptr = input_tlv_norito_bytes(vm, &payload);
     vm.set_register(10, ptr);
     vm.execute_metered_syscall_with_host(host, syscalls::SYSCALL_ZK_VERIFY_BATCH)

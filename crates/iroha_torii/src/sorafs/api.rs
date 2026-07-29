@@ -36331,7 +36331,12 @@ mod advert_tests {
     }
 
     #[test]
-    fn asset_escrow_kind_label_covers_conditional_escrows() {
+    fn asset_escrow_kind_labels_cover_the_closed_enum() {
+        assert_eq!(
+            asset_escrow_kind_label(AssetEscrowKind::Marketplace),
+            "marketplace"
+        );
+        assert_eq!(asset_escrow_kind_label(AssetEscrowKind::Lock), "lock");
         assert_eq!(
             asset_escrow_kind_label(AssetEscrowKind::Conditional),
             "conditional"

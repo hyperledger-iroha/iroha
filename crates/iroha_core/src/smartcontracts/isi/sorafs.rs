@@ -61,7 +61,7 @@ use iroha_primitives::{
 };
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
-    DecodeLimits, decode_from_bytes_with_limits,
+    DecodeLimits, decode_canonical_with_limits, decode_from_bytes_with_limits,
     json::{self, Value},
 };
 use sorafs_manifest::{
@@ -178,16 +178,14 @@ fn decode_capacity_declaration_payload(bytes: &[u8]) -> Result<CapacityDeclarati
             bytes.len()
         ));
     }
-    let declaration = decode_from_bytes_with_limits::<CapacityDeclarationV1>(
-        bytes,
-        CAPACITY_DECLARATION_DECODE_LIMITS,
-    )
-    .map_err(|error| error.to_string())?;
-    let canonical = norito::to_bytes(&declaration).map_err(|error| error.to_string())?;
-    if canonical != bytes {
-        return Err("payload must use canonical first-release Norito".to_owned());
-    }
-    Ok(declaration)
+    decode_canonical_with_limits::<CapacityDeclarationV1>(bytes, CAPACITY_DECLARATION_DECODE_LIMITS)
+        .map_err(|error| {
+            if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                "payload must use canonical first-release Norito".to_owned()
+            } else {
+                error.to_string()
+            }
+        })
 }
 
 fn decode_capacity_dispute_payload(bytes: &[u8]) -> Result<CapacityDisputeV1, String> {
@@ -197,14 +195,14 @@ fn decode_capacity_dispute_payload(bytes: &[u8]) -> Result<CapacityDisputeV1, St
             bytes.len()
         ));
     }
-    let dispute =
-        decode_from_bytes_with_limits::<CapacityDisputeV1>(bytes, CAPACITY_DISPUTE_DECODE_LIMITS)
-            .map_err(|error| error.to_string())?;
-    let canonical = norito::to_bytes(&dispute).map_err(|error| error.to_string())?;
-    if canonical != bytes {
-        return Err("payload must use canonical first-release Norito".to_owned());
-    }
-    Ok(dispute)
+    decode_canonical_with_limits::<CapacityDisputeV1>(bytes, CAPACITY_DISPUTE_DECODE_LIMITS)
+        .map_err(|error| {
+            if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                "payload must use canonical first-release Norito".to_owned()
+            } else {
+                error.to_string()
+            }
+        })
 }
 
 fn storage_class_metadata_key() -> &'static Name {
@@ -1565,7 +1563,7 @@ fn build_auto_replication_order(
         )
     })?;
 
-    let canonical_order = norito::to_bytes(&order).map_err(|error| {
+    let canonical_order = norito::encode_canonical(&order).map_err(|error| {
         InstructionExecutionError::InvariantViolation(
             format!("failed to encode automatic replication order: {error}").into(),
         )
@@ -1650,8 +1648,16 @@ fn validate_manifest_alias_binding(
         )));
     }
 
-    let bundle = decode_alias_proof(&alias.proof)
-        .map_err(|err| invalid_parameter(format!("alias proof failed verification: {err}")))?;
+    let bundle = {
+        // The manifest helper validates canonicality and recomputes the
+        // Norito-derived binding leaf internally. Scope the complete verified
+        // decode to the fixed V1 layout so caller ambient state cannot affect
+        // proof admission or identity.
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        decode_alias_proof(&alias.proof)
+    }
+    .map_err(|err| invalid_parameter(format!("alias proof failed verification: {err}")))?;
 
     let expected_alias = format!("{}/{}", alias.namespace, alias.name);
     if bundle.binding.alias != expected_alias {
@@ -1683,7 +1689,7 @@ fn validate_manifest_alias_binding(
         }
     }
 
-    norito::to_bytes(&bundle).map_err(|err| {
+    norito::encode_canonical(&bundle).map_err(|err| {
         invalid_parameter(format!("failed to canonicalize alias proof bundle: {err}"))
     })
 }
@@ -2718,16 +2724,24 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 "replication order validation failed for {order_label}: {err}"
             ))
         })?;
-        let canonical_order = norito::to_bytes(&order_payload).map_err(|err| {
-            invalid_parameter(format!(
-                "failed to canonicalize replication order {order_label}: {err}"
-            ))
+        // Preserve semantic-validation precedence while asking the bounded
+        // canonical decoder, rather than a raw decode/re-encode comparison,
+        // to enforce the one accepted V1 layout.
+        decode_canonical_with_limits::<ReplicationOrderV1>(
+            &self.order_payload,
+            REPLICATION_ORDER_DECODE_LIMITS,
+        )
+        .map_err(|err| {
+            if matches!(&err, norito::Error::NonCanonicalEncoding) {
+                invalid_parameter(format!(
+                    "replication order {order_label} payload must use canonical first-release Norito"
+                ))
+            } else {
+                invalid_parameter(format!(
+                    "failed to canonicalize replication order {order_label}: {err}"
+                ))
+            }
         })?;
-        if canonical_order != self.order_payload {
-            return Err(invalid_parameter(format!(
-                "replication order {order_label} payload must use canonical first-release Norito"
-            )));
-        }
 
         if order_payload.order_id != *self.order_id.as_bytes() {
             return Err(invalid_parameter(format!(
@@ -2848,16 +2862,30 @@ fn validate_stored_replication_order(
                 .into(),
         )
     })?;
-    let canonical_bytes = norito::to_bytes(&canonical_payload).map_err(|err| {
-        InstructionExecutionError::InvariantViolation(
-            format!(
-                "replication order {order_label} stored payload could not be canonicalized: {err}"
+    // Keep stored semantic validation ahead of the representation check so
+    // corruption reports retain their established precedence.
+    decode_canonical_with_limits::<ReplicationOrderV1>(
+        &record.canonical_order,
+        REPLICATION_ORDER_DECODE_LIMITS,
+    )
+    .map_err(|err| {
+        if matches!(&err, norito::Error::NonCanonicalEncoding) {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} stored payload is not canonical or bound to its record"
+                )
+                .into(),
             )
-            .into(),
-        )
+        } else {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} stored payload could not be canonicalized: {err}"
+                )
+                .into(),
+            )
+        }
     })?;
-    if canonical_bytes != record.canonical_order
-        || canonical_payload.order_id != *record.order_id.as_bytes()
+    if canonical_payload.order_id != *record.order_id.as_bytes()
         || canonical_payload.manifest_digest != *record.manifest_digest.as_bytes()
         || canonical_payload.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
     {
@@ -3343,7 +3371,7 @@ fn encode_repair_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    norito::to_bytes(value).map_err(|error| {
+    norito::encode_canonical(value).map_err(|error| {
         InstructionExecutionError::InvariantViolation(
             format!("failed to encode {label}: {error}").into(),
         )
@@ -3359,18 +3387,17 @@ where
             format!("{label} exceeds {REPAIR_STATE_MAX_BYTES_V1} bytes").into(),
         ));
     }
-    let value =
-        decode_from_bytes_with_limits::<T>(bytes, REPAIR_STATE_LIMITS_V1).map_err(|error| {
+    decode_canonical_with_limits::<T>(bytes, REPAIR_STATE_LIMITS_V1).map_err(|error| {
+        if matches!(&error, norito::Error::NonCanonicalEncoding) {
+            InstructionExecutionError::InvariantViolation(
+                format!("{label} is not exact canonical Norito").into(),
+            )
+        } else {
             InstructionExecutionError::InvariantViolation(
                 format!("failed to decode {label}: {error}").into(),
             )
-        })?;
-    if encode_repair_state(&value, label)? != bytes {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!("{label} is not exact canonical Norito").into(),
-        ));
-    }
-    Ok(value)
+        }
+    })
 }
 
 fn decode_repair_payload<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
@@ -3383,16 +3410,13 @@ where
             bytes.len()
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, REPAIR_PAYLOAD_LIMITS_V1)
-        .map_err(|error| invalid_parameter(format!("invalid canonical {label}: {error}")))?;
-    let canonical = norito::to_bytes(&value)
-        .map_err(|error| invalid_parameter(format!("failed to canonicalize {label}: {error}")))?;
-    if canonical != bytes {
-        return Err(invalid_parameter(format!(
-            "{label} is not exact canonical Norito"
-        )));
-    }
-    Ok(value)
+    decode_canonical_with_limits::<T>(bytes, REPAIR_PAYLOAD_LIMITS_V1).map_err(|error| {
+        if matches!(&error, norito::Error::NonCanonicalEncoding) {
+            invalid_parameter(format!("{label} is not exact canonical Norito"))
+        } else {
+            invalid_parameter(format!("invalid canonical {label}: {error}"))
+        }
+    })
 }
 
 fn decode_stored_repair_payload<T>(
@@ -3411,18 +3435,17 @@ where
             .into(),
         ));
     }
-    let value =
-        decode_from_bytes_with_limits::<T>(bytes, REPAIR_PAYLOAD_LIMITS_V1).map_err(|error| {
+    decode_canonical_with_limits::<T>(bytes, REPAIR_PAYLOAD_LIMITS_V1).map_err(|error| {
+        if matches!(&error, norito::Error::NonCanonicalEncoding) {
+            InstructionExecutionError::InvariantViolation(
+                format!("{label} is not exact canonical Norito").into(),
+            )
+        } else {
             InstructionExecutionError::InvariantViolation(
                 format!("failed to decode {label}: {error}").into(),
             )
-        })?;
-    if encode_repair_state(&value, label)? != bytes {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!("{label} is not exact canonical Norito").into(),
-        ));
-    }
-    Ok(value)
+        }
+    })
 }
 
 fn repair_block_time_ms(
@@ -4295,6 +4318,11 @@ fn repair_action_digest<T: norito::core::NoritoSerialize>(
     authority: &AccountId,
     action: &T,
 ) -> Result<[u8; 32], InstructionExecutionError> {
+    // The data-model helper owns the public domain-separated preimage. Pin any
+    // internal encoding it performs to the canonical V1 layout as part of this
+    // consensus boundary.
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     sorafs_repair_action_digest_v1(authority, action)
         .map_err(|error| invalid_parameter(format!("failed to encode repair action: {error}")))
 }
@@ -4946,7 +4974,7 @@ fn ensure_repair_query_encoded_budget<T: norito::core::NoritoSerialize>(
     maximum: usize,
     label: &str,
 ) -> Result<(), QueryExecutionFail> {
-    let encoded_len = norito::to_bytes(value)
+    let encoded_len = norito::encode_canonical(value)
         .map_err(|error| {
             QueryExecutionFail::Conversion(format!("failed to encode {label}: {error}"))
         })?
@@ -5178,7 +5206,7 @@ fn query_repair_task_page(
                 "authoritative repair task disagrees with its page index".to_owned(),
             ));
         }
-        let task_len = norito::to_bytes(&task)
+        let task_len = norito::encode_canonical(&task)
             .map_err(|error| {
                 QueryExecutionFail::Conversion(format!(
                     "failed to encode authoritative repair task: {error}"
@@ -5393,7 +5421,7 @@ fn query_repair_event_page(
         )?;
         encoded_event_bytes = encoded_event_bytes
             .checked_add(
-                norito::to_bytes(&resolved)
+                norito::encode_canonical(&resolved)
                     .map_err(|error| {
                         QueryExecutionFail::Conversion(format!(
                             "failed to encode committed repair event: {error}"
@@ -6913,7 +6941,7 @@ mod sorafs_tests {
     }
 
     pub(super) fn encode_replication_order(order: &ReplicationOrderV1) -> Vec<u8> {
-        to_bytes(order).expect("serialize replication order")
+        norito::encode_canonical(order).expect("serialize canonical replication order")
     }
 
     fn sample_capacity_declaration() -> CapacityDeclarationV1 {
@@ -6944,7 +6972,8 @@ mod sorafs_tests {
 
     fn sample_capacity_record() -> (ProviderId, CapacityDeclarationRecord) {
         let declaration = sample_capacity_declaration();
-        let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
+        let canonical_bytes =
+            norito::encode_canonical(&declaration).expect("serialize canonical declaration");
         let provider = ProviderId::new(declaration.provider_id);
         let record = CapacityDeclarationRecord::new(
             provider,
@@ -6964,7 +6993,8 @@ mod sorafs_tests {
             key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
             value: account_literal(owner),
         }];
-        let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
+        let canonical_bytes =
+            norito::encode_canonical(&declaration).expect("serialize canonical declaration");
         let provider = ProviderId::new(declaration.provider_id);
         let record = CapacityDeclarationRecord::new(
             provider,
@@ -7068,7 +7098,7 @@ mod sorafs_tests {
             description: "provider uptime dipped below SLA".into(),
             requested_remedy: Some("slash stake".into()),
         };
-        let payload = norito::to_bytes(&dispute).expect("encode dispute payload");
+        let payload = norito::encode_canonical(&dispute).expect("encode canonical dispute payload");
         let dispute_id = CapacityDisputeId::new(*blake3_hash(&payload).as_bytes());
         let evidence = CapacityDisputeEvidence {
             digest: dispute.evidence.evidence_digest,
@@ -7089,6 +7119,184 @@ mod sorafs_tests {
             payload,
         );
         (record, dispute_id)
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn v1_norito_boundaries_ignore_ambient_layout() {
+        let declaration = sample_capacity_declaration();
+        let declaration_bytes =
+            norito::encode_canonical(&declaration).expect("encode canonical declaration");
+        let provider = ProviderId::new(declaration.provider_id);
+        let (dispute_record, _) = sample_capacity_dispute(provider);
+        let dispute = decode_capacity_dispute_payload(&dispute_record.dispute_payload)
+            .expect("decode canonical dispute fixture");
+        let report = repair_report(
+            "REP-CANONICAL-AMBIENT",
+            provider,
+            [0x45; 32],
+            &alice(),
+            4_000,
+        );
+        let report_bytes =
+            norito::encode_canonical(&report).expect("encode canonical repair report");
+        let action_digest =
+            repair_action_digest(&alice(), &report).expect("derive canonical action digest");
+
+        let digest = default_digest();
+        let manifest_record = PinManifestRecord::new(
+            digest,
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(digest),
+            default_content_length(),
+            default_policy(),
+            alice(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        );
+        let providers = [
+            ProviderId::new([0x46; 32]),
+            ProviderId::new([0x47; 32]),
+            ProviderId::new([0x48; 32]),
+        ];
+        let automatic = build_auto_replication_order(&manifest_record, &alice(), 7, &providers)
+            .expect("build canonical automatic order")
+            .expect("enough providers for automatic order");
+        let alias = default_alias_binding();
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_report =
+            norito::to_bytes(&report).expect("encode alternate-layout ambient report");
+        assert_ne!(ambient_report, report_bytes);
+
+        assert_eq!(
+            decode_capacity_declaration_payload(&declaration_bytes)
+                .expect("decode declaration under alternate ambient layout"),
+            declaration
+        );
+        assert_eq!(
+            decode_capacity_dispute_payload(&dispute_record.dispute_payload)
+                .expect("decode dispute under alternate ambient layout"),
+            dispute
+        );
+        assert_eq!(
+            encode_repair_state(&report, "ambient repair report")
+                .expect("encode repair state under alternate ambient layout"),
+            report_bytes
+        );
+        assert_eq!(
+            decode_repair_state::<RepairReportV1>(&report_bytes, "ambient repair report")
+                .expect("decode repair state under alternate ambient layout"),
+            report
+        );
+        assert_eq!(
+            decode_repair_payload::<RepairReportV1>(&report_bytes, "ambient repair report")
+                .expect("decode repair payload under alternate ambient layout"),
+            report
+        );
+        assert_eq!(
+            repair_action_digest(&alice(), &report)
+                .expect("derive action digest under alternate ambient layout"),
+            action_digest
+        );
+        ensure_repair_query_encoded_budget(&report, report_bytes.len(), "ambient repair report")
+            .expect("canonical query budget ignores alternate ambient layout");
+
+        let automatic_under_ambient =
+            build_auto_replication_order(&manifest_record, &alice(), 7, &providers)
+                .expect("build automatic order under alternate ambient layout")
+                .expect("enough providers for automatic order");
+        assert_eq!(automatic_under_ambient, automatic);
+        let validated_order =
+            validate_stored_replication_order(&automatic, "canonical-ambient-order")
+                .expect("validate stored order under alternate ambient layout");
+        assert_eq!(
+            norito::encode_canonical(&validated_order).expect("encode validated order"),
+            automatic.canonical_order
+        );
+        assert_eq!(
+            validate_manifest_alias_binding(
+                &alias,
+                &digest,
+                &default_root_cid(),
+                Some((5, default_policy().retention_epoch)),
+            )
+            .expect("validate alias under alternate ambient layout"),
+            alias.proof
+        );
+        assert_eq!(
+            norito::to_bytes(&report).expect("encode ambient report after canonical operations"),
+            ambient_report,
+            "canonical helpers must restore the caller's ambient layout"
+        );
+    }
+
+    #[test]
+    fn v1_norito_decoders_reject_advertised_alternate_layouts() {
+        let provider = ProviderId::new([0x49; 32]);
+        let report = repair_report(
+            "REP-ALTERNATE-LAYOUT",
+            provider,
+            [0x4A; 32],
+            &alice(),
+            4_000,
+        );
+        let canonical = norito::encode_canonical(&report).expect("encode canonical repair report");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&report).expect("encode alternate-layout repair report")
+        };
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            norito::decode_from_bytes::<RepairReportV1>(&alternate)
+                .expect("ordinary Norito accepts the advertised alternate layout"),
+            report
+        );
+
+        let payload_error = decode_repair_payload::<RepairReportV1>(&alternate, "repair report")
+            .expect_err("admitted repair payload must reject alternate layout");
+        assert!(
+            smart_contract_error_message(&payload_error)
+                .contains("repair report is not exact canonical Norito")
+        );
+        for error in [
+            decode_repair_state::<RepairReportV1>(&alternate, "repair report")
+                .expect_err("persisted repair state must reject alternate layout"),
+            decode_stored_repair_payload::<RepairReportV1>(&alternate, "repair report")
+                .expect_err("stored repair payload must reject alternate layout"),
+        ] {
+            assert!(matches!(
+                error,
+                InstructionExecutionError::InvariantViolation(message)
+                    if message.contains("repair report is not exact canonical Norito")
+            ));
+        }
+
+        let mut alias = default_alias_binding();
+        let bundle = decode_alias_proof(&alias.proof).expect("decode canonical alias fixture");
+        alias.proof = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&bundle).expect("encode alternate-layout alias proof")
+        };
+        let alias_error = validate_manifest_alias_binding(
+            &alias,
+            &default_digest(),
+            &default_root_cid(),
+            Some((5, default_policy().retention_epoch)),
+        )
+        .expect_err("alias proof must reject alternate layout");
+        assert!(
+            smart_contract_error_message(&alias_error).contains("not canonical Norito"),
+            "unexpected alias rejection: {alias_error:?}"
+        );
     }
 
     pub(super) fn alice() -> AccountId {

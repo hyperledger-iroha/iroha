@@ -661,7 +661,9 @@ impl LaneQueueReservationKeyV2 {
     /// Return a digest covering every exact identity field.
     #[must_use]
     pub fn digest(&self) -> Hash {
-        Hash::new(norito::to_bytes(self).expect("lane queue reservation identity must encode"))
+        Hash::new(
+            norito::encode_canonical(self).expect("lane queue reservation identity must encode"),
+        )
     }
 
     /// Validate the current schema version and complete reservation identity.
@@ -858,7 +860,7 @@ impl LaneQueueReservationReleaseBarrierV3 {
     pub(crate) fn digest(&self) -> Hash {
         Hash::new_from_chunks(&[
             b"iroha:queue-lane-reservation-release-barrier:v3\0",
-            &norito::to_bytes(self).expect("validated queue release barrier must encode"),
+            &norito::encode_canonical(self).expect("validated queue release barrier must encode"),
         ])
     }
 }
@@ -26806,12 +26808,23 @@ pub mod tests {
             mismatched_queue_hash.validate(),
             Err("lane reservation compatibility transaction hash does not match its entrypoint")
         );
-        let framed = norito::to_bytes(&key).expect("encode current reservation key");
+        let key_digest = key.digest();
+        let framed = norito::encode_canonical(&key).expect("encode current reservation key");
         assert_eq!(
-            norito::decode_from_bytes::<LaneQueueReservationKeyV2>(&framed)
+            norito::decode_canonical::<LaneQueueReservationKeyV2>(&framed)
                 .expect("decode current reservation key"),
             key
         );
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                key.digest(),
+                key_digest,
+                "reservation identity must ignore the caller's ambient Norito layout"
+            );
+        }
 
         let legacy = LegacyLaneQueueReservationKeyV1 {
             signed_transaction_hash: key.signed_transaction_hash,
@@ -27129,6 +27142,17 @@ pub mod tests {
             .expect("reserve ordered release batch");
         let keys = reserved.iter().map(|tx| *tx.key()).collect::<Vec<_>>();
         let barrier = lane_reservation_release_barrier(keys.clone(), b"retirement-a");
+        let barrier_digest = barrier.digest();
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                barrier.digest(),
+                barrier_digest,
+                "release-barrier identity must ignore the caller's ambient Norito layout"
+            );
+        }
 
         assert_eq!(
             queue

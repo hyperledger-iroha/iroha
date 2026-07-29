@@ -41,8 +41,8 @@ fn add(int lhs, int rhs) -> int { return lhs + rhs; }
 The old `name: Type` declaration form is invalid. The source type names `i64`,
 `u128`, `Int`, `Integer`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `Quantity`,
 `num`, `number`, `float`, and `money`, and suffixed numeric literals such as
-`1i64`, `1u128`, and `1amt`, are invalid. Diagnostics MUST identify the retired
-surface and show the type-first replacement.
+`1i64`, `1u128`, `1amt`, and `1qty`, are invalid. Diagnostics MUST identify the
+retired surface and show the type-first replacement.
 
 Those spellings are reserved only when declaring or referring to a type. They
 remain ordinary value-namespace identifiers, so declarations such as

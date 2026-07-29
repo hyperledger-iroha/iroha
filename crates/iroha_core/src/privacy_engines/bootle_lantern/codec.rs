@@ -6,6 +6,7 @@ use super::params::{
     APPLICATION_RING_DEGREE_V1, CHALLENGE_OMEGA_V1, PROOF_MODULUS_V1, PROOF_RESIDUE_BYTES_V1,
 };
 use super::ring::ProofPolynomialV1;
+use super::transcript::challenge_eta_is_valid_v1;
 
 /// Proof wire magic.
 pub const PROOF_MAGIC_V1: [u8; 4] = *b"ILN1";
@@ -338,6 +339,15 @@ fn validate_challenge(challenge: &[u64]) -> Result<(), ProofCodecErrorV1> {
             });
         }
     }
+    let challenge = ProofPolynomialV1::new(
+        challenge
+            .try_into()
+            .expect("strict challenge slice has the fixed ring degree"),
+    )
+    .expect("all challenge residues were already proved canonical");
+    if !challenge_eta_is_valid_v1(challenge) {
+        return Err(ProofCodecErrorV1::ChallengeEtaBoundExceeded);
+    }
     Ok(())
 }
 
@@ -451,6 +461,9 @@ pub enum ProofCodecErrorV1 {
         /// Rejected residue.
         actual: u64,
     },
+    /// The challenge exceeds the exact integer-ring LNP22 eta bound.
+    #[error("Bootle/Lantern challenge exceeds the exact integer-ring eta bound")]
+    ChallengeEtaBoundExceeded,
 }
 
 #[cfg(test)]
@@ -644,6 +657,36 @@ mod tests {
                 expected: 3,
                 actual: 4
             })
+        );
+
+        let mut eta_exceeded = valid_proof().coefficients().to_vec();
+        let challenge = &mut eta_exceeded[CHALLENGE_START..HINT_START];
+        challenge[..32].fill(8);
+        challenge[32] = 0;
+        for index in 33..APPLICATION_RING_DEGREE_V1 {
+            challenge[index] = PROOF_MODULUS_V1 - 8;
+        }
+        assert_eq!(
+            BootleLanternPresentationProofV1::from_coefficients(
+                eta_exceeded.clone().into_boxed_slice()
+            ),
+            Err(ProofCodecErrorV1::ChallengeEtaBoundExceeded)
+        );
+
+        let mut encoded_eta_exceeded = valid_proof().encode();
+        for (index, residue) in eta_exceeded[CHALLENGE_START..HINT_START]
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            write_residue(&mut encoded_eta_exceeded, CHALLENGE_START + index, residue);
+        }
+        assert_eq!(
+            BootleLanternPresentationProofV1::decode_exact(
+                &encoded_eta_exceeded,
+                u32::try_from(PROOF_BYTES_V1).expect("fixed proof length fits u32")
+            ),
+            Err(ProofCodecErrorV1::ChallengeEtaBoundExceeded)
         );
     }
 }

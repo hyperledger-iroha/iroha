@@ -32,7 +32,7 @@ def test_compare_ignores_intentional_swift_only_fixtures(tmp_path: Path) -> None
     write(target, "swift_mint_asset_basic.norito", "swift-only")
     write(target, "swift_parity_manifest.json", "{}")
     write(target, "js_email_identifier_request.json", "{}")
-    write(target, "offline/peer_nearby_v1.json", "{}")
+    write(target, "offline/kagemusha_peer_transport_v2.json", "{}")
 
     assert MODULE.compare(source, target) == ([], [], [])
 

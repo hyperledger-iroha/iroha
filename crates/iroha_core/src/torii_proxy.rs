@@ -68,7 +68,7 @@ pub fn queue_plan_synced_request_id_from_chain_digest(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Hash {
     Hash::new(
-        norito::to_bytes(&(
+        norito::encode_canonical(&(
             QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
             chain_id_digest,
             entrypoint_hash,
@@ -384,7 +384,7 @@ impl QueuePlanAdmissionBindingV2 {
     /// Return the domain-separated hash attested by coordinator authorities.
     #[must_use]
     pub fn canonical_hash(&self) -> Hash {
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .expect("QueuePlan admission binding must have a canonical Norito encoding");
         Hash::new_from_chunks(&[QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2, bytes.as_slice()])
     }
@@ -491,7 +491,7 @@ pub fn queue_plan_admission_attestation_signing_bytes_v2(
         binding_hash,
         validator_index,
     };
-    let encoded = norito::to_bytes(&payload)?;
+    let encoded = norito::encode_canonical(&payload)?;
     let mut bytes =
         Vec::with_capacity(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2.len() + encoded.len());
     bytes.extend_from_slice(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2);
@@ -619,16 +619,11 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v2(
         max_bytes.saturating_mul(4),
         64,
     );
-    let certificate = norito::decode_from_bytes_with_limits::<QueuePlanAdmissionCertificateV2>(
+    let certificate = norito::decode_canonical_with_limits::<QueuePlanAdmissionCertificateV2>(
         bytes,
         decode_limits,
     )
     .map_err(|error| format!("QueuePlan admission certificate cannot be decoded: {error}"))?;
-    let canonical = norito::to_bytes(&certificate)
-        .map_err(|error| format!("QueuePlan admission certificate cannot be encoded: {error}"))?;
-    if canonical != bytes {
-        return Err("QueuePlan admission certificate is not canonical Norito".to_owned());
-    }
     validate_queue_plan_admission_certificate_v2(
         chain_id,
         certificate,
@@ -1538,7 +1533,7 @@ mod tests {
         assert_eq!(
             request,
             Hash::new(
-                norito::to_bytes(&(
+                norito::encode_canonical(&(
                     "torii:proxy:queue-plan-synced:v5",
                     chain_a_digest,
                     entrypoint_a.clone(),
@@ -1554,7 +1549,7 @@ mod tests {
         );
         assert_eq!(
             request,
-            queue_plan_synced_request_id(&chain_a, entrypoint_a),
+            queue_plan_synced_request_id(&chain_a, entrypoint_a.clone()),
             "connection tenure and delivery ordinal are intentionally absent"
         );
         assert_ne!(
@@ -1565,6 +1560,19 @@ mod tests {
             request,
             queue_plan_synced_request_id(&chain_a, entrypoint_b)
         );
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                queue_plan_synced_request_id_from_chain_digest(
+                    chain_a_digest,
+                    entrypoint_a.clone()
+                ),
+                request,
+                "semantic request identity must ignore the caller's ambient Norito layout"
+            );
+        }
     }
 
     #[test]
@@ -1718,6 +1726,58 @@ mod tests {
             error.contains("noncanonical semantic request identity"),
             "unexpected rejection: {error}"
         );
+    }
+
+    #[test]
+    fn queue_plan_certificate_boundary_is_canonical_and_ambient_independent() {
+        let (chain_id, _, _, binding, validator) = single_route_admission_fixture();
+        let binding_hash = binding.canonical_hash();
+        let signing_bytes = queue_plan_admission_attestation_signing_bytes_v2(binding_hash, 0)
+            .expect("encode canonical attestation preimage");
+        let certificate = QueuePlanAdmissionCertificateV2 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+            binding,
+            attestations: vec![QueuePlanAdmissionAttestationV2 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                validator_index: 0,
+                signature: Signature::try_new(validator.private_key(), &signing_bytes)
+                    .expect("sign canonical admission certificate"),
+            }],
+        };
+        let canonical =
+            norito::encode_canonical(&certificate).expect("encode canonical admission certificate");
+        decode_and_validate_queue_plan_admission_certificate_v2(&chain_id, &canonical)
+            .expect("canonical admission certificate validates");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&certificate).expect("encode alternate-layout admission certificate")
+        };
+        assert_ne!(
+            alternate, canonical,
+            "fixture must exercise a distinct non-canonical certificate layout"
+        );
+        assert!(
+            decode_and_validate_queue_plan_admission_certificate_v2(&chain_id, &alternate).is_err(),
+            "alternate-layout certificate must fail closed"
+        );
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                certificate.binding.canonical_hash(),
+                binding_hash,
+                "binding identity must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                queue_plan_admission_attestation_signing_bytes_v2(binding_hash, 0)
+                    .expect("encode attestation under alternate ambient layout"),
+                signing_bytes
+            );
+            decode_and_validate_queue_plan_admission_certificate_v2(&chain_id, &canonical)
+                .expect("canonical certificate must validate under alternate ambient layout");
+        }
     }
 
     #[test]

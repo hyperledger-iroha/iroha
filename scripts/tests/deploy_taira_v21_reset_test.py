@@ -301,6 +301,66 @@ def test_release_cutover_moves_one_physical_copy_and_restores_on_rollback(
     assert (release.source_root / relative).stat().st_ino == original_inode
 
 
+def test_release_cutover_recovers_signal_window_after_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_path = _build_bundle(tmp_path, "e" * 64, "f" * 40)
+    bundle = _validate(bundle_path, "e" * 64, "f" * 40)
+    destination = tmp_path / "root-store" / bundle.release.tree_sha256
+    _mkdir(destination.parent)
+    release = dataclasses.replace(bundle.release, installed_root=destination)
+    bundle = dataclasses.replace(bundle, release=release)
+    calls = 0
+
+    def interrupted_fsync(_path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise MODULE.DeploymentError("injected post-rename interruption")
+
+    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        MODULE, "rewrite_release_tree_ownership", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(MODULE, "fsync_directory", interrupted_fsync)
+
+    with pytest.raises(MODULE.DeploymentError, match="post-rename"):
+        MODULE.move_release_to_root_store(bundle)
+
+    assert release.source_root.is_dir()
+    assert not destination.exists()
+
+
+def test_release_cutover_rejects_root_swap_during_hardening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_path = _build_bundle(tmp_path, "1" * 64, "2" * 40)
+    bundle = _validate(bundle_path, "1" * 64, "2" * 40)
+    destination = tmp_path / "root-store" / bundle.release.tree_sha256
+    _mkdir(destination.parent)
+    release = dataclasses.replace(bundle.release, installed_root=destination)
+    bundle = dataclasses.replace(bundle, release=release)
+    displaced = release.source_root.with_name("displaced-kagemusha")
+    calls = 0
+
+    def swap_once(root: Path, **_kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            root.rename(displaced)
+            _mkdir(root)
+
+    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
+    monkeypatch.setattr(MODULE, "rewrite_release_tree_ownership", swap_once)
+
+    with pytest.raises(MODULE.DeploymentError, match="inventory changed"):
+        MODULE.move_release_to_root_store(bundle)
+
+    assert displaced.is_dir()
+    assert release.source_root.is_dir()
+    assert not destination.exists()
+
+
 @pytest.mark.parametrize("mutation", ["source", "budget", "port", "storage"])
 def test_bundle_preflight_rejects_identity_and_freshness_drift(
     tmp_path: Path, mutation: str
@@ -370,7 +430,12 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(tmp_path: Pa
 
     assert payload["Label"] == MODULE.LABELS[0]
     assert payload["UserName"] == bundle.runtime_user
-    assert arguments[:2] == [str(sources.python), str(installed_supervisor)]
+    assert arguments[:4] == [
+        str(sources.python),
+        "-I",
+        "-S",
+        str(installed_supervisor),
+    ]
     for field in (
         "--binary-device",
         "--binary-inode",

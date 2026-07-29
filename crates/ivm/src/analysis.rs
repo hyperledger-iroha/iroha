@@ -453,7 +453,7 @@ fn authenticated_literal_name(contract: &PreparedContract, pointer: u64) -> Opti
     if tlv.type_id != crate::pointer_abi::PointerType::Name {
         return None;
     }
-    let name: Name = norito::decode_from_bytes(tlv.payload).ok()?;
+    let name: Name = norito::decode_canonical(tlv.payload).ok()?;
     crate::host::validate_state_path_name(&name).ok()?;
     Some(name.to_string())
 }

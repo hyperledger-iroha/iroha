@@ -19251,7 +19251,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     ), errors
     adapter.write_text(canonical_adapter, encoding="utf-8")
 
-    tc_name = "fn tc_promoted_historical_commit_is_fsynced_before_sign_and_status()"
+    tc_name = "fn tc_promoted_lock_requires_same_subject_reproposal_before_commit()"
     tc_start = canonical_adapter.index(tc_name)
     no_sign_start = canonical_adapter.index("        assert!(\n            installed", tc_start)
     match_start = canonical_adapter.index(
@@ -19264,7 +19264,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     )
     exact_match = canonical_adapter[match_start:match_end]
     commit_witness_start = canonical_adapter.index(
-        "        let sign = adapter", match_end
+        "        let validation = adapter", match_end
     )
     tc_test_end = canonical_adapter.index(
         "\n    }\n\n    #[test]", commit_witness_start
@@ -19285,15 +19285,6 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
                 tc_name + " {",
                 tc_name + " {\n        if false { return; }",
             ),
-            "strengthened TC regression declaration and complete control flow "
-            "must match the exact reviewed token digest",
-        ),
-        (
-            canonical_adapter[:commit_witness_start]
-            + "        if false {\n"
-            + canonical_adapter[commit_witness_start:tc_test_end]
-            + "\n        }"
-            + canonical_adapter[tc_test_end:],
             "strengthened TC regression declaration and complete control flow "
             "must match the exact reviewed token digest",
         ),
@@ -19335,10 +19326,9 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "TC regression must reject signing and exactly match EnterView-before-FetchBody",
         ),
         (
-            canonical_adapter.replace(
-                "                && *fetched_subject == subject\n",
-                "",
-                1,
+            mutate_tc(
+                "                && *fetched_subject == subject",
+                "                && *fetched_subject != subject",
             ),
             "TC regression must reject signing and exactly match EnterView-before-FetchBody",
         ),
@@ -19353,60 +19343,56 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             mutate_tc(
-                "            ] if *tag == fetch_tag\n"
-                "                && vote.round == round",
-                "            ] if *tag == timeout_tag\n"
-                "                && vote.round == round",
+                "            }] if *tag == fetch_tag\n"
+                "                && *validated_round == round",
+                "            }] if *tag == timeout_tag\n"
+                "                && *validated_round == round",
             ),
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
+            "TC regression must pin exact StoreBody/ValidateBody tags, rounds, and subjects",
         ),
         (
             mutate_tc(
-                "            Some(core_commit_vote.vote()),",
-                "            Some(other_core_vote.vote()),",
+                "validation.is_empty()",
+                "!validation.is_empty()",
             ),
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
         ),
         (
-            canonical_adapter.replace(
+            mutate_tc(
                 ".validation_succeeded(fetch_tag, round, subject, &validated)",
                 ".validation_succeeded(fetch_tag, round, subject, &other)",
-                1,
             ),
             "strengthened TC regression must contain exactly one "
             "adapter.validation_succeeded(fetch_tag, round, subject, &validated)",
         ),
         (
-            canonical_adapter[:commit_witness_start]
-            + canonical_adapter[tc_test_end:],
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
-        ),
-        (
-            canonical_adapter[:commit_witness_start]
-            + canonical_adapter[commit_witness_start:tc_test_end].replace(
-                "wire::SumeragiV2OutboundIntentStage::PendingSignature",
-                "wire::SumeragiV2OutboundIntentStage::Sent",
-                1,
-            )
-            + canonical_adapter[tc_test_end:],
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
-        ),
-        (
-            canonical_adapter[:commit_witness_start]
-            + canonical_adapter[commit_witness_start:tc_test_end].replace(
-                "            adapter.wal.recovered_records().len(),\n"
-                "            3,\n",
+            mutate_tc(
                 "            adapter.wal.recovered_records().len(),\n"
                 "            2,\n",
-                1,
-            )
-            + canonical_adapter[tc_test_end:],
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
+                "            adapter.wal.recovered_records().len(),\n"
+                "            3,\n",
+            ),
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
+        ),
+        (
+            mutate_tc(
+                "            .commit_intent(core_current_round),\n"
+                "            None,",
+                "            .commit_intent(core_current_round),\n"
+                "            Some(reducer::Vote::new(round, subject, 0)),",
+            ),
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
+        ),
+        (
+            mutate_tc(
+                "wire::SumeragiV2OutboundIntentKind::CommitQc",
+                "wire::SumeragiV2OutboundIntentKind::PrepareQc",
+            ),
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
         ),
     )
     for mutated_adapter, expected_error in tc_mutations:

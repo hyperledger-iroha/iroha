@@ -23,7 +23,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { devNull } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export const NATIVE_BUILD_PROVENANCE_FILENAME =
   "iroha_js_host.build-provenance.json";
@@ -37,6 +37,8 @@ const MAX_UNTRACKED_FILES = 100_000;
 const MAX_UNTRACKED_FILE_BYTES = 64n * 1024n * 1024n;
 const MAX_CARGO_LOCK_BYTES = 16n * 1024n * 1024n;
 const CARGO_LOCK_PATH = Buffer.from("Cargo.lock", "utf8");
+export const NATIVE_BUILD_CARGO_LOCK_ENV =
+  "IROHA_JS_CARGO_LOCKFILE_PATH";
 const SNAPSHOT_PREFIX = ".iroha-js-source-snapshot-";
 const PROVENANCE_PREVIOUS_SUFFIX = ".previous";
 const PROVENANCE_RETIRED_PREFIX = `.${NATIVE_BUILD_PROVENANCE_FILENAME}.retired-`;
@@ -460,6 +462,72 @@ function lstatOrNull(path) {
   }
 }
 
+function selectedCargoLock(repoRoot, env) {
+  const configured = env[NATIVE_BUILD_CARGO_LOCK_ENV];
+  if (
+    configured !== undefined &&
+    (typeof configured !== "string" ||
+      configured.length === 0 ||
+      !isAbsolute(configured))
+  ) {
+    throw new Error(
+      `${NATIVE_BUILD_CARGO_LOCK_ENV} must name an absolute Cargo.lock path`,
+    );
+  }
+  const cargoLockPath =
+    configured === undefined
+      ? join(resolve(repoRoot), "Cargo.lock")
+      : configured;
+  if (
+    resolve(cargoLockPath) !== cargoLockPath ||
+    realpathSync(cargoLockPath) !== cargoLockPath
+  ) {
+    throw new Error(
+      "Native build Cargo.lock path must be canonical and contain no symbolic-link components",
+    );
+  }
+  const metadata = lstatSync(cargoLockPath, { bigint: true });
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    canonicalRegularMode(metadata) !== "100644"
+  ) {
+    throw new Error(
+      "Native build Cargo.lock must be a non-executable regular non-symbolic-link file",
+    );
+  }
+  const seal = readStableRegularFileDigest(cargoLockPath, {
+    label: "Native build Cargo.lock",
+    maximumBytes: Number(MAX_CARGO_LOCK_BYTES),
+    requireNonempty: true,
+  });
+  return Object.freeze({
+    identity: seal.identity,
+    path: cargoLockPath,
+    sha256: seal.sha256,
+  });
+}
+
+function assertSelectedCargoLockUnchanged(cargoLock) {
+  if (
+    realpathSync(cargoLock.path) !== cargoLock.path ||
+    resolve(cargoLock.path) !== cargoLock.path
+  ) {
+    throw new Error("Native build Cargo.lock path changed identity");
+  }
+  const current = readStableRegularFileDigest(cargoLock.path, {
+    label: "Native build Cargo.lock",
+    maximumBytes: Number(MAX_CARGO_LOCK_BYTES),
+    requireNonempty: true,
+  });
+  if (
+    current.sha256 !== cargoLock.sha256 ||
+    !sameStableIdentity(current.identity, cargoLock.identity)
+  ) {
+    throw new Error("Native build Cargo.lock changed while it was in use");
+  }
+}
+
 const UNSUPPORTED_DIRECTORY_SYNC_CODES = new Set([
   "EACCES",
   "EBADF",
@@ -622,6 +690,7 @@ function fingerprintSourceEntries(
   trackedInventory,
   untrackedInventory,
   status,
+  cargoLockPath = absoluteSourcePath(sourceRoot, CARGO_LOCK_PATH),
 ) {
   const hash = createHash("sha256");
   hash.update(SOURCE_TREE_DOMAIN);
@@ -638,7 +707,6 @@ function fingerprintSourceEntries(
     appendSourceEntry(hash, sourceRoot, entry, "untracked-source-v1");
   }
 
-  const cargoLockPath = absoluteSourcePath(sourceRoot, CARGO_LOCK_PATH);
   const cargoLockMetadata = lstatOrNull(cargoLockPath);
   if (
     cargoLockMetadata === null ||
@@ -647,7 +715,7 @@ function fingerprintSourceEntries(
     canonicalRegularMode(cargoLockMetadata) !== "100644"
   ) {
     throw new Error(
-      "Native build requires a non-executable regular root Cargo.lock source input",
+      "Native build requires a non-executable regular Cargo.lock source input",
     );
   }
   appendField(hash, "required-ignored-build-input-v1");
@@ -657,7 +725,7 @@ function fingerprintSourceEntries(
   appendStableRegularFile(
     hash,
     cargoLockPath,
-    "Native build root Cargo.lock",
+    "Native build Cargo.lock",
     {
       maximumBytes: MAX_CARGO_LOCK_BYTES,
       requireNonempty: true,
@@ -666,7 +734,13 @@ function fingerprintSourceEntries(
   return hash.digest("hex");
 }
 
-function captureSourceTreeFingerprint(repoRoot, run, env, status) {
+function captureSourceTreeFingerprint(
+  repoRoot,
+  run,
+  env,
+  status,
+  selectedLock,
+) {
   const trackedBefore = readTrackedInventory(repoRoot, run, env);
   const untrackedBefore = readUntrackedInventory(repoRoot, run, env);
   const trackedPaths = new Set(
@@ -677,13 +751,17 @@ function captureSourceTreeFingerprint(repoRoot, run, env, status) {
       throw new Error("Native build source inventories overlap");
     }
   }
+  const cargoLock = selectedLock ?? selectedCargoLock(repoRoot, env);
+  assertSelectedCargoLockUnchanged(cargoLock);
 
   const sourceTreeSha256 = fingerprintSourceEntries(
     repoRoot,
     trackedBefore,
     untrackedBefore,
     status,
+    cargoLock.path,
   );
+  assertSelectedCargoLockUnchanged(cargoLock);
 
   const trackedAfter = readTrackedInventory(repoRoot, run, env);
   const untrackedAfter = readUntrackedInventory(repoRoot, run, env);
@@ -694,6 +772,7 @@ function captureSourceTreeFingerprint(repoRoot, run, env, status) {
     throw new Error("Native build source inventory changed while it was sealed");
   }
   return {
+    cargoLock,
     sourceTreeSha256,
     trackedInventory: trackedBefore,
     untrackedInventory: untrackedBefore,
@@ -717,13 +796,16 @@ function captureNativeBuildSourceState(
     env,
     statusBefore,
   );
+  const cargoLock = captured.cargoLock;
   const statusMiddle = readGitStatus(repoRoot, run, env);
   const rechecked = captureSourceTreeFingerprint(
     repoRoot,
     run,
     env,
     statusMiddle,
+    cargoLock,
   );
+  assertSelectedCargoLockUnchanged(cargoLock);
   const statusAfter = readGitStatus(repoRoot, run, env);
   const revisionAfter = readGitRevision(repoRoot, run, env);
   if (
@@ -737,6 +819,7 @@ function captureNativeBuildSourceState(
     );
   }
   return {
+    cargoLock,
     sourceState: Object.freeze({
       sourceGitRevision,
       sourceTreeClean: statusBefore.length === 0,
@@ -889,6 +972,31 @@ function copySnapshotEntry(repoRoot, snapshotRoot, entry, kind) {
   if (!sameStableIdentity(before, after)) {
     throw new Error("Native build source changed while it was snapshotted");
   }
+}
+
+function copySelectedCargoLock(snapshotRoot, cargoLock) {
+  assertSelectedCargoLockUnchanged(cargoLock);
+  const destinationPath = absoluteSourcePath(
+    snapshotRoot,
+    CARGO_LOCK_PATH,
+  );
+  copyFileSync(
+    cargoLock.path,
+    destinationPath,
+    constants.COPYFILE_EXCL | (constants.COPYFILE_FICLONE ?? 0),
+  );
+  chmodSync(destinationPath, 0o400);
+  const copied = readStableRegularFileDigest(destinationPath, {
+    label: "Native build snapshotted Cargo.lock",
+    maximumBytes: Number(MAX_CARGO_LOCK_BYTES),
+    requireNonempty: true,
+  });
+  if (copied.sha256 !== cargoLock.sha256) {
+    throw new Error(
+      "Native build snapshotted Cargo.lock does not match its selected input",
+    );
+  }
+  assertSelectedCargoLockUnchanged(cargoLock);
 }
 
 function snapshotRelativePath(parent, name) {
@@ -1122,6 +1230,7 @@ export function createNativeBuildSourceSnapshot(
   );
   const snapshotMetadata = lstatSync(snapshotRoot, { bigint: true });
   const snapshot = {
+    cargoLockSource: captured.cargoLock,
     snapshotRoot,
     snapshotIdentity: Object.freeze({
       dev: snapshotMetadata.dev,
@@ -1146,12 +1255,7 @@ export function createNativeBuildSourceSnapshot(
       if (entry.path.equals(CARGO_LOCK_PATH)) continue;
       copySnapshotEntry(repoRoot, snapshotRoot, entry, "untracked-source-v1");
     }
-    copySnapshotEntry(
-      repoRoot,
-      snapshotRoot,
-      { path: CARGO_LOCK_PATH },
-      "required-ignored-build-input-v1",
-    );
+    copySelectedCargoLock(snapshotRoot, captured.cargoLock);
     assertTargetIdentity(snapshot);
     assertSnapshotRootIdentity(snapshot);
     assertSnapshotSymlinksContained(snapshot);
@@ -1183,6 +1287,7 @@ export function createNativeBuildSourceSnapshot(
 }
 
 export function verifyNativeBuildSourceSnapshot(snapshot) {
+  assertSelectedCargoLockUnchanged(snapshot.cargoLockSource);
   assertTargetIdentity(snapshot);
   assertSnapshotRootIdentity(snapshot);
   assertExactSnapshotInventory(snapshot);
@@ -1196,6 +1301,7 @@ export function verifyNativeBuildSourceSnapshot(snapshot) {
   if (digest !== snapshot.sourceState.sourceTreeSha256) {
     throw new Error("Native build source snapshot changed while Cargo was running");
   }
+  assertSelectedCargoLockUnchanged(snapshot.cargoLockSource);
   return snapshot.sourceState;
 }
 

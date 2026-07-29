@@ -92,8 +92,9 @@ use iroha_data_model::{
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS},
     nexus::{
-        AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob,
+        AssetHandle, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope,
+        AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope,
+        ProofBlob,
     },
     peer::PeerId,
     transaction::{
@@ -241,6 +242,11 @@ fn map_overlay_error(
                 ctx.clone(),
             ))
         }
+        crate::pipeline::overlay::OverlayBuildError::InvalidAxtPolicySnapshot(error) => {
+            TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::InternalError(
+                format!("invalid AXT policy snapshot: {error}"),
+            ))
+        }
         crate::pipeline::overlay::OverlayBuildError::AmxBudgetViolation(violation) => {
             let message = crate::pipeline::overlay::amx_timeout_message(violation);
             TransactionRejectionReason::Validation(iroha_data_model::ValidationFail::NotPermitted(
@@ -352,7 +358,10 @@ fn commit_stateful_admission_sequence_to_block(
 mod overlay_error_tests {
     use iroha_data_model::{
         ValidationFail,
-        nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
+        nexus::{
+            AxtPolicySnapshotValidationError, AxtRejectContext, AxtRejectReason, DataSpaceId,
+            LaneId,
+        },
         transaction::{ExecutableBatchItem, IvmBytecode, IvmProved},
     };
 
@@ -364,7 +373,7 @@ mod overlay_error_tests {
             reason: AxtRejectReason::Manifest,
             dataspace: Some(DataSpaceId::new(7)),
             lane: Some(LaneId::new(3)),
-            snapshot_version: 42,
+            snapshot_version: Some(42),
             detail: "manifest mismatch".to_string(),
             next_min_handle_era: None,
             next_min_sub_nonce: None,
@@ -382,6 +391,24 @@ mod overlay_error_tests {
             }
             other => panic!("unexpected mapping: {other:?}"),
         }
+    }
+
+    #[test]
+    fn map_overlay_error_classifies_invalid_axt_snapshot_as_internal() {
+        let mapped = map_overlay_error(
+            &crate::pipeline::overlay::OverlayBuildError::InvalidAxtPolicySnapshot(
+                AxtPolicySnapshotValidationError::VersionMismatch {
+                    expected: 7,
+                    actual: 8,
+                },
+            ),
+        );
+
+        assert!(matches!(
+            mapped,
+            TransactionRejectionReason::Validation(ValidationFail::InternalError(message))
+                if message == "invalid AXT policy snapshot: policy snapshot version mismatch: expected 7, found 8"
+        ));
     }
 
     #[test]
@@ -2979,8 +3006,8 @@ pub struct AxtEnvelopeValidationDetails {
     pub message: String,
     /// Categorised reason label for the rejection.
     pub reason: AxtRejectReason,
-    /// Policy snapshot version active during validation.
-    pub snapshot_version: u64,
+    /// Policy snapshot version active during validation, when block results were present.
+    pub snapshot_version: Option<u64>,
     /// Dataspace associated with the rejection (if known).
     pub dataspace: Option<DataSpaceId>,
     /// Lane associated with the rejection (if known).
@@ -2995,13 +3022,15 @@ impl fmt::Display for AxtEnvelopeValidationDetails {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} (reason={}, snapshot_version={}, lane={:?}, dsid={:?}",
+            "{} (reason={}, lane={:?}, dsid={:?}",
             self.message,
             self.reason.label(),
-            self.snapshot_version,
             self.lane,
             self.dataspace
         )?;
+        if let Some(snapshot_version) = self.snapshot_version {
+            write!(f, ", snapshot_version={snapshot_version}")?;
+        }
         if let Some(hint) = self.next_min_handle_era {
             write!(f, ", next_min_handle_era={hint}")?;
         }
@@ -4961,15 +4990,18 @@ pub(crate) mod valid {
         block: &SignedBlock,
         state_block: &StateBlock<'_>,
     ) -> Result<(), BlockValidationError> {
-        let snapshot = block
-            .axt_policy_snapshot()
-            .cloned()
-            .unwrap_or_else(|| state_block.axt_policy_snapshot());
-        let snapshot_version = if snapshot.version != 0 {
-            snapshot.version
-        } else {
-            AxtPolicySnapshot::compute_version(&snapshot.entries)
-        };
+        let snapshot = block.axt_policy_snapshot().cloned().ok_or_else(|| {
+            BlockValidationError::AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails {
+                message: "block result is missing its required AXT policy snapshot".to_owned(),
+                reason: AxtRejectReason::MissingPolicy,
+                snapshot_version: None,
+                dataspace: None,
+                lane: None,
+                next_min_handle_era: None,
+                next_min_sub_nonce: None,
+            })
+        })?;
+        let snapshot_version = snapshot.version;
         let make_axt_error_with =
             |reason: AxtRejectReason,
              message: &str,
@@ -4980,13 +5012,23 @@ pub(crate) mod valid {
                 BlockValidationError::AxtEnvelopeValidationFailed(AxtEnvelopeValidationDetails {
                     message: message.to_owned(),
                     reason,
-                    snapshot_version,
+                    snapshot_version: Some(snapshot_version),
                     dataspace,
                     lane,
                     next_min_handle_era,
                     next_min_sub_nonce,
                 })
             };
+        snapshot.validate().map_err(|error| {
+            make_axt_error_with(
+                AxtRejectReason::PolicyDenied,
+                &format!("invalid AXT policy snapshot: {error}"),
+                None,
+                None,
+                None,
+                None,
+            )
+        })?;
         let axt_timing = state_block.nexus.axt;
         let policies: BTreeMap<_, _> = snapshot
             .entries
@@ -5083,17 +5125,18 @@ pub(crate) mod valid {
                         None,
                     ));
                 }
-                let envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
-                    .map_err(|err| {
-                        make_axt_error_with(
-                            AxtRejectReason::Proof,
-                            &format!("proof payload is not an AXT proof envelope: {err}"),
-                            Some(dsid),
-                            Some(policy.target_lane),
-                            None,
-                            None,
-                        )
-                    })?;
+                let envelope =
+                    ivm::codec::decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
+                        .map_err(|err| {
+                            make_axt_error_with(
+                                AxtRejectReason::Proof,
+                                &format!("proof payload is not an AXT proof envelope: {err}"),
+                                Some(dsid),
+                                Some(policy.target_lane),
+                                None,
+                                None,
+                            )
+                        })?;
                 if envelope.dsid != dsid || envelope.manifest_root != policy.manifest_root {
                     return Err(make_axt_error_with(
                         AxtRejectReason::Manifest,
@@ -5204,6 +5247,20 @@ pub(crate) mod valid {
 
             for envelope in envelopes {
                 let envelope_lane = envelope.lane;
+                let expected_commit_height = block.header().height().get();
+                if envelope.commit_height != expected_commit_height {
+                    return Err(make_env_error(
+                        envelope_lane,
+                        AxtRejectReason::Descriptor,
+                        &format!(
+                            "envelope commit height {} does not match block height {expected_commit_height}",
+                            envelope.commit_height
+                        ),
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 if let Err(err) = iroha_data_model::nexus::validate_descriptor(&envelope.descriptor)
                 {
                     return Err(make_env_error(
@@ -5242,8 +5299,32 @@ pub(crate) mod valid {
                 for spec in &envelope.descriptor.touches {
                     touch_specs.insert(spec.dsid, spec);
                 }
+                if envelope
+                    .touches
+                    .windows(2)
+                    .any(|pair| pair[0].dsid >= pair[1].dsid)
+                {
+                    return Err(make_env_error(
+                        envelope_lane,
+                        AxtRejectReason::Descriptor,
+                        "touch fragments are not strictly ordered by dataspace",
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 let mut touch_dsids: BTreeSet<DataSpaceId> = BTreeSet::new();
                 for touch in &envelope.touches {
+                    if ivm::axt::validate_model_touch_manifest(&touch.manifest).is_err() {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::Descriptor,
+                            "touch manifest paths are not canonical",
+                            Some(touch.dsid),
+                            None,
+                            None,
+                        ));
+                    }
                     if !expected_dsids.contains(&touch.dsid) {
                         return Err(make_env_error(
                             envelope_lane,
@@ -5334,6 +5415,20 @@ pub(crate) mod valid {
                     }
                 }
                 let mut proofs_by_ds: BTreeMap<DataSpaceId, ProofBlob> = BTreeMap::new();
+                if envelope
+                    .proofs
+                    .windows(2)
+                    .any(|pair| pair[0].dsid >= pair[1].dsid)
+                {
+                    return Err(make_env_error(
+                        envelope_lane,
+                        AxtRejectReason::Proof,
+                        "proof fragments are not strictly ordered by dataspace",
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 for proof in &envelope.proofs {
                     if !expected_dsids.contains(&proof.dsid) {
                         return Err(make_axt_error_with(
@@ -5376,6 +5471,27 @@ pub(crate) mod valid {
                 let mut accumulators: BTreeMap<HandleBudgetKey, HandleAccumulator> =
                     BTreeMap::new();
 
+                if envelope.handles.windows(2).any(|pair| {
+                    let key = |fragment: &AxtHandleFragment| {
+                        (
+                            *fragment.handle.axt_binding.as_bytes(),
+                            fragment.handle.handle_era,
+                            fragment.handle.sub_nonce,
+                            fragment.intent.asset_dsid,
+                            fragment.amount.clone(),
+                        )
+                    };
+                    key(&pair[0]) >= key(&pair[1])
+                }) {
+                    return Err(make_env_error(
+                        envelope_lane,
+                        AxtRejectReason::Duplicate,
+                        "handle fragments are not strictly ordered by producer key",
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 for fragment in &envelope.handles {
                     let binding = fragment.handle.axt_binding;
                     if binding.as_bytes() != envelope.binding.as_bytes() {
@@ -5640,6 +5756,12 @@ pub(crate) mod valid {
                                     "intent amount is absent and no committed proof amount was provided",
                                 )
                             }
+                            ivm::axt::HandleAmountResolutionError::InvalidProofEnvelope => {
+                                (
+                                    AxtRejectReason::Proof,
+                                    "proof payload is not a canonical AXT proof envelope",
+                                )
+                            }
                             ivm::axt::HandleAmountResolutionError::Mismatch => {
                                 (
                                     AxtRejectReason::Budget,
@@ -5744,6 +5866,26 @@ pub(crate) mod valid {
                         }
                     }
 
+                    if ivm::axt::validate_model_asset_handle(&fragment.handle).is_err() {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "handle fields are not canonical or usable",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
+                    if ivm::axt::validate_model_remote_spend_intent(&fragment.intent).is_err() {
+                        return Err(make_env_error(
+                            envelope_lane,
+                            AxtRejectReason::PolicyDenied,
+                            "remote spend intent fields are not canonical or usable",
+                            Some(fragment.intent.asset_dsid),
+                            None,
+                            None,
+                        ));
+                    }
                     if !seen.insert(replay_key) {
                         return Err(make_env_error(
                             envelope_lane,
@@ -8521,7 +8663,7 @@ pub(crate) mod valid {
             }
             let mut aggregate_bytes = 0_usize;
             for (index, envelope) in envelopes.iter().enumerate() {
-                let envelope_bytes = norito::to_bytes(envelope).map_err(|error| {
+                let envelope_bytes = norito::encode_canonical(envelope).map_err(|error| {
                     Self::execution_context_error(format!(
                         "failed to canonically encode autonomous lane payload envelope {index}: {error}"
                     ))
@@ -10935,7 +11077,7 @@ pub(crate) mod valid {
                 state_block.drain_transfer_transcripts_with_pending(fastpq_digest_batch);
             let axt_envelopes = state_block.drain_axt_envelopes();
             let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
-            let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            let axt_policy_snapshot = state_block.axt_policy_snapshot();
             let trigger_completions = state_block.world.trigger_completions();
             block
                 .set_transaction_results_with_transcripts(
@@ -11095,7 +11237,21 @@ pub(crate) mod valid {
             let mut timings = timings;
             if block.has_results() {
                 if let Some(snapshot) = block.axt_policy_snapshot() {
-                    state_block.install_axt_policy_snapshot(snapshot);
+                    state_block
+                        .install_axt_policy_snapshot(snapshot)
+                        .map_err(|error| {
+                            BlockValidationError::AxtEnvelopeValidationFailed(
+                                AxtEnvelopeValidationDetails {
+                                    message: format!("invalid AXT policy snapshot: {error}"),
+                                    reason: AxtRejectReason::PolicyDenied,
+                                    snapshot_version: Some(snapshot.version),
+                                    dataspace: None,
+                                    lane: None,
+                                    next_min_handle_era: None,
+                                    next_min_sub_nonce: None,
+                                },
+                            )
+                        })?;
                 }
             }
 
@@ -15146,7 +15302,7 @@ pub(crate) mod valid {
             let axt_start = timings.as_ref().map(|_| Instant::now());
             let axt_envelopes = state_block.drain_axt_envelopes();
             let batch_transfer_outcomes = state_block.drain_batch_transfer_outcomes();
-            let axt_policy_snapshot = Some(state_block.axt_policy_snapshot());
+            let axt_policy_snapshot = state_block.axt_policy_snapshot();
             let trigger_completions = state_block.world.trigger_completions();
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), axt_start) {
                 timings.execution_tx_finalize_axt_ms = to_ms(start.elapsed());
@@ -16407,6 +16563,50 @@ pub(crate) mod valid {
             ));
         }
 
+        #[test]
+        fn autonomous_anchor_budget_is_ambient_layout_invariant() {
+            let fixture = autonomous_anchor_fixture(None, 0);
+            let mut exact_limit = fixture.bundle.autonomous_lane_payloads[0].clone();
+            exact_limit
+                .canonical_payload
+                .resize(MAX_MERGE_EXECUTION_BATCH_BYTES, 0);
+            let initial_len = norito::encode_canonical(&exact_limit)
+                .expect("encode exact-limit autonomous envelope")
+                .len();
+            let envelope_overhead = initial_len
+                .checked_sub(exact_limit.canonical_payload.len())
+                .expect("framed envelope contains its canonical payload");
+            exact_limit.canonical_payload.resize(
+                MAX_MERGE_EXECUTION_BATCH_BYTES
+                    .checked_sub(envelope_overhead)
+                    .expect("autonomous envelope overhead fits the aggregate budget"),
+                0,
+            );
+            assert_eq!(
+                norito::encode_canonical(&exact_limit)
+                    .expect("re-encode exact-limit autonomous envelope")
+                    .len(),
+                MAX_MERGE_EXECUTION_BATCH_BYTES
+            );
+
+            let baseline = ValidBlock::validate_autonomous_lane_payload_envelope_budget(
+                core::slice::from_ref(&exact_limit),
+            );
+            assert_eq!(baseline, Ok(()));
+            let alternate = {
+                let alternate_flags =
+                    norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+                let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                ValidBlock::validate_autonomous_lane_payload_envelope_budget(core::slice::from_ref(
+                    &exact_limit,
+                ))
+            };
+            assert_eq!(
+                alternate, baseline,
+                "block admission must account exact canonical envelope bytes"
+            );
+        }
+
         fn state_confidential_features_at_height(
             state: &State,
             height: u64,
@@ -17007,7 +17207,7 @@ pub(crate) mod valid {
                     vec![result],
                     std::collections::BTreeMap::new(),
                     Vec::new(),
-                    None,
+                    AxtPolicySnapshot::default(),
                 )
                 .expect("SCCP test block entrypoint hashes should match");
         }
@@ -23856,7 +24056,7 @@ pub(crate) mod valid {
                     ],
                     BTreeMap::new(),
                     Vec::new(),
-                    None,
+                    AxtPolicySnapshot::default(),
                 )
                 .expect("fixture result roots match external entrypoint");
             signed_block.set_committed_fragment_count(99);
@@ -23943,7 +24143,7 @@ pub(crate) mod valid {
                     ],
                     BTreeMap::new(),
                     Vec::new(),
-                    None,
+                    AxtPolicySnapshot::default(),
                 )
                 .expect("fixture result roots match external entrypoint");
             signed_block.set_committed_fragment_count(0);
@@ -25213,7 +25413,7 @@ mod commit {
                     results,
                     BTreeMap::new(),
                     vec![envelope],
-                    Some(snapshot),
+                    snapshot,
                 )
                 .expect("empty test block should attach AXT envelope results");
             block
@@ -25254,6 +25454,138 @@ mod commit {
                     details
                 }
                 other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn axt_validation_rejects_mismatched_commit_heights() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::new(), kura, query);
+            for commit_height in [0, 2] {
+                let descriptor = AxtDescriptor {
+                    dsids: vec![DataSpaceId::new(1)],
+                    touches: Vec::new(),
+                };
+                let envelope = AxtEnvelopeRecord {
+                    binding: binding_for_descriptor(&descriptor),
+                    lane: LaneId::new(0),
+                    descriptor,
+                    touches: Vec::new(),
+                    proofs: Vec::new(),
+                    handles: Vec::new(),
+                    commit_height,
+                };
+                let block = build_block_with_envelopes(envelope, AxtPolicySnapshot::default());
+                let state_block = state.block(block.header());
+
+                let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+                expect_axt_error(
+                    err,
+                    AxtRejectReason::Descriptor,
+                    &format!("commit height {commit_height} does not match block height 1"),
+                );
+            }
+        }
+
+        #[test]
+        fn axt_validation_rejects_resultless_block_without_policy_snapshot() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::new(), kura, query);
+            let descriptor = AxtDescriptor {
+                dsids: vec![DataSpaceId::new(1)],
+                touches: Vec::new(),
+            };
+            let envelope = AxtEnvelopeRecord {
+                binding: binding_for_descriptor(&descriptor),
+                lane: LaneId::new(0),
+                descriptor,
+                touches: Vec::new(),
+                proofs: Vec::new(),
+                handles: Vec::new(),
+                commit_height: 1,
+            };
+            let block = build_block_with_envelopes(envelope, AxtPolicySnapshot::default())
+                .canonical_resultless_proposal();
+            let state_block = state.block(block.header());
+
+            let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+            let details = expect_axt_error(
+                err,
+                AxtRejectReason::MissingPolicy,
+                "block result is missing its required AXT policy snapshot",
+            );
+            assert_eq!(
+                details.snapshot_version, None,
+                "a resultless block must not borrow the live state's snapshot version"
+            );
+        }
+
+        #[test]
+        fn axt_validation_rejects_noncanonical_embedded_policy_snapshots() {
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::new(), kura, query);
+            let descriptor = AxtDescriptor {
+                dsids: vec![DataSpaceId::new(1)],
+                touches: Vec::new(),
+            };
+            let envelope = AxtEnvelopeRecord {
+                binding: binding_for_descriptor(&descriptor),
+                lane: LaneId::new(0),
+                descriptor,
+                touches: Vec::new(),
+                proofs: Vec::new(),
+                handles: Vec::new(),
+                commit_height: 1,
+            };
+            let base = build_block_with_envelopes(envelope, AxtPolicySnapshot::default());
+            let policy = AxtPolicyEntry {
+                manifest_root: [0x42; 32],
+                target_lane: LaneId::new(0),
+                min_handle_era: 1,
+                min_sub_nonce: 1,
+                current_slot: 1,
+            };
+            let first = AxtPolicyBinding {
+                dsid: DataSpaceId::new(1),
+                policy,
+            };
+            let second = AxtPolicyBinding {
+                dsid: DataSpaceId::new(2),
+                policy,
+            };
+            let duplicate_entries = vec![first, first];
+            let reversed_entries = vec![second, first];
+            let canonical_entries = vec![first, second];
+            let invalid_snapshots = [
+                AxtPolicySnapshot {
+                    version: AxtPolicySnapshot::compute_version(&duplicate_entries),
+                    entries: duplicate_entries,
+                },
+                AxtPolicySnapshot {
+                    version: AxtPolicySnapshot::compute_version(&reversed_entries),
+                    entries: reversed_entries,
+                },
+                AxtPolicySnapshot {
+                    version: AxtPolicySnapshot::compute_version(&canonical_entries).wrapping_add(1),
+                    entries: canonical_entries,
+                },
+            ];
+
+            for invalid_snapshot in invalid_snapshots {
+                let mut block = base.clone();
+                block
+                    .replace_axt_policy_snapshot_for_testing(invalid_snapshot)
+                    .expect("test block has execution results");
+                let state_block = state.block(block.header());
+                let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
+                expect_axt_error(
+                    err,
+                    AxtRejectReason::PolicyDenied,
+                    "invalid AXT policy snapshot",
+                );
             }
         }
 
@@ -25330,7 +25662,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: Vec::new(),
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25344,7 +25676,7 @@ mod commit {
         }
 
         #[test]
-        fn axt_validation_rejects_duplicate_handle_use() {
+        fn axt_validation_rejects_duplicate_handle_fragment_key() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let mut state = State::new_for_testing(World::new(), kura, query);
@@ -25385,7 +25717,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"duplicate-handle", 12),
                 }],
                 handles: vec![handle.clone(), handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25393,8 +25725,8 @@ mod commit {
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(
                 err,
-                AxtRejectReason::ReplayCache,
-                "duplicate handle usage in block",
+                AxtRejectReason::Duplicate,
+                "handle fragments are not strictly ordered by producer key",
             );
         }
 
@@ -25448,9 +25780,20 @@ mod commit {
                     sample_handle(binding, lane_a, dsid_a, 20, policy_a.manifest_root),
                     sample_handle(binding, lane_b, dsid_b, 20, policy_b.manifest_root),
                 ],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
+            let mut reversed_envelope = envelope.clone();
+            reversed_envelope.handles.reverse();
+            let reversed_block = build_block_with_envelopes(reversed_envelope, snapshot.clone());
+            let reversed_state_block = state.block(reversed_block.header());
+            let err = validate_axt_envelopes(&reversed_block, &reversed_state_block).unwrap_err();
+            expect_axt_error(
+                err,
+                AxtRejectReason::Duplicate,
+                "handle fragments are not strictly ordered by producer key",
+            );
+
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let result = validate_axt_envelopes(&block, &state_block);
@@ -25501,7 +25844,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"amount-mismatch", 12),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25560,7 +25903,7 @@ mod commit {
                 }],
                 proofs: Vec::new(),
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25620,7 +25963,7 @@ mod commit {
                 }],
                 proofs: Vec::new(),
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25683,7 +26026,7 @@ mod commit {
                 }],
                 proofs: Vec::new(),
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25739,7 +26082,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"missing-touch", 12),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25786,7 +26129,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"handle-without-touch", 12),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25839,7 +26182,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"touch-prefix", 12),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25889,7 +26232,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"descriptor-binding", 12),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -25948,7 +26291,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs,
                 handles: vec![handle, other],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26005,7 +26348,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: vec![proof],
                 handles: vec![first, second],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26044,7 +26387,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: Vec::new(),
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26088,7 +26431,7 @@ mod commit {
                     },
                 }],
                 handles: Vec::new(),
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26130,7 +26473,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"expired-proof", 4),
                 }],
                 handles: Vec::new(),
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let entries = vec![AxtPolicyBinding { dsid, policy }];
             let snapshot = AxtPolicySnapshot {
@@ -26175,7 +26518,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"zero-proof-expiry", 0),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26221,7 +26564,7 @@ mod commit {
                 touches: Vec::new(),
                 proofs: Vec::new(),
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26276,7 +26619,7 @@ mod commit {
                     },
                 }],
                 handles: vec![handle],
-                commit_height: Some(2),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26331,7 +26674,7 @@ mod commit {
                     },
                 }],
                 handles: vec![handle],
-                commit_height: Some(2),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26378,7 +26721,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"budget-block", 10),
                 }],
                 handles: vec![handle_one, handle_two],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26420,7 +26763,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"handle-era", 10),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26466,7 +26809,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"zero-handle-expiry", 10),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26512,7 +26855,7 @@ mod commit {
                     },
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26558,7 +26901,7 @@ mod commit {
                     },
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26601,7 +26944,7 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"zero-root-handle", 8),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26648,12 +26991,14 @@ mod commit {
                     proof: proof_blob_for(dsid, policy.manifest_root, b"snapshot-fallback", 9),
                 }],
                 handles: vec![handle],
-                commit_height: Some(2),
+                commit_height: 1,
             };
 
             let block = build_block_with_envelopes(envelope, snapshot.clone());
             let mut state_block = state.block(block.header());
-            state_block.install_axt_policy_snapshot(&snapshot);
+            state_block
+                .install_axt_policy_snapshot(&snapshot)
+                .expect("test policy snapshot must be canonical");
 
             assert!(validate_axt_envelopes(&block, &state_block).is_ok());
         }
@@ -26699,7 +27044,7 @@ mod commit {
                     proof: proof_blob_for(dsid_b, policy_b.manifest_root, b"policy-slot-dsid", 10),
                 }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
 
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
@@ -26711,7 +27056,7 @@ mod commit {
         }
 
         #[test]
-        fn axt_validation_rejects_missing_policy_snapshot() {
+        fn axt_validation_rejects_empty_policy_snapshot() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), kura, query);
@@ -26745,7 +27090,7 @@ mod commit {
                     proof: proof_blob_for(dsid, manifest_root, b"missing-policy-snapshot", 15),
                 }],
                 handles: vec![handle],
-                commit_height: Some(3),
+                commit_height: 1,
             };
 
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));
@@ -26765,7 +27110,7 @@ mod commit {
                     results,
                     BTreeMap::new(),
                     vec![envelope],
-                    None,
+                    AxtPolicySnapshot::default(),
                 )
                 .expect("empty test block should attach AXT envelope results");
 
@@ -26813,7 +27158,7 @@ mod commit {
                     },
                 }],
                 handles: vec![handle],
-                commit_height: Some(4),
+                commit_height: 1,
             };
 
             let entries = vec![AxtPolicyBinding { dsid, policy }];
@@ -26824,7 +27169,9 @@ mod commit {
 
             let block = build_block_with_envelopes(envelope, snapshot.clone());
             let mut state_block = state.block(block.header());
-            state_block.install_axt_policy_snapshot(&snapshot);
+            state_block
+                .install_axt_policy_snapshot(&snapshot)
+                .expect("test policy snapshot must be canonical");
 
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
             expect_axt_error(
@@ -26892,7 +27239,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment { dsid, proof }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
@@ -26953,7 +27300,7 @@ mod commit {
                 }],
                 proofs: vec![AxtProofFragment { dsid, proof }],
                 handles: vec![handle],
-                commit_height: Some(1),
+                commit_height: 1,
             };
             let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);

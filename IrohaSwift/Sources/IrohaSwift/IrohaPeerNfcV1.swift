@@ -2,9 +2,9 @@ import Foundation
 
 /// Transport-neutral NFC V1 constants for exchanging `IPM1` messages.
 ///
-/// This protocol is intentionally independent from the older offline-note NFC
-/// protocol. V1 has one application identifier, one command set, and no codec
-/// negotiation or legacy fallback.
+/// This protocol is intentionally independent from the ABI-21 Kagemusha bulk
+/// rail. V1 has one application identifier, one command set, and no codec
+/// negotiation or fallback.
 public enum IrohaPeerNfcV1 {
     /// ISO/IEC 7816 application identifier `F0504B45504B524E464301`.
     public static let applicationIdentifierHex = "F0504B45504B524E464301"

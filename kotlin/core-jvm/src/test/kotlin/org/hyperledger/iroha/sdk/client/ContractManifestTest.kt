@@ -20,7 +20,9 @@ class ContractManifestTest {
         assertEquals("Ledger", manifest.seiyakuName)
         assertEquals("b".repeat(64), manifest.codeHashHex)
         assertEquals("d".repeat(64), manifest.abiHashHex)
-        assertEquals(64, manifest.accessSetHints!!.dynamicReads.single().maxKeys)
+        val accessSetHints = manifest.accessSetHints ?: error("missing access-set hints")
+        assertEquals(64, accessSetHints.dynamicReads.single().maxKeys)
+        assertEquals("AccountId", accessSetHints.dynamicReads.single().keyType)
         val entrypoint = manifest.entrypoints!!.single()
         assertEquals(ContractEntrypointKind.KOTOAGE, entrypoint.kind)
         val argumentSchema = entrypoint.argumentSchema ?: error("missing argument schema")
@@ -87,6 +89,272 @@ class ContractManifestTest {
                 ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
             }
         }
+    }
+
+    @Test
+    fun retiredNumericTypeNamesAreRejectedOnlyInTypePositions() {
+        fun statePayload(typeName: String): String =
+            """{"manifest":{"states":[{"name":"Balances","type_name":"$typeName"}]},"code_hash":null,"abi_hash":null}"""
+
+        val maximumDepth = "Option<".repeat(255) + "int" + ">".repeat(255)
+        val maximumMapDepth = "Option<".repeat(254) + "int" + ">".repeat(254)
+        listOf(
+            "quantity",
+            "(int, decimal)",
+            "Option<Result<quantity, string>>",
+            "List<Transfer{amount: quantity}, 64>",
+            "StateMap<AccountId, Transfer{amount: quantity, memo: Option<string>}>",
+            "List<Envelope{items: List<Transfer{amount: quantity}, 64>}, 1>",
+            maximumDepth,
+            wideTupleType(255),
+            "StateMap<AccountId, ${wideTupleType(255)}>",
+            "StateMap<AccountId, $maximumMapDepth>",
+        ).forEach { legalType ->
+            val legal = statePayload(legalType)
+            assertEquals(
+                legalType,
+                ContractJsonParser.parseManifestRecord(legal.toByteArray(StandardCharsets.UTF_8))
+                    .manifest.states!!.single().typeName,
+            )
+        }
+
+        listOf(
+            "Amount",
+            "amount",
+            "Foo{Amount: quantity}",
+            "Foo{Amount:quantity}",
+            "StateMap<AccountId, int>",
+            "Аmount",
+        ).forEach { invalidHint ->
+            val payload = fullResponse().replace(
+                "\"key_type\":\"AccountId\"",
+                "\"key_type\":\"$invalidHint\"",
+            )
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+
+        listOf(
+            "Amount",
+            "amount",
+            "Amount: quantity",
+            "Option<Amount>",
+            "List<amount, 1>",
+            "StateMap<AccountId, Amount>",
+            "StateMap<AccountId, Amount: quantity>",
+            "Transfer{amount: amount}",
+            "Transfer{amount:: quantity}",
+            "Amount{amount: quantity}",
+            "Transfer{amount: quantity, amount: int}",
+            "Transfer{}",
+            "Option<StateMap<AccountId, quantity>>",
+            "StateMap<Json, quantity>",
+            "(int)",
+            "Result<int,string>",
+            "List<quantity, 0>",
+            "List<quantity, 65>",
+            "List<quantity, 01>",
+            "Transfer {amount: quantity}",
+            "Transfer{amount: quantity, memo:string}",
+            "Transfer{amøunt: quantity}",
+            "Tránsfer{amount: quantity}",
+            "Transfer{__kotodama_link_private: quantity}",
+            "Option<".repeat(256) + "int" + ">".repeat(256),
+            wideTupleType(256),
+            "StateMap<AccountId, ${wideTupleType(256)}>",
+            "StateMap<AccountId, $maximumDepth>",
+        ).forEach { retiredType ->
+            val payload = statePayload(retiredType)
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+    }
+
+    @Test
+    fun dynamicAccessHintsEnforceTheExactV1Policy() {
+        fun parse(payload: String): ContractDynamicAccessHint {
+            val manifest =
+                ContractJsonParser.parseManifestRecord(payload.toByteArray(StandardCharsets.UTF_8))
+                    .manifest
+            val accessSetHints = manifest.accessSetHints ?: error("missing access-set hints")
+            return accessSetHints.dynamicReads.single()
+        }
+
+        val keyTypes = listOf(
+            "int",
+            "decimal",
+            "quantity",
+            "bool",
+            "string",
+            "bytes",
+            "DataSpaceId",
+            "AccountId",
+            "AssetDefinitionId",
+            "AssetId",
+            "NftId",
+            "DomainId",
+            "Name",
+        )
+        keyTypes.forEach { keyType ->
+            val payload = fullResponse().replaceFirst(
+                "\"key_type\":\"AccountId\"",
+                "\"key_type\":\"$keyType\"",
+            ).replaceFirst(
+                "StateMap<AccountId, quantity>",
+                "StateMap<$keyType, quantity>",
+            )
+            assertEquals(keyType, parse(payload).keyType)
+        }
+
+        listOf("range", "take").forEach { boundKind ->
+            val payload = fullResponse().replaceFirst(
+                "\"bound_kind\":\"take\"",
+                "\"bound_kind\":\"$boundKind\"",
+            )
+            assertEquals(boundKind, parse(payload).boundKind)
+        }
+        listOf("state:Balances", "state:amount").forEach { baseKey ->
+            var payload = fullResponse().replaceFirst(
+                "\"base_key\":\"state:Balances\"",
+                "\"base_key\":\"$baseKey\"",
+            )
+            if (baseKey == "state:amount") {
+                payload = payload.replaceFirst(
+                    "\"name\":\"Balances\",\"type_name\":\"StateMap<AccountId, quantity>\"",
+                    "\"name\":\"amount\",\"type_name\":\"StateMap<AccountId, quantity>\"",
+                )
+            }
+            assertEquals(baseKey, parse(payload).baseKey)
+        }
+        listOf(1, 64).forEach { maxKeys ->
+            val payload = fullResponse().replaceFirst("\"max_keys\":64", "\"max_keys\":$maxKeys")
+            assertEquals(maxKeys.toLong(), parse(payload).maxKeys)
+        }
+
+        listOf(
+            "",
+            "state:",
+            "state:*",
+            "state:Balances.more",
+            "state:Balances:Other",
+            "state:state:Balances",
+            "state:match",
+            "state:StateMap",
+            "state:__kotodama_link_Balances",
+            "state: Balances",
+            "state:Balances ",
+            "state:Бalances",
+            "states:Balances",
+            "Balances",
+            "state:amount.more",
+        ).forEach { baseKey ->
+            val payload = fullResponse().replaceFirst(
+                "\"base_key\":\"state:Balances\"",
+                "\"base_key\":\"$baseKey\"",
+            )
+            assertFailsWith<IllegalStateException>("accepted base_key `$baseKey`") { parse(payload) }
+        }
+        listOf(
+            "",
+            "Json",
+            "Int",
+            "Amount",
+            "amount",
+            "AccountID",
+            "Transfer",
+            "StateMap",
+            "StateMap<AccountId, quantity>",
+            " AccountId",
+            "AccountId ",
+            "АccountId",
+        ).forEach { keyType ->
+            val payload = fullResponse().replaceFirst(
+                "\"key_type\":\"AccountId\"",
+                "\"key_type\":\"$keyType\"",
+            )
+            assertFailsWith<IllegalStateException>("accepted key_type `$keyType`") { parse(payload) }
+        }
+        listOf("", "Range", "Take", "all", "prefix", "range ", " take").forEach { boundKind ->
+            val payload = fullResponse().replaceFirst(
+                "\"bound_kind\":\"take\"",
+                "\"bound_kind\":\"$boundKind\"",
+            )
+            assertFailsWith<IllegalStateException>("accepted bound_kind `$boundKind`") { parse(payload) }
+        }
+        listOf("0", "65", "4294967295", "-1", "1.0", "\"1\"").forEach { maxKeys ->
+            val payload = fullResponse().replaceFirst("\"max_keys\":64", "\"max_keys\":$maxKeys")
+            assertFailsWith<IllegalStateException>("accepted max_keys `$maxKeys`") { parse(payload) }
+        }
+        listOf(
+            fullResponse().replaceFirst(
+                "\"max_keys\":64",
+                "\"max_keys\":64,\"unknown\":true",
+            ),
+            fullResponse().replaceFirst("\"base_key\":\"state:Balances\"", "\"base_key\":null"),
+            fullResponse().replaceFirst("\"key_type\":\"AccountId\"", "\"key_type\":false"),
+            fullResponse().replaceFirst("\"bound_kind\":\"take\"", "\"bound_kind\":1"),
+            fullResponse().replaceFirst("\"max_keys\":64", "\"max_keys\":null"),
+        ).forEach { payload ->
+            assertFailsWith<IllegalStateException> { parse(payload) }
+        }
+    }
+
+    @Test
+    fun dynamicAccessHintsResolveExactDeclaredStateMaps() {
+        fun hint(
+            baseKey: String = "state:Balances",
+            keyType: String = "AccountId",
+        ): String =
+            """{"base_key":"$baseKey","key_type":"$keyType","bound_kind":"take","max_keys":1}"""
+
+        fun payload(
+            dynamicReads: List<String>,
+            dynamicWrites: List<String>,
+            stateName: String = "Balances",
+            stateType: String = "StateMap<AccountId, quantity>",
+        ): String =
+            """
+            {
+              "manifest":{
+                "access_set_hints":{
+                  "read_keys":[],
+                  "write_keys":[],
+                  "dynamic_reads":[${dynamicReads.joinToString(",")}],
+                  "dynamic_writes":[${dynamicWrites.joinToString(",")}]
+                },
+                "states":[{"name":"$stateName","type_name":"$stateType"}]
+              },
+              "code_hash":null,
+              "abi_hash":null
+            }
+            """.trimIndent()
+
+        fun parse(value: String): ContractManifestRecord =
+            ContractJsonParser.parseManifestRecord(value.toByteArray(StandardCharsets.UTF_8))
+
+        val canonical = hint()
+        listOf(
+            payload(listOf(canonical, canonical), emptyList()),
+            payload(emptyList(), listOf(canonical, canonical)),
+            payload(listOf(hint(baseKey = "state:Missing")), emptyList()),
+            payload(listOf(canonical), emptyList(), stateType = "quantity"),
+            payload(listOf(hint(keyType = "Name")), emptyList()),
+        ).forEach { malformed ->
+            assertFailsWith<IllegalStateException> { parse(malformed) }
+        }
+
+        val amount = hint(baseKey = "state:amount")
+        val accepted = parse(
+            payload(
+                dynamicReads = listOf(amount),
+                dynamicWrites = listOf(amount),
+                stateName = "amount",
+            ),
+        )
+        assertEquals("state:amount", accepted.manifest.accessSetHints!!.dynamicReads.single().baseKey)
+        assertEquals("state:amount", accepted.manifest.accessSetHints!!.dynamicWrites.single().baseKey)
     }
 
     @Test
@@ -285,6 +553,15 @@ class ContractManifestTest {
     companion object {
         private val triggerFilter =
             "TlJUMAAAl9+YQQ4oJZjALRf6FAto0QAKAAAAAAAAANzCjydU9+jNAgIAAAAFBAAAAAA="
+
+        private fun wideTupleType(elements: Int): String = buildString(elements * 5 + 2) {
+            append('(')
+            repeat(elements) { index ->
+                if (index > 0) append(", ")
+                append("int")
+            }
+            append(')')
+        }
 
         private fun parseBoundarySchema(
             nodes: String,

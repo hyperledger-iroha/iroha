@@ -63,19 +63,7 @@ tasks.withType<Test>().configureEach {
         rootProject.layout.projectDirectory
             .dir("..")
             .dir("..")
-            .file("fixtures/offline/peer_transport_v1.json"),
-    )
-    inputs.file(
-        rootProject.layout.projectDirectory
-            .dir("..")
-            .dir("..")
-            .file("fixtures/offline/peer_nearby_v1.json"),
-    )
-    inputs.file(
-        rootProject.layout.projectDirectory
-            .dir("..")
-            .dir("..")
-            .file("fixtures/offline/peer_nfc_v1.json"),
+            .file("fixtures/offline/kagemusha_peer_transport_v2.json"),
     )
     inputs.dir(
         rootProject.layout.projectDirectory

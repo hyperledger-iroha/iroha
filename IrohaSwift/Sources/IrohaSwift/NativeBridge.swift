@@ -740,96 +740,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
     #endif
 
-    static let privacyNativeArchiveMaxBytes = 64 * 1024 * 1024
+    static let privacyNativeArchiveMaxBytes = 256 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
-    private static let privacyNoritoHeaderBytes = 40
-    private static let privacyNoritoMaxHeaderPaddingBytes = 64
-    private static let privacyNoritoSupportedFlagsMask: UInt8 = 0x27
-    private static let privacyNoritoFieldBitsetFlag: UInt8 = 0x20
-    private static let privacyNoritoFieldBitsetRequiredFlags: UInt8 = 0x06
-    private static let privacyCapabilitiesResultSchemaByte: UInt8 = 0x50
-    private static let privacyCrc64ReflectedPoly: UInt64 = 0xC96C_5795_D787_0F42
-    private static let privacyNoritoMagic: [UInt8] = [0x4E, 0x52, 0x54, 0x30]
-
-    static func isValidPrivacyNoritoArchive(_ archive: Data) -> Bool {
-        guard archive.count >= privacyNoritoHeaderBytes,
-              archive.count <= privacyNativeArchiveMaxBytes else {
-            return false
-        }
-        let bytes = [UInt8](archive)
-        guard Array(bytes[0..<4]) == privacyNoritoMagic else {
-            return false
-        }
-        guard bytes[4] == 0, bytes[5] == 0, bytes[22] == 0 else {
-            return false
-        }
-        let flags = bytes[39]
-        guard (flags & ~privacyNoritoSupportedFlagsMask) == 0 else {
-            return false
-        }
-        if (flags & privacyNoritoFieldBitsetFlag) != 0,
-           (flags & privacyNoritoFieldBitsetRequiredFlags) != privacyNoritoFieldBitsetRequiredFlags {
-            return false
-        }
-        let payloadLength = readPrivacyUInt64LittleEndian(bytes, offset: 23)
-        guard payloadLength <= UInt64(Int.max - privacyNoritoHeaderBytes) else {
-            return false
-        }
-        let minimumLength = privacyNoritoHeaderBytes + Int(payloadLength)
-        guard bytes.count >= minimumLength else {
-            return false
-        }
-        let paddingLength = bytes.count - minimumLength
-        guard paddingLength <= privacyNoritoMaxHeaderPaddingBytes else {
-            return false
-        }
-        if paddingLength > 0 {
-            let paddingStart = privacyNoritoHeaderBytes
-            let paddingEnd = paddingStart + paddingLength
-            guard bytes[paddingStart..<paddingEnd].allSatisfy({ $0 == 0 }) else {
-                return false
-            }
-        }
-        let payloadStart = privacyNoritoHeaderBytes + paddingLength
-        let expectedCrc = readPrivacyUInt64LittleEndian(bytes, offset: 31)
-        return privacyCrc64(bytes[payloadStart..<bytes.count]) == expectedCrc
-    }
-
-    static func hasNonEmptyPrivacyNoritoPayload(_ archive: Data) -> Bool {
-        guard isValidPrivacyNoritoArchive(archive) else {
-            return false
-        }
-        let bytes = [UInt8](archive)
-        return readPrivacyUInt64LittleEndian(bytes, offset: 23) > 0
-    }
-
-    static func hasPrivacyNoritoSchema(_ archive: Data, expectedSchemaByte: UInt8) -> Bool {
-        guard archive.count >= 22 else {
-            return false
-        }
-        return archive[6..<22].allSatisfy { $0 == expectedSchemaByte }
-    }
-
-    private static func readPrivacyUInt64LittleEndian(_ bytes: [UInt8], offset: Int) -> UInt64 {
-        var value: UInt64 = 0
-        for index in 0..<8 {
-            value |= UInt64(bytes[offset + index]) << (8 * index)
-        }
-        return value
-    }
-
-    private static func privacyCrc64(_ payload: ArraySlice<UInt8>) -> UInt64 {
-        var crc = UInt64.max
-        for byte in payload {
-            crc ^= UInt64(byte)
-            for _ in 0..<8 {
-                crc = (crc & 1) != 0
-                    ? (crc >> 1) ^ privacyCrc64ReflectedPoly
-                    : crc >> 1
-            }
-        }
-        return crc ^ UInt64.max
-    }
 
     #if canImport(Darwin)
     private typealias EncodeTransferFn = @convention(c) (
@@ -1986,6 +1898,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias PrivacyCapabilitiesFn = @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias PrivacyValidateCapabilitiesFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -2143,6 +2058,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var aliasInstructionRoundTripFn: AliasInstructionRoundTripFn? = nil
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
+    private var privacyValidateCapabilitiesFn: PrivacyValidateCapabilitiesFn? = nil
     private var privacyFreeFn: FreeFn? = nil
     private var privacyNativeProbeOk = false
 #else
@@ -2269,6 +2185,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let aliasInstructionRoundTripFn: Any? = nil
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
+    private let privacyValidateCapabilitiesFn: Any? = nil
     private let privacyFreeFn: Any? = nil
     private let privacyNativeProbeOk = false
 #endif
@@ -2280,6 +2197,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private func loadPrivacySymbols(from handle: UnsafeMutableRawPointer?) {
         guard let handle else {
             self.privacyCapabilitiesFn = nil
+            self.privacyValidateCapabilitiesFn = nil
             self.privacyFreeFn = nil
             return
         }
@@ -2287,6 +2205,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.privacyCapabilitiesFn = unsafeBitCast(capabilitiesSymbol, to: PrivacyCapabilitiesFn.self)
         } else {
             self.privacyCapabilitiesFn = nil
+        }
+        if let validateSymbol = dlsym(handle, "iroha_privacy_validate_capabilities_v1") {
+            self.privacyValidateCapabilitiesFn = unsafeBitCast(
+                validateSymbol,
+                to: PrivacyValidateCapabilitiesFn.self
+            )
+        } else {
+            self.privacyValidateCapabilitiesFn = nil
         }
         if let freeSymbol = dlsym(handle, "iroha_privacy_free_buffer") {
             self.privacyFreeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
@@ -3257,6 +3183,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.aliasInstructionRoundTripFn = nil
             self.canonicalJSONBlake3Fn = nil
             self.privacyCapabilitiesFn = nil
+            self.privacyValidateCapabilitiesFn = nil
             self.privacyFreeFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
@@ -3344,25 +3271,20 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     #if canImport(Darwin)
-    static func isValidPrivacyNativeProbeResult(
+    private static func isValidPrivacyNativeProbeResult(
         status: Int32,
         outPtr: UnsafeMutablePointer<UInt8>?,
         outLen: CUnsignedLong,
-        expectedSchemaByte: UInt8
+        validate: PrivacyValidateCapabilitiesFn?
     ) -> Bool {
         guard status == 0,
               let outPtr,
               outLen > 0,
-              outLen <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes) else {
+              outLen <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes),
+              let validate else {
             return false
         }
-        var archive = Data(bytes: outPtr, count: Int(outLen))
-        defer {
-            archive.resetBytes(in: 0..<archive.count)
-        }
-        return Self.isValidPrivacyNoritoArchive(archive)
-            && Self.hasNonEmptyPrivacyNoritoPayload(archive)
-            && Self.hasPrivacyNoritoSchema(archive, expectedSchemaByte: expectedSchemaByte)
+        return validate(UnsafePointer(outPtr), outLen) == 0
     }
 
     private func probePrivacyNativeAvailability() {
@@ -3370,7 +3292,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     private func probePrivacyCapabilitiesFunction(_ function: PrivacyCapabilitiesFn?) -> Bool {
-        guard let function, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+        guard let function,
+              let validate = privacyValidateCapabilitiesFn,
+              let freePrivacyFn = privacyFreeFn ?? freeFn else {
             return false
         }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
@@ -3380,7 +3304,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             status: status,
             outPtr: outPtr,
             outLen: outLen,
-            expectedSchemaByte: Self.privacyCapabilitiesResultSchemaByte,
+            validate: validate,
             free: freePrivacyFn
         )
     }
@@ -3389,14 +3313,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         status: Int32,
         outPtr: UnsafeMutablePointer<UInt8>?,
         outLen: CUnsignedLong,
-        expectedSchemaByte: UInt8,
+        validate: PrivacyValidateCapabilitiesFn?,
         free: FreeFn
     ) -> Bool {
         let expected = Self.isValidPrivacyNativeProbeResult(
             status: status,
             outPtr: outPtr,
             outLen: outLen,
-            expectedSchemaByte: expectedSchemaByte
+            validate: validate
         )
         if let outPtr {
             Self.clearPrivacyNativeBuffer(outPtr, length: outLen)
@@ -3536,6 +3460,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return privacyCapabilitiesFn != nil
+            && privacyValidateCapabilitiesFn != nil
             && (privacyFreeFn != nil || freeFn != nil)
             && privacyNativeProbeOk
         #else
@@ -6464,7 +6389,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     func privacyCapabilitiesV1() throws -> Data? {
         #if canImport(Darwin)
-        guard let privacyCapabilitiesFn, let freePrivacyFn = privacyFreeFn ?? freeFn else {
+        guard let privacyCapabilitiesFn,
+              let privacyValidateCapabilitiesFn,
+              let freePrivacyFn = privacyFreeFn ?? freeFn else {
             return nil
         }
         var outPtr: UnsafeMutablePointer<UInt8>? = nil
@@ -6482,7 +6409,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return try Self.readPrivacyNativeOutput(
             pointer: outPtr,
             length: outLen,
-            expectedSchemaByte: Self.privacyCapabilitiesResultSchemaByte
+            validate: privacyValidateCapabilitiesFn
         ) { pointer in
             freePrivacyFn(pointer)
         }
@@ -6491,10 +6418,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    static func readPrivacyNativeOutput(
+    private static func readPrivacyNativeOutput(
         pointer: UnsafeMutablePointer<UInt8>?,
         length: CUnsignedLong,
-        expectedSchemaByte: UInt8,
+        validate: PrivacyValidateCapabilitiesFn,
         free: (UnsafeMutablePointer<UInt8>?) -> Void
     ) throws -> Data {
         guard let pointer else {
@@ -6507,17 +6434,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard length > 0, length <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes) else {
             throw NativeBridgeError.invalidPrivacyOutput
         }
-        let archive = Data(bytes: pointer, count: Int(length))
-        guard Self.isValidPrivacyNoritoArchive(archive) else {
+        guard validate(UnsafePointer(pointer), length) == 0 else {
             throw NativeBridgeError.invalidPrivacyOutput
         }
-        guard Self.hasNonEmptyPrivacyNoritoPayload(archive) else {
-            throw NativeBridgeError.invalidPrivacyOutput
+        return Data(bytes: pointer, count: Int(length))
+    }
+
+    func privacyCapabilityValidationStatusV1(_ archive: Data) -> Int32? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let privacyValidateCapabilitiesFn,
+              archive.count <= Self.privacyNativeArchiveMaxBytes else {
+            return nil
         }
-        guard Self.hasPrivacyNoritoSchema(archive, expectedSchemaByte: expectedSchemaByte) else {
-            throw NativeBridgeError.invalidPrivacyOutput
+        return archive.withUnsafeBytes { bytes in
+            privacyValidateCapabilitiesFn(
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(archive.count)
+            )
         }
-        return archive
+        #else
+        return nil
+        #endif
     }
 
     private static func clearPrivacyNativeBuffer(

@@ -250,6 +250,34 @@ public sealed class ContractManifestTests
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"__kotodama_link_private\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"state_map_get\""),
+            ReplaceFirst(
+                response,
+                "StateMap<AccountId, quantity>",
+                "StateMap<AccountId, Amount>"),
+            ReplaceFirst(
+                response,
+                "StateMap<AccountId, quantity>",
+                "StateMap<AccountId, amount>"),
+            ReplaceFirst(
+                response,
+                "StateMap<AccountId, quantity>",
+                "Amount: quantity"),
+            ReplaceFirst(
+                response,
+                "StateMap<AccountId, quantity>",
+                "StateMap<AccountId, Amount: quantity>"),
+            ReplaceFirst(
+                response,
+                "StateMap<AccountId, quantity>",
+                "Transfer{value: Result<int, Amount: quantity>}"),
+            ReplaceFirst(
+                response,
+                "StateMap<AccountId, quantity>",
+                "Transfer{amount: Amount}"),
+            ReplaceFirst(
+                response,
+                "StateMap<AccountId, quantity>",
+                "Amount{amount: quantity}"),
             ReplaceFirst(response, "\"namespace\":\"TransferError\"", "\"namespace\":\"Option\""),
             ReplaceFirst(response, "\"features_bitmap\":0", "\"features_bitmap\":4"),
             ReplaceFirst(response, "\"dynamic_writes\":[]", "\"dynamic_writes\":[],\"unknown\":true"),
@@ -267,6 +295,540 @@ public sealed class ContractManifestTests
         {
             Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiContractCodeRecord>(payload));
         }
+    }
+
+    [Fact]
+    public void ManifestAllowsAmountAsStructFieldIdentifier()
+    {
+        var manifest = JsonSerializer.Deserialize<ToriiContractManifest>(
+            StateManifestJson("Transfer{amount: quantity}"))!;
+
+        Assert.Equal("Transfer{amount: quantity}", manifest.States!.Single().TypeName);
+        var encoded = JsonSerializer.Serialize(manifest);
+        var decoded = JsonSerializer.Deserialize<ToriiContractManifest>(encoded)!;
+        Assert.Equal("Transfer{amount: quantity}", decoded.States!.Single().TypeName);
+    }
+
+    [Fact]
+    public void ManifestStateTypesUseExactCanonicalV1Grammar()
+    {
+        string[] scalarTypes =
+        [
+            "int", "decimal", "quantity", "bool", "string", "bytes", "DataSpaceId",
+            "AccountId", "AssetDefinitionId", "AssetId", "NftId", "DomainId", "Name", "Json",
+        ];
+        var canonical = scalarTypes
+            .Concat(
+                scalarTypes
+                    .Where(typeName => typeName != "Json")
+                    .Select(typeName => $"StateMap<{typeName}, quantity>"))
+            .Concat(
+                new[]
+                {
+                    "(int, decimal)",
+                    "Option<Result<quantity, string>>",
+                    "List<Transfer{amount: quantity}, 64>",
+                    "StateMap<AccountId, Transfer{amount: quantity}>",
+                    "StateMap<Name, Transfer{amount: quantity, memo: Option<string>}>",
+                });
+        foreach (var typeName in canonical)
+        {
+            var manifest = JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson(typeName))!;
+            Assert.Equal(typeName, manifest.States!.Single().TypeName);
+            Assert.NotNull(JsonSerializer.Serialize(manifest));
+        }
+
+        var noncanonical = new[]
+        {
+            "Amount",
+            "amount",
+            "Transfer{amount: amount}",
+            "Transfer{amount:: quantity}",
+            "Transfer{amount:quantity}",
+            "Transfer{amount:  quantity}",
+            "Transfer {amount: quantity}",
+            "Transfer{}",
+            "Transfer{amount: quantity, amount: int}",
+            "Transfer{__kotodama_link_amount: quantity}",
+            "(int)",
+            "(int,decimal)",
+            "Option<quantity",
+            "Transfer{amount: Option<quantity>}}",
+            "Option<StateMap<AccountId, quantity>>",
+            "StateMap<AccountId, StateMap<Name, quantity>>",
+            "StateMap<Json, quantity>",
+            "StateMap<AccountId , quantity>",
+            "StateMap<AccountId,quantity>",
+            "List<quantity, 0>",
+            "List<quantity, 01>",
+            "List<quantity, 65>",
+            "Trаnsfer{amount: quantity}",
+            "Transfer{amount: quаntity}",
+        };
+        foreach (var typeName in noncanonical)
+        {
+            Assert.Throws<JsonException>(
+                () => JsonSerializer.Deserialize<ToriiContractManifest>(
+                    StateManifestJson(typeName)));
+
+            var forged = new ToriiContractManifest
+            {
+                States =
+                [
+                    new ToriiContractStateDescriptor
+                    {
+                        Name = "Balances",
+                        TypeName = typeName,
+                    },
+                ],
+            };
+            Assert.Throws<JsonException>(() => JsonSerializer.Serialize(forged));
+        }
+    }
+
+    [Fact]
+    public void ManifestStateTypeParserEnforcesDepthAndNodeBudgets()
+    {
+        var maximumDepth = string.Concat(Enumerable.Repeat("Option<", 255))
+            + "int"
+            + new string('>', 255);
+        Assert.NotNull(
+            JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson(maximumDepth)));
+        var maximumMapValueDepth = string.Concat(Enumerable.Repeat("Option<", 254))
+            + "int"
+            + new string('>', 254);
+        Assert.NotNull(
+            JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson($"StateMap<AccountId, {maximumMapValueDepth}>")));
+
+        Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson($"Option<{maximumDepth}>")));
+        Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson($"StateMap<AccountId, {maximumDepth}>")));
+
+        var maximumNodes = $"({string.Join(", ", Enumerable.Repeat("int", 255))})";
+        Assert.NotNull(
+            JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson(maximumNodes)));
+        Assert.NotNull(
+            JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson($"StateMap<AccountId, {maximumNodes}>")));
+
+        var excessiveNodes = $"{maximumNodes[..^1]}, int)";
+        Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson(excessiveNodes)));
+        Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<ToriiContractManifest>(
+                StateManifestJson($"StateMap<AccountId, {excessiveNodes}>")));
+    }
+
+    [Fact]
+    public void ManifestDynamicAccessHintsUseExactV1Policy()
+    {
+        ToriiContractDynamicAccessHint ParseDynamic(
+            string baseKey = "state:Balances",
+            string keyType = "AccountId",
+            string boundKind = "take",
+            string maxKeys = "64",
+            string stateName = "Balances",
+            string? stateKeyType = null)
+        {
+            var response = ReplaceFirst(
+                FullResponse(),
+                "\"base_key\":\"state:Balances\"",
+                $"\"base_key\":{JsonSerializer.Serialize(baseKey)}");
+            response = ReplaceFirst(
+                response,
+                "\"key_type\":\"AccountId\"",
+                $"\"key_type\":{JsonSerializer.Serialize(keyType)}");
+            response = ReplaceFirst(
+                response,
+                "\"bound_kind\":\"take\"",
+                $"\"bound_kind\":{JsonSerializer.Serialize(boundKind)}");
+            response = ReplaceFirst(response, "\"max_keys\":64", $"\"max_keys\":{maxKeys}");
+            var declaredStateType = $"StateMap<{stateKeyType ?? keyType}, quantity>";
+            response = ReplaceFirst(
+                response,
+                "\"name\":\"Balances\",\"type_name\":\"StateMap<AccountId, quantity>\"",
+                $"\"name\":{JsonSerializer.Serialize(stateName)},"
+                    + $"\"type_name\":{JsonSerializer.Serialize(declaredStateType)}");
+            return JsonSerializer.Deserialize<ToriiContractCodeRecord>(response)!
+                .Manifest.AccessSetHints!.DynamicReads.Single();
+        }
+
+        string EncodeDynamic(
+            ToriiContractDynamicAccessHint hint,
+            string stateName = "Balances",
+            string stateKeyType = "AccountId")
+        {
+            var record = JsonSerializer.Deserialize<ToriiContractCodeRecord>(FullResponse())!;
+            var accessSetHints = record.Manifest.AccessSetHints!;
+            var forged = record with
+            {
+                Manifest = record.Manifest with
+                {
+                    AccessSetHints = accessSetHints with
+                    {
+                        DynamicReads = [hint],
+                    },
+                    States =
+                    [
+                        new ToriiContractStateDescriptor
+                        {
+                            Name = stateName,
+                            TypeName = $"StateMap<{stateKeyType}, quantity>",
+                        },
+                    ],
+                },
+            };
+            return JsonSerializer.Serialize(forged);
+        }
+
+        string[] keyTypes =
+        [
+            "int",
+            "decimal",
+            "quantity",
+            "bool",
+            "string",
+            "bytes",
+            "DataSpaceId",
+            "AccountId",
+            "AssetDefinitionId",
+            "AssetId",
+            "NftId",
+            "DomainId",
+            "Name",
+        ];
+        foreach (var keyType in keyTypes)
+        {
+            Assert.Equal(
+                keyType,
+                ParseDynamic(keyType: keyType, stateKeyType: keyType).KeyType);
+            Assert.NotNull(
+                EncodeDynamic(
+                    new ToriiContractDynamicAccessHint
+                    {
+                        BaseKey = "state:Balances",
+                        KeyType = keyType,
+                        BoundKind = "range",
+                        MaxKeys = 64,
+                    },
+                    stateKeyType: keyType));
+        }
+        foreach (var boundKind in new[] { "range", "take" })
+        {
+            Assert.Equal(boundKind, ParseDynamic(boundKind: boundKind).BoundKind);
+        }
+        foreach (var baseKey in new[] { "state:Balances", "state:amount" })
+        {
+            var stateName = baseKey == "state:amount" ? "amount" : "Balances";
+            Assert.Equal(
+                baseKey,
+                ParseDynamic(baseKey: baseKey, stateName: stateName).BaseKey);
+            Assert.NotNull(
+                EncodeDynamic(
+                    new ToriiContractDynamicAccessHint
+                    {
+                        BaseKey = baseKey,
+                        KeyType = "AccountId",
+                        BoundKind = "take",
+                        MaxKeys = 1,
+                    },
+                    stateName: stateName));
+        }
+        foreach (var maxKeys in new[] { 1U, 64U })
+        {
+            Assert.Equal(maxKeys, ParseDynamic(maxKeys: maxKeys.ToString()).MaxKeys);
+        }
+
+        var invalidBaseKeys = new[]
+        {
+            "",
+            "state:",
+            "state:*",
+            "state:Balances.more",
+            "state:Balances:Other",
+            "state:state:Balances",
+            "state:match",
+            "state:StateMap",
+            "state:__kotodama_link_Balances",
+            "state: Balances",
+            "state:Balances ",
+            "state:Бalances",
+            "states:Balances",
+            "Balances",
+            "state:amount.more",
+        };
+        foreach (var baseKey in invalidBaseKeys)
+        {
+            Assert.Throws<JsonException>(() => ParseDynamic(baseKey: baseKey));
+            Assert.Throws<JsonException>(
+                () => EncodeDynamic(
+                    new ToriiContractDynamicAccessHint
+                    {
+                        BaseKey = baseKey,
+                        KeyType = "AccountId",
+                        BoundKind = "take",
+                        MaxKeys = 1,
+                    }));
+        }
+
+        var invalidKeyTypes = new[]
+        {
+            "",
+            "Json",
+            "Int",
+            "Amount",
+            "amount",
+            "AccountID",
+            "Transfer",
+            "StateMap",
+            "StateMap<AccountId, quantity>",
+            " AccountId",
+            "AccountId ",
+            "АccountId",
+        };
+        foreach (var keyType in invalidKeyTypes)
+        {
+            Assert.Throws<JsonException>(() => ParseDynamic(keyType: keyType));
+            Assert.Throws<JsonException>(
+                () => EncodeDynamic(
+                    new ToriiContractDynamicAccessHint
+                    {
+                        BaseKey = "state:Balances",
+                        KeyType = keyType,
+                        BoundKind = "take",
+                        MaxKeys = 1,
+                    }));
+        }
+
+        foreach (var boundKind in new[] { "", "Range", "Take", "all", "prefix", "range ", " take" })
+        {
+            Assert.Throws<JsonException>(() => ParseDynamic(boundKind: boundKind));
+            Assert.Throws<JsonException>(
+                () => EncodeDynamic(
+                    new ToriiContractDynamicAccessHint
+                    {
+                        BaseKey = "state:Balances",
+                        KeyType = "AccountId",
+                        BoundKind = boundKind,
+                        MaxKeys = 1,
+                    }));
+        }
+        foreach (var maxKeys in new[] { "0", "65", "4294967295", "-1", "1.0", "\"1\"" })
+        {
+            Assert.Throws<JsonException>(() => ParseDynamic(maxKeys: maxKeys));
+        }
+        var malformed = new[]
+        {
+            ReplaceFirst(
+                FullResponse(),
+                "\"max_keys\":64",
+                "\"max_keys\":64,\"unknown\":true"),
+            ReplaceFirst(
+                FullResponse(),
+                "\"base_key\":\"state:Balances\"",
+                "\"base_key\":null"),
+            ReplaceFirst(
+                FullResponse(),
+                "\"key_type\":\"AccountId\"",
+                "\"key_type\":false"),
+            ReplaceFirst(
+                FullResponse(),
+                "\"bound_kind\":\"take\"",
+                "\"bound_kind\":1"),
+            ReplaceFirst(FullResponse(), "\"max_keys\":64", "\"max_keys\":null"),
+        };
+        foreach (var payload in malformed)
+        {
+            Assert.Throws<JsonException>(
+                () => JsonSerializer.Deserialize<ToriiContractCodeRecord>(payload));
+        }
+        foreach (var maxKeys in new[] { 0U, 65U, uint.MaxValue })
+        {
+            Assert.Throws<JsonException>(
+                () => EncodeDynamic(
+                    new ToriiContractDynamicAccessHint
+                    {
+                        BaseKey = "state:Balances",
+                        KeyType = "AccountId",
+                        BoundKind = "take",
+                        MaxKeys = maxKeys,
+                    }));
+        }
+    }
+
+    [Fact]
+    public void ManifestDynamicAccessHintsResolveExactDeclaredStateMaps()
+    {
+        var canonical = new ToriiContractDynamicAccessHint
+        {
+            BaseKey = "state:Balances",
+            KeyType = "AccountId",
+            BoundKind = "take",
+            MaxKeys = 1,
+        };
+        var unknown = canonical with { BaseKey = "state:Missing" };
+        var mismatch = canonical with { KeyType = "Name" };
+        var malformed = new[]
+        {
+            (
+                Reads: new[] { canonical, canonical },
+                Writes: Array.Empty<ToriiContractDynamicAccessHint>(),
+                StateName: "Balances",
+                StateType: "StateMap<AccountId, quantity>"
+            ),
+            (
+                Reads: Array.Empty<ToriiContractDynamicAccessHint>(),
+                Writes: new[] { canonical, canonical },
+                StateName: "Balances",
+                StateType: "StateMap<AccountId, quantity>"
+            ),
+            (
+                Reads: new[] { unknown },
+                Writes: Array.Empty<ToriiContractDynamicAccessHint>(),
+                StateName: "Balances",
+                StateType: "StateMap<AccountId, quantity>"
+            ),
+            (
+                Reads: new[] { canonical },
+                Writes: Array.Empty<ToriiContractDynamicAccessHint>(),
+                StateName: "Balances",
+                StateType: "quantity"
+            ),
+            (
+                Reads: new[] { mismatch },
+                Writes: Array.Empty<ToriiContractDynamicAccessHint>(),
+                StateName: "Balances",
+                StateType: "StateMap<AccountId, quantity>"
+            ),
+        };
+
+        foreach (var value in malformed)
+        {
+            var payload = DynamicManifestJson(
+                value.Reads,
+                value.Writes,
+                value.StateName,
+                value.StateType);
+            Assert.Throws<JsonException>(
+                () => JsonSerializer.Deserialize<ToriiContractManifest>(payload));
+            Assert.Throws<JsonException>(
+                () => JsonSerializer.Serialize(
+                    DynamicManifest(
+                        value.Reads,
+                        value.Writes,
+                        value.StateName,
+                        value.StateType)));
+        }
+
+        var amount = canonical with
+        {
+            BaseKey = "state:amount",
+            BoundKind = "range",
+            MaxKeys = 64,
+        };
+        var accepted = DynamicManifest(
+            [amount],
+            [amount],
+            "amount",
+            "StateMap<AccountId, quantity>");
+        var decoded = JsonSerializer.Deserialize<ToriiContractManifest>(
+            DynamicManifestJson(
+                [amount],
+                [amount],
+                "amount",
+                "StateMap<AccountId, quantity>"))!;
+        Assert.Equal(
+            "state:amount",
+            decoded.AccessSetHints!.DynamicReads.Single().BaseKey);
+        Assert.NotNull(JsonSerializer.Serialize(accepted));
+    }
+
+    [Theory]
+    [InlineData("Amount")]
+    [InlineData("amount")]
+    public void ManifestRejectsRetiredErrorNamespaces(string retired)
+    {
+        var namespaceResponse = ReplaceFirst(
+            FullResponse(),
+            "\"namespace\":\"TransferError\"",
+            $"\"namespace\":\"{retired}\"");
+        var namespaceError = Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<ToriiContractCodeRecord>(namespaceResponse));
+        Assert.Contains("namespace", namespaceError.Message, StringComparison.Ordinal);
+
+        var record = JsonSerializer.Deserialize<ToriiContractCodeRecord>(FullResponse())!;
+        var errorCode = record.Manifest.ErrorCodes!.Single();
+        var forgedNamespace = record with
+        {
+            Manifest = record.Manifest with
+            {
+                ErrorCodes = [errorCode with { Namespace = retired }],
+            },
+        };
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(forgedNamespace));
+    }
+
+    private static ToriiContractManifest DynamicManifest(
+        IReadOnlyList<ToriiContractDynamicAccessHint> reads,
+        IReadOnlyList<ToriiContractDynamicAccessHint> writes,
+        string stateName,
+        string stateType)
+    {
+        return new ToriiContractManifest
+        {
+            AccessSetHints = new ToriiContractAccessSetHints
+            {
+                DynamicReads = reads,
+                DynamicWrites = writes,
+            },
+            States =
+            [
+                new ToriiContractStateDescriptor
+                {
+                    Name = stateName,
+                    TypeName = stateType,
+                },
+            ],
+        };
+    }
+
+    private static string DynamicManifestJson(
+        IReadOnlyList<ToriiContractDynamicAccessHint> reads,
+        IReadOnlyList<ToriiContractDynamicAccessHint> writes,
+        string stateName,
+        string stateType)
+    {
+        static string HintJson(ToriiContractDynamicAccessHint hint)
+        {
+            return $"{{\"base_key\":{JsonSerializer.Serialize(hint.BaseKey)},"
+                + $"\"key_type\":{JsonSerializer.Serialize(hint.KeyType)},"
+                + $"\"bound_kind\":{JsonSerializer.Serialize(hint.BoundKind)},"
+                + $"\"max_keys\":{hint.MaxKeys}}}";
+        }
+
+        return "{\"access_set_hints\":{\"read_keys\":[],\"write_keys\":[],"
+            + $"\"dynamic_reads\":[{string.Join(",", reads.Select(HintJson))}],"
+            + $"\"dynamic_writes\":[{string.Join(",", writes.Select(HintJson))}]"
+            + "},\"states\":[{\"name\":"
+            + JsonSerializer.Serialize(stateName)
+            + ",\"type_name\":"
+            + JsonSerializer.Serialize(stateType)
+            + "}]}";
+    }
+
+    private static string StateManifestJson(string typeName)
+    {
+        return "{\"states\":[{\"name\":\"Balances\",\"type_name\":"
+            + JsonSerializer.Serialize(typeName)
+            + "}]}";
     }
 
     private static string ReplaceFirst(string source, string target, string replacement)

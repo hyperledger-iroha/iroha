@@ -279,12 +279,12 @@ fn decode_norito_bytes_literal(expr: &Expr) -> Option<Vec<u8>> {
 
 fn decode_instruction_box_literal(args: &[Expr]) -> Option<InstructionBox> {
     let payload = decode_norito_bytes_literal(args.first()?)?;
-    norito::decode_from_bytes(&payload).ok()
+    norito::decode_canonical(&payload).ok()
 }
 
 fn decode_query_request_literal(args: &[Expr]) -> Option<QueryRequest> {
     let payload = decode_norito_bytes_literal(args.first()?)?;
-    norito::decode_from_bytes(&payload).ok()
+    norito::decode_canonical(&payload).ok()
 }
 
 fn instruction_box_is_hintable(instr: &InstructionBox) -> bool {
@@ -390,16 +390,16 @@ fn anonymous_escrow_request_literal_is_hintable(name: &str, args: &[Expr]) -> bo
     };
     match name {
         name if name == Builtin::AnonymousEscrowOpenOffer.source_name() => {
-            norito::decode_from_bytes::<DMEscrow::OpenAnonymousAssetEscrow>(&payload).is_ok()
+            norito::decode_canonical::<DMEscrow::OpenAnonymousAssetEscrow>(&payload).is_ok()
         }
         name if name == Builtin::AnonymousEscrowRelease.source_name() => {
-            norito::decode_from_bytes::<DMEscrow::ReleaseAnonymousAssetEscrow>(&payload).is_ok()
+            norito::decode_canonical::<DMEscrow::ReleaseAnonymousAssetEscrow>(&payload).is_ok()
         }
         name if name == Builtin::AnonymousEscrowCancel.source_name() => {
-            norito::decode_from_bytes::<DMEscrow::CancelAnonymousAssetEscrow>(&payload).is_ok()
+            norito::decode_canonical::<DMEscrow::CancelAnonymousAssetEscrow>(&payload).is_ok()
         }
         name if name == Builtin::AnonymousEscrowResolveDispute.source_name() => {
-            norito::decode_from_bytes::<DMEscrow::ResolveAnonymousEscrowDispute>(&payload).is_ok()
+            norito::decode_canonical::<DMEscrow::ResolveAnonymousEscrowDispute>(&payload).is_ok()
         }
         _ => false,
     }

@@ -22,6 +22,9 @@ public final class ContractManifestTests {
   public static void main(final String[] args) {
     fullManifestPreservesExactKotodamaV1Interface();
     manifestRejectsUnknownEnglishAndNoncanonicalShapes();
+    retiredNumericTypeNamesAreRejectedOnlyInTypePositions();
+    dynamicAccessHintsEnforceTheExactV1Policy();
+    dynamicAccessHintsResolveExactDeclaredStateMaps();
     manifestEndpointValidatesPathAndParsesFullRecord();
     flatListTapeEnforcesTheExactV1DepthBoundary();
     everyReservedProjectionAndPageHasAnExactNominalName();
@@ -39,6 +42,9 @@ public final class ContractManifestTests {
     require(
         manifest.accessSetHints().dynamicReads().get(0).maxKeys() == 64,
         "dynamic read bound");
+    require(
+        "AccountId".equals(manifest.accessSetHints().dynamicReads().get(0).keyType()),
+        "dynamic read key type");
     final ContractManifest.EntrypointDescriptor entrypoint = manifest.entrypoints().get(0);
     require(
         entrypoint.kind() == ContractManifest.EntrypointKind.KOTOAGE,
@@ -142,6 +148,341 @@ public final class ContractManifestTests {
               ContractJsonParser.parseManifestRecord(
                   payload.getBytes(StandardCharsets.UTF_8)));
     }
+  }
+
+  private static void retiredNumericTypeNamesAreRejectedOnlyInTypePositions() {
+    final String[] legalTypes = {
+      "quantity",
+      "(int, decimal)",
+      "Option<Result<quantity, string>>",
+      "List<Transfer{amount: quantity}, 64>",
+      "StateMap<AccountId, Transfer{amount: quantity, memo: Option<string>}>",
+      "List<Envelope{items: List<Transfer{amount: quantity}, 64>}, 1>",
+      nestedOptionType(255),
+      wideTupleType(255),
+      "StateMap<AccountId, " + wideTupleType(255) + ">",
+      "StateMap<AccountId, " + nestedOptionType(254) + ">"
+    };
+    for (final String legalType : legalTypes) {
+      final String legal = statePayload(legalType);
+      require(
+          legalType.equals(
+              ContractJsonParser.parseManifestRecord(legal.getBytes(StandardCharsets.UTF_8))
+                  .manifest()
+                  .states()
+                  .get(0)
+                  .typeName()),
+          "canonical state type");
+    }
+
+    final String[] invalidHints = {
+      "Amount",
+      "amount",
+      "Foo{Amount: quantity}",
+      "Foo{Amount:quantity}",
+      "StateMap<AccountId, int>",
+      "Аmount"
+    };
+    for (final String invalidHint : invalidHints) {
+      final String payload =
+          replaceFirst(
+              fullResponse(),
+              "\"key_type\":\"AccountId\"",
+              "\"key_type\":\"" + invalidHint + "\"");
+      expectFailure(
+          () ->
+              ContractJsonParser.parseManifestRecord(
+                  payload.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    final String[] retiredTypes = {
+      "Amount",
+      "amount",
+      "Amount: quantity",
+      "Option<Amount>",
+      "List<amount, 1>",
+      "StateMap<AccountId, Amount>",
+      "StateMap<AccountId, Amount: quantity>",
+      "Transfer{amount: amount}",
+      "Transfer{amount:: quantity}",
+      "Amount{amount: quantity}",
+      "Transfer{amount: quantity, amount: int}",
+      "Transfer{}",
+      "Option<StateMap<AccountId, quantity>>",
+      "StateMap<Json, quantity>",
+      "(int)",
+      "Result<int,string>",
+      "List<quantity, 0>",
+      "List<quantity, 65>",
+      "List<quantity, 01>",
+      "Transfer {amount: quantity}",
+      "Transfer{amount: quantity, memo:string}",
+      "Transfer{amøunt: quantity}",
+      "Tránsfer{amount: quantity}",
+      "Transfer{__kotodama_link_private: quantity}",
+      nestedOptionType(256),
+      wideTupleType(256),
+      "StateMap<AccountId, " + wideTupleType(256) + ">",
+      "StateMap<AccountId, " + nestedOptionType(255) + ">"
+    };
+    for (final String retiredType : retiredTypes) {
+      final String payload = statePayload(retiredType);
+      expectFailure(
+          () ->
+              ContractJsonParser.parseManifestRecord(
+                  payload.getBytes(StandardCharsets.UTF_8)));
+    }
+  }
+
+  private static void dynamicAccessHintsEnforceTheExactV1Policy() {
+    final String[] keyTypes = {
+      "int",
+      "decimal",
+      "quantity",
+      "bool",
+      "string",
+      "bytes",
+      "DataSpaceId",
+      "AccountId",
+      "AssetDefinitionId",
+      "AssetId",
+      "NftId",
+      "DomainId",
+      "Name"
+    };
+    for (final String keyType : keyTypes) {
+      final String payload =
+          replaceFirst(
+              replaceFirst(
+                  fullResponse(),
+                  "StateMap<AccountId, quantity>",
+                  "StateMap<" + keyType + ", quantity>"),
+              "\"key_type\":\"AccountId\"",
+              "\"key_type\":\"" + keyType + "\"");
+      require(
+          keyType.equals(parseDynamicHintPayload(payload).keyType()),
+          "canonical dynamic key type " + keyType);
+    }
+
+    for (final String boundKind : new String[] {"range", "take"}) {
+      final String payload =
+          replaceFirst(
+              fullResponse(),
+              "\"bound_kind\":\"take\"",
+              "\"bound_kind\":\"" + boundKind + "\"");
+      require(
+          boundKind.equals(parseDynamicHintPayload(payload).boundKind()),
+          "canonical dynamic bound " + boundKind);
+    }
+    for (final String baseKey : new String[] {"state:Balances", "state:amount"}) {
+      String payload =
+          replaceFirst(
+              fullResponse(),
+              "\"base_key\":\"state:Balances\"",
+              "\"base_key\":\"" + baseKey + "\"");
+      if ("state:amount".equals(baseKey)) {
+        payload =
+            replaceFirst(
+                payload,
+                "\"name\":\"Balances\",\"type_name\":\"StateMap<AccountId, quantity>\"",
+                "\"name\":\"amount\",\"type_name\":\"StateMap<AccountId, quantity>\"");
+      }
+      require(
+          baseKey.equals(parseDynamicHintPayload(payload).baseKey()),
+          "canonical dynamic base " + baseKey);
+    }
+    for (final int maxKeys : new int[] {1, 64}) {
+      final String payload =
+          replaceFirst(fullResponse(), "\"max_keys\":64", "\"max_keys\":" + maxKeys);
+      require(
+          parseDynamicHintPayload(payload).maxKeys() == maxKeys,
+          "canonical dynamic maximum " + maxKeys);
+    }
+
+    final String[] invalidBaseKeys = {
+      "",
+      "state:",
+      "state:*",
+      "state:Balances.more",
+      "state:Balances:Other",
+      "state:state:Balances",
+      "state:match",
+      "state:StateMap",
+      "state:__kotodama_link_Balances",
+      "state: Balances",
+      "state:Balances ",
+      "state:Бalances",
+      "states:Balances",
+      "Balances",
+      "state:amount.more"
+    };
+    for (final String baseKey : invalidBaseKeys) {
+      final String payload =
+          replaceFirst(
+              fullResponse(),
+              "\"base_key\":\"state:Balances\"",
+              "\"base_key\":\"" + baseKey + "\"");
+      expectFailure(() -> parseDynamicHintPayload(payload));
+    }
+
+    final String[] invalidKeyTypes = {
+      "",
+      "Json",
+      "Int",
+      "Amount",
+      "amount",
+      "AccountID",
+      "Transfer",
+      "StateMap",
+      "StateMap<AccountId, quantity>",
+      " AccountId",
+      "AccountId ",
+      "АccountId"
+    };
+    for (final String keyType : invalidKeyTypes) {
+      final String payload =
+          replaceFirst(
+              fullResponse(),
+              "\"key_type\":\"AccountId\"",
+              "\"key_type\":\"" + keyType + "\"");
+      expectFailure(() -> parseDynamicHintPayload(payload));
+    }
+
+    for (final String boundKind :
+        new String[] {"", "Range", "Take", "all", "prefix", "range ", " take"}) {
+      final String payload =
+          replaceFirst(
+              fullResponse(),
+              "\"bound_kind\":\"take\"",
+              "\"bound_kind\":\"" + boundKind + "\"");
+      expectFailure(() -> parseDynamicHintPayload(payload));
+    }
+    for (final String maxKeys :
+        new String[] {"0", "65", "4294967295", "-1", "1.0", "\"1\""}) {
+      final String payload =
+          replaceFirst(fullResponse(), "\"max_keys\":64", "\"max_keys\":" + maxKeys);
+      expectFailure(() -> parseDynamicHintPayload(payload));
+    }
+    final String[] malformed = {
+      replaceFirst(
+          fullResponse(), "\"max_keys\":64", "\"max_keys\":64,\"unknown\":true"),
+      replaceFirst(
+          fullResponse(), "\"base_key\":\"state:Balances\"", "\"base_key\":null"),
+      replaceFirst(fullResponse(), "\"key_type\":\"AccountId\"", "\"key_type\":false"),
+      replaceFirst(fullResponse(), "\"bound_kind\":\"take\"", "\"bound_kind\":1"),
+      replaceFirst(fullResponse(), "\"max_keys\":64", "\"max_keys\":null")
+    };
+    for (final String payload : malformed) {
+      expectFailure(() -> parseDynamicHintPayload(payload));
+    }
+  }
+
+  private static void dynamicAccessHintsResolveExactDeclaredStateMaps() {
+    final String canonical = dynamicHint("state:Balances", "AccountId");
+    final String[] malformed = {
+      dynamicManifest(canonical + "," + canonical, "", "Balances", "StateMap<AccountId, quantity>"),
+      dynamicManifest("", canonical + "," + canonical, "Balances", "StateMap<AccountId, quantity>"),
+      dynamicManifest(
+          dynamicHint("state:Missing", "AccountId"),
+          "",
+          "Balances",
+          "StateMap<AccountId, quantity>"),
+      dynamicManifest(canonical, "", "Balances", "quantity"),
+      dynamicManifest(
+          dynamicHint("state:Balances", "Name"),
+          "",
+          "Balances",
+          "StateMap<AccountId, quantity>")
+    };
+    for (final String payload : malformed) {
+      expectFailure(
+          () ->
+              ContractJsonParser.parseManifestRecord(
+                  payload.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    final String amount = dynamicHint("state:amount", "AccountId");
+    final ContractManifest.AccessSetHints accepted =
+        ContractJsonParser.parseManifestRecord(
+                dynamicManifest(
+                        amount,
+                        amount,
+                        "amount",
+                        "StateMap<AccountId, quantity>")
+                    .getBytes(StandardCharsets.UTF_8))
+            .manifest()
+            .accessSetHints();
+    require(
+        "state:amount".equals(accepted.dynamicReads().get(0).baseKey()),
+        "state:amount dynamic read");
+    require(
+        "state:amount".equals(accepted.dynamicWrites().get(0).baseKey()),
+        "state:amount dynamic write");
+  }
+
+  private static ContractManifest.DynamicAccessHint parseDynamicHintPayload(
+      final String payload) {
+    return ContractJsonParser.parseManifestRecord(payload.getBytes(StandardCharsets.UTF_8))
+        .manifest()
+        .accessSetHints()
+        .dynamicReads()
+        .get(0);
+  }
+
+  private static String dynamicHint(final String baseKey, final String keyType) {
+    return "{\"base_key\":\""
+        + baseKey
+        + "\",\"key_type\":\""
+        + keyType
+        + "\",\"bound_kind\":\"take\",\"max_keys\":1}";
+  }
+
+  private static String dynamicManifest(
+      final String dynamicReads,
+      final String dynamicWrites,
+      final String stateName,
+      final String stateType) {
+    return "{\"manifest\":{\"access_set_hints\":{\"read_keys\":[],\"write_keys\":[],"
+        + "\"dynamic_reads\":["
+        + dynamicReads
+        + "],\"dynamic_writes\":["
+        + dynamicWrites
+        + "]},\"states\":[{\"name\":\""
+        + stateName
+        + "\",\"type_name\":\""
+        + stateType
+        + "\"}]},\"code_hash\":null,\"abi_hash\":null}";
+  }
+
+  private static String statePayload(final String typeName) {
+    return "{\"manifest\":{\"states\":[{\"name\":\"Balances\",\"type_name\":\""
+        + typeName
+        + "\"}]},\"code_hash\":null,\"abi_hash\":null}";
+  }
+
+  private static String nestedOptionType(final int depth) {
+    final StringBuilder typeName = new StringBuilder(depth * 8 + 3);
+    for (int index = 0; index < depth; index++) {
+      typeName.append("Option<");
+    }
+    typeName.append("int");
+    for (int index = 0; index < depth; index++) {
+      typeName.append('>');
+    }
+    return typeName.toString();
+  }
+
+  private static String wideTupleType(final int elements) {
+    final StringBuilder typeName = new StringBuilder(elements * 5 + 2);
+    typeName.append('(');
+    for (int index = 0; index < elements; index++) {
+      if (index > 0) {
+        typeName.append(", ");
+      }
+      typeName.append("int");
+    }
+    typeName.append(')');
+    return typeName.toString();
   }
 
   private static void manifestEndpointValidatesPathAndParsesFullRecord() {

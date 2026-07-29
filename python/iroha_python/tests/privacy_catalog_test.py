@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -17,19 +19,34 @@ from iroha_python.privacy_catalog import (
     parse_privacy_capability_snapshot_v1,
 )
 
-EXPECTED_PROTOCOL_IDS = (
-    "zk-ace-pq-authorization-v0",
-    "anonymous-pgc-k-out-of-n-v1",
-    "verange-transparent-range-v1",
-    "iroha-zk-ams-v1",
-    "vega-existing-credential-zk-v0",
-    "iroha-zk-x509-stark-p256-v0",
-    "iroha-jindo-polynomial-commitment-v0",
-    "iroha-bootle-lantern-anoncred-v1",
-    "orchard-halo2-actions-v1",
-    "monero-fcmp-plus-plus-v1",
-    "iroha-ivm-private-note-stark-v1",
-    "pq-masp-stark-v0",
+MATRIX_PATH = (
+    Path(__file__).resolve().parents[3] / "fixtures" / "privacy" / "exact12_v1.tsv"
+)
+MATRIX_BYTES = MATRIX_PATH.read_bytes()
+MATRIX_TEXT = MATRIX_BYTES.decode("utf-8", errors="strict")
+MATRIX_ROWS = tuple(
+    tuple(line.split("\t"))
+    for line in MATRIX_TEXT.splitlines()
+    if line and not line.startswith("#")
+)
+
+
+def _matrix_rows(kind: str) -> tuple[tuple[str, ...], ...]:
+    return tuple(row for row in MATRIX_ROWS if row[0] == kind)
+
+
+PROTOCOL_ROWS = _matrix_rows("protocol")
+TYPED_ENVELOPE_ROWS = _matrix_rows("typed-envelope")
+RETIRED_PROTOCOL_IDS = tuple(row[1] for row in _matrix_rows("retired"))
+EXPECTED_PROTOCOL_IDS = tuple(row[2] for row in PROTOCOL_ROWS)
+MATRIX_ROW_KINDS = frozenset(
+    {
+        "matrix-version",
+        "registry-sha256",
+        "protocol",
+        "typed-envelope",
+        "retired",
+    }
 )
 
 RETIRED_MODULES = (
@@ -74,10 +91,10 @@ def _snapshot() -> dict[str, object]:
             "current_limits": {
                 "max_actions_per_transaction": 1,
                 "max_actions_per_block": 2,
-                "max_proof_bytes_per_action": 8 * 1024 * 1024,
-                "max_action_bytes": 8 * 1024 * 1024,
-                "max_privacy_bytes_per_transaction": 8 * 1024 * 1024,
-                "max_privacy_bytes_per_block": 16 * 1024 * 1024,
+                "max_proof_bytes_per_action": 9 * 1024 * 1024,
+                "max_action_bytes": 9 * 1024 * 1024,
+                "max_privacy_bytes_per_transaction": 9 * 1024 * 1024,
+                "max_privacy_bytes_per_block": 18 * 1024 * 1024,
                 "max_statement_and_encrypted_output_bytes_per_transaction": 256
                 * 1024,
                 "max_nullifiers_per_action": 8,
@@ -129,9 +146,47 @@ def test_protocol_registry_is_exactly_the_canonical_twelve() -> None:
     assert len(set(PRIVACY_PROTOCOL_IDS_V1)) == 12
 
 
+def test_shared_exact12_matrix_binds_routes_typed_envelopes_and_retired_ids() -> None:
+    assert MATRIX_TEXT.endswith("\n")
+    assert "\r" not in MATRIX_TEXT
+    assert all(MATRIX_TEXT.split("\n")[:-1])
+    assert all(row[0] in MATRIX_ROW_KINDS for row in MATRIX_ROWS)
+    assert _matrix_rows("matrix-version") == (("matrix-version", "1"),)
+    assert len(PROTOCOL_ROWS) == 12
+    assert tuple(row[1] for row in PROTOCOL_ROWS) == tuple(map(str, range(12)))
+    assert all(len(row) == 5 for row in PROTOCOL_ROWS)
+    registry_preimage = "".join(f"{protocol}\n" for protocol in EXPECTED_PROTOCOL_IDS)
+    assert _matrix_rows("registry-sha256") == (
+        ("registry-sha256", hashlib.sha256(registry_preimage.encode()).hexdigest()),
+    )
+    assert len(TYPED_ENVELOPE_ROWS) == 12
+    assert tuple(row[1:4] for row in TYPED_ENVELOPE_ROWS) == tuple(
+        row[2:5] for row in PROTOCOL_ROWS
+    )
+    assert all(
+        len(row) == 6
+        and all(
+            len(digest) == 64
+            and digest == digest.lower()
+            and set(digest) <= set("0123456789abcdef")
+            and digest != "0" * 64
+            for digest in row[4:]
+        )
+        for row in TYPED_ENVELOPE_ROWS
+    )
+    assert len(RETIRED_PROTOCOL_IDS) == len(set(RETIRED_PROTOCOL_IDS))
+    assert set(RETIRED_PROTOCOL_IDS).isdisjoint(EXPECTED_PROTOCOL_IDS)
+
+
 def test_snapshot_parser_defensively_copies_the_closed_shape() -> None:
     source = _snapshot()
     parsed = parse_privacy_capability_snapshot_v1(source)
+    assert parsed["consensus_policy"]["current_limits"][
+        "max_proof_bytes_per_action"
+    ] == 9 * 1024 * 1024
+    assert parsed["consensus_policy"]["current_limits"][
+        "max_privacy_bytes_per_block"
+    ] == 18 * 1024 * 1024
     assert tuple(
         row["protocol_id"]["protocol"] for row in parsed["protocols"]
     ) == EXPECTED_PROTOCOL_IDS
@@ -166,6 +221,18 @@ def test_snapshot_parser_defensively_copies_the_closed_shape() -> None:
         lambda value: value["consensus_policy"]["current_limits"].update(
             {"max_actions_per_transaction": 1.5}
         ),
+        lambda value: value["consensus_policy"]["current_limits"].update(
+            {"max_proof_bytes_per_action": 9 * 1024 * 1024 + 1}
+        ),
+        lambda value: value["consensus_policy"]["current_limits"].update(
+            {"max_action_bytes": 9 * 1024 * 1024 + 1}
+        ),
+        lambda value: value["consensus_policy"]["current_limits"].update(
+            {"max_privacy_bytes_per_transaction": 9 * 1024 * 1024 + 1}
+        ),
+        lambda value: value["consensus_policy"]["current_limits"].update(
+            {"max_privacy_bytes_per_block": 18 * 1024 * 1024 + 1}
+        ),
     ),
 )
 def test_snapshot_parser_rejects_aliases_unknown_fields_and_malformed_rows(
@@ -173,6 +240,14 @@ def test_snapshot_parser_rejects_aliases_unknown_fields_and_malformed_rows(
 ) -> None:
     hostile = _snapshot()
     mutate(hostile)
+    with pytest.raises(PrivacyCapabilitySnapshotError):
+        parse_privacy_capability_snapshot_v1(hostile)
+
+
+@pytest.mark.parametrize("retired_protocol", RETIRED_PROTOCOL_IDS)
+def test_every_retired_matrix_protocol_is_rejected(retired_protocol: str) -> None:
+    hostile = _snapshot()
+    hostile["protocols"][0]["protocol_id"]["protocol"] = retired_protocol
     with pytest.raises(PrivacyCapabilitySnapshotError):
         parse_privacy_capability_snapshot_v1(hostile)
 

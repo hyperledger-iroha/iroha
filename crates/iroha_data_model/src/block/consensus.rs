@@ -1156,7 +1156,7 @@ impl LaneBlockDescriptorV1 {
     #[must_use]
     pub fn computed_descriptor_hash(&self) -> Hash {
         Hash::new(
-            norito::to_bytes(&LaneBlockDescriptorPreimage {
+            norito::encode_canonical(&LaneBlockDescriptorPreimage {
                 purpose: "nexus:lane-block-descriptor:v1".to_string(),
                 version: 1,
                 lane_id: self.lane_id,
@@ -1233,7 +1233,7 @@ impl LaneBlockProposalV1 {
     pub fn computed_proposal_hash(&self) -> Hash {
         let descriptor = &self.descriptor;
         Hash::new(
-            norito::to_bytes(&LaneBlockProposalPreimage {
+            norito::encode_canonical(&LaneBlockProposalPreimage {
                 purpose: "nexus:lane-block-proposal:v1".to_string(),
                 version: 1,
                 proposal_height: descriptor.proposal_height,
@@ -1353,7 +1353,9 @@ impl LaneBlockVoteBodyV1 {
     pub fn signature_preimage(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(32 + 512);
         out.extend_from_slice(b"iroha:lane-block-vote:v1");
-        out.extend_from_slice(&norito::to_bytes(self).expect("lane block vote body must encode"));
+        out.extend_from_slice(
+            &norito::encode_canonical(self).expect("lane block vote body must encode"),
+        );
         out
     }
 }
@@ -1425,7 +1427,7 @@ impl LanePayloadAvailabilityBodyV1 {
         let mut out = Vec::with_capacity(32 + 512);
         out.extend_from_slice(b"iroha:lane-payload-availability-ready:v1");
         out.extend_from_slice(
-            &norito::to_bytes(self).expect("lane payload availability body must encode"),
+            &norito::encode_canonical(self).expect("lane payload availability body must encode"),
         );
         out
     }
@@ -1672,7 +1674,7 @@ impl SumeragiLanePayloadOwnership {
         qc_mode_tag: &str,
     ) -> Result<Hash, SumeragiLanePayloadOwnershipReplayError> {
         Ok(Hash::new(
-            norito::to_bytes(&LanePayloadOwnershipSubjectPreimage {
+            norito::encode_canonical(&LanePayloadOwnershipSubjectPreimage {
                 version: 1,
                 lane_id,
                 dataspace_id,
@@ -1709,7 +1711,7 @@ impl SumeragiLanePayloadOwnership {
         qc_mode_tag: &str,
     ) -> Result<Hash, SumeragiLanePayloadOwnershipReplayError> {
         Ok(Hash::new(
-            norito::to_bytes(&LanePayloadOwnershipPreimage {
+            norito::encode_canonical(&LanePayloadOwnershipPreimage {
                 purpose: "nexus:lane-payload-ownership:v1".to_string(),
                 version: 1,
                 lane_id,
@@ -1742,7 +1744,7 @@ impl SumeragiLanePayloadOwnership {
         payload_ownership_hash: Hash,
     ) -> Result<Hash, SumeragiLanePayloadOwnershipReplayError> {
         Ok(Hash::new(
-            norito::to_bytes(&LanePayloadOwnershipRbcPreimage {
+            norito::encode_canonical(&LanePayloadOwnershipRbcPreimage {
                 purpose: "nexus:lane-rbc-instance:v1".to_string(),
                 version: 1,
                 lane_id,
@@ -1799,7 +1801,7 @@ impl SumeragiLanePayloadOwnership {
             payload_ownership_hash,
         )?;
         let lane_block_descriptor_hash = Hash::new(
-            norito::to_bytes(&LaneBlockDescriptorPreimage {
+            norito::encode_canonical(&LaneBlockDescriptorPreimage {
                 purpose: "nexus:lane-block-descriptor:v1".to_string(),
                 version: 1,
                 lane_id: self.lane_id,
@@ -2100,7 +2102,7 @@ impl NativeAmxAttestationBodyV2 {
         let mut out = Vec::with_capacity(32 + 320);
         out.extend_from_slice(b"iroha:native-amx:v2");
         out.extend_from_slice(
-            &norito::to_bytes(self).expect("native AMX v2 attestation body must encode"),
+            &norito::encode_canonical(self).expect("native AMX v2 attestation body must encode"),
         );
         out
     }
@@ -5135,6 +5137,8 @@ fn decode_from_slice_canonical<T>(bytes: &[u8]) -> Result<(T, usize), norito::co
 where
     T: DecodeAll + Encode,
 {
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let (value, used) = norito::core::decode_field_prefix::<T>(bytes)
         .map_err(|e| norito::core::Error::Message(format!("codec decode error: {e}")))?;
     let canonical = value.encode();
@@ -5231,10 +5235,7 @@ impl fmt::Display for CertPhase {
 
 impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut input = bytes;
-        let value = <Self as DecodeAll>::decode_all(&mut input)?;
-        let consumed = bytes.len() - input.len();
-        Ok((value, consumed))
+        decode_from_slice_canonical(bytes)
     }
 }
 
@@ -6665,6 +6666,16 @@ mod tests {
         )
         .body;
         let preimage = body.signature_preimage();
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                body.signature_preimage(),
+                preimage,
+                "Native AMX signature identity must ignore the caller's ambient Norito layout"
+            );
+        }
         let mut another_view = body;
         another_view.round.view = another_view.round.view.saturating_add(1);
         let mut another_epoch = body;
@@ -6747,6 +6758,16 @@ mod tests {
     fn lane_block_vote_body_signature_preimage_binds_phase_and_descriptor() {
         let body = sample_lane_block_vote_body(CertPhase::Prepare);
         let preimage = body.signature_preimage();
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                body.signature_preimage(),
+                preimage,
+                "lane-vote signature identity must ignore the caller's ambient Norito layout"
+            );
+        }
 
         assert!(preimage.starts_with(b"iroha:lane-block-vote:v1"));
         assert!(preimage.len() > b"iroha:lane-block-vote:v1".len());
@@ -6881,6 +6902,32 @@ mod tests {
             committee_drift.descriptor.computed_descriptor_hash(),
             proposal.descriptor.descriptor_hash,
             "committee order drift must change descriptor identity"
+        );
+    }
+
+    #[test]
+    fn lane_block_and_replay_hashes_ignore_ambient_norito_layout() {
+        let proposal = sample_lane_block_proposal();
+        let descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        let proposal_hash = proposal.computed_proposal_hash();
+        let ownership = sample_lane_payload_ownership_with_replay_material();
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("compute canonical replay hashes");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            proposal.descriptor.computed_descriptor_hash(),
+            descriptor_hash
+        );
+        assert_eq!(proposal.computed_proposal_hash(), proposal_hash);
+        assert_eq!(
+            ownership
+                .compute_replay_hashes()
+                .expect("compute replay hashes under alternate ambient layout"),
+            replay_hashes
         );
     }
 
@@ -7503,6 +7550,43 @@ mod tests {
             RbcReady::decode_from_slice(&canonical).expect("decode_from_slice ready");
         assert_eq!(ready, decoded);
         assert_eq!(used, canonical.len());
+    }
+
+    #[test]
+    fn lane_settlement_receipt_decode_from_slice_requires_canonical_bare_prefix() {
+        let receipt = LaneSettlementReceipt {
+            source_id: [0xA5; 32],
+            local_amount: "1.25".parse().expect("quantity"),
+            xor_due: "2.5".parse().expect("quantity"),
+            xor_after_haircut: "2.0".parse().expect("quantity"),
+            xor_variance: "0.5".parse().expect("quantity"),
+            timestamp_ms: 1_689_000,
+        };
+        let canonical = receipt.encode();
+        let mut followed_by_next_field = canonical.clone();
+        followed_by_next_field.extend_from_slice(b"next-field");
+        let (decoded, used) = LaneSettlementReceipt::decode_from_slice(&followed_by_next_field)
+            .expect("decode canonical lane settlement receipt prefix");
+        assert_eq!(decoded, receipt);
+        assert_eq!(used, canonical.len());
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::codec::encode_with_header_flags(&receipt).0
+        };
+        assert_ne!(
+            alternate, canonical,
+            "alternate layout must differ for the canonicality probe"
+        );
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let (decoded, used) = LaneSettlementReceipt::decode_from_slice(&followed_by_next_field)
+            .expect("canonical receipt prefix must ignore the ambient layout");
+        assert_eq!(decoded, receipt);
+        assert_eq!(used, canonical.len());
+        LaneSettlementReceipt::decode_from_slice(&alternate)
+            .expect_err("alternate bare layout must be rejected");
     }
 
     #[test]

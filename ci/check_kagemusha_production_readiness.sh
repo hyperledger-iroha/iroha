@@ -46,6 +46,7 @@ NODE = "crates/irohad/src/main.rs"
 KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
 ROUTES = "crates/iroha_torii_shared/src/route_catalog.rs"
 WORKFLOW = ".github/workflows/pr_kagemusha_payload_bench.yml"
+IOS_EVIDENCE_CHECKER = "scripts/check_kagemusha_candidate_ios_evidence.py"
 
 ARTIFACTS = (
     "step-eq.params-ipa.krv4",
@@ -603,6 +604,13 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
 
 
 def strict_json(path: Path) -> dict[str, object]:
+    return strict_json_bytes(
+        read_regular_bounded(path, MAX_MANIFEST_BYTES, "manifest JSON"),
+        "manifest JSON",
+    )
+
+
+def strict_json_bytes(payload: bytes, label: str) -> dict[str, object]:
     def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
         for key, value in pairs:
@@ -612,11 +620,14 @@ def strict_json(path: Path) -> dict[str, object]:
         return result
 
     value = json.loads(
-        read_regular_bounded(path, MAX_MANIFEST_BYTES, "manifest JSON").decode("utf-8"),
+        payload.decode("utf-8"),
         object_pairs_hook=object_pairs,
+        parse_constant=lambda value: (_ for _ in ()).throw(
+            ValueError(f"{label} contains non-finite value {value!r}")
+        ),
     )
     if not isinstance(value, dict):
-        raise ValueError("manifest JSON must be an object")
+        raise ValueError(f"{label} must be an object")
     return value
 
 
@@ -643,6 +654,104 @@ def release_verifier_command(directory: Path, policy: Path) -> list[str]:
     ]
 
 
+def ios_evidence_configuration(
+    errors: list[str],
+) -> tuple[Path, str, Path] | None:
+    """Return the complete opt-in physical-iOS evidence configuration."""
+
+    root_text = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT", "")
+    key_id = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID", "")
+    public_key_text = os.environ.get(
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY", ""
+    )
+    present = tuple(bool(value) for value in (root_text, key_id, public_key_text))
+    if not any(present):
+        return None
+    if not all(present):
+        errors.append(
+            "physical-iOS evidence requires KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT, "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID, and "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY together"
+        )
+        return None
+    ios_root = Path(root_text)
+    if not ios_root.is_dir() or ios_root.is_symlink():
+        errors.append("physical-iOS evidence root must be a real directory")
+        return None
+    return ios_root, key_id, Path(public_key_text)
+
+
+def verify_ios_evidence(
+    directory: Path,
+    ios_configuration: tuple[Path, str, Path],
+) -> tuple[str | None, str | None]:
+    """Verify one signed raw physical-iOS slot and return its candidate digest."""
+
+    ios_root, key_id, public_key = ios_configuration
+    release_root = ios_root / directory.name
+    raw_root = release_root / "raw"
+    if (
+        not release_root.is_dir()
+        or release_root.is_symlink()
+        or not raw_root.is_dir()
+        or raw_root.is_symlink()
+    ):
+        return None, (
+            f"{directory.name}: physical-iOS evidence must use "
+            f"{ios_root}/<manifest-sha256>/raw"
+        )
+    evidence_path = directory / "physical-device-benchmark.evidence"
+    command = [
+        sys.executable,
+        "-I",
+        str(root / IOS_EVIDENCE_CHECKER),
+        "--evidence",
+        str(evidence_path),
+        "--artifact-root",
+        str(raw_root),
+        "--trusted-key-id",
+        key_id,
+        "--trusted-public-key",
+        str(public_key),
+    ]
+    checked = subprocess.run(
+        command,
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if checked.returncode != 0:
+        detail = (checked.stderr or checked.stdout).strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        return None, f"{directory.name}: physical-iOS evidence verification failed{suffix}"
+    try:
+        evidence = strict_json_bytes(
+            read_regular_bounded(
+                evidence_path,
+                MAX_BENCHMARK_EVIDENCE_BYTES,
+                "signed physical-iOS evidence",
+            ),
+            "signed physical-iOS evidence",
+        )
+        artifact_digests = evidence.get("artifact_digests")
+        if not isinstance(artifact_digests, dict):
+            raise ValueError("artifact_digests is not an object")
+        candidate = artifact_digests.get("input/candidate-v4.norito")
+        if not isinstance(candidate, dict):
+            raise ValueError("candidate artifact binding is missing")
+        candidate_sha256 = candidate.get("sha256")
+        if (
+            not isinstance(candidate_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", candidate_sha256) is None
+            or candidate_sha256 == "0" * 64
+        ):
+            raise ValueError("candidate artifact digest is not canonical")
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        return None, f"{directory.name}: invalid signed physical-iOS evidence: {error}"
+    return candidate_sha256, None
+
+
 def promotion_errors() -> list[str]:
     errors: list[str] = []
     policy_text = os.environ.get("KAGEMUSHA_V4_RELEASE_POLICY_PATH", "")
@@ -663,6 +772,7 @@ def promotion_errors() -> list[str]:
     if not artifact_root.is_dir() or artifact_root.is_symlink():
         errors.append("promotion artifact root must be a real directory")
         return errors
+    ios_configuration = ios_evidence_configuration(errors)
 
     source_identity: dict[str, object] | None = None
     reviewed_closure_text = os.environ.get(
@@ -740,9 +850,29 @@ def promotion_errors() -> list[str]:
     if not directories:
         errors.append("promotion artifact root contains no manifest-digest releases")
         return errors
+    if ios_configuration is not None:
+        ios_root = ios_configuration[0]
+        ios_directories = []
+        for path in ios_root.iterdir():
+            ios_directories.append(path)
+            if len(ios_directories) > MAX_RELEASE_DIRECTORIES:
+                errors.append(
+                    "physical-iOS evidence root exceeds "
+                    f"{MAX_RELEASE_DIRECTORIES} releases"
+                )
+                return errors
+        if {path.name for path in ios_directories} != {
+            path.name for path in directories
+        }:
+            errors.append(
+                "physical-iOS evidence root must contain exactly one "
+                "manifest-digest directory for every promoted release"
+            )
+            return errors
     expected_inventory = set(ARTIFACTS + FINAL_METADATA)
     for directory in directories:
         directory_error_count = len(errors)
+        ios_candidate_sha256: str | None = None
         if not directory.is_dir() or directory.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", directory.name):
             errors.append(f"noncanonical release entry: {directory.name}")
             continue
@@ -847,6 +977,12 @@ def promotion_errors() -> list[str]:
                     )
             except (OSError, ValueError) as error:
                 errors.append(f"{directory.name}/{name}: invalid evidence: {error}")
+        if ios_configuration is not None and len(errors) == directory_error_count:
+            ios_candidate_sha256, ios_error = verify_ios_evidence(
+                directory, ios_configuration
+            )
+            if ios_error is not None:
+                errors.append(ios_error)
         if authenticated_verification_allowed and len(errors) == directory_error_count:
             command = release_verifier_command(directory, policy)
             verified = subprocess.run(
@@ -862,6 +998,22 @@ def promotion_errors() -> list[str]:
                 errors.append(
                     f"{directory.name}: authenticated V4 release verification failed{suffix}"
                 )
+            elif ios_candidate_sha256 is not None:
+                try:
+                    report = strict_json_bytes(
+                        verified.stdout.encode("utf-8"),
+                        "Kagami V4 verification report",
+                    )
+                    reconstructed_candidate = report.get("candidate_sha256")
+                    if reconstructed_candidate != ios_candidate_sha256:
+                        raise ValueError(
+                            "signed physical-iOS candidate differs from "
+                            "Kagami's reconstructed immutable release candidate"
+                        )
+                except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+                    errors.append(
+                        f"{directory.name}: physical-iOS release binding failed: {error}"
+                    )
     return errors
 
 

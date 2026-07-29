@@ -56,6 +56,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
@@ -68,7 +69,6 @@ import org.hyperledger.iroha.android.client.RetryPolicy;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
-import java.util.Base64;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 

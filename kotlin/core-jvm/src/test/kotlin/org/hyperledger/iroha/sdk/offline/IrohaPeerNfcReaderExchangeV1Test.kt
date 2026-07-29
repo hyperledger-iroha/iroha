@@ -485,9 +485,9 @@ class IrohaPeerNfcReaderExchangeV1Test {
         paymentBytes: Int,
         acknowledgementBytes: Int,
     ) = Messages(
-        message(IrohaPeerPayloadProfile.OFFLINE_NOTE, IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x41, requestBytes),
-        message(IrohaPeerPayloadProfile.OFFLINE_NOTE, IrohaPeerPayloadKind.PAYMENT, 0x42, paymentBytes),
-        message(IrohaPeerPayloadProfile.OFFLINE_NOTE, IrohaPeerPayloadKind.ACKNOWLEDGEMENT, 0x43, acknowledgementBytes),
+        message(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND, IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x41, requestBytes),
+        message(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND, IrohaPeerPayloadKind.PAYMENT, 0x42, paymentBytes),
+        message(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND, IrohaPeerPayloadKind.ACKNOWLEDGEMENT, 0x43, acknowledgementBytes),
     )
 
     private fun message(
@@ -499,7 +499,10 @@ class IrohaPeerNfcReaderExchangeV1Test {
         profile,
         kind,
         profile.requiredSchemaVersion,
-        ByteArray(count) { byte.toByte() },
+        IrohaPeerKagemushaStructuralTestV1.archive(
+            kind,
+            ByteArray(count) { byte.toByte() },
+        ),
     ))
 
     private fun limits(read: Int, write: Int) = IrohaPeerNfcLimitsV1(
@@ -577,6 +580,6 @@ class IrohaPeerNfcReaderExchangeV1Test {
     companion object {
         private val SESSION = ByteArray(16) { (it + 1).toByte() }
         private val policy =
-            IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.OFFLINE_NOTE)
+            IrohaPeerNfcProfilePolicyV1(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND)
     }
 }

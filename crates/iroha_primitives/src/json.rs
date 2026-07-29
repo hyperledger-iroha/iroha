@@ -113,6 +113,9 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Json {
         let wire = <JsonWireOwned as norito::core::NoritoDeserialize>::try_deserialize(
             archived.cast::<JsonWireOwned>(),
         )?;
+        json::validate_json(&wire.value).map_err(|error| {
+            norito::core::Error::Message(format!("invalid Json payload: {error}"))
+        })?;
         Ok(Self(Arc::new(wire.value)))
     }
 }
@@ -206,6 +209,17 @@ impl Json {
         out
     }
 
+    fn drop_json_value_iteratively(value: Value) {
+        let mut pending = vec![value];
+        while let Some(value) = pending.pop() {
+            match value {
+                Value::Array(mut values) => pending.append(&mut values),
+                Value::Object(values) => pending.extend(values.into_values()),
+                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+            }
+        }
+    }
+
     /// Serializes `payload` into a JSON string.
     ///
     /// # Errors
@@ -246,22 +260,23 @@ impl Json {
         // Primary path: canonical Norito serializer.
         let serialized =
             norito::json::to_json(&payload).map_err(|e| norito::Error::from(e.to_string()))?;
-        if norito::json::parse_value(&serialized).is_ok() {
+        if norito::json::validate_json(&serialized).is_ok() {
             return Ok(Self::from_string_unchecked(serialized));
         }
 
         // Fallback: materialize a `Value` and serialize it plainly.
         if let Ok(value) = norito::json::to_value(&payload) {
             let plain = Self::serialize_json_value_plain_str(&value);
-            if norito::json::parse_value(&plain).is_ok() {
+            let valid = norito::json::validate_json(&plain).is_ok();
+            Self::drop_json_value_iteratively(value);
+            if valid {
                 return Ok(Self::from_string_unchecked(plain));
             }
-            // Even if parsing fails, keep the plain serialization to avoid panicking.
-            return Ok(Self::from_string_unchecked(plain));
         }
 
-        // Last resort: return the original serialized form even if validation failed.
-        Ok(Self::from_string_unchecked(serialized))
+        Err(norito::Error::from(
+            "Json serializer produced an invalid JSON document",
+        ))
     }
 
     /// Fallible constructor from `&str` using Norito's JSON helper.
@@ -271,7 +286,9 @@ impl Json {
     /// Returns an error if the input string is not valid JSON.
     pub fn from_str_norito(s: &str) -> Result<Self, norito::Error> {
         let value = json::parse_value(s).map_err(|e| norito::Error::from(e.to_string()))?;
-        Self::from_norito_value_ref(&value)
+        let result = Self::from_norito_value_ref(&value);
+        Self::drop_json_value_iteratively(value);
+        result
     }
 
     /// Creates a `Json` value without validating that the input is well-formed.
@@ -304,7 +321,7 @@ impl Json {
     /// Returns an error if serialization of the value to a string fails.
     pub fn from_norito_value_ref(v: &Value) -> Result<Self, norito::Error> {
         let plain = Self::serialize_json_value_plain_str(v);
-        norito::json::parse_value(&plain).map_err(|e| norito::Error::from(e.to_string()))?;
+        norito::json::validate_json(&plain).map_err(|e| norito::Error::from(e.to_string()))?;
         Ok(Self::from_string_unchecked(plain))
     }
 }
@@ -334,7 +351,9 @@ impl From<&Value> for Json {
 
 impl From<Value> for Json {
     fn from(value: Value) -> Self {
-        Json::from_norito_value_ref(&value).expect("json to_string")
+        let result = Json::from_norito_value_ref(&value);
+        Json::drop_json_value_iteratively(value);
+        result.expect("json to_string")
     }
 }
 
@@ -381,8 +400,12 @@ impl FromStr for Json {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match json::parse_value(s) {
-            Ok(value) => Json::from_norito_value_ref(&value),
-            Err(_parse_err) => {
+            Ok(value) => {
+                let result = Json::from_norito_value_ref(&value);
+                Json::drop_json_value_iteratively(value);
+                result
+            }
+            Err(_) => {
                 let value = Value::String(s.to_owned());
                 Json::from_norito_value_ref(&value)
             }
@@ -403,6 +426,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Json {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (wire, consumed) =
             <JsonWireOwned as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        json::validate_json(&wire.value).map_err(|error| {
+            norito::core::Error::Message(format!("invalid Json payload: {error}"))
+        })?;
         Ok((Self(Arc::new(wire.value)), consumed))
     }
 }
@@ -687,6 +713,8 @@ mod tests {
             cursor = &items[0];
         }
         assert_eq!(cursor.as_u64(), Some(7));
+        Json::drop_json_value_iteratively(decoded);
+        Json::drop_json_value_iteratively(boundary);
 
         let mut too_deep = norito::json::Value::Null;
         for _ in 0..=norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
@@ -696,6 +724,86 @@ mod tests {
             Json::from_norito_value_ref(&too_deep).is_err(),
             "the explicit JSON structural bound must still fail closed"
         );
+        Json::drop_json_value_iteratively(too_deep);
+    }
+
+    #[test]
+    fn json_validation_and_normalization_fit_a_128k_stack() {
+        let worker = std::thread::Builder::new()
+            .name("iroha-json-iterative-boundary".into())
+            .stack_size(128 * 1024)
+            .spawn(|| -> Result<(), String> {
+                let wrappers = norito::core::MAX_OWNED_VALUE_DECODE_DEPTH - 1;
+                let at_255 = format!("{}null{}", "[".repeat(wrappers), "]".repeat(wrappers));
+                let normalized =
+                    Json::from_str_norito(&at_255).map_err(|error| error.to_string())?;
+                if normalized.get() != &at_255 {
+                    return Err("deep Json normalization changed canonical text".to_owned());
+                }
+                let direct =
+                    norito::json::from_json::<Json>(&at_255).map_err(|error| error.to_string())?;
+                if direct.get() != &at_255 {
+                    return Err("deep direct Json decode changed the input slice".to_owned());
+                }
+                let value =
+                    norito::json::parse_value(&at_255).map_err(|error| error.to_string())?;
+                let converted = Json::from(value);
+                if converted.get() != &at_255 {
+                    return Err("owned Value conversion changed canonical text".to_owned());
+                }
+                let retry = Json::try_new(RetryJson {
+                    calls: std::cell::Cell::new(0),
+                    valid: at_255.clone(),
+                })
+                .map_err(|error| error.to_string())?;
+                if retry.get() != &at_255 {
+                    return Err("try_new fallback changed canonical text".to_owned());
+                }
+
+                let encoded = JsonWireOwned {
+                    value: at_255.clone(),
+                }
+                .encode();
+                let (decoded, consumed) =
+                    <Json as norito::core::DecodeFromSlice>::decode_from_slice(&encoded)
+                        .map_err(|error| error.to_string())?;
+                if consumed != encoded.len() || decoded.get() != &at_255 {
+                    return Err("deep Json slice decode changed the wire payload".to_owned());
+                }
+                let framed = norito::to_bytes(&Json::from_string_unchecked(at_255.clone()))
+                    .map_err(|error| error.to_string())?;
+                let decoded = norito::decode_from_bytes::<Json>(&framed)
+                    .map_err(|error| error.to_string())?;
+                if decoded.get() != &at_255 {
+                    return Err("deep framed Json decode changed the wire payload".to_owned());
+                }
+
+                let invalid_256th_wrapper = format!("[{at_255},]");
+                if Json::from_str_norito(&invalid_256th_wrapper).is_ok() {
+                    return Err("strict Json constructor accepted a trailing comma".to_owned());
+                }
+                let invalid_wire = JsonWireOwned {
+                    value: invalid_256th_wrapper.clone(),
+                }
+                .encode();
+                if <Json as norito::core::DecodeFromSlice>::decode_from_slice(&invalid_wire).is_ok()
+                {
+                    return Err("Json wire decoder accepted a trailing comma".to_owned());
+                }
+
+                let fallback = invalid_256th_wrapper
+                    .parse::<Json>()
+                    .map_err(|error| error.to_string())?;
+                if fallback.as_ref() != invalid_256th_wrapper {
+                    return Err("FromStr plain-text fallback behavior changed".to_owned());
+                }
+                Ok(())
+            })
+            .expect("spawn 128KiB Json boundary test");
+        worker
+            .join()
+            .expect("128KiB Json boundary thread")
+            .expect("iterative Json boundary");
     }
 
     struct BadJson;
@@ -706,14 +814,78 @@ mod tests {
         }
     }
 
+    struct RetryJson {
+        calls: std::cell::Cell<u8>,
+        valid: String,
+    }
+
+    impl JsonSerialize for RetryJson {
+        fn json_serialize(&self, out: &mut String) {
+            let call = self.calls.get();
+            self.calls.set(call.saturating_add(1));
+            if call == 0 {
+                out.push_str("invalid fallback trigger");
+            } else {
+                out.push_str(&self.valid);
+            }
+        }
+    }
+
     #[test]
-    fn try_new_tolerates_unparseable_payload() {
-        let j = Json::try_new(BadJson).expect("try_new must not panic");
+    fn try_new_rejects_unparseable_payload() {
+        let error = Json::try_new(BadJson).expect_err("invalid JSON serializer must fail closed");
         assert!(
-            j.get().starts_with("bad json"),
-            "unexpected serialization: {}",
-            j.get()
+            error.to_string().contains("invalid JSON document"),
+            "unexpected serialization error: {error}"
         );
+    }
+
+    #[test]
+    fn json_boundaries_reject_duplicate_keys_and_invalid_norito_payloads() {
+        let duplicate = r#"{"owner":"alice","owner":"bob"}"#;
+        assert!(
+            norito::json::from_json::<Json>(duplicate).is_err(),
+            "direct JSON decoding must reject duplicate object keys"
+        );
+
+        for invalid in [duplicate, "not-json"] {
+            let encoded = JsonWireOwned {
+                value: invalid.to_owned(),
+            }
+            .encode();
+            assert!(
+                <Json as norito::core::DecodeFromSlice>::decode_from_slice(&encoded).is_err(),
+                "slice decoding accepted invalid Json payload: {invalid}"
+            );
+
+            let framed = norito::to_bytes(&Json::from_string_unchecked(invalid.to_owned()))
+                .expect("encode hostile Json wire");
+            assert!(
+                norito::decode_from_bytes::<Json>(&framed).is_err(),
+                "framed decoding accepted invalid Json payload: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_quantity_conversion_accepts_only_canonical_nominal_json() {
+        let canonical = Json::from_str_norito(r#""12.5""#).expect("canonical quantity JSON");
+        assert_eq!(
+            canonical
+                .try_into_any_norito::<crate::numeric::Quantity>()
+                .expect("typed quantity conversion")
+                .to_string(),
+            "12.5"
+        );
+
+        for invalid in [r#""12.50""#, r#""-1""#, "12.5"] {
+            let json = Json::from_str_norito(invalid).expect("valid JSON document");
+            assert!(
+                json.try_into_any_norito::<crate::numeric::Quantity>()
+                    .is_err(),
+                "typed quantity conversion accepted {invalid}"
+            );
+        }
     }
 
     #[test]

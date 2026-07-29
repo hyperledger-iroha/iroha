@@ -713,6 +713,19 @@ mod tests {
 
     use super::*;
 
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let (payload, canonical_flags) = norito::codec::encode_with_header_flags(value);
+        assert_eq!(
+            canonical_flags, 0,
+            "numeric V1 payloads use no layout-dependent body features"
+        );
+        norito::core::frame_bare_with_header_flags::<T>(
+            &payload,
+            norito::core::header_flags::COMPACT_LEN,
+        )
+        .expect("frame alternate-layout numeric value")
+    }
+
     fn schema_hash_hex(hash: &[u8; 16]) -> String {
         let mut encoded = String::with_capacity(hash.len() * 2);
         for byte in hash {
@@ -793,6 +806,43 @@ mod tests {
         let quantity = QuantityValueV1::new("12.50".parse().expect("quantity"));
         let quantity_frame = quantity.encode_frame().expect("encode quantity");
         assert_eq!(QuantityValueV1::decode_frame(&quantity_frame), Ok(quantity));
+    }
+
+    #[test]
+    fn numeric_v1_values_reject_alternate_outer_norito_layouts() {
+        fn assert_canonical_only<T>(value: &T)
+        where
+            T: core::fmt::Debug + PartialEq + norito::NoritoSerialize,
+            for<'de> T: norito::NoritoDeserialize<'de>,
+        {
+            let canonical = norito::encode_canonical(value).expect("encode canonical numeric");
+            assert_eq!(
+                &norito::decode_canonical::<T>(&canonical).expect("decode canonical numeric"),
+                value
+            );
+
+            let alternate = encode_with_alternate_norito_layout(value);
+            assert_ne!(alternate, canonical);
+            assert_eq!(
+                &norito::decode_from_bytes::<T>(&alternate)
+                    .expect("alternate numeric remains structurally decodable"),
+                value
+            );
+            assert!(matches!(
+                norito::decode_canonical::<T>(&alternate),
+                Err(norito::Error::NonCanonicalEncoding)
+            ));
+        }
+
+        assert_canonical_only(
+            &IntValueV1::try_new(BigInt::from_i128(-129)).expect("bounded integer"),
+        );
+        assert_canonical_only(
+            &DecimalValueV1::try_from_numeric(Numeric::new(-125, 2)).expect("canonical decimal"),
+        );
+        assert_canonical_only(&QuantityValueV1::new(
+            "1.25".parse().expect("canonical quantity"),
+        ));
     }
 
     #[test]

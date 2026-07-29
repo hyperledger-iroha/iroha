@@ -285,6 +285,21 @@ impl From<crate::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1> for Ins
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::privacy::RegisterPrivacyVegaIssuerV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RegisterPrivacyVegaIssuerV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RotatePrivacyVegaIssuerV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RotatePrivacyVegaIssuerV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::privacy::RevokePrivacyVegaIssuerV1> for InstructionBox {
+    fn from(i: crate::isi::privacy::RevokePrivacyVegaIssuerV1) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1> for InstructionBox {
     fn from(i: crate::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1) -> Self {
         InstructionBox(Box::new(i))
@@ -1471,24 +1486,6 @@ impl From<crate::isi::offline::SetOfflineDeviceAttestationPolicy> for Instructio
     }
 }
 
-impl From<crate::isi::offline::IssueOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::IssueOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RedeemOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::AuditOfflineNote> for InstructionBox {
-    fn from(i: crate::isi::offline::AuditOfflineNote) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
 // Allow direct boxing of oracle feed instructions.
 impl From<crate::isi::oracle::RegisterOracleFeed> for InstructionBox {
     fn from(i: crate::isi::oracle::RegisterOracleFeed) -> Self {
@@ -2256,7 +2253,8 @@ impl norito::json::FastJsonWrite for InstructionBox {
     fn write_json(&self, out: &mut String) {
         // JSON uses base64 of the canonical Norito-framed payload so clients can
         // round-trip without guessing decode flags.
-        let bytes = norito::to_bytes(self).expect("InstructionBox should Norito-frame");
+        let bytes =
+            norito::encode_canonical(self).expect("InstructionBox should canonically Norito-frame");
         let encoded = STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
     }
@@ -2269,9 +2267,7 @@ fn instruction_box_from_base64_literal(
     let bytes = STANDARD
         .decode(encoded.as_bytes())
         .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-    let archived = norito::from_bytes::<InstructionBox>(&bytes)
-        .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-    norito::core::NoritoDeserialize::try_deserialize(archived)
+    norito::decode_canonical::<InstructionBox>(&bytes)
         .map_err(|err| norito::json::Error::Message(err.to_string()))
 }
 
@@ -4476,6 +4472,38 @@ mod tests {
         // Verify type id and payload equivalence without relying on downcast
         assert_eq!(Instruction::id(&*decoded), name);
         assert_eq!(Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn instruction_box_json_is_canonical_and_ambient_independent() {
+        let registry = InstructionRegistry::new().register_slice::<Log>();
+        let _registry = RegistryGuard::set(registry);
+        let instruction = InstructionBox::from(Log::new(
+            Level::INFO,
+            "canonical JSON instruction".to_owned(),
+        ));
+        let canonical_json =
+            norito::json::to_json(&instruction).expect("encode canonical InstructionBox JSON");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                norito::json::to_json(&instruction)
+                    .expect("encode InstructionBox JSON under alternate ambient layout"),
+                canonical_json
+            );
+        }
+
+        let alternate_frame = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&instruction).expect("encode alternate-layout InstructionBox")
+        };
+        let alternate_json = norito::json::to_json(&STANDARD.encode(alternate_frame))
+            .expect("encode alternate frame as JSON string");
+        norito::json::from_json::<InstructionBox>(&alternate_json)
+            .expect_err("alternate-layout InstructionBox JSON must be rejected");
     }
 
     #[test]

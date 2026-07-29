@@ -21,7 +21,7 @@ fn read_fixture(path: &str) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
 
-fn regenerate_fixtures(root: &Path) {
+fn seed_generator_inputs(root: &Path) {
     for directory in [
         "appeal_finance",
         "orderbook",
@@ -36,16 +36,29 @@ fn regenerate_fixtures(root: &Path) {
                 .as_path(),
         );
     }
-    let output = cargo_bin_cmd!("generate_por_fixtures")
+}
+
+fn run_generator(root: &Path, arguments: &[&str]) -> std::process::Output {
+    cargo_bin_cmd!("generate_por_fixtures")
         .current_dir(root)
+        .args(arguments)
         .output()
-        .expect("run deterministic SoraFS fixture generator");
+        .expect("run deterministic SoraFS fixture generator")
+}
+
+fn assert_generator_success(output: &std::process::Output, mode: &str) {
     assert!(
         output.status.success(),
-        "fixture generator failed:\nstdout:\n{}\nstderr:\n{}",
+        "fixture generator {mode} failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+fn regenerate_fixtures(root: &Path) {
+    seed_generator_inputs(root);
+    let write = run_generator(root, &["--write"]);
+    assert_generator_success(&write, "--write");
 }
 
 fn copy_fixture_tree(source: &Path, destination: &Path) {
@@ -77,6 +90,157 @@ fn copy_fixture_tree(source: &Path, destination: &Path) {
             });
         }
     }
+}
+
+#[test]
+fn por_fixture_generator_requires_exactly_one_explicit_mode() {
+    let root = tempdir().expect("create CLI contract directory");
+    for arguments in [
+        Vec::<&str>::new(),
+        vec!["--write", "--check"],
+        vec!["--unknown"],
+        vec!["positional"],
+    ] {
+        let output = run_generator(root.path(), &arguments);
+        assert!(
+            !output.status.success(),
+            "invalid arguments unexpectedly succeeded: {arguments:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("exactly one mode is required"),
+            "invalid arguments did not report the strict mode contract: {arguments:?}\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn por_fixture_generator_check_rejects_drift_unexpected_entries_and_hardlinks() {
+    let root = tempdir().expect("create adversarial fixture directory");
+    regenerate_fixtures(root.path());
+    let fixture_root = root.path().join("fixtures/sorafs_manifest");
+    let challenge = fixture_root.join("por/challenge_v1.to");
+    let original = fs::read(&challenge).expect("read generated challenge");
+    let baseline = run_generator(root.path(), &["--check"]);
+    assert_generator_success(&baseline, "baseline --check");
+
+    let mut drifted = original.clone();
+    drifted.push(0);
+    fs::write(&challenge, &drifted).expect("write deterministic drift");
+    let drift = run_generator(root.path(), &["--check"]);
+    assert!(!drift.status.success(), "byte drift unexpectedly passed");
+    assert!(
+        String::from_utf8_lossy(&drift.stderr)
+            .contains("managed fixture bytes differ from deterministic generation"),
+        "byte drift failure was not specific: {}",
+        String::from_utf8_lossy(&drift.stderr)
+    );
+    assert_eq!(
+        fs::read(&challenge).expect("reread drifted challenge"),
+        drifted,
+        "--check mutated a drifted fixture"
+    );
+    fs::write(&challenge, &original).expect("restore generated challenge");
+
+    let unexpected_a = fixture_root.join("por/aaa_unexpected_v1.json");
+    let unexpected_z = fixture_root.join("por/zzz_unexpected_v1.json");
+    fs::write(&unexpected_z, b"{}\n").expect("write unexpected z fixture");
+    fs::write(&unexpected_a, b"{}\n").expect("write unexpected a fixture");
+    let unexpected = run_generator(root.path(), &["--write"]);
+    assert!(
+        !unexpected.status.success(),
+        "unexpected managed entries passed"
+    );
+    let stderr = String::from_utf8_lossy(&unexpected.stderr);
+    let a_position = stderr
+        .find("por/aaa_unexpected_v1.json")
+        .expect("unexpected a path must be reported");
+    let z_position = stderr
+        .find("por/zzz_unexpected_v1.json")
+        .expect("unexpected z path must be reported");
+    assert!(
+        a_position < z_position,
+        "unexpected paths were not reported deterministically: {stderr}"
+    );
+    assert_eq!(
+        fs::read(&unexpected_a).expect("reread unexpected a fixture"),
+        b"{}\n".to_vec(),
+        "failed write mode altered an unexpected managed entry"
+    );
+    assert_eq!(
+        fs::read(&unexpected_z).expect("reread unexpected z fixture"),
+        b"{}\n".to_vec(),
+        "failed write mode altered an unexpected managed entry"
+    );
+    fs::remove_file(&unexpected_a).expect("remove unexpected a fixture");
+    fs::remove_file(&unexpected_z).expect("remove unexpected z fixture");
+
+    let publication_lock = fixture_root.join(".generate_por_fixtures.lock");
+    fs::write(&publication_lock, b"stale\n").expect("write stale publication lock");
+    let locked = run_generator(root.path(), &["--check"]);
+    assert!(
+        !locked.status.success(),
+        "check passed an ambiguous publication lock"
+    );
+    assert!(
+        String::from_utf8_lossy(&locked.stderr).contains("verification is blocked"),
+        "publication-lock failure was not specific: {}",
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    fs::remove_file(&publication_lock).expect("remove stale publication lock");
+
+    let hardlink = root.path().join("challenge-hardlink.to");
+    if fs::hard_link(&challenge, &hardlink).is_ok() {
+        let write = run_generator(root.path(), &["--write"]);
+        assert!(
+            !write.status.success(),
+            "hardlinked fixture was overwritten"
+        );
+        assert!(
+            String::from_utf8_lossy(&write.stderr).contains("must have exactly one hard link"),
+            "hardlink failure was not specific: {}",
+            String::from_utf8_lossy(&write.stderr)
+        );
+        assert_eq!(
+            fs::read(&hardlink).expect("read hardlink alias"),
+            original,
+            "failed publication changed the hardlink alias"
+        );
+        fs::remove_file(&hardlink).expect("remove hardlink alias");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn por_fixture_generator_rejects_symlinked_managed_targets() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempdir().expect("create symlink fixture directory");
+    regenerate_fixtures(root.path());
+    let fixture_root = root.path().join("fixtures/sorafs_manifest");
+    let challenge = fixture_root.join("por/challenge_v1.to");
+    let backup = root.path().join("challenge-backup.to");
+    let original = fs::read(&challenge).expect("read generated challenge");
+    fs::rename(&challenge, &backup).expect("move challenge outside managed tree");
+    symlink(&backup, &challenge).expect("install managed symlink");
+
+    for mode in ["--check", "--write"] {
+        let output = run_generator(root.path(), &[mode]);
+        assert!(
+            !output.status.success(),
+            "symlinked target unexpectedly passed {mode}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("must not be a symlink"),
+            "symlink failure was not specific for {mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert_eq!(
+        fs::read(&backup).expect("read symlink target"),
+        original,
+        "failed publication changed the symlink target"
+    );
 }
 
 #[test]

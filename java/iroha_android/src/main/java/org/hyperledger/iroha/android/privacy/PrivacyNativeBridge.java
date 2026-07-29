@@ -13,12 +13,31 @@ import java.util.List;
  */
 public final class PrivacyNativeBridge {
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 21;
-  public static final int PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
-
-  private static final int NORITO_HEADER_BYTES = 40;
-  private static final int CAPABILITY_SCHEMA_BYTE = 0x50;
-  private static final byte[] NORITO_MAGIC = new byte[] {'N', 'R', 'T', '0'};
+  public static final int PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024;
   private static final String LIBRARY_NAME = "connect_norito_bridge";
+
+  /** Stable ABI-21 result of validating one typed privacy capability archive. */
+  public enum ValidationStatusV1 {
+    VALID(0),
+    NULL_POINTER(1),
+    EMPTY(2),
+    ARCHIVE_TOO_LARGE(3),
+    DECODE_RESOURCE_LIMIT(4),
+    SCHEMA_MISMATCH(5),
+    NON_CANONICAL(6),
+    MALFORMED_ARCHIVE(7),
+    INVALID_SNAPSHOT(8);
+
+    private final int code;
+
+    ValidationStatusV1(final int code) {
+      this.code = code;
+    }
+
+    public int code() {
+      return code;
+    }
+  }
 
   /** Closed first-release protocol identity in canonical Norito discriminant order. */
   public enum ProtocolIdV1 {
@@ -81,8 +100,9 @@ public final class PrivacyNativeBridge {
   /**
    * Returns the authoritative {@code PrivacyCapabilitySnapshotV1} Norito archive.
    *
-   * <p>The archive is rejected unless it has the canonical Norito header and capability schema
-   * marker. Consumers must decode it as the current typed snapshot; there is no legacy codec.
+   * <p>The archive is rejected unless the shared Rust validator decodes the exact canonical typed
+   * snapshot and validates all twelve rows. Consumers may use Torii JSON as its dynamic typed
+   * projection; there is no legacy codec.
    */
   public static byte[] capabilitiesArchiveV1() {
     if (!NATIVE_AVAILABLE) {
@@ -99,19 +119,13 @@ public final class PrivacyNativeBridge {
 
   static byte[] requireCapabilityArchive(final byte[] archive) {
     if (archive == null
-        || archive.length < NORITO_HEADER_BYTES
+        || archive.length == 0
         || archive.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
       throw new IllegalStateException("invalid privacy capability archive length");
     }
-    for (int index = 0; index < NORITO_MAGIC.length; index++) {
-      if (archive[index] != NORITO_MAGIC[index]) {
-        throw new IllegalStateException("invalid privacy capability Norito magic");
-      }
-    }
-    for (int index = 6; index < 22; index++) {
-      if (archive[index] != (byte) CAPABILITY_SCHEMA_BYTE) {
-        throw new IllegalStateException("invalid privacy capability schema");
-      }
+    final int status = nativeValidateCapabilities(archive);
+    if (status != ValidationStatusV1.VALID.code()) {
+      throw new IllegalStateException("invalid typed privacy capability archive");
     }
     return Arrays.copyOf(archive, archive.length);
   }
@@ -120,7 +134,7 @@ public final class PrivacyNativeBridge {
     try {
       System.loadLibrary(LIBRARY_NAME);
       return nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION
-          && requireCapabilityArchive(nativeCapabilities()).length >= NORITO_HEADER_BYTES;
+          && requireCapabilityArchive(nativeCapabilities()).length > 0;
     } catch (final RuntimeException | LinkageError error) {
       return false;
     }
@@ -129,4 +143,6 @@ public final class PrivacyNativeBridge {
   private static native int nativeBridgeAbiVersion();
 
   private static native byte[] nativeCapabilities();
+
+  private static native int nativeValidateCapabilities(byte[] archive);
 }

@@ -166,6 +166,7 @@ def test_offline_proof_backend_type_is_the_exact_closed_registry_v1() -> None:
         "zkat",
         "silent-threshold-anoncred",
         "penumbra-masp",
+        "sis-hints-anoncred-pq-v0",
         "sis-with-hints",
         "unsupported",
         "stark",

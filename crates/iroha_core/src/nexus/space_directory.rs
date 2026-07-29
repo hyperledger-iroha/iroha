@@ -289,7 +289,7 @@ impl norito::json::JsonSerialize for UaidDataspaceBindings {
     fn json_serialize(&self, out: &mut String) {
         use base64::Engine as _;
 
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .expect("UaidDataspaceBindings Norito serialization must succeed");
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
@@ -307,9 +307,7 @@ impl norito::json::JsonDeserialize for UaidDataspaceBindings {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_str())
             .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        let archived = norito::from_bytes::<UaidDataspaceBindings>(&bytes)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
+        norito::decode_canonical::<UaidDataspaceBindings>(&bytes)
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
@@ -319,7 +317,7 @@ impl norito::json::JsonSerialize for AccountScopeDirectoryEntry {
     fn json_serialize(&self, out: &mut String) {
         use base64::Engine as _;
 
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .expect("AccountScopeDirectoryEntry Norito serialization must succeed");
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         norito::json::JsonSerialize::json_serialize(&encoded, out);
@@ -337,9 +335,7 @@ impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_str())
             .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        let archived = norito::from_bytes::<AccountScopeDirectoryEntry>(&bytes)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
+        norito::decode_canonical::<AccountScopeDirectoryEntry>(&bytes)
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
@@ -476,6 +472,7 @@ impl SpaceDirectoryManifestSet {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use iroha_crypto::Hash;
     use iroha_data_model::nexus::ManifestVersion;
     use iroha_data_model::{account::Account, domain::Domain, prelude::*};
@@ -505,6 +502,17 @@ mod tests {
         assert_eq!(record.manifest, manifest);
         assert_eq!(record.manifest_hash, expected_hash);
         assert!(record.lifecycle.activated_epoch.is_none());
+
+        let ambient_record = {
+            let alternate_flags =
+                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            SpaceDirectoryManifestRecord::new(manifest)
+        };
+        assert_eq!(
+            ambient_record.manifest_hash, expected_hash,
+            "manifest identity must ignore ambient Norito layout"
+        );
     }
 
     #[test]
@@ -550,6 +558,30 @@ mod tests {
         let decoded: UaidDataspaceBindings =
             json::from_str(&encoded).expect("bindings should deserialize from JSON");
         assert_eq!(decoded, bindings);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+        let ambient_encoded = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            json::to_json(&bindings).expect("bindings use ambient-independent JSON")
+        };
+        assert_eq!(ambient_encoded, encoded);
+
+        let canonical_frame =
+            norito::encode_canonical(&bindings).expect("encode canonical bindings frame");
+        let alternate_frame = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&bindings).expect("encode alternate-layout bindings frame")
+        };
+        assert_ne!(alternate_frame, canonical_frame);
+        let alternate_json = format!(
+            "\"{}\"",
+            base64::engine::general_purpose::STANDARD.encode(alternate_frame)
+        );
+        assert!(
+            json::from_str::<UaidDataspaceBindings>(&alternate_json).is_err(),
+            "alternate-layout bindings frame must fail the external JSON boundary"
+        );
     }
 
     #[test]
@@ -562,6 +594,30 @@ mod tests {
         let decoded: AccountScopeDirectoryEntry =
             json::from_str(&encoded).expect("scope entry should deserialize from JSON");
         assert_eq!(decoded, entry);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+        let ambient_encoded = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            json::to_json(&entry).expect("scope entry uses ambient-independent JSON")
+        };
+        assert_eq!(ambient_encoded, encoded);
+
+        let canonical_frame =
+            norito::encode_canonical(&entry).expect("encode canonical scope frame");
+        let alternate_frame = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&entry).expect("encode alternate-layout scope frame")
+        };
+        assert_ne!(alternate_frame, canonical_frame);
+        let alternate_json = format!(
+            "\"{}\"",
+            base64::engine::general_purpose::STANDARD.encode(alternate_frame)
+        );
+        assert!(
+            json::from_str::<AccountScopeDirectoryEntry>(&alternate_json).is_err(),
+            "alternate-layout scope frame must fail the external JSON boundary"
+        );
     }
 
     fn world_with_uaid(

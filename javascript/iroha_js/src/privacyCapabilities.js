@@ -4,6 +4,8 @@
  * only committed, typed protocol state can authorize proof submission.
  */
 
+import { privacyCapabilityTransportV1 } from "./privacyCapabilityTransport.js";
+
 export const PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1 = 1;
 
 export const PRIVACY_PROTOCOL_IDS_V1 = Object.freeze([
@@ -33,12 +35,12 @@ const PROTOCOL_BINDINGS = Object.freeze({
     "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
   ],
   "vega-existing-credential-zk-v0": ["vega-neutron-nova-spartan-hyrax-t256", "native-vega"],
-  "iroha-zk-x509-stark-p256-v0": ["stark-fri-poseidon2-goldilocks", "native-goldilocks-stark-fri"],
+  "iroha-zk-x509-stark-p256-v0": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
   "iroha-jindo-polynomial-commitment-v0": ["jindo-polynomial-commitment", "native-jindo"],
   "iroha-bootle-lantern-anoncred-v1": ["lantern-lnp22-module-linear-norm", "native-lantern-lnp22"],
   "orchard-halo2-actions-v1": ["halo2-ipa-pasta", "native-halo2-orchard"],
   "monero-fcmp-plus-plus-v1": ["fcmp-plus-plus-curve-tree-bulletproofs", "native-fcmp-plus-plus"],
-  "iroha-ivm-private-note-stark-v1": ["stark-fri-poseidon2-goldilocks", "native-goldilocks-stark-fri"],
+  "iroha-ivm-private-note-stark-v1": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
   "pq-masp-stark-v0": ["stark-fri-sha256-goldilocks", "native-goldilocks-stark-fri"],
 });
 
@@ -57,10 +59,10 @@ const CONSENSUS_LIMIT_KEYS = Object.freeze([
 const CONSENSUS_LIMIT_MAXIMA = Object.freeze({
   max_actions_per_transaction: 1,
   max_actions_per_block: 2,
-  max_proof_bytes_per_action: 8 * 1024 * 1024,
-  max_action_bytes: 8 * 1024 * 1024,
-  max_privacy_bytes_per_transaction: 8 * 1024 * 1024,
-  max_privacy_bytes_per_block: 16 * 1024 * 1024,
+  max_proof_bytes_per_action: 9 * 1024 * 1024,
+  max_action_bytes: 9 * 1024 * 1024,
+  max_privacy_bytes_per_transaction: 9 * 1024 * 1024,
+  max_privacy_bytes_per_block: 18 * 1024 * 1024,
   max_statement_and_encrypted_output_bytes_per_transaction: 256 * 1024,
   max_nullifiers_per_action: 8,
   max_commitments_per_action: 8,
@@ -110,6 +112,33 @@ export function parsePrivacyCapabilitySnapshotV1(payload) {
     consensus_policy: consensusPolicy,
     protocols,
   });
+}
+
+/**
+ * Fetch and fail-closed validate the authoritative committed privacy
+ * capability snapshot from a configured Iroha JS Torii client.
+ *
+ * @param {unknown} client A package ToriiClient or ToriiBrowserClient.
+ * @param {object} [options] Client-specific request options.
+ * @returns {Promise<Readonly<Record<string, unknown>>>}
+ */
+export async function getPrivacyCapabilitiesV1(client, options = {}) {
+  if (
+    (typeof client !== "object" && typeof client !== "function")
+    || client === null
+  ) {
+    throw new TypeError(
+      "getPrivacyCapabilitiesV1 client must be an Iroha JS Torii client",
+    );
+  }
+  const transport = client[privacyCapabilityTransportV1];
+  if (typeof transport !== "function") {
+    throw new TypeError(
+      "getPrivacyCapabilitiesV1 client must be an Iroha JS Torii client",
+    );
+  }
+  const payload = await Reflect.apply(transport, client, [options]);
+  return parsePrivacyCapabilitySnapshotV1(payload);
 }
 
 function parseConsensusPolicy(value, committedHeight) {

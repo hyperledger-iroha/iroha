@@ -9,6 +9,7 @@ import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
 import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
+import * as packagePrivacyCapabilitiesExports from "../dist/privacyCapabilities.js";
 import * as packageSccpExports from "../dist/sccp.js";
 import {
   findForbiddenBrowserInputs,
@@ -33,10 +34,7 @@ const {
   PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
   PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   isPrivacyNativeAvailable,
-  privacyBuildProofV1,
   privacyCapabilitiesV1,
-  privacyProofRequestV1,
-  privacyVerifyProofV1,
 } = packageExports;
 
 function withNativeBinding(binding, fn) {
@@ -108,51 +106,7 @@ function slicedPrivacyView(
   return backing.subarray(prefix.length, prefix.length + archive.length);
 }
 
-function malformedPrivacyRequestArchives() {
-  const badMagic = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badMagic[0] = 0x00;
-  const badVersion = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badVersion[4] = 1;
-  const badMinorVersion = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badMinorVersion[5] = 1;
-  const badCompression = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badCompression[22] = 1;
-  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(0x52, 6n);
-  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
-    0x52,
-    0x8000000000000000n,
-  );
-  const badPadding = Buffer.concat([PRIVACY_REQUEST_ARCHIVE, Buffer.from([0x7f])]);
-  const badExcessivePadding = privacyNoritoFrameWithPadding(0x52, 65);
-  const badFlags = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badFlags[39] = 0x08;
-  const badFieldBitsetFlags = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badFieldBitsetFlags[39] = 0x20;
-  const badChecksum = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badChecksum[31] ^= 0x01;
-  const badPayload = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  badPayload[44] ^= 0x7f;
-  return [
-    Buffer.from([1]),
-    badMagic,
-    badVersion,
-    badMinorVersion,
-    badCompression,
-    badDeclaredPayloadLength,
-    badOversizedDeclaredPayloadLength,
-    badPadding,
-    badExcessivePadding,
-    badFlags,
-    badFieldBitsetFlags,
-    badChecksum,
-    badPayload,
-  ];
-}
-
 const PRIVACY_CAPABILITIES_ARCHIVE = privacyNoritoFrameWithPayload(0x50);
-const PRIVACY_BUILD_ARCHIVE = privacyNoritoFrameWithPayload(0x42);
-const PRIVACY_VERIFY_ARCHIVE = privacyNoritoFrameWithPayload(0x56);
-const PRIVACY_REQUEST_ARCHIVE = privacyNoritoFrameWithPayload(0x52);
 
 function malformedPrivacyNativeOutputArchives(schemaByte) {
   const archive = privacyNoritoFrameWithPayload(schemaByte);
@@ -199,48 +153,13 @@ function malformedPrivacyNativeOutputArchives(schemaByte) {
   ];
 }
 
-function wrongSchemaPrivacyRequestArchives() {
-  return [
-    PRIVACY_CAPABILITIES_ARCHIVE,
-    PRIVACY_BUILD_ARCHIVE,
-    PRIVACY_VERIFY_ARCHIVE,
-    privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
-    privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56),
-  ];
-}
-
-function completePrivacyBinding(overrides = {}) {
+function completePrivacyCapabilitiesBinding(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
       return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
     },
     privacyCapabilitiesV1() {
       return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
-    },
-    privacyProofRequestV1(
-      algorithmId,
-      entrypoint,
-      vkRef,
-      publicInputs,
-      witness,
-      proof,
-    ) {
-      assert.equal(typeof algorithmId, "string");
-      assert.equal(typeof entrypoint, "string");
-      assert.equal(typeof vkRef, "string");
-      assert.ok(Buffer.from(publicInputs).length > 0);
-      assert.ok(Buffer.isBuffer(publicInputs));
-      assert.ok(Buffer.isBuffer(witness));
-      assert.ok(Buffer.isBuffer(proof));
-      return Uint8Array.from(PRIVACY_REQUEST_ARCHIVE);
-    },
-    privacyBuildProofV1(request) {
-      assert.ok(Buffer.from(request).length > 0);
-      return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
-    },
-    privacyVerifyProofV1(request) {
-      assert.ok(Buffer.from(request).length > 0);
-      return Uint8Array.from(PRIVACY_VERIFY_ARCHIVE);
     },
     ...overrides,
   };
@@ -416,6 +335,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./nexus-app",
     "./norito",
     "./normalizers",
+    "./privacy-capabilities",
     "./sccp",
     "./smart-contract-deployment",
     "./sorafs",
@@ -423,6 +343,41 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./torii-browser",
     "./transaction-codec",
   ]);
+});
+
+test("package privacy capability policy is isolated behind its explicit subpath", () => {
+  assert.deepEqual(packageJson.exports["./privacy-capabilities"], {
+    browser: "./dist/privacyCapabilities.js",
+    import: "./dist/privacyCapabilities.js",
+    types: "./privacy-capabilities.d.ts",
+  });
+  const optionalExports = [
+    "getPrivacyCapabilitiesV1",
+    "parsePrivacyCapabilitySnapshotV1",
+    "PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1",
+    "PRIVACY_PROTOCOL_IDS_V1",
+    "PrivacyCapabilitySnapshotError",
+  ];
+  assert.deepEqual(
+    Object.keys(packagePrivacyCapabilitiesExports).sort(),
+    optionalExports.slice().sort(),
+  );
+  for (const name of optionalExports) {
+    assert.equal(Object.hasOwn(packageExports, name), false, `root export ${name}`);
+    assert.notEqual(
+      packagePrivacyCapabilitiesExports[name],
+      undefined,
+      `optional privacy export ${name}`,
+    );
+  }
+  assert.equal(
+    Object.hasOwn(packageExports.ToriiClient.prototype, "getPrivacyCapabilitiesV1"),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(packageExports.ToriiBrowserClient.prototype, "getPrivacyCapabilitiesV1"),
+    false,
+  );
 });
 
 test("package SCCP exports expose the exact Solana-aware inventory", () => {
@@ -654,489 +609,315 @@ test("package dist entrypoint exports only the canonical privacy capability brid
   }
   assert.equal(
     packageExports.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
-    64 * 1024 * 1024,
+    256 * 1024,
   );
   assert.equal(Number.isInteger(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION), true);
 });
 
-test("package dist privacy native availability clears request copies after failures", () => {
-  let throwingProofRequestProbe;
-  let badProofRequestOutput;
-  let throwingProbe;
-  let badOutputProbe;
-  let badOutput;
-
+test("package dist privacy native availability clears probed capability output", () => {
+  const acceptedOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
   withNativeBinding(
-    completePrivacyBinding({
-      privacyProofRequestV1(_algorithmId, _entrypoint, _vkRef, publicInputs) {
-        throwingProofRequestProbe = publicInputs;
-        throw new Error("proof-request probe failure after request copy");
+    completePrivacyCapabilitiesBinding({
+      privacyCapabilitiesV1() {
+        return acceptedOutput;
       },
     }),
-    () => assert.equal(isPrivacyNativeAvailable(), false),
-  );
-  withNativeBinding(
-    completePrivacyBinding({
-      privacyProofRequestV1() {
-        badProofRequestOutput = Buffer.from([0x52]);
-        return badProofRequestOutput;
-      },
-    }),
-    () => assert.equal(isPrivacyNativeAvailable(), false),
-  );
-  withNativeBinding(
-    completePrivacyBinding({
-      privacyBuildProofV1(request) {
-        throwingProbe = request;
-        throw new Error("probe failure after request copy");
-      },
-    }),
-    () => assert.equal(isPrivacyNativeAvailable(), false),
-  );
-  withNativeBinding(
-    completePrivacyBinding({
-      privacyVerifyProofV1(request) {
-        badOutputProbe = request;
-        badOutput = Buffer.from([0x56]);
-        return badOutput;
-      },
-    }),
-    () => assert.equal(isPrivacyNativeAvailable(), false),
-  );
-
-  assert.equal(throwingProofRequestProbe.every((value) => value === 0), true);
-  assert.deepEqual(badProofRequestOutput, Buffer.alloc(1));
-  assert.deepEqual(
-    Buffer.from(throwingProbe),
-    Buffer.alloc(privacyNoritoFrame(0x52).length),
+    () => assert.equal(isPrivacyNativeAvailable(), true),
   );
   assert.deepEqual(
-    Buffer.from(badOutputProbe),
-    Buffer.alloc(privacyNoritoFrame(0x52).length),
+    acceptedOutput,
+    Buffer.alloc(PRIVACY_CAPABILITIES_ARCHIVE.length),
   );
-  assert.deepEqual(badOutput, Buffer.alloc(1));
+
+  const rejectedOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+  rejectedOutput[0] = 0x00;
+  withNativeBinding(
+    completePrivacyCapabilitiesBinding({
+      privacyCapabilitiesV1() {
+        return rejectedOutput;
+      },
+    }),
+    () => assert.equal(isPrivacyNativeAvailable(), false),
+  );
+  assert.deepEqual(
+    rejectedOutput,
+    Buffer.alloc(PRIVACY_CAPABILITIES_ARCHIVE.length),
+  );
 });
 
-test("package dist privacy native wrappers reject invalid request archives", () => {
-  withNativeBinding(
-    completePrivacyBinding({
-      privacyBuildProofV1() {
-        assert.fail("invalid build request must not reach native dispatch");
-      },
-      privacyVerifyProofV1() {
-        assert.fail("invalid verify request must not reach native dispatch");
-      },
-    }),
-    () => {
-      for (const wrongSchemaArchive of wrongSchemaPrivacyRequestArchives()) {
-        assert.throws(
-          () => privacyBuildProofV1(Buffer.from(wrongSchemaArchive)),
-          /requestArchive must use the privacy request schema/,
-        );
-        assert.throws(
-          () => privacyVerifyProofV1(Uint8Array.from(wrongSchemaArchive)),
-          /requestArchive must use the privacy request schema/,
-        );
-      }
-      for (const malformedArchive of malformedPrivacyRequestArchives()) {
-        assert.throws(
-          () => privacyBuildProofV1(Buffer.from(malformedArchive)),
-          /requestArchive must be a valid Norito V1 archive/,
-        );
-        assert.throws(
-          () => privacyVerifyProofV1(Uint8Array.from(malformedArchive)),
-          /requestArchive must be a valid Norito V1 archive/,
-        );
-      }
+test("package dist privacy availability admits the capabilities-only first-release bridge", () => {
+  let capabilityCalls = 0;
+  const binding = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
     },
-  );
-});
-
-test("package dist privacy native wrappers sanitize native exceptions", () => {
-  const witness = Buffer.from("package-dist-private-witness-never-echo", "utf8");
-  const requestArchive = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
-  const capturedRequests = [];
-  const throwLeakingNativeError = (request) => {
-    if (request !== undefined) {
-      capturedRequests.push(request);
-      assert.notEqual(request, requestArchive);
-      assert.deepEqual(Buffer.from(request), PRIVACY_REQUEST_ARCHIVE);
-    }
-    throw new Error(`native panic included ${witness.toString("utf8")}`);
+    privacyCapabilitiesV1() {
+      capabilityCalls += 1;
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
   };
 
-  withNativeBinding(
-    completePrivacyBinding({
-      privacyCapabilitiesV1: throwLeakingNativeError,
-      privacyBuildProofV1: throwLeakingNativeError,
-      privacyVerifyProofV1: throwLeakingNativeError,
-    }),
-    () => {
-      for (const [operation, invoke] of [
-        ["privacyCapabilitiesV1", () => privacyCapabilitiesV1()],
-        ["privacyBuildProofV1", () => privacyBuildProofV1(requestArchive)],
-        ["privacyVerifyProofV1", () => privacyVerifyProofV1(requestArchive)],
-      ]) {
-        const error = captureThrown(invoke);
-        assert.match(error.message, new RegExp(`native ${operation} failed`));
-        assert.equal(error.cause, undefined);
-        assert.equal(String(error).includes(witness.toString("utf8")), false);
-        assert.equal(String(error.stack).includes(witness.toString("utf8")), false);
-      }
-    },
-  );
-
-  assert.equal(capturedRequests.length, 2);
-  for (const request of capturedRequests) {
-    assert.equal(request.every((value) => value === 0), true);
+  withNativeBinding(binding, () => {
+    assert.equal(isPrivacyNativeAvailable(), true);
+    assert.deepEqual(privacyCapabilitiesV1(), PRIVACY_CAPABILITIES_ARCHIVE);
+  });
+  assert.equal(capabilityCalls, 2);
+  for (const retired of [
+    "privacyProofRequestV1",
+    "privacyBuildProofV1",
+    "privacyVerifyProofV1",
+  ]) {
+    assert.equal(retired in binding, false);
+    assert.equal(retired in packageExports, false);
   }
-  assert.deepEqual(requestArchive, PRIVACY_REQUEST_ARCHIVE);
 });
 
-test("package dist privacy native wrappers respect sliced request archive views", () => {
-  const buildView = slicedPrivacyView(PRIVACY_REQUEST_ARCHIVE);
-  const verifyBacking = Uint8Array.from([
-    0x99,
-    0x88,
-    ...PRIVACY_REQUEST_ARCHIVE,
-    0x77,
-  ]);
-  const verifyView = new DataView(
-    verifyBacking.buffer,
-    2,
-    PRIVACY_REQUEST_ARCHIVE.length,
-  );
-  let buildRequest;
-  let verifyRequest;
-
+test("package dist privacy capability wrapper sanitizes native exceptions", () => {
+  const witness = "package-dist-private-witness-never-echo";
   withNativeBinding(
-    completePrivacyBinding({
-      privacyBuildProofV1(request) {
-        buildRequest = request;
-        assert.deepEqual(Buffer.from(request), PRIVACY_REQUEST_ARCHIVE);
-        return slicedPrivacyView(PRIVACY_BUILD_ARCHIVE);
-      },
-      privacyVerifyProofV1(request) {
-        verifyRequest = request;
-        assert.deepEqual(Buffer.from(request), PRIVACY_REQUEST_ARCHIVE);
-        const output = slicedPrivacyView(PRIVACY_VERIFY_ARCHIVE);
-        return new DataView(output.buffer, output.byteOffset, output.byteLength);
+    completePrivacyCapabilitiesBinding({
+      privacyCapabilitiesV1() {
+        throw new Error("native panic included " + witness);
       },
     }),
     () => {
-      assert.deepEqual(privacyBuildProofV1(buildView), PRIVACY_BUILD_ARCHIVE);
-      assert.deepEqual(privacyVerifyProofV1(verifyView), PRIVACY_VERIFY_ARCHIVE);
+      const error = captureThrown(() => privacyCapabilitiesV1());
+      assert.equal(error.message, "native privacyCapabilitiesV1 failed");
+      assert.equal(error.cause, undefined);
+      assert.equal(String(error).includes(witness), false);
+      assert.equal(String(error.stack).includes(witness), false);
+      assert.equal(isPrivacyNativeAvailable(), false);
     },
   );
-
-  assert.deepEqual(Buffer.from(buildView), PRIVACY_REQUEST_ARCHIVE);
-  assert.deepEqual(
-    Buffer.from(verifyBacking.subarray(2, 2 + PRIVACY_REQUEST_ARCHIVE.length)),
-    PRIVACY_REQUEST_ARCHIVE,
-  );
-  assert.equal(buildRequest.every((value) => value === 0), true);
-  assert.equal(verifyRequest.every((value) => value === 0), true);
 });
 
-test("package dist privacy native wrappers respect sliced native output archive views", () => {
+test("package dist privacy capability bridge rejects invalid ABI versions before dispatch", () => {
+  for (const abiVersion of [
+    PRIVACY_REQUIRED_BRIDGE_ABI_VERSION - 1,
+    String(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION),
+    Number.NaN,
+    Number.MAX_SAFE_INTEGER,
+  ]) {
+    let dispatched = false;
+    withNativeBinding(
+      completePrivacyCapabilitiesBinding({
+        connectNoritoBridgeAbiVersion() {
+          return abiVersion;
+        },
+        privacyCapabilitiesV1() {
+          dispatched = true;
+          return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+        },
+      }),
+      () => {
+        assert.equal(isPrivacyNativeAvailable(), false);
+        assert.throws(
+          () => privacyCapabilitiesV1(),
+          /requires the iroha_js_host native binding built with privacy FFI support/u,
+        );
+      },
+    );
+    assert.equal(dispatched, false);
+  }
+});
+
+test("package dist privacy capability wrapper respects sliced native output views", () => {
   const prefixLength = 3;
-  const capabilitiesBacking = Uint8Array.from([
+  const backing = Uint8Array.from([
     0xff,
     0x7f,
     0x50,
     ...PRIVACY_CAPABILITIES_ARCHIVE,
     0x24,
   ]);
-  const buildBacking = Uint8Array.from([
-    0xff,
-    0x7f,
-    0x42,
-    ...PRIVACY_BUILD_ARCHIVE,
-    0x13,
-  ]);
-  const verifyBacking = Uint8Array.from([
-    0xff,
-    0x7f,
-    0x56,
-    ...PRIVACY_VERIFY_ARCHIVE,
-    0x37,
-  ]);
+  let published;
 
   withNativeBinding(
-    completePrivacyBinding({
+    completePrivacyCapabilitiesBinding({
       privacyCapabilitiesV1() {
-        return capabilitiesBacking.subarray(
-          prefixLength,
-          prefixLength + PRIVACY_CAPABILITIES_ARCHIVE.length,
-        );
-      },
-      privacyBuildProofV1() {
         return new DataView(
-          buildBacking.buffer,
+          backing.buffer,
           prefixLength,
-          PRIVACY_BUILD_ARCHIVE.length,
-        );
-      },
-      privacyVerifyProofV1() {
-        return verifyBacking.subarray(
-          prefixLength,
-          prefixLength + PRIVACY_VERIFY_ARCHIVE.length,
+          PRIVACY_CAPABILITIES_ARCHIVE.length,
         );
       },
     }),
     () => {
-      const capabilitiesArchive = privacyCapabilitiesV1();
-      const buildArchive = privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE);
-      const verifyArchive = privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE);
-
-      assert.deepEqual(capabilitiesArchive, PRIVACY_CAPABILITIES_ARCHIVE);
-      assert.deepEqual(buildArchive, PRIVACY_BUILD_ARCHIVE);
-      assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
-
-      capabilitiesBacking[prefixLength] = 0x00;
-      buildBacking[prefixLength] = 0x00;
-      verifyBacking[prefixLength] = 0x00;
-
-      assert.deepEqual(capabilitiesArchive, PRIVACY_CAPABILITIES_ARCHIVE);
-      assert.deepEqual(buildArchive, PRIVACY_BUILD_ARCHIVE);
-      assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
+      published = privacyCapabilitiesV1();
     },
   );
+
+  assert.deepEqual(published, PRIVACY_CAPABILITIES_ARCHIVE);
+  assert.equal(backing[0], 0xff);
+  assert.equal(backing.at(-1), 0x24);
+  backing[prefixLength] = 0x00;
+  assert.deepEqual(published, PRIVACY_CAPABILITIES_ARCHIVE);
 });
 
-test("package dist privacy native wrappers accept max-padded request archives", () => {
-  withNativeBinding(completePrivacyBinding(), () => {
-    assert.deepEqual(
-      privacyBuildProofV1(privacyNoritoFrameWithPadding(0x52, 64)),
-      PRIVACY_BUILD_ARCHIVE,
-    );
-    assert.deepEqual(
-      privacyVerifyProofV1(privacyNoritoFrameWithPadding(0x52, 64)),
-      PRIVACY_VERIFY_ARCHIVE,
-    );
-  });
-});
-
-test("package dist privacy native wrappers accept complete field-bitset flags", () => {
-  const requestArchive = privacyNoritoFrameWithFlags(0x52, 0x26);
-  const buildArchive = privacyNoritoFrameWithFlags(0x42, 0x26);
-  const verifyArchive = privacyNoritoFrameWithFlags(0x56, 0x26);
-
+test("package dist privacy capability wrapper accepts maximum Norito header padding", () => {
+  const paddedArchive = privacyNoritoFrameWithPadding(0x50, 64);
   withNativeBinding(
-    completePrivacyBinding({
-      privacyBuildProofV1(request) {
-        assert.deepEqual(Buffer.from(request), requestArchive);
-        return buildArchive;
-      },
-      privacyVerifyProofV1(request) {
-        assert.deepEqual(Buffer.from(request), requestArchive);
-        return verifyArchive;
-      },
-    }),
-    () => {
-      assert.deepEqual(privacyBuildProofV1(requestArchive), buildArchive);
-      assert.deepEqual(privacyVerifyProofV1(requestArchive), verifyArchive);
-    },
-  );
-});
-
-test("package dist privacy native wrappers defensively copy native output archives", () => {
-  const capabilitiesOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
-  const buildOutput = Buffer.from(PRIVACY_BUILD_ARCHIVE);
-  const verifyBacking = Uint8Array.from(
-    Buffer.concat([Buffer.from([0x00]), PRIVACY_VERIFY_ARCHIVE, Buffer.from([0x00])]),
-  );
-  const verifyOutput = verifyBacking.subarray(1, 1 + PRIVACY_VERIFY_ARCHIVE.length);
-
-  withNativeBinding(
-    completePrivacyBinding({
+    completePrivacyCapabilitiesBinding({
       privacyCapabilitiesV1() {
-        return capabilitiesOutput;
+        return Buffer.from(paddedArchive);
       },
-      privacyBuildProofV1() {
-        return buildOutput;
+    }),
+    () => assert.deepEqual(privacyCapabilitiesV1(), paddedArchive),
+  );
+});
+
+test("package dist privacy capability wrapper accepts complete field-bitset flags", () => {
+  const flaggedArchive = privacyNoritoFrameWithFlags(0x50, 0x26);
+  withNativeBinding(
+    completePrivacyCapabilitiesBinding({
+      privacyCapabilitiesV1() {
+        return Buffer.from(flaggedArchive);
       },
-      privacyVerifyProofV1() {
-        return verifyOutput;
+    }),
+    () => assert.deepEqual(privacyCapabilitiesV1(), flaggedArchive),
+  );
+});
+
+test("package dist privacy capability wrapper defensively copies native output", () => {
+  const nativeOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+  let published;
+
+  withNativeBinding(
+    completePrivacyCapabilitiesBinding({
+      privacyCapabilitiesV1() {
+        return nativeOutput;
       },
     }),
     () => {
-      const capabilitiesArchive = privacyCapabilitiesV1();
-      assert.notEqual(capabilitiesArchive, capabilitiesOutput);
-      assert.deepEqual(capabilitiesArchive, PRIVACY_CAPABILITIES_ARCHIVE);
-      capabilitiesArchive[0] = 0x7f;
-      assert.deepEqual(capabilitiesOutput, PRIVACY_CAPABILITIES_ARCHIVE);
-
-      const buildArchive = privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE);
-      assert.notEqual(buildArchive, buildOutput);
-      assert.deepEqual(buildArchive, PRIVACY_BUILD_ARCHIVE);
-      buildArchive[0] = 0x7f;
-      assert.deepEqual(buildOutput, PRIVACY_BUILD_ARCHIVE);
-
-      const verifyArchive = privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE);
-      assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
-      verifyBacking[1] = 0x7f;
-      assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
+      published = privacyCapabilitiesV1();
     },
   );
+
+  assert.notEqual(published, nativeOutput);
+  assert.deepEqual(published, PRIVACY_CAPABILITIES_ARCHIVE);
+  published[0] = 0x7f;
+  assert.deepEqual(nativeOutput, PRIVACY_CAPABILITIES_ARCHIVE);
+  nativeOutput[1] = 0x7f;
+  assert.equal(published[1], PRIVACY_CAPABILITIES_ARCHIVE[1]);
 });
 
-test("package declarations mark privacy capability metadata readonly", () => {
-  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+test("package declarations expose readonly snapshot metadata without retired privacy types", () => {
+  const rootDeclarations = readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const optionalDeclarations = readFileSync(
+    new URL("../privacy-capabilities.d.ts", import.meta.url),
+    "utf8",
+  );
+
+  for (const retiredPattern of [
+    /\bexport interface PrivacyCapabilities\s*\{/u,
+    /\bexport interface PrivacyProductionGate\s*\{/u,
+    /\bexport function privacyProofRequestV1\s*\(/u,
+    /\bexport function privacyBuildProofV1\s*\(/u,
+    /\bexport function privacyVerifyProofV1\s*\(/u,
+    /\bexport type PrivacyBackendTag\s*=/u,
+    /\bexport interface PrivacyVerifierKey/u,
+    /\bexport interface RegisterPrivacyVerifierKeyInstructionInput/u,
+    /\bexport function buildRegisterPrivacyVerifierKeyInstruction\s*\(/u,
+    /\bexport function buildRetirePrivacyVerifierKeyInstruction\s*\(/u,
+    /\bexport function noritoEncodePrivacyProofEnvelope\s*\(/u,
+    /\bexport function noritoDecodePrivacyProofEnvelope\s*\(/u,
+  ]) {
+    assert.doesNotMatch(rootDeclarations, retiredPattern);
+    assert.doesNotMatch(optionalDeclarations, retiredPattern);
+  }
   assert.match(
-    declarations,
-    /export interface PrivacyCapabilities[\s\S]*readonly privacyAlgorithms:[\s\S]*readonly privacyCriteria:/,
+    optionalDeclarations,
+    /export interface PrivacyCapabilitySnapshotV1\s*\{[\s\S]*readonly version:\s*1;[\s\S]*readonly committed_height:\s*number;[\s\S]*readonly consensus_policy:\s*PrivacyConsensusPolicyV1;[\s\S]*readonly protocols:\s*readonly PrivacyCapabilityRowV1\[\];/u,
   );
   assert.match(
-    declarations,
-    /export interface PrivacyProductionGate[\s\S]*readonly ready:[\s\S]*readonly missing:/,
+    optionalDeclarations,
+    /export declare class PrivacyCapabilitySnapshotError extends TypeError\s*\{[\s\S]*readonly path:\s*string;/u,
+  );
+  assert.match(
+    rootDeclarations,
+    /export type OpenVerifyBackendTag = "halo2-ipa-pasta" \| "stark";/u,
+  );
+  assert.match(
+    rootDeclarations,
+    /export type ToriiVerifierBackendLabelV1 =\s*\| "halo2\/ipa"\s*\| "halo2\/pasta\/kaigi-roster-v1"\s*\| "halo2\/pasta\/kaigi-usage-v1"\s*\| "halo2\/pasta\/ivm-overlay-bind"\s*\| "halo2\/pasta\/ivm-execution-v1"\s*\| "halo2\/pasta\/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"\s*\| "halo2\/pasta\/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"\s*\| "halo2\/pasta\/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-full-merkle16-axiom-poseidon-v3"\s*\| "halo2\/pasta\/confidential-unshield-change-merkle16-axiom-poseidon-v4"\s*\| "stark\/fri"\s*\| "stark\/fri\/sha256-goldilocks"\s*\| "stark\/fri\/poseidon2-goldilocks"\s*\| "stark\/fri\/sha256_goldilocks\.v1";/u,
   );
 });
 
-test("package dist privacy native wrappers reject invalid Norito-framed output archives", () => {
-  const badMagic = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
-  badMagic[0] = 0x00;
-  const badVersion = Buffer.from(PRIVACY_BUILD_ARCHIVE);
-  badVersion[4] = 1;
-  const badMinorVersion = Buffer.from(PRIVACY_BUILD_ARCHIVE);
-  badMinorVersion[5] = 1;
-  const badCompression = Buffer.from(PRIVACY_BUILD_ARCHIVE);
-  badCompression[22] = 1;
-  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(0x42, 6n);
-  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
-    0x42,
-    0x8000000000000000n,
-  );
-  const badPadding = Buffer.concat([PRIVACY_VERIFY_ARCHIVE, Buffer.from([0x7f])]);
-  const badExcessivePadding = privacyNoritoFrameWithPadding(0x42, 65);
-  const badFlags = Buffer.from(PRIVACY_BUILD_ARCHIVE);
-  badFlags[39] = 0x08;
-  const badFieldBitsetFlags = Buffer.from(PRIVACY_BUILD_ARCHIVE);
-  badFieldBitsetFlags[39] = 0x20;
-  const badChecksum = Buffer.concat([PRIVACY_VERIFY_ARCHIVE, Buffer.alloc(1)]);
-  badChecksum[31] = 0x01;
-  const badPayload = Buffer.from(privacyNoritoFrameWithPayload(0x57));
-  badPayload[44] ^= 0x7f;
-
-  const cases = [
-    ["privacyCapabilitiesV1", { privacyCapabilitiesV1: () => badMagic }, () => privacyCapabilitiesV1()],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badVersion }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badMinorVersion }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badCompression }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badDeclaredPayloadLength }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badOversizedDeclaredPayloadLength }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badFlags }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badFieldBitsetFlags }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyBuildProofV1", { privacyBuildProofV1: () => badExcessivePadding }, () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyVerifyProofV1", { privacyVerifyProofV1: () => badPadding }, () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyVerifyProofV1", { privacyVerifyProofV1: () => badChecksum }, () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE)],
-    ["privacyCapabilitiesV1", { privacyCapabilitiesV1: () => badPayload }, () => privacyCapabilitiesV1()],
-  ];
-  for (const [operation, override, invoke] of cases) {
-    withNativeBinding(completePrivacyBinding(override), () => {
-      assert.throws(
-        invoke,
-        new RegExp(`native ${operation} returned invalid Norito V1 archive`),
-      );
-    });
+test("package dist privacy capability wrapper rejects malformed Norito output archives", () => {
+  for (const malformedArchive of malformedPrivacyNativeOutputArchives(0x50)) {
+    withNativeBinding(
+      completePrivacyCapabilitiesBinding({
+        privacyCapabilitiesV1() {
+          return Buffer.from(malformedArchive);
+        },
+      }),
+      () => {
+        assert.throws(
+          () => privacyCapabilitiesV1(),
+          /native privacyCapabilitiesV1 returned invalid Norito V1 archive/u,
+        );
+      },
+    );
   }
 });
 
-test("package dist privacy native wrappers reject oversized request archives", () => {
+test("package dist privacy capability wrapper rejects oversized native output", () => {
   const oversized = Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
   withNativeBinding(
-    completePrivacyBinding({
-      privacyBuildProofV1() {
-        assert.fail("oversized build request must not reach native dispatch");
-      },
-      privacyVerifyProofV1() {
-        assert.fail("oversized verify request must not reach native dispatch");
+    completePrivacyCapabilitiesBinding({
+      privacyCapabilitiesV1() {
+        return oversized;
       },
     }),
     () => {
-      assert.throws(() => privacyBuildProofV1(oversized), /must not exceed/);
-      assert.throws(() => privacyVerifyProofV1(oversized), /must not exceed/);
+      assert.throws(
+        () => privacyCapabilitiesV1(),
+        /native privacyCapabilitiesV1 returned oversized output/u,
+      );
     },
   );
+  assert.equal(oversized[0], 0x7f);
+  assert.equal(oversized.at(-1), 0x7f);
 });
 
-test("package dist privacy native availability probes reject unsafe raw output", () => {
+test("package dist privacy native availability rejects every unsafe capability output", () => {
   const overrides = [
-    { privacyCapabilitiesV1: () => "json is not Norito" },
-    { privacyProofRequestV1: () => "json is not Norito" },
-    { privacyProofRequestV1: () => Buffer.from(PRIVACY_BUILD_ARCHIVE) },
-    { privacyBuildProofV1: () => new Uint8Array() },
-    { privacyVerifyProofV1: () => undefined },
-    { privacyBuildProofV1: () => [0x42] },
-    {
-      privacyCapabilitiesV1: () =>
-        Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f),
-    },
-    {
-      privacyProofRequestV1: () =>
-        Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f),
-    },
-    {
-      privacyBuildProofV1: () =>
-        Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f),
-    },
-    {
-      privacyVerifyProofV1: () =>
-        Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f),
-    },
+    () => "json is not Norito",
+    () => new Uint8Array(),
+    () => undefined,
+    () => [0x50],
+    () => Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f),
+    ...malformedPrivacyNativeOutputArchives(0x50).map(
+      (archive) => () => Buffer.from(archive),
+    ),
   ];
-  for (const archive of malformedPrivacyNativeOutputArchives(0x50)) {
-    overrides.push({ privacyCapabilitiesV1: () => Buffer.from(archive) });
-  }
-  for (const archive of malformedPrivacyNativeOutputArchives(0x52)) {
-    overrides.push({ privacyProofRequestV1: () => Buffer.from(archive) });
-  }
-  for (const archive of malformedPrivacyNativeOutputArchives(0x42)) {
-    overrides.push({ privacyBuildProofV1: () => Buffer.from(archive) });
-  }
-  for (const archive of malformedPrivacyNativeOutputArchives(0x56)) {
-    overrides.push({ privacyVerifyProofV1: () => Buffer.from(archive) });
-  }
-  for (const override of overrides) {
-    withNativeBinding(completePrivacyBinding(override), () => {
-      assert.equal(isPrivacyNativeAvailable(), false);
-    });
+  for (const privacyCapabilitiesOverride of overrides) {
+    withNativeBinding(
+      completePrivacyCapabilitiesBinding({
+        privacyCapabilitiesV1: privacyCapabilitiesOverride,
+      }),
+      () => assert.equal(isPrivacyNativeAvailable(), false),
+    );
   }
 });
 
-test("package dist privacy native wrappers reject wrong-operation result schemas", () => {
-  for (const [operation, override, invoke] of [
-    [
-      "privacyCapabilitiesV1",
-      {
-        privacyCapabilitiesV1: () =>
-          privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42),
+test("package dist privacy capability wrapper rejects wrong result schemas", () => {
+  const wrongSchemaArchive = privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42);
+  withNativeBinding(
+    completePrivacyCapabilitiesBinding({
+      privacyCapabilitiesV1() {
+        return Buffer.from(wrongSchemaArchive);
       },
-      () => privacyCapabilitiesV1(),
-    ],
-    [
-      "privacyBuildProofV1",
-      {
-        privacyBuildProofV1: () =>
-          privacyNoritoFrameWithSchemaOverride(0x42, 6, 0x56),
-      },
-      () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
-    ],
-    [
-      "privacyVerifyProofV1",
-      {
-        privacyVerifyProofV1: () =>
-          privacyNoritoFrameWithSchemaOverride(0x56, 21, 0x50),
-      },
-      () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
-    ],
-  ]) {
-    withNativeBinding(completePrivacyBinding(override), () => {
+    }),
+    () => {
       assert.equal(isPrivacyNativeAvailable(), false);
       assert.throws(
-        invoke,
-        new RegExp(`native ${operation} returned unexpected privacy result schema`),
+        () => privacyCapabilitiesV1(),
+        /native privacyCapabilitiesV1 returned unexpected privacy result schema/u,
       );
-    });
-  }
+    },
+  );
 });

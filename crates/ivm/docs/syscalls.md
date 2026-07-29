@@ -76,30 +76,6 @@ Query syscall (Norito)
 Vendor syscall (Norito)
 - `0xA0` expects `r10=&NoritoBytes(InstructionBox)` and a mandatory operation tag in `r11`: `1` for `SubmitBallot`, `2` for `Unshield`, or `3` for `RecordSccpMessage`. Tag `0`, unknown tags, mismatched instruction types, and other instruction types are rejected.
 
-Examples (dev envelopes; mock WSV host only)
-- Execute query (JSON envelope) `0xA1`: set `r10` to a `&Json` TLV with `{ "type": "wsv.get_balance", "payload": { "account_id": "…", "asset_id": "…" } }`. On success, `r10` receives a host-owned pointer to a `&Json` TLV like `{ "balance": 42 }`.
-- List triggers (JSON envelope): `{ "type": "wsv.list_triggers", "payload": {} }` → `{ "triggers": [{"name":"…","enabled":true}, …] }` via `r10`.
-
-JSON Envelope Matrix (dev)
-- Queries via `0xA1` (EXECUTE_QUERY): `wsv.get_balance`, `wsv.list_triggers`, `wsv.has_permission` (returns a `&Json` TLV in `r10`).
-- Admin via `0xA0` (EXECUTE_INSTRUCTION): `wsv.create_role`, `wsv.grant_role`, `wsv.revoke_role`, `wsv.grant_permission`, `wsv.revoke_permission`, `wsv.create_trigger`, `wsv.set_trigger_enabled`, `wsv.remove_trigger`, and helpers for FT/NFT mint/burn/transfer.
-- Notes: The JSON envelope path is intended for tests/dev tooling; production contracts should prefer Norito TLVs. Hosts enforce the same permission checks as dedicated syscalls.
-
-Minimal envelope table
-| Envelope id              | Opcode | Args TLV  | Return        |
-|--------------------------|--------|----------|---------------|
-| `wsv.get_balance`        | 0xA1   | `&Json`  | `ptr (&Json)` |
-| `wsv.list_triggers`      | 0xA1   | `&Json`  | `ptr (&Json)` |
-| `wsv.has_permission`     | 0xA1   | `&Json`  | `ptr (&Json)` |
-| `wsv.create_role`        | 0xA0   | `&Json`  | `u64=0`       |
-| `wsv.grant_role`         | 0xA0   | `&Json`  | `u64=0`       |
-| `wsv.revoke_role`        | 0xA0   | `&Json`  | `u64=0`       |
-| `wsv.grant_permission`   | 0xA0   | `&Json`  | `u64=0`       |
-| `wsv.revoke_permission`  | 0xA0   | `&Json`  | `u64=0`       |
-| `wsv.create_trigger`     | 0xA0   | `&Json`  | `u64=0`       |
-| `wsv.set_trigger_enabled`| 0xA0   | `&Json`  | `u64=0`       |
-| `wsv.remove_trigger`     | 0xA0   | `&Json`  | `u64=0`       |
-
 Ordering and OUTPUT
 - Syscalls execute in program order. Hosts must apply their side effects in the order received.
 - `COMMIT_OUTPUT (0xFE)` makes the VM OUTPUT region visible to the host. Programs may write multiple times to OUTPUT, but content becomes observable only after `COMMIT_OUTPUT` runs. If `COMMIT_OUTPUT` is called multiple times, hosts should treat the last call’s contents as final for that run.
@@ -168,6 +144,7 @@ Lifecycle / Utility
 - 0x94 SM4_CCM_SEAL — Args: `r10=&Blob(key16)`, `r11=&Blob(nonce[7..13])`, `r12=&Blob(aad)` *(0 => empty)*, `r13=&Blob(plaintext)`, `r14=tag_len:u64` *(0 => 16)* → Return: `ptr (&Blob(ciphertext || tag))` — Gas: G_sm4 + bytes
 - 0x95 SM4_CCM_OPEN — Args: `r10=&Blob(key16)`, `r11=&Blob(nonce[7..13])`, `r12=&Blob(aad)` *(0 => empty)*, `r13=&Blob(ciphertext || tag)`, `r14=tag_len:u64` *(0 => 16)* → Return: `ptr (&Blob(plaintext))` or `0` on failure — Gas: G_sm4 + bytes
 - 0x96 SHA256_HASH, 0x97 SHA3_HASH, 0x98 BLAKE2B256_HASH, 0x99 KECCAK256_HASH, and 0x9A IROHA_HASH all take `r10=&Blob(message)` and return `r10=ptr (&Blob(digest))`. They use fixed CPU implementations or byte-equivalent acceleration only, so the returned digest is byte-identical across machines. Gas: G_hash + bytes.
+- 0xF0 ALLOC — Args: `r10=bytes:u64` → Return: `ptr (r10)` — Gas: G_alloc + bytes
 - 0xF1 GET_PUBLIC_INPUT — Args: `r10=&Name` → Return: `ptr (&Tlv)` — Gas: G_get_pub + bytes
   - Reads a public input by name from the on-chain registry `Parameters.custom["ivm_public_inputs"]`.
   - Registry entries are JSON objects: `{ "name": "<Name>", "type_id": <u16>, "tlv_hex": "<hex>" }` with optional `gas_base`/`gas_per_byte` (`tlv_hex` is the full TLV envelope; `0x` prefix allowed).
@@ -377,7 +354,7 @@ Smart‑contract helpers (Norito)
 Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010000 QUERY_EXECUTE_NORITO — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr (&NoritoBytes(QueryResponse))` — Gas: G_scq
 - 0x010001 CORE_QUERY_GET — Args: `r10=CoreQueryEntityTagV1`, `r11=&typed entity id` → `r10=Option<View>` sum handle. The active projection is flattened in declaration order and contains exact typed leaf TLVs.
-- 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<i64>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.
+- 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<int>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.
 - 0x010006..0x010008 retain the canonical-Norito specialist reads for named parameters, contract manifests, and contract instances. Parameter keys are `&Name`, manifest keys are `&NoritoBytes(Hash)`, and instance keys are either `&NoritoBytes(ContractAddress)` or `&Name(alias)`; untyped `NoritoBytes(Name)` carriers are rejected. Core and specialist reads use deterministic item/byte gas schedules.
 - `QUERY_GET_PARAMETER` accepts canonical system parameter names such as `block.max_transactions`, `transaction.max_instructions`, `smart_contract.fuel`, and exact custom parameter names.
 - 0x010020 SYSVAR_CHAIN_ID — Args: none → `ptr (&Blob(chain_id))` or `0` — Gas: G_sysvar + bytes
@@ -412,28 +389,13 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010036 STATE_VALUE_DECODE — Args: `r10=&NoritoBytes(StateValueSchemaV1), r11=&NoritoBytes(StateValueRecordV1)` → `ptr (&Blob(pad:u8 then [u64; word_count]))` — Gas: G_state_value + schema + record + pointers + output
   - Compiler-internal decoder for scalars, structs, tuples, `Option`, and `Result`. Missing map entries are handled by the caller's outer `Option`; a zero record pointer, non-canonical inactive branch, malformed typed leaf, or different schema hash is rejected.
 
-JSON envelope support for EXECUTE_INSTRUCTION
-- The mock host accepts a JSON “envelope” in INPUT for `EXECUTE_INSTRUCTION` to execute a subset of instructions directly without relying on Norito bytes.
-- Envelope format:
-  - `{ "type": "<id>", "payload": { ... } }`
-  - `<id>` may be one of:
-    - ZK: `zk.RegisterZkAsset`, `zk.Shield`, `zk.ZkTransfer`, `zk.Unshield`, `zk.CreateElection`, `zk.SubmitBallot`, `zk.FinalizeElection`
-    - WSV helpers: `wsv.mint_asset`, `wsv.burn_asset`, `wsv.transfer_asset`,
-      `wsv.nft_mint_asset`,
-      `wsv.nft_transfer_asset`, `wsv.nft_burn_asset`, `wsv.nft_set_metadata`,
-      `wsv.register_domain`, `wsv.register_account`, `wsv.register_asset_definition`,
-      `wsv.create_role`, `wsv.delete_role`, `wsv.grant_role`, `wsv.revoke_role`,
-      `wsv.grant_permission`, `wsv.revoke_permission`, `wsv.create_trigger`,
-      `wsv.remove_trigger`, `wsv.set_trigger_enabled`, `wsv.register_peer`, `wsv.unregister_peer`
-- Payload examples:
-  - Shield:
-    - `{"type":"zk.Shield","payload":{"asset":"<asset-definition-id>","from":"<account>","amount":3,"note_commitment":[7,...,7],"enc_payload":{"version":1,"ephemeral_pubkey":[0,...,0],"nonce":[0,...,0],"ciphertext":""}}}`
-  - Mint asset:
-    - `{"type":"wsv.mint_asset","payload":{"account_id":"<account>","asset_id":"<base58-asset-definition-id>","amount":100}}`
-- Notes:
-  - The JSON envelope is intended for tests and developer tooling; production smart‑contracts should prefer Norito TLVs generated by the compiler.
-  - Public asset ids are bare Base58 asset-definition ids. Internal balance buckets may bind asset and account state together, but those are not public `asset_id` values.
-  - The host enforces the same permission checks as the dedicated syscalls (`MINT_ASSET`, `BURN_ASSET`, etc.).
+Canonical instruction bridge
+- `EXECUTE_INSTRUCTION` accepts only a pointer-ABI `NoritoBytes` payload containing the canonical
+  Norito frame of one data-model `InstructionBox`. Register `r11` must contain the matching
+  operation tag: `1` for `SubmitBallot`, `2` for `Unshield`, or `3` for `RecordSccpMessage`.
+- JSON pointers, raw JSON envelopes, direct concrete-instruction frames, alternate-layout Norito
+  frames, tag `0`, unknown tags, mismatched instruction types, and all other instruction types are
+  rejected. There is no compatibility decoding path.
 - 0xA1 EXECUTE_QUERY — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr` — Gas: G_scq
 - 0xA2 CREATE_NFTS_FOR_ALL_USERS — Args: none → `u64=count` — Gas: G_create_nfts_all
 - 0xA3 SET_SMARTCONTRACT_EXECUTION_DEPTH — Args: `r10=depth:u64` → `u64=prev` — Gas: G_sc_depth
@@ -506,8 +468,9 @@ Hardware / Proofs
   - Writes a compact proof for the register commitment using the same layout as GET_MERKLE_COMPACT.
 
 VRF
-- 0x66 VRF_VERIFY — Args: `r10=&NoritoBytes(VrfVerifyRequest{variant:u8, pk:bytes, proof:bytes, chain_id:bytes, input:bytes})` → Return: `r10=ptr (&Blob(32-byte output))`, `r11=status:u64` — Gas: G_verify + bytes
-  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=unknown_variant`, `4=bad_pk`, `5=bad_proof`, `6=verify_fail`, `7=oom`.
+- 0x66 VRF_VERIFY — Args: `r10=&NoritoBytes(VrfVerifyRequest{variant:u8, pk:bytes, proof:bytes, chain_id:bytes, input:bytes})`, canonical frame at most 65,536 bytes → Return: `r10=ptr (&Blob(32-byte output))`, `r11=status:u64` — Gas: `64 + 250,000 × examined_items + 5 × canonical_request_bytes`
+  - Status codes: `0=ok`, `1=type_mismatch`, `2=decode_error`, `3=unknown_variant`, `4=bad_pk`, `5=bad_proof`, `6=verify_fail`.
+  - Canonical-decode failures examine zero items. Every decoded request whose chain, variant, key, proof, or pairing validation begins examines one item. Output encoding/allocation failures trap after charging that item.
   - When the host is configured with a chain_id, requests with a different `chain_id` are rejected with `r11=8 (chain_mismatch)`.
   - Proof: BLS signature over `Hash("iroha:vrf:v1:input|" || chain_id || "|" || input)` using VRF-specific DSTs:
     - G2 hash: `"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1"`
@@ -515,9 +478,11 @@ VRF
     - Output: `Hash("iroha:vrf:v1:output" || canonical_proof_bytes)`.
   - Encodings: pk and proof MUST be canonical compressed encodings; infinity/non-subgroup are rejected.
   - Variants: `1 = SigInG2 (pk=G1 48B, proof=G2 96B)`, `2 = SigInG1 (pk=G2 96B, proof=G1 48B)`.
+  - Both VRF verification syscalls decode with the shared V1 resource budget: at most 65,536 elements in any sequence and cumulatively, at most 65,536 bytes in one field, at most 524,288 cumulative allocated bytes, and nesting depth at most 16.
 
-- 0x67 VRF_VERIFY_BATCH — Args: `r10=&NoritoBytes(VrfVerifyBatchRequest{items: [VrfVerifyRequest]})` → Return: `r10=ptr (&NoritoBytes(Vec<[u8;32]>))`, `r11=status:u64`, `r12=fail_index?:u64` — Gas: G_verify + bytes
+- 0x67 VRF_VERIFY_BATCH — Args: `r10=&NoritoBytes(VrfVerifyBatchRequest{items: [VrfVerifyRequest]})`, 1 through 16 items, canonical frame at most 65,536 bytes → Return: `r10=ptr (&NoritoBytes(Vec<[u8;32]>))`, `r11=status:u64`, `r12=fail_index?:u64` — Gas: `64 + 250,000 × examined_items + 5 × canonical_request_bytes`
   - Verifies each item; on success returns a Norito-encoded vector of 32‑byte outputs (order preserved). On failure, returns `r10=0`, `r11` = error code, `r12` = index (0‑based) of the first failing item.
+  - Empty and over-16 batches fail with `r11=9 (batch_bound)` and `r12=u64::MAX` before backend or response-allocation work. Canonical-decode and batch-bound failures examine zero items. The VM reserves 16 items, then deterministically refunds every unexamined item, including the tail after the first failing item.
   - If the host is configured with a chain_id, all items must match it; otherwise batch fails with `r11=8 (chain_mismatch)` and `r12` set to the first offending index.
 
 - 0x7E VRF_EPOCH_SEED — Args: `r10=&NoritoBytes(VrfEpochSeedRequest{epoch:u64, fallback_to_latest:bool})` → Return: `r10=ptr (&NoritoBytes(VrfEpochSeedResponse{found:bool, epoch:u64, seed:[u8;32]}))`, `r11=status:u64` — Gas: G_vote_get + bytes
@@ -623,8 +588,8 @@ node enforces that policy unconditionally.
 | 0x63 | ZK_VOTE_VERIFY_TALLY | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v2 + bytes |
 | 0x64 | ZK_ROOTS_GET | r10=&NoritoBytes(RootsGetRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_roots_get@ivm.core/v2 + bytes |
 | 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 + bytes |
-| 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
-| 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 + bytes |
+| 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest), canonical frame <=65536 bytes | r10=ptr (&Blob(32-byte output)), r11=status:u64 | 64 + 250,000 per examined item + 5 per canonical request byte |
+| 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest), 1..=16 items, canonical frame <=65536 bytes | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | 64 + 250,000 per examined item + 5 per canonical request byte |
 | 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | 250,000 per proof + 5 per encoded byte + bounded per-proof archive/status bytes |
 | 0x77 | TLV_LEN | r10=&Tlv | r10=payload_len:u64 | asset:gas/G_tlv_len@ivm.core/v2 + bytes |
 | 0x79 | JSON_GET_JSON | r10=&Json(object), r11=&Name(key) | r10=Option<Json> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
@@ -715,7 +680,7 @@ node enforces that policy unconditionally.
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0x10000 | QUERY_EXECUTE_NORITO | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10001 | CORE_QUERY_GET | r10=CoreQueryEntityTagV1:u64, r11=&typed entity id | r10=Option<View> sum handle (typed leaf TLVs) | asset:gas/G_scq@ivm.core/v2 + query items + encoded bytes |
-| 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<i64> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
+| 0x10002 | CORE_QUERY_PAGE | r10=CoreQueryEntityTagV1:u64, r11=offset:i64 bits, r12=limit:1..=64 | r10=List<View,64> handle, r11=Option<int> sum handle | asset:gas/G_scq@ivm.core/v2 + offset + query items + encoded bytes |
 | 0x10006 | QUERY_GET_PARAMETER | r10=&NoritoBytes(Name) | r10=ptr (&NoritoBytes(Parameter)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10007 | QUERY_GET_CONTRACT_MANIFEST | r10=&NoritoBytes(ContractAddress | Hash) | r10=ptr (&NoritoBytes(ContractManifest)) | asset:gas/G_scq@ivm.core/v2 |
 | 0x10008 | QUERY_GET_CONTRACT_INSTANCE | r10=&NoritoBytes(ContractAddress | Name) | r10=ptr (&NoritoBytes(ContractInstance)) | asset:gas/G_scq@ivm.core/v2 |

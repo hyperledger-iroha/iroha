@@ -620,7 +620,7 @@ impl BoundProgressAppendIntentV1 {
     fn computed_integrity_hash(&self) -> Option<Hash> {
         let mut canonical = self.clone();
         canonical.integrity_hash = Hash::prehashed([0; Hash::LENGTH]);
-        norito::to_bytes(&canonical).ok().map(|bytes| {
+        norito::encode_canonical(&canonical).ok().map(|bytes| {
             Hash::new_from_chunks(&[BOUND_PROGRESS_APPEND_INTENT_DIGEST_DOMAIN, &bytes])
         })
     }
@@ -5618,7 +5618,7 @@ impl Kura {
             ));
         }
         let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let stage = norito::decode_from_bytes::<CanonicalAssociationStageV1>(&bytes)
+        let stage = norito::decode_canonical::<CanonicalAssociationStageV1>(&bytes)
             .map_err(|error| Error::NoritoFrame(error.into()))?;
         let _ = self.validate_canonical_association_stage(&stage)?;
         Ok(Some(stage))
@@ -5639,7 +5639,7 @@ impl Kura {
             merge_entry: merge_entry.cloned(),
         };
         let _ = self.validate_canonical_association_stage(&stage)?;
-        let bytes = norito::to_bytes(&stage).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(&stage).map_err(Error::NoritoFrame)?;
         if u64::try_from(bytes.len())? > MAX_CANONICAL_ASSOCIATION_STAGE_BYTES {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -6335,7 +6335,7 @@ impl Kura {
             lane_incarnation: Hash::prehashed([u8::MAX; Hash::LENGTH]),
             entries,
         };
-        let encoded_len = norito::to_bytes(&maximum_intent)?.len();
+        let encoded_len = norito::encode_canonical(&maximum_intent)?.len();
         if encoded_len == 0 || encoded_len > shared_budget {
             return Err(Error::PruneIntentConflict(
                 "configured Native AMX evidence retention encodes a prune journal larger than the shared sidecar budget"
@@ -8336,7 +8336,7 @@ impl Kura {
     ) -> Option<std::fs::File> {
         let build_path = Self::bound_progress_append_build_path(index_path);
         let intent_path = Self::bound_progress_append_intent_path(index_path);
-        let bytes = match norito::to_bytes(intent) {
+        let bytes = match norito::encode_canonical(intent) {
             Ok(bytes)
                 if !bytes.is_empty() && bytes.len() <= BOUND_PROGRESS_APPEND_INTENT_MAX_BYTES =>
             {
@@ -9237,7 +9237,7 @@ impl Kura {
         bytes: &[u8],
     ) -> Result<MergeLedgerCarrierRecord> {
         let record =
-            norito::decode_from_bytes::<MergeLedgerCarrierRecord>(bytes).map_err(|err| {
+            norito::decode_canonical::<MergeLedgerCarrierRecord>(bytes).map_err(|err| {
                 Error::MergeCarrierConflict(format!(
                     "carrier record {} is not exact framed Norito: {err}",
                     source_path.display()
@@ -9245,7 +9245,6 @@ impl Kura {
             })?;
         if record.version != 1
             || record.block_height == 0
-            || norito::to_bytes(&record).map_err(Error::NoritoFrame)? != bytes
             || self.merge_carrier_path(record.block_height) != canonical_path
         {
             return Err(Error::MergeCarrierConflict(format!(
@@ -9500,7 +9499,7 @@ impl Kura {
             )));
         }
         let path = self.merge_carrier_path(record.block_height);
-        let bytes = norito::to_bytes(&record).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(&record).map_err(Error::NoritoFrame)?;
         if bytes.len() > MERGE_CARRIER_MAX_BYTES {
             return Err(Error::MergeCarrierConflict(
                 "canonical carrier record exceeds its hard byte limit".to_owned(),
@@ -11079,7 +11078,7 @@ impl Kura {
                         "pending merge temporary disappeared during recovery",
                     )
                 })?;
-            let entry = norito::decode_from_bytes::<MergeLedgerEntry>(&bytes).map_err(|err| {
+            let entry = norito::decode_canonical::<MergeLedgerEntry>(&bytes).map_err(|err| {
                 Self::invalid_pending_merge_entry_error(
                     temp_path.clone(),
                     format!("pending merge temporary is not exact framed Norito: {err}"),
@@ -11094,8 +11093,7 @@ impl Kura {
                     ),
                 ));
             }
-            if entry.canonical_bytes() != bytes
-                || hex::encode(entry.canonical_hash().as_ref()) != hash_text
+            if hex::encode(entry.canonical_hash().as_ref()) != hash_text
                 || self.pending_merge_entry_path(entry.canonical_hash()) != target_path
             {
                 return Err(Self::invalid_pending_merge_entry_error(
@@ -11478,7 +11476,7 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let entry = norito::decode_from_bytes::<MergeLedgerEntry>(&bytes).map_err(|err| {
+        let entry = norito::decode_canonical::<MergeLedgerEntry>(&bytes).map_err(|err| {
             Self::invalid_pending_merge_entry_error(
                 path.to_path_buf(),
                 format!("pending certified merge entry is not exact framed Norito: {err}"),
@@ -11491,13 +11489,6 @@ impl Kura {
                     "pending certified merge entry has unsupported merge ledger entry version {}",
                     entry.version
                 ),
-            ));
-        }
-        let canonical = crate::merge::canonical_merge_ledger_entry_bytes(&entry);
-        if canonical != bytes {
-            return Err(Self::invalid_pending_merge_entry_error(
-                path.to_path_buf(),
-                "pending certified merge entry is not canonical framed Norito",
             ));
         }
         let actual_hash = crate::merge::merge_ledger_entry_hash(&entry);
@@ -12243,7 +12234,7 @@ impl Kura {
                                 .iter()
                                 .zip(&execution.native_amx_receipts)
                                 .any(|(encoded, receipt)| {
-                                    let Ok(plan) = norito::decode_from_bytes::<
+                                    let Ok(plan) = norito::decode_canonical::<
                                         crate::queue::RoutingPlan,
                                     >(encoded)
                                     else {
@@ -19974,18 +19965,12 @@ impl Kura {
                 bytes.len()
             )));
         }
-        let intent = norito::decode_from_bytes::<KuraPruneIntentV1>(bytes).map_err(|err| {
+        let intent = norito::decode_canonical::<KuraPruneIntentV1>(bytes).map_err(|err| {
             Error::PruneIntentConflict(format!(
                 "intent {} failed exact Norito decode: {err}",
                 path.display()
             ))
         })?;
-        if norito::to_bytes(&intent).map_err(Error::NoritoFrame)? != bytes {
-            return Err(Error::PruneIntentConflict(format!(
-                "intent {} is not canonical Norito",
-                path.display()
-            )));
-        }
         if intent.version != 1
             || intent.target_height >= intent.source_height
             || (intent.source_height == 0) != intent.source_tip_hash.is_none()
@@ -20060,7 +20045,7 @@ impl Kura {
                 "another prune intent is already active".to_owned(),
             ));
         }
-        let bytes = norito::to_bytes(intent).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(intent).map_err(Error::NoritoFrame)?;
         if bytes.len() > PRUNE_INTENT_MAX_BYTES {
             return Err(Error::PruneIntentConflict(
                 "encoded prune intent exceeds its hard byte limit".to_owned(),
@@ -20080,7 +20065,7 @@ impl Kura {
 
     fn decode_rollback_intent(path: &Path) -> Result<KuraRollbackIntent> {
         let bytes = std::fs::read(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        let intent = norito::decode_from_bytes::<KuraRollbackIntent>(&bytes).map_err(|err| {
+        let intent = norito::decode_canonical::<KuraRollbackIntent>(&bytes).map_err(|err| {
             Error::RollbackIntentInvalid {
                 path: path.to_path_buf(),
                 reason: format!("failed to decode rollback intent: {err}"),
@@ -20386,7 +20371,11 @@ impl Kura {
         let carrier_bytes = {
             let _guard = self.merge_carrier_lock.lock();
             if self.preflight_merge_carrier_record_unlocked(record)? {
-                u64::try_from(norito::to_bytes(&record).map_err(Error::NoritoFrame)?.len())?
+                u64::try_from(
+                    norito::encode_canonical(&record)
+                        .map_err(Error::NoritoFrame)?
+                        .len(),
+                )?
             } else {
                 0
             }
@@ -21853,16 +21842,14 @@ impl Kura {
         }
         let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
         let artifact =
-            norito::decode_from_bytes::<NativeAmxParticipantApplicationManifestArtifactV1>(&bytes)
+            norito::decode_canonical::<NativeAmxParticipantApplicationManifestArtifactV1>(&bytes)
                 .map_err(|error| {
-                    Self::invalid_lane_artifact_error(
-                        file.path.clone(),
-                        format!("Native AMX manifest failed exact Norito decode: {error}"),
-                    )
-                })?;
-        if artifact.encode_framed()? != bytes
-            || Self::validate_native_amx_participant_application_manifest_artifact(&artifact)
-                .is_err()
+                Self::invalid_lane_artifact_error(
+                    file.path.clone(),
+                    format!("Native AMX manifest failed exact Norito decode: {error}"),
+                )
+            })?;
+        if Self::validate_native_amx_participant_application_manifest_artifact(&artifact).is_err()
             || artifact.leaf.lane_id != entry.lane_id
             || artifact.leaf.dataspace_id != entry.dataspace_id
             || artifact.leaf.participant_height != file.participant_height
@@ -21916,7 +21903,7 @@ impl Kura {
         }
         let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
         let artifact =
-            norito::decode_from_bytes::<NativeAmxParticipantApplicationReceiptArtifact>(&bytes)
+            norito::decode_canonical::<NativeAmxParticipantApplicationReceiptArtifact>(&bytes)
                 .map_err(|error| {
                     Self::invalid_lane_artifact_error(
                         file.path.clone(),
@@ -21924,9 +21911,7 @@ impl Kura {
                     )
                 })?;
         let descriptor = &artifact.participant_proposal.descriptor;
-        if artifact.encode_framed()? != bytes
-            || Self::validate_native_amx_participant_application_receipt_artifact(&artifact)
-                .is_err()
+        if Self::validate_native_amx_participant_application_receipt_artifact(&artifact).is_err()
             || descriptor.lane_id != entry.lane_id
             || descriptor.dataspace_id != entry.dataspace_id
             || descriptor.lane_block_height != file.participant_height
@@ -22467,20 +22452,13 @@ impl Kura {
         path: &Path,
         bytes: &[u8],
     ) -> Result<NativeAmxEvidencePruneIntentV1> {
-        let intent = norito::decode_from_bytes::<NativeAmxEvidencePruneIntentV1>(bytes).map_err(
-            |error| {
+        let intent =
+            norito::decode_canonical::<NativeAmxEvidencePruneIntentV1>(bytes).map_err(|error| {
                 Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
                     format!("Native AMX evidence prune intent failed exact decode: {error}"),
                 )
-            },
-        )?;
-        if norito::to_bytes(&intent)? != bytes {
-            return Err(Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                "Native AMX evidence prune intent is not canonical Norito",
-            ));
-        }
+            })?;
         Ok(intent)
     }
 
@@ -22789,7 +22767,7 @@ impl Kura {
             entries: removals,
         };
         self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
-        let bytes = norito::to_bytes(&intent)?;
+        let bytes = norito::encode_canonical(&intent)?;
         if bytes.is_empty() || bytes.len() > self.native_amx_evidence_prune_intent_max_bytes() {
             return Err(Error::PruneIntentConflict(
                 "Native AMX evidence prune intent exceeds its hard byte limit".to_owned(),
@@ -25740,7 +25718,7 @@ impl PipelineRecoverySidecar {
     ///
     /// Returns an error if framing fails (e.g., compression/header mismatch).
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        let bytes = norito::to_bytes(self)?;
+        let bytes = norito::encode_canonical(self)?;
         if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
             return Err(norito::Error::Message(
                 "certified lane block exceeds the merge source envelope byte limit".to_owned(),
@@ -26053,7 +26031,7 @@ impl CertifiedLaneBlockArtifact {
     /// Returns an error if framing fails or the complete certified source
     /// exceeds its protocol-reserved merge envelope.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        let bytes = norito::to_bytes(self)?;
+        let bytes = norito::encode_canonical(self)?;
         if bytes.len() > MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES {
             return Err(norito::Error::Message(
                 "certified lane block exceeds the merge source envelope byte limit".to_owned(),
@@ -26096,7 +26074,7 @@ impl LatestCertifiedLaneBlockFrontierV1 {
     fn computed_integrity_hash(&self) -> Option<Hash> {
         let mut canonical = self.clone();
         canonical.integrity_hash = Hash::prehashed([0; Hash::LENGTH]);
-        norito::to_bytes(&canonical).ok().map(|bytes| {
+        norito::encode_canonical(&canonical).ok().map(|bytes| {
             Hash::new_from_chunks(&[LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_DIGEST_DOMAIN, &bytes])
         })
     }
@@ -26149,7 +26127,7 @@ impl AutonomousLaneBlockArtifact {
     }
 
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        let bytes = norito::to_bytes(self)?;
+        let bytes = norito::encode_canonical(self)?;
         if bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES {
             return Err(norito::Error::Message(
                 "autonomous lane block exceeds the merge source byte limit".to_owned(),
@@ -26221,7 +26199,7 @@ pub(crate) struct AutonomousLaneMergeBundleV1 {
 impl AutonomousLaneMergeBundleV1 {
     /// Canonical framed bytes used by authenticated bundle transport and merge logs.
     pub(crate) fn encode_framed(&self) -> Result<Vec<u8>> {
-        let bytes = norito::to_bytes(self)?;
+        let bytes = norito::encode_canonical(self)?;
         if bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
             return Err(Error::NoritoFrame(norito::Error::Message(
                 "autonomous lane merge bundle exceeds hard byte limit".to_owned(),
@@ -26409,7 +26387,7 @@ impl AutonomousLaneSlotRetirementV1 {
     }
 
     pub(crate) fn digest(&self) -> Result<Hash> {
-        let bytes = norito::to_bytes(self).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(self).map_err(Error::NoritoFrame)?;
         Ok(Hash::new_from_chunks(&[
             b"iroha:nexus:autonomous-lane-slot-retirement:v1\0",
             &bytes,
@@ -26564,7 +26542,7 @@ impl LaneBlockArtifact {
     ///
     /// Returns an error if framing fails.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 }
 
@@ -26631,7 +26609,7 @@ impl RosterSidecar {
     ///
     /// Returns an error if framing fails.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 
     /// Return the roster snapshot contained in the sidecar, preferring commit certificates over
@@ -26971,7 +26949,7 @@ impl LaneBlockExecutionInputArtifact {
     ///
     /// Returns an error if framing fails.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 }
 
@@ -27054,7 +27032,7 @@ impl LaneBlockExecutionPreflightArtifact {
     ///
     /// Returns an error if framing fails.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 }
 
@@ -27200,7 +27178,7 @@ impl NativeAmxParticipantApplicationManifestArtifactV1 {
     const FORMAT_LABEL: &'static str = "lane.native_amx_participant_application_manifest.v1";
 
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 }
 
@@ -27370,7 +27348,7 @@ impl NativeAmxParticipantApplicationReceiptArtifact {
     }
 
     fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 }
 
@@ -27516,7 +27494,7 @@ impl LaneBlockApplicationReceiptArtifact {
     ///
     /// Returns an error if framing fails.
     pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
-        norito::to_bytes(self)
+        norito::encode_canonical(self)
     }
 }
 
@@ -28181,14 +28159,15 @@ impl Kura {
         if bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
             return Err("autonomous lane merge bundle exceeds hard byte limit");
         }
-        let bundle = norito::decode_from_bytes::<AutonomousLaneMergeBundleV1>(bytes)
-            .map_err(|_| "autonomous lane merge bundle is not valid framed Norito")?;
-        let canonical = bundle
-            .encode_framed()
-            .map_err(|_| "autonomous lane merge bundle cannot be canonically encoded")?;
-        if canonical != bytes {
-            return Err("autonomous lane merge bundle is not canonical framed Norito");
-        }
+        let bundle =
+            norito::decode_canonical::<AutonomousLaneMergeBundleV1>(bytes).map_err(|error| {
+                match error {
+                    norito::Error::NonCanonicalEncoding => {
+                        "autonomous lane merge bundle is not canonical framed Norito"
+                    }
+                    _ => "autonomous lane merge bundle is not valid framed Norito",
+                }
+            })?;
         Self::validate_autonomous_lane_merge_bundle(
             &bundle,
             expected_chain_id_hash,
@@ -28690,18 +28669,19 @@ impl Kura {
         path: &Path,
         bytes: &[u8],
     ) -> Result<NativeAmxParticipantReceiptLatestIndexV1> {
-        let latest = norito::decode_from_bytes::<NativeAmxParticipantReceiptLatestIndexV1>(bytes)
+        let latest = norito::decode_canonical::<NativeAmxParticipantReceiptLatestIndexV1>(bytes)
             .map_err(|error| {
-            Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                format!("Native AMX participant latest index failed exact Norito decode: {error}"),
-            )
-        })?;
-        let canonical = norito::to_bytes(&latest)?;
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!(
+                        "Native AMX participant latest index failed exact Norito decode: {error}"
+                    ),
+                )
+            })?;
         Self::validate_native_amx_participant_receipt_latest_index(&latest).map_err(|message| {
             Self::invalid_lane_artifact_error(path.to_path_buf(), message.to_owned())
         })?;
-        if canonical != bytes || latest.lane_id != lane_id || latest.dataspace_id != dataspace_id {
+        if latest.lane_id != lane_id || latest.dataspace_id != dataspace_id {
             return Err(Self::invalid_lane_artifact_error(
                 path.to_path_buf(),
                 "Native AMX participant latest index is non-canonical or targets another route",
@@ -28850,7 +28830,7 @@ impl Kura {
                 "Native AMX participant latest index targets another lane storage route",
             ));
         }
-        let bytes = norito::to_bytes(&latest)?;
+        let bytes = norito::encode_canonical(&latest)?;
         if bytes.is_empty() || bytes.len() > NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES
         {
             return Err(Self::invalid_lane_artifact_error(
@@ -28956,7 +28936,7 @@ impl Kura {
             let manifest_len = u64::try_from(manifest_artifact.encode_framed()?.len())?;
             let receipt_len = u64::try_from(receipt.encode_framed()?.len())?;
             let latest_len = u64::try_from(
-                norito::to_bytes(&NativeAmxParticipantReceiptLatestIndexV1::from_receipt(
+                norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV1::from_receipt(
                     &receipt,
                 )?)?
                 .len(),
@@ -29120,7 +29100,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<LaneBlockArtifact>,
+            norito::decode_canonical::<LaneBlockArtifact>,
             "lane block artifact",
             false,
         ) {
@@ -29192,7 +29172,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<LaneBlockArtifact>,
+            norito::decode_canonical::<LaneBlockArtifact>,
             "lane block artifact",
             false,
         ) {
@@ -29551,7 +29531,7 @@ impl Kura {
                 "latest certified lane block frontier has an invalid byte length",
             ));
         }
-        let frontier = norito::decode_from_bytes::<LatestCertifiedLaneBlockFrontierV1>(bytes)
+        let frontier = norito::decode_canonical::<LatestCertifiedLaneBlockFrontierV1>(bytes)
             .map_err(|error| {
                 Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
@@ -29562,7 +29542,6 @@ impl Kura {
             })?;
         if frontier.version != LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_VERSION
             || frontier.computed_integrity_hash() != Some(frontier.integrity_hash)
-            || norito::to_bytes(&frontier).map_err(Error::NoritoFrame)? != bytes
         {
             return Err(Self::invalid_lane_artifact_error(
                 path.to_path_buf(),
@@ -29863,7 +29842,7 @@ impl Kura {
             }
         }
 
-        let bytes = norito::to_bytes(&replacement).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(&replacement).map_err(Error::NoritoFrame)?;
         if bytes.is_empty()
             || bytes.len() > usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).unwrap_or(usize::MAX)
         {
@@ -31051,7 +31030,7 @@ impl Kura {
             &mut bound.index,
             &bound.namespace.data_path,
             &bound.namespace.index_path,
-            norito::decode_from_bytes::<CertifiedLaneBlockArtifact>,
+            norito::decode_canonical::<CertifiedLaneBlockArtifact>,
             "certified lane block",
         )?;
         let descriptor = &artifact.proposal.descriptor;
@@ -31131,10 +31110,15 @@ impl Kura {
                 "autonomous lane latest-attempt pointer exceeds its hard byte limit",
             ));
         }
-        let pointer = norito::decode_from_bytes::<AutonomousLaneBlockLatestAttemptV1>(bytes)
-            .map_err(Error::NoritoFrame)?;
-        if norito::to_bytes(&pointer).map_err(Error::NoritoFrame)? != bytes
-            || pointer.version != AutonomousLaneBlockLatestAttemptV1::VERSION
+        let pointer = norito::decode_canonical::<AutonomousLaneBlockLatestAttemptV1>(bytes)
+            .map_err(|error| match error {
+                norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "autonomous lane latest-attempt pointer has a non-canonical identity",
+                ),
+                other => Error::NoritoFrame(other),
+            })?;
+        if pointer.version != AutonomousLaneBlockLatestAttemptV1::VERSION
             || pointer.proposal_height == 0
             || pointer.lane_block_height == 0
             || [
@@ -31275,11 +31259,15 @@ impl Kura {
                     "autonomous lane latest-attempt pointer references a missing payload",
                 )
             })?;
-        let mut artifact = norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&bytes)
-            .map_err(Error::NoritoFrame)?;
-        if artifact.encode_framed().map_err(Error::NoritoFrame)? != bytes
-            || !pointer.matches_payload(&artifact.executable_payload)
-        {
+        let mut artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
+            .map_err(|error| match error {
+                norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                    artifact_path.clone(),
+                    "autonomous lane attempt payload conflicts with its latest pointer",
+                ),
+                other => Error::NoritoFrame(other),
+            })?;
+        if !pointer.matches_payload(&artifact.executable_payload) {
             return Err(Self::invalid_lane_artifact_error(
                 artifact_path,
                 "autonomous lane attempt payload conflicts with its latest pointer",
@@ -31333,14 +31321,16 @@ impl Kura {
                 "autonomous lane view state exceeds its hard byte limit",
             ));
         }
-        let state = norito::decode_from_bytes::<AutonomousLaneBlockViewState>(bytes)
-            .map_err(Error::NoritoFrame)?;
-        if norito::to_bytes(&state).map_err(Error::NoritoFrame)? != bytes {
-            return Err(Self::invalid_lane_artifact_error(
-                path.to_path_buf(),
-                "autonomous lane view state is not canonical Norito",
-            ));
-        }
+        let state =
+            norito::decode_canonical::<AutonomousLaneBlockViewState>(bytes).map_err(|error| {
+                match error {
+                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                        path.to_path_buf(),
+                        "autonomous lane view state is not canonical Norito",
+                    ),
+                    other => Error::NoritoFrame(other),
+                }
+            })?;
         Ok(state)
     }
 
@@ -31457,7 +31447,7 @@ impl Kura {
             Ok(())
         };
         let promote_temp = |state: &AutonomousLaneBlockViewState| -> Result<()> {
-            let bytes = norito::to_bytes(state).map_err(Error::NoritoFrame)?;
+            let bytes = norito::encode_canonical(state).map_err(Error::NoritoFrame)?;
             self.write_atomic_synced_replace(path, &bytes)?;
             remove_temp()
         };
@@ -31570,7 +31560,7 @@ impl Kura {
             expected_epoch,
         )
         .map_err(|message| Self::invalid_lane_artifact_error(path.to_path_buf(), message))?;
-        let bytes = norito::to_bytes(state).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(state).map_err(Error::NoritoFrame)?;
         if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES {
             return Err(Self::invalid_lane_artifact_error(
                 path.to_path_buf(),
@@ -31687,10 +31677,11 @@ impl Kura {
                     "autonomous attempt publication would exceed the hard namespace file-count limit",
                 ));
             }
-            let state_bytes = norito::to_bytes(state).map_err(Error::NoritoFrame)?;
-            let pointer_bytes =
-                norito::to_bytes(&AutonomousLaneBlockLatestAttemptV1::from_payload(payload))
-                    .map_err(Error::NoritoFrame)?;
+            let state_bytes = norito::encode_canonical(state).map_err(Error::NoritoFrame)?;
+            let pointer_bytes = norito::encode_canonical(
+                &AutonomousLaneBlockLatestAttemptV1::from_payload(payload),
+            )
+            .map_err(Error::NoritoFrame)?;
             let projected_bytes = u64::try_from(
                 artifact_bytes
                     .len()
@@ -31724,19 +31715,16 @@ impl Kura {
                     )
                 })?;
             if existing != artifact_bytes {
-                let existing_artifact =
-                    norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&existing)
-                        .map_err(Error::NoritoFrame)?;
-                if existing_artifact
-                    .encode_framed()
-                    .map_err(Error::NoritoFrame)?
-                    != existing
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        artifact_path,
+                let existing_artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(
+                    &existing,
+                )
+                .map_err(|error| match error {
+                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                        artifact_path.clone(),
                         "autonomous lane proposal-height attempt is not canonical Norito",
-                    ));
-                }
+                    ),
+                    other => Error::NoritoFrame(other),
+                })?;
                 let existing_descriptor = &existing_artifact
                     .executable_payload
                     .origin_proposal
@@ -31841,7 +31829,7 @@ impl Kura {
                 ));
             }
         }
-        let bytes = norito::to_bytes(pointer).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(pointer).map_err(Error::NoritoFrame)?;
         if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES {
             return Err(Self::invalid_lane_artifact_error(
                 path,
@@ -31891,7 +31879,7 @@ impl Kura {
                 ));
             }
         }
-        let bytes = norito::to_bytes(pointer).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(pointer).map_err(Error::NoritoFrame)?;
         if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES {
             return Err(Self::invalid_lane_artifact_error(
                 path,
@@ -31928,7 +31916,7 @@ impl Kura {
         if bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
             return Err("autonomous entrypoint claim exceeds hard byte limit");
         }
-        let claim = norito::decode_from_bytes::<AutonomousLaneEntrypointClaimV3>(&bytes)
+        let claim = norito::decode_canonical::<AutonomousLaneEntrypointClaimV3>(&bytes)
             .map_err(|_| "failed to decode autonomous entrypoint claim")?;
         if claim.version != AutonomousLaneEntrypointClaimV3::VERSION
             || claim.proposal_height == 0
@@ -32509,7 +32497,7 @@ impl Kura {
                 }
             }
 
-            let bytes = norito::to_bytes(&incoming).map_err(Error::NoritoFrame)?;
+            let bytes = norito::encode_canonical(&incoming).map_err(Error::NoritoFrame)?;
             if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
@@ -32626,7 +32614,7 @@ impl Kura {
             };
             std::fs::create_dir_all(parent)
                 .map_err(|err| Error::MkDir(err, parent.to_path_buf()))?;
-            let bytes = norito::to_bytes(&incoming).map_err(Error::NoritoFrame)?;
+            let bytes = norito::encode_canonical(&incoming).map_err(Error::NoritoFrame)?;
             if bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
@@ -32818,7 +32806,7 @@ impl Kura {
         }
 
         for (path, replacement) in replacements {
-            let bytes = norito::to_bytes(&replacement).map_err(Error::NoritoFrame)?;
+            let bytes = norito::encode_canonical(&replacement).map_err(Error::NoritoFrame)?;
             if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
                 return Err(Self::invalid_lane_artifact_error(
                     path,
@@ -33644,13 +33632,14 @@ impl Kura {
             artifact.new_view_certificates.len() >= MAX_LANE_NEW_VIEW_CERTIFICATES;
         let mut appended = artifact.clone();
         appended.new_view_certificates.push(durable_certificate);
-        let appended_bytes = norito::to_bytes(&appended).map_err(Error::NoritoFrame)?;
+        let appended_bytes = norito::encode_canonical(&appended).map_err(Error::NoritoFrame)?;
         let bytes_require_checkpoint =
             appended_bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
         if count_requires_checkpoint || bytes_require_checkpoint {
             artifact.view_checkpoint = Some(checkpoint);
             artifact.new_view_certificates.clear();
-            let compacted_bytes = norito::to_bytes(&artifact).map_err(Error::NoritoFrame)?;
+            let compacted_bytes =
+                norito::encode_canonical(&artifact).map_err(Error::NoritoFrame)?;
             if compacted_bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES {
                 return Err(Self::invalid_lane_artifact_error(
                     slot_path,
@@ -33972,14 +33961,16 @@ impl Kura {
                                 "autonomous attempt disappeared during startup reconstruction",
                             )
                         })?;
-                    let artifact = norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&bytes)
-                        .map_err(Error::NoritoFrame)?;
-                    if artifact.encode_framed().map_err(Error::NoritoFrame)? != bytes {
-                        return Err(Self::invalid_lane_artifact_error(
-                            path,
-                            "autonomous attempt is not canonical framed Norito",
-                        ));
-                    }
+                    let artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
+                        .map_err(|error| match error {
+                            norito::Error::NonCanonicalEncoding => {
+                                Self::invalid_lane_artifact_error(
+                                    path.clone(),
+                                    "autonomous attempt is not canonical framed Norito",
+                                )
+                            }
+                            other => Error::NoritoFrame(other),
+                        })?;
                     let pointer = AutonomousLaneBlockLatestAttemptV1::from_payload(
                         &artifact.executable_payload,
                     );
@@ -34617,14 +34608,14 @@ impl Kura {
                         "autonomous lane attempt disappeared during exact lookup",
                     )
                 })?;
-            let artifact = norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&bytes)
-                .map_err(Error::NoritoFrame)?;
-            if artifact.encode_framed().map_err(Error::NoritoFrame)? != bytes {
-                return Err(Self::invalid_lane_artifact_error(
-                    attempt_path,
-                    "autonomous lane attempt payload is not canonical Norito",
-                ));
-            }
+            let artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
+                .map_err(|error| match error {
+                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                        attempt_path.clone(),
+                        "autonomous lane attempt payload is not canonical Norito",
+                    ),
+                    other => Error::NoritoFrame(other),
+                })?;
             let pointer =
                 AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
             if pointer.lane_id != lane_id
@@ -34776,7 +34767,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<LaneBlockExecutionInputArtifact>,
+            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
             "lane block execution input",
         ) {
             if existing == *artifact {
@@ -34884,7 +34875,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<LaneBlockExecutionInputArtifact>,
+            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
             "lane block execution input",
             true,
         )
@@ -35037,7 +35028,7 @@ impl Kura {
             lane_block_height,
             data_path,
             index_path,
-            norito::decode_from_bytes::<LaneBlockExecutionInputArtifact>,
+            norito::decode_canonical::<LaneBlockExecutionInputArtifact>,
             "lane block execution input",
             recover,
         )
@@ -35156,7 +35147,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<LaneBlockExecutionPreflightArtifact>,
+            norito::decode_canonical::<LaneBlockExecutionPreflightArtifact>,
             "lane block execution preflight",
         ) {
             if existing == *artifact {
@@ -35468,7 +35459,7 @@ impl Kura {
             lane_block_height,
             data_path,
             index_path,
-            norito::decode_from_bytes::<LaneBlockExecutionPreflightArtifact>,
+            norito::decode_canonical::<LaneBlockExecutionPreflightArtifact>,
             "lane block execution preflight",
             recover,
         )
@@ -36327,8 +36318,8 @@ impl Kura {
             return None;
         }
         let source_count = u32::try_from(receipt.source_ids.len()).ok()?;
-        let receipt_bytes = norito::to_bytes(receipt).ok()?;
-        let latest_index_bytes = norito::to_bytes(&latest).ok()?;
+        let receipt_bytes = norito::encode_canonical(receipt).ok()?;
+        let latest_index_bytes = norito::encode_canonical(&latest).ok()?;
         Some(LaneDrainNativeFrontierEvidenceV1 {
             version: 1,
             participant_view: descriptor.lane_block_view,
@@ -37904,10 +37895,15 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let frontier = norito::decode_from_bytes::<LaneMergeApplicationFrontierV1>(&bytes)
-            .map_err(Error::NoritoFrame)?;
-        if norito::to_bytes(&frontier).map_err(Error::NoritoFrame)? != bytes
-            || frontier.version != LaneMergeApplicationFrontierV1::VERSION
+        let frontier = norito::decode_canonical::<LaneMergeApplicationFrontierV1>(&bytes)
+            .map_err(|error| match error {
+                norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "lane merge application frontier is non-canonical or targets another incarnation",
+                ),
+                other => Error::NoritoFrame(other),
+            })?;
+        if frontier.version != LaneMergeApplicationFrontierV1::VERSION
             || frontier.lane_id != entry.lane_id
             || frontier.dataspace_id != entry.dataspace_id
             || self
@@ -37954,7 +37950,7 @@ impl Kura {
                 ));
             }
         }
-        let bytes = norito::to_bytes(&frontier).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(&frontier).map_err(Error::NoritoFrame)?;
         if bytes.is_empty() || bytes.len() > LANE_MERGE_APPLICATION_FRONTIER_MAX_BYTES {
             return Err(Self::invalid_lane_artifact_error(
                 path,
@@ -38246,7 +38242,7 @@ impl Kura {
             lane_block_height,
             data_path,
             index_path,
-            norito::decode_from_bytes::<LaneBlockApplicationReceiptArtifact>,
+            norito::decode_canonical::<LaneBlockApplicationReceiptArtifact>,
             "lane block application receipt",
             recover,
         )
@@ -38335,7 +38331,7 @@ impl Kura {
             &mut bound.index,
             &bound.namespace.data_path,
             &bound.namespace.index_path,
-            norito::decode_from_bytes::<LaneBlockApplicationReceiptArtifact>,
+            norito::decode_canonical::<LaneBlockApplicationReceiptArtifact>,
             "lane block application receipt",
         )?;
         let descriptor = &artifact.proposal.descriptor;
@@ -39136,7 +39132,7 @@ impl Kura {
             lane_block_height,
             &data_path,
             &index_path,
-            norito::decode_from_bytes::<LaneBlockArtifact>,
+            norito::decode_canonical::<LaneBlockArtifact>,
             "lane block artifact",
             recover,
         )
@@ -39278,7 +39274,7 @@ impl Kura {
             .fastpq_proof_sidecar_max_bytes
             .load(Ordering::Relaxed)
             .max(1);
-        let actual = match norito::to_bytes(&snapshot) {
+        let actual = match norito::encode_canonical(&snapshot) {
             Ok(bytes) => bytes.len(),
             Err(err) => {
                 telemetry.record_event("rejected_encode");
@@ -39550,7 +39546,7 @@ impl Kura {
             height,
             PIPELINE_SIDECARS_DATA_FILE,
             PIPELINE_SIDECARS_INDEX_FILE,
-            norito::decode_from_bytes::<PipelineRecoverySidecar>,
+            norito::decode_canonical::<PipelineRecoverySidecar>,
             "pipeline sidecar",
         ) else {
             iroha_logger::debug!(
@@ -39811,7 +39807,7 @@ impl Kura {
                 height,
                 PIPELINE_SIDECARS_DATA_FILE,
                 PIPELINE_SIDECARS_INDEX_FILE,
-                norito::decode_from_bytes::<PipelineRecoverySidecar>,
+                norito::decode_canonical::<PipelineRecoverySidecar>,
                 "pipeline sidecar",
             )
         }?;
@@ -39909,7 +39905,7 @@ impl Kura {
                 height,
                 &data_path,
                 &index_path,
-                norito::decode_from_bytes::<RosterSidecar>,
+                norito::decode_canonical::<RosterSidecar>,
                 "roster sidecar",
             )?;
             if sidecar.height != height {
@@ -40233,7 +40229,7 @@ impl Kura {
             );
             return Err(BoundProgressRecoveryFailure::from_io(&error));
         }
-        let intent = match norito::decode_from_bytes::<BoundProgressAppendIntentV1>(&bytes) {
+        let intent = match norito::decode_canonical::<BoundProgressAppendIntentV1>(&bytes) {
             Ok(intent) => intent,
             Err(error) => {
                 warn!(
@@ -40245,13 +40241,6 @@ impl Kura {
                 return Err(BoundProgressRecoveryFailure::InvalidData);
             }
         };
-        if norito::to_bytes(&intent).ok().as_deref() != Some(bytes.as_slice()) {
-            warn!(
-                ?intent_path,
-                kind, "progress append intent is not canonical Norito"
-            );
-            return Err(BoundProgressRecoveryFailure::InvalidData);
-        }
         if let Err(reason) = intent.validate_for(namespace, data_path, index_path) {
             warn!(
                 reason,
@@ -44994,13 +44983,15 @@ impl BlockStore {
         else {
             return Ok(None);
         };
-        let stage = norito::decode_from_bytes::<EvictionCompactionStageV1>(&bytes)
-            .map_err(|error| Error::NoritoFrame(error.into()))?;
-        if norito::to_bytes(&stage).map_err(Error::NoritoFrame)? != bytes {
-            return Err(self.invalid_eviction_compaction_stage(
-                "eviction compaction stage is not canonically encoded",
-            ));
-        }
+        let stage =
+            norito::decode_canonical::<EvictionCompactionStageV1>(&bytes).map_err(|error| {
+                match error {
+                    norito::Error::NonCanonicalEncoding => self.invalid_eviction_compaction_stage(
+                        "eviction compaction stage is not canonically encoded",
+                    ),
+                    other => Error::NoritoFrame(other.into()),
+                }
+            })?;
         self.validate_eviction_compaction_stage(&stage)?;
         Ok(Some(stage))
     }
@@ -45091,7 +45082,7 @@ impl BlockStore {
                 path.clone(),
             )
         })?;
-        let bytes = norito::to_bytes(stage).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(stage).map_err(Error::NoritoFrame)?;
         if u64::try_from(bytes.len())? > MAX_EVICTION_COMPACTION_STAGE_BYTES {
             return Err(self.invalid_eviction_compaction_stage(
                 "eviction compaction stage exceeds its hard size limit",
@@ -45777,7 +45768,7 @@ impl BlockStore {
             ));
         }
         let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
-        let stage = norito::decode_from_bytes::<DaBlockRewriteStageV1>(&bytes)
+        let stage = norito::decode_canonical::<DaBlockRewriteStageV1>(&bytes)
             .map_err(|error| Error::NoritoFrame(error.into()))?;
         self.validate_da_block_rewrite_stage(&stage)?;
         Ok(Some(stage))
@@ -45906,7 +45897,7 @@ impl BlockStore {
             )
         })?;
         std::fs::create_dir_all(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-        let bytes = norito::to_bytes(stage).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(stage).map_err(Error::NoritoFrame)?;
         if u64::try_from(bytes.len())? > MAX_DA_BLOCK_REWRITE_STAGE_BYTES {
             return Err(self.invalid_da_block_rewrite_stage(
                 "DA block rewrite stage exceeds its hard size limit",
@@ -46351,7 +46342,7 @@ impl BlockStore {
             verified_snapshot_hash_journal_digest(snapshot_hashes)?,
             bootstrap_lineage_hash,
         );
-        let bytes = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(&marker).map_err(Error::NoritoFrame)?;
         if bytes.len() > MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -46452,11 +46443,8 @@ impl BlockStore {
         else {
             return Ok(None);
         };
-        match norito::decode_from_bytes::<VerifiedSnapshotTailMarkerV1>(&bytes) {
-            Ok(marker)
-                if marker.version == VerifiedSnapshotTailMarkerV1::VERSION
-                    && norito::to_bytes(&marker).map_err(Error::NoritoFrame)? == bytes =>
-            {
+        match norito::decode_canonical::<VerifiedSnapshotTailMarkerV1>(&bytes) {
+            Ok(marker) if marker.version == VerifiedSnapshotTailMarkerV1::VERSION => {
                 Ok(Some(marker))
             }
             Ok(marker) => {
@@ -46501,10 +46489,9 @@ impl BlockStore {
             path: path.clone(),
             reason,
         };
-        let marker = norito::decode_from_bytes::<VerifiedSnapshotTailMarkerV1>(&bytes)
+        let marker = norito::decode_canonical::<VerifiedSnapshotTailMarkerV1>(&bytes)
             .map_err(|error| invalid(format!("failed to decode marker: {error}")))?;
-        let canonical = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
-        if marker.version != VerifiedSnapshotTailMarkerV1::VERSION || canonical != bytes {
+        if marker.version != VerifiedSnapshotTailMarkerV1::VERSION {
             return Err(invalid(
                 "marker version or canonical encoding is invalid".to_owned(),
             ));
@@ -46605,7 +46592,7 @@ impl BlockStore {
         let tmp_path = path.with_extension("norito.tmp");
         let mut main_invalid = false;
         match std::fs::read(&path) {
-            Ok(bytes) => match norito::decode_from_bytes::<BlockStoreCommitMarker>(&bytes) {
+            Ok(bytes) => match norito::decode_canonical::<BlockStoreCommitMarker>(&bytes) {
                 Ok(marker) => {
                     if marker.version == BlockStoreCommitMarker::VERSION {
                         if (marker.count == 0) == marker.tip_hash.is_none() {
@@ -46648,7 +46635,7 @@ impl BlockStore {
         }
 
         match std::fs::read(&tmp_path) {
-            Ok(bytes) => match norito::decode_from_bytes::<BlockStoreCommitMarker>(&bytes) {
+            Ok(bytes) => match norito::decode_canonical::<BlockStoreCommitMarker>(&bytes) {
                 Ok(marker) => {
                     if marker.version != BlockStoreCommitMarker::VERSION {
                         warn!(
@@ -46747,7 +46734,7 @@ impl BlockStore {
                 path,
             ));
         }
-        let bytes = norito::to_bytes(marker).map_err(Error::NoritoFrame)?;
+        let bytes = norito::encode_canonical(marker).map_err(Error::NoritoFrame)?;
         let parent = path.parent().ok_or_else(|| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, "commit marker has no parent"),
@@ -46956,12 +46943,10 @@ impl BlockStore {
         let marker_path = self.commit_marker_path();
         let marker_bytes =
             std::fs::read(&marker_path).map_err(|error| Error::IO(error, marker_path.clone()))?;
-        let marker = norito::decode_from_bytes::<BlockStoreCommitMarker>(&marker_bytes)
+        let marker = norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes)
             .map_err(|_| mutation(1))?;
-        let canonical_marker = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
         if marker.version != BlockStoreCommitMarker::VERSION
             || (marker.count == 0) != marker.tip_hash.is_none()
-            || canonical_marker != marker_bytes
         {
             return Err(mutation(1));
         }
@@ -47529,11 +47514,20 @@ impl BlockStore {
                 marker_path,
             ));
         };
-        let marker = norito::decode_from_bytes::<BlockStoreCommitMarker>(&marker_bytes)
-            .map_err(Error::NoritoFrame)?;
-        let canonical = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
-        if canonical != marker_bytes
-            || marker.version != BlockStoreCommitMarker::VERSION
+        let marker =
+            norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|error| {
+                match error {
+                    norito::Error::NonCanonicalEncoding => Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "block commit marker is non-canonical or structurally invalid",
+                        ),
+                        marker_path.clone(),
+                    ),
+                    other => Error::NoritoFrame(other),
+                }
+            })?;
+        if marker.version != BlockStoreCommitMarker::VERSION
             || (marker.count == 0) != marker.tip_hash.is_none()
         {
             return Err(Error::IO(
@@ -47992,14 +47986,14 @@ impl BlockStore {
                 marker_path.clone(),
             )
         })?;
-        let marker = norito::decode_from_bytes::<BlockStoreCommitMarker>(&marker_bytes).map_err(
-            |error| Error::InvalidSnapshotBootstrapMarker {
-                path: marker_path.clone(),
-                reason: format!("failed to decode canonical block marker: {error}"),
-            },
-        )?;
+        let marker =
+            norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|error| {
+                Error::InvalidSnapshotBootstrapMarker {
+                    path: marker_path.clone(),
+                    reason: format!("failed to decode canonical block marker: {error}"),
+                }
+            })?;
         if marker.version != BlockStoreCommitMarker::VERSION
-            || norito::to_bytes(&marker).map_err(Error::NoritoFrame)? != marker_bytes
             || (marker.count == 0) != marker.tip_hash.is_none()
             || marker.count != index_count
         {
@@ -48511,7 +48505,7 @@ impl BlockStore {
         let marker_bytes =
             std::fs::read(&marker_path).map_err(|err| Error::IO(err, marker_path.clone()))?;
         let marker =
-            norito::decode_from_bytes::<BlockStoreCommitMarker>(&marker_bytes).map_err(|err| {
+            norito::decode_canonical::<BlockStoreCommitMarker>(&marker_bytes).map_err(|err| {
                 Error::RollbackIntentInvalid {
                     path: intent_path.to_path_buf(),
                     reason: format!("rollback commit marker is not decodable: {err}"),
@@ -72657,6 +72651,118 @@ mod tests {
     }
 
     #[test]
+    fn framed_sidecar_boundaries_are_canonical_and_ambient_independent() {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"canonical framed sidecar boundary",
+        ));
+        let pipeline = PipelineRecoverySidecar::new(
+            1,
+            block_hash,
+            PipelineDagSnapshot {
+                fingerprint: [0xA5; 32],
+                key_count: 1,
+            },
+            Vec::new(),
+        );
+        let roster = RosterSidecar::new(1, block_hash, None, None, None);
+        let canonical_pipeline =
+            norito::encode_canonical(&pipeline).expect("encode canonical pipeline sidecar");
+        let canonical_roster =
+            norito::encode_canonical(&roster).expect("encode canonical roster sidecar");
+        assert_eq!(
+            pipeline.encode_framed().expect("frame pipeline sidecar"),
+            canonical_pipeline
+        );
+        assert_eq!(
+            roster.encode_framed().expect("frame roster sidecar"),
+            canonical_roster
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let (alternate_pipeline, alternate_roster) = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            (
+                norito::to_bytes(&pipeline).expect("encode alternate-layout pipeline sidecar"),
+                norito::to_bytes(&roster).expect("encode alternate-layout roster sidecar"),
+            )
+        };
+        assert_ne!(alternate_pipeline, canonical_pipeline);
+        assert_ne!(alternate_roster, canonical_roster);
+        assert!(
+            norito::decode_canonical::<PipelineRecoverySidecar>(&alternate_pipeline).is_err(),
+            "durable pipeline sidecars must reject alternate layouts"
+        );
+        assert!(
+            norito::decode_canonical::<RosterSidecar>(&alternate_roster).is_err(),
+            "durable roster sidecars must reject alternate layouts"
+        );
+
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            pipeline
+                .encode_framed()
+                .expect("frame pipeline sidecar under alternate ambient layout"),
+            canonical_pipeline
+        );
+        assert_eq!(
+            roster
+                .encode_framed()
+                .expect("frame roster sidecar under alternate ambient layout"),
+            canonical_roster
+        );
+    }
+
+    #[test]
+    fn bound_progress_intent_identity_is_canonical_and_ambient_independent() {
+        let payload = b"bound progress canonical payload";
+        let intent = BoundProgressAppendIntentV1 {
+            version: BOUND_PROGRESS_APPEND_INTENT_VERSION,
+            namespace_components: vec!["blocks".to_owned(), "lane".to_owned()],
+            data_file: "progress.data".to_owned(),
+            index_file: "progress.index".to_owned(),
+            height: 1,
+            pair_was_present: false,
+            old_data_len: 0,
+            new_data_len: u64::try_from(payload.len()).expect("payload length fits u64"),
+            payload_hash: BoundProgressAppendIntentV1::payload_digest(payload),
+            old_index_len: 0,
+            new_index_len: 16,
+            index_write_offset: 0,
+            old_index_bytes: Vec::new(),
+            new_index_bytes: vec![0; 16],
+            integrity_hash: Hash::prehashed([0; Hash::LENGTH]),
+        }
+        .seal();
+        let canonical =
+            norito::encode_canonical(&intent).expect("encode canonical progress intent");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&intent).expect("encode alternate-layout progress intent")
+        };
+        assert_ne!(alternate, canonical);
+        assert!(
+            norito::decode_canonical::<BoundProgressAppendIntentV1>(&alternate).is_err(),
+            "durable progress intents must reject alternate layouts"
+        );
+
+        let integrity_hash = intent.integrity_hash;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            intent.computed_integrity_hash(),
+            Some(integrity_hash),
+            "intent identity must ignore ambient layout"
+        );
+        assert_eq!(
+            norito::encode_canonical(&intent)
+                .expect("encode intent under alternate ambient layout"),
+            canonical
+        );
+    }
+
+    #[test]
     fn pipeline_sidecar_exact_candidate_read_preserves_canonical_authority() {
         let temp_dir = TempDir::new().expect("create Kura root");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -72703,7 +72809,7 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_sidecar_decodes_missing_fastpq_proofs_as_empty() {
+    fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
         #[derive(Debug, Clone, Encode, Decode)]
         struct LegacyPipelineRecoverySidecar {
             format: PipelineRecoveryFormat,
@@ -72734,12 +72840,16 @@ mod tests {
         let schema_end = schema_start + schema.len();
         assert!(bytes.len() >= Header::SIZE);
         bytes[schema_start..schema_end].copy_from_slice(&schema);
-        let decoded: PipelineRecoverySidecar =
-            norito::decode_from_bytes(&bytes).expect("decode sidecar with defaulted fastpq proofs");
+        let decoded: PipelineRecoverySidecar = norito::decode_from_bytes(&bytes)
+            .expect("ordinary decoding accepts the pre-release defaulted field");
         assert_eq!(decoded.height, legacy.height);
         assert_eq!(decoded.block_hash, legacy.block_hash);
         assert!(decoded.proofs.is_empty());
         assert!(decoded.fastpq_proofs.is_empty());
+        assert!(
+            norito::decode_canonical::<PipelineRecoverySidecar>(&bytes).is_err(),
+            "the durable V1 boundary must reject a byte layout missing current fields"
+        );
     }
 
     #[test]
@@ -83443,6 +83553,53 @@ mod tests {
         let marker = store.read_commit_marker().unwrap().expect("marker");
         assert_eq!(marker.count, 2);
         assert!(blocks_dir.join(COUNT_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn commit_marker_boundary_is_canonical_and_ambient_independent() {
+        let temp_dir = TempDir::new().expect("create commit-marker root");
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        let marker = BlockStoreCommitMarker::new(0, None);
+        let canonical = norito::encode_canonical(&marker).expect("encode canonical commit marker");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            store
+                .write_commit_marker_value(&marker)
+                .expect("write marker under alternate ambient layout");
+            assert_ne!(
+                norito::to_bytes(&marker).expect("encode ambient marker fixture"),
+                canonical,
+                "canonical marker encoding must restore the caller's ambient layout"
+            );
+        }
+        let marker_path = store.commit_marker_path();
+        assert_eq!(
+            std::fs::read(&marker_path).expect("read published commit marker"),
+            canonical,
+            "durable marker publication must ignore ambient layout"
+        );
+
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&marker).expect("encode alternate-layout commit marker")
+        };
+        assert_ne!(alternate, canonical);
+        std::fs::write(&marker_path, alternate).expect("replace marker with alternate layout");
+        assert!(
+            store
+                .read_commit_marker()
+                .expect("classify alternate-layout marker")
+                .is_none(),
+            "the durable marker reader must reject alternate layouts"
+        );
+        assert!(
+            !marker_path.exists(),
+            "recovery must remove a rejected main marker before reconstruction"
+        );
     }
 
     #[test]

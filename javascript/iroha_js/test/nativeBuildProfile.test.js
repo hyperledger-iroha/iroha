@@ -76,6 +76,7 @@ function createFixtureSnapshot(snapshotTargetRoot, state) {
     path.join(snapshotRoot, "Cargo.toml"),
     '[workspace.package]\nversion = "0.0.0"\n',
   );
+  writeFileSync(path.join(snapshotRoot, "Cargo.lock"), "version = 4\n");
   writeFileSync(
     path.join(snapshotRoot, "crates", "iroha_js_host", "Cargo.toml"),
     '[package]\nname = "iroha_js_host"\nversion.workspace = true\n',
@@ -612,9 +613,16 @@ test("successful Cargo execution records provenance for the exact profile output
         cleaned += 1;
       },
       runCargo(args, options) {
-        assert.deepEqual(args.slice(0, 3), [
+        assert.deepEqual(args.slice(0, 10), [
           "build",
           "--locked",
+          "--offline",
+          "--jobs",
+          "1",
+          "-Z",
+          "unstable-options",
+          "--lockfile-path",
+          path.join(snapshots.snapshot.snapshotRoot, "Cargo.lock"),
           "--manifest-path",
         ]);
         assert.deepEqual(args.slice(-2), ["--profile", "deploy"]);
@@ -715,6 +723,53 @@ test("Cargo deps-to-profile hardlink uplift is copied into a singly linked publi
       SOURCE_DIGEST,
     );
     assertNoPublicationTransients(nativePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a Cargo hardlink mutation after private copying is rejected before publication", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-hardlink-race-")),
+  );
+  let raceInjected = false;
+  try {
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          repoRoot,
+          cargoHandler({ runNativePath, snapshot }) {
+            const depsPath = path.join(
+              path.dirname(runNativePath),
+              "deps",
+              "libiroha_js_host-fixture.so",
+            );
+            mkdirSync(path.dirname(depsPath), { recursive: true });
+            writeFileSync(depsPath, "hardlinked Cargo output");
+            linkSync(depsPath, runNativePath);
+            return {
+              status: 0,
+              stdout: successfulCargoJson(snapshot, runNativePath),
+            };
+          },
+          runContainerFailpoint(phase, details) {
+            if (phase !== "cargo-output-copied") return;
+            const size = Number(
+              lstatSync(details.sourcePath, { bigint: true }).size,
+            );
+            writeFileSync(details.sourcePath, Buffer.alloc(size, 0x78));
+            raceInjected = true;
+          },
+        }),
+      /changed before digest verification|digest changed after private sealing/u,
+    );
+    assert.equal(raceInjected, true);
+    const nativePath = finalNativePath(repoRoot);
+    assert.equal(existsSync(nativePath), false);
+    assert.throws(
+      () => readNativeBuildProvenance(nativePath),
+      /ENOENT|unreadable/u,
+    );
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -1460,6 +1515,107 @@ test("run janitor detects a replacement after dead-owner validation", (t) => {
   );
 });
 
+test("run janitor does not treat an off-name move as completed deletion", (t) => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-move-")),
+  );
+  const dead = writeRunContainerFixture({ withCargoTarget: true });
+  const preserved = `${dead.artifactPath}.preserved`;
+  t.after(() => {
+    cleanupExactTestArtifacts(repoRoot, dead.artifactPath, preserved);
+  });
+
+  assert.throws(
+    () =>
+      runRecoveryFixture({
+        repoRoot,
+        runContainerOwnerIsAlive(pid) {
+          return pid !== dead.pid;
+        },
+        runContainerFailpoint(phase, details) {
+          if (
+            phase === "run-stale-verified" &&
+            details.runId === dead.runId
+          ) {
+            renameSync(dead.artifactPath, preserved);
+          }
+        },
+      }),
+    /ENOENT|no such file/u,
+  );
+  assert.equal(lstatSync(preserved).isDirectory(), true);
+  assert.equal(
+    readFileSync(path.join(preserved, RUN_OWNER_FILENAME), "utf8").includes(
+      dead.runId,
+    ),
+    true,
+  );
+});
+
+test("competing janitors converge only after the witnessed owner is unlinked", async (t) => {
+  const phases = [
+    "run-stale-verified",
+    "run-trash-renamed",
+    "run-trash-synced",
+    "run-payload-removed:cargo-target",
+    "run-owner-retired",
+    "run-trash-directory-removed",
+  ];
+  for (const phase of phases) {
+    await t.test(phase, (subtest) => {
+      const repoRoot = realpathSync(
+        mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-run-race-")),
+      );
+      const dead = writeRunContainerFixture({ withCargoTarget: true });
+      let contenderCompleted = false;
+      subtest.after(() => {
+        cleanupExactTestArtifacts(repoRoot);
+        for (const name of readdirSync(dead.parent)) {
+          if (name.includes(dead.runId)) {
+            cleanupExactTestArtifacts(path.join(dead.parent, name));
+          }
+        }
+      });
+
+      assert.equal(
+        runRecoveryFixture({
+          repoRoot,
+          runContainerOwnerIsAlive(pid) {
+            return pid !== dead.pid;
+          },
+          runContainerFailpoint(actual, details) {
+            if (
+              contenderCompleted ||
+              actual !== phase ||
+              details.runId !== dead.runId
+            ) {
+              return;
+            }
+            assert.equal(
+              runRecoveryFixture({
+                repoRoot,
+                runContainerOwnerIsAlive(pid) {
+                  return pid !== dead.pid;
+                },
+              }),
+              7,
+            );
+            contenderCompleted = true;
+          },
+        }),
+        7,
+      );
+      assert.equal(contenderCompleted, true);
+      assert.equal(
+        readdirSync(dead.parent).some((name) =>
+          name.includes(dead.runId),
+        ),
+        false,
+      );
+    });
+  }
+});
+
 test("run trash recovery resumes every deletion crash phase", async (t) => {
   const phases = [
     "run-trash-renamed",
@@ -2111,6 +2267,8 @@ test("failure immediately after stage rename rolls back only the exact owned bin
           sourceTreeSha256: "d".repeat(64),
         }),
       );
+      let rollbackRenameObserved = false;
+      let rollbackRestoreObserved = false;
       assert.throws(
         () =>
           runFixtureNativeBuild({
@@ -2120,10 +2278,45 @@ test("failure immediately after stage rename rolls back only the exact owned bin
               if (stage === "after-binary-rename") {
                 throw new Error("injected failure after binary rename");
               }
+              const names = readdirSync(path.dirname(nativePath));
+              const staged = names.filter((name) =>
+                name.startsWith(
+                  `.${path.basename(nativePath)}.stage-`,
+                ),
+              );
+              const retired = names.filter((name) =>
+                name.startsWith(
+                  `.${path.basename(nativePath)}.retired-`,
+                ),
+              );
+              if (stage === "after-binary-rollback-rename") {
+                assert.equal(existsSync(nativePath), false);
+                assert.equal(staged.length, 1);
+                assert.equal(retired.length, 1);
+                assert.equal(
+                  readFileSync(
+                    path.join(path.dirname(nativePath), staged[0]),
+                    "utf8",
+                  ),
+                  "replacement-native-output",
+                );
+                rollbackRenameObserved = true;
+              }
+              if (stage === "after-binary-rollback-restore") {
+                assert.equal(
+                  readFileSync(nativePath, "utf8"),
+                  "prior-native-output",
+                );
+                assert.equal(staged.length, 1);
+                assert.equal(retired.length, 0);
+                rollbackRestoreObserved = true;
+              }
             },
           }),
         /injected failure after binary rename/u,
       );
+      assert.equal(rollbackRenameObserved, true);
+      assert.equal(rollbackRestoreObserved, true);
       assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
       assert.throws(
         () => readNativeBuildProvenance(nativePath),
@@ -2143,6 +2336,7 @@ test("failure immediately after stage rename rolls back only the exact owned bin
     );
     try {
       const nativePath = finalNativePath(repoRoot);
+      let rollbackRenameObserved = false;
       assert.throws(
         () =>
           runFixtureNativeBuild({
@@ -2152,10 +2346,29 @@ test("failure immediately after stage rename rolls back only the exact owned bin
               if (stage === "after-binary-rename") {
                 throw new Error("injected first failure after binary rename");
               }
+              if (stage === "after-binary-rollback-rename") {
+                const names = readdirSync(path.dirname(nativePath));
+                const staged = names.filter((name) =>
+                  name.startsWith(
+                    `.${path.basename(nativePath)}.stage-`,
+                  ),
+                );
+                assert.equal(existsSync(nativePath), false);
+                assert.equal(staged.length, 1);
+                assert.equal(
+                  readFileSync(
+                    path.join(path.dirname(nativePath), staged[0]),
+                    "utf8",
+                  ),
+                  "first-native-output",
+                );
+                rollbackRenameObserved = true;
+              }
             },
           }),
         /injected first failure after binary rename/u,
       );
+      assert.equal(rollbackRenameObserved, true);
       assert.throws(() => readFileSync(nativePath), /ENOENT/u);
       assert.throws(
         () => readNativeBuildProvenance(nativePath),
@@ -2166,6 +2379,229 @@ test("failure immediately after stage rename rolls back only the exact owned bin
       rmSync(repoRoot, { recursive: true, force: true });
     }
   });
+});
+
+test("a crash after rollback retirement is recovered from owner-bound paths", () => {
+  const repoRoot = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-native-rollback-crash-")),
+  );
+  try {
+    const { nativePath } = writeAuthenticatedPair(
+      repoRoot,
+      "prior-native-output",
+      sourceState({
+        sourceGitRevision: "c".repeat(40),
+        sourceTreeSha256: "d".repeat(64),
+      }),
+    );
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          bytes: "replacement-native-output",
+          repoRoot,
+          publicationFailpoint(stage) {
+            if (stage === "after-binary-rename") {
+              throw new Error("injected publication failure");
+            }
+            if (stage === "after-binary-rollback-rename") {
+              throw new Error("injected rollback crash");
+            }
+          },
+        }),
+      /owner-bound rollback both failed/u,
+    );
+    const directory = path.dirname(nativePath);
+    const nativeName = path.basename(nativePath);
+    const names = readdirSync(directory);
+    const lockName = `.${nativeName}.publish-lock`;
+    const owner = JSON.parse(
+      readFileSync(path.join(directory, lockName, "owner.json"), "utf8"),
+    );
+    assert.equal(existsSync(nativePath), false);
+    assert.equal(
+      names.filter((name) =>
+        name.startsWith(`.${nativeName}.stage-`),
+      ).length,
+      1,
+    );
+    assert.equal(
+      names.filter((name) =>
+        name.startsWith(`.${nativeName}.retired-`),
+      ).length,
+      1,
+    );
+
+    let restoredBeforeRepublish = false;
+    assert.throws(
+      () =>
+        runFixtureNativeBuild({
+          bytes: "unused-new-output",
+          publicationOwnerIsAlive(pid) {
+            assert.equal(pid, process.pid);
+            return false;
+          },
+          publicationFailpoint(stage) {
+            if (stage !== "after-invalidation") return;
+            assert.equal(
+              readFileSync(nativePath, "utf8"),
+              "prior-native-output",
+            );
+            restoredBeforeRepublish = true;
+            throw new Error("stop after stale-owner recovery");
+          },
+          repoRoot,
+        }),
+      /stop after stale-owner recovery/u,
+    );
+    assert.equal(restoredBeforeRepublish, true);
+    assert.equal(readFileSync(nativePath, "utf8"), "prior-native-output");
+    assertNoPublicationTransients(nativePath, {
+      allowedStaleOwners: [owner.owner_id],
+    });
+    assert.throws(
+      () => readNativeBuildProvenance(nativePath),
+      /ENOENT|unreadable/u,
+    );
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("post-rename rollback retains ownership when its final is missing or replaced", async (t) => {
+  for (const scenario of ["missing", "replaced"]) {
+    await t.test(scenario, (subtest) => {
+      const repoRoot = realpathSync(
+        mkdtempSync(
+          path.join(os.tmpdir(), "iroha-js-native-rollback-ambiguous-"),
+        ),
+      );
+      subtest.after(() => {
+        rmSync(repoRoot, { recursive: true, force: true });
+      });
+      const { nativePath } = writeAuthenticatedPair(
+        repoRoot,
+        "prior-native-output",
+        sourceState({
+          sourceGitRevision: "c".repeat(40),
+          sourceTreeSha256: "d".repeat(64),
+        }),
+      );
+      assert.throws(
+        () =>
+          runFixtureNativeBuild({
+            bytes: "replacement-native-output",
+            repoRoot,
+            publicationFailpoint(stage) {
+              if (stage !== "after-binary-rename") return;
+              rmSync(nativePath);
+              if (scenario === "replaced") {
+                writeFileSync(nativePath, "unowned-racing-output");
+              }
+              throw new Error("injected ambiguous rollback");
+            },
+          }),
+        /owner-bound rollback both failed/u,
+      );
+      if (scenario === "missing") {
+        assert.equal(existsSync(nativePath), false);
+      } else {
+        assert.equal(
+          readFileSync(nativePath, "utf8"),
+          "unowned-racing-output",
+        );
+      }
+      const directory = path.dirname(nativePath);
+      const nativeName = path.basename(nativePath);
+      const names = readdirSync(directory);
+      assert.equal(
+        names.includes(`.${nativeName}.publish-lock`),
+        true,
+      );
+      assert.equal(
+        names.filter((name) =>
+          name.startsWith(`.${nativeName}.retired-`),
+        ).length,
+        1,
+      );
+      assert.throws(
+        () => readNativeBuildProvenance(nativePath),
+        /ENOENT|unreadable/u,
+      );
+    });
+  }
+});
+
+test("publication cleanup retains ownership when an owned stage or retired file disappears", async (t) => {
+  for (const scenario of ["stage", "retired"]) {
+    await t.test(scenario, (subtest) => {
+      const repoRoot = realpathSync(
+        mkdtempSync(
+          path.join(os.tmpdir(), "iroha-js-native-owned-disappear-"),
+        ),
+      );
+      subtest.after(() => {
+        rmSync(repoRoot, { recursive: true, force: true });
+      });
+      const { nativePath } = writeAuthenticatedPair(
+        repoRoot,
+        "prior-native-output",
+        sourceState({
+          sourceGitRevision: "c".repeat(40),
+          sourceTreeSha256: "d".repeat(64),
+        }),
+      );
+      const nativeName = path.basename(nativePath);
+      const directory = path.dirname(nativePath);
+      assert.throws(
+        () =>
+          runFixtureNativeBuild({
+            bytes: "replacement-native-output",
+            repoRoot,
+            publicationFailpoint(stage) {
+              const targetPhase =
+                scenario === "stage"
+                  ? "after-invalidation"
+                  : "after-binary-retire";
+              if (stage !== targetPhase) return;
+              const ownedPrefix =
+                scenario === "stage"
+                  ? `.${nativeName}.stage-`
+                  : `.${nativeName}.retired-`;
+              const owned = readdirSync(directory).filter((name) =>
+                name.startsWith(ownedPrefix),
+              );
+              assert.equal(owned.length, 1);
+              rmSync(path.join(directory, owned[0]));
+              throw new Error(`injected missing ${scenario}`);
+            },
+          }),
+        /owner-bound rollback both failed/u,
+      );
+      const names = readdirSync(directory);
+      assert.equal(
+        names.includes(`.${nativeName}.publish-lock`),
+        true,
+      );
+      if (scenario === "stage") {
+        assert.equal(
+          readFileSync(nativePath, "utf8"),
+          "prior-native-output",
+        );
+      } else {
+        assert.equal(existsSync(nativePath), false);
+        assert.equal(
+          names.filter((name) =>
+            name.startsWith(`.${nativeName}.stage-`),
+          ).length,
+          1,
+        );
+      }
+      assert.throws(
+        () => readNativeBuildProvenance(nativePath),
+        /ENOENT|unreadable/u,
+      );
+    });
+  }
 });
 
 test("failure after binary publication cannot leave stale provenance valid", () => {
@@ -2275,14 +2711,25 @@ test("a final-binary switch after sidecar publication invalidates that sidecar",
             symlinkSync(victimPath, path_);
           },
         }),
-      /canonical singly linked regular file/u,
+      /owner-bound rollback both failed/u,
     );
     assert.equal(readFileSync(victimPath, "utf8"), "switch-victim-bytes");
     assert.throws(
       () => readNativeBuildProvenance(nativePath),
       /ENOENT|unreadable/u,
     );
-    assertNoPublicationTransients(nativePath);
+    const names = readdirSync(path.dirname(nativePath));
+    const nativeName = path.basename(nativePath);
+    assert.equal(
+      names.includes(`.${nativeName}.publish-lock`),
+      true,
+    );
+    assert.equal(
+      names.filter((name) =>
+        name.startsWith(`.${nativeName}.retired-`),
+      ).length,
+      1,
+    );
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }

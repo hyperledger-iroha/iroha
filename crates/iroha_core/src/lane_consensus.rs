@@ -221,7 +221,7 @@ impl LaneBlockNewViewBodyV1 {
         let mut out = Vec::with_capacity(512);
         out.extend_from_slice(b"iroha:nexus:lane-new-view:v1");
         out.extend_from_slice(
-            &norito::to_bytes(self).expect("lane NewView body must encode canonically"),
+            &norito::encode_canonical(self).expect("lane NewView body must encode canonically"),
         );
         out
     }
@@ -763,7 +763,7 @@ impl LaneExecutablePayloadV1 {
 
     fn producer_signature_preimage(&self) -> Vec<u8> {
         let descriptor = &self.origin_proposal.descriptor;
-        norito::to_bytes(&LaneExecutablePayloadSignaturePreimage {
+        norito::encode_canonical(&LaneExecutablePayloadSignaturePreimage {
             purpose: "nexus:lane-executable-payload-signature:v2".to_owned(),
             version: self.version,
             chain_id_hash: self.chain_id_hash,
@@ -901,7 +901,7 @@ pub(crate) fn autonomous_lane_payload_envelope(
     {
         return Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint);
     }
-    let canonical_payload = norito::to_bytes(payload)
+    let canonical_payload = norito::encode_canonical(payload)
         .map_err(|_| LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding)?;
     if canonical_payload.is_empty()
         || canonical_payload.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES
@@ -925,7 +925,7 @@ pub(crate) fn autonomous_lane_payload_envelope(
         producer: payload.producer.clone(),
         canonical_payload,
     };
-    let envelope_bytes = norito::to_bytes(&envelope)
+    let envelope_bytes = norito::encode_canonical(&envelope)
         .map_err(|_| LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding)?;
     if envelope_bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
         return Err(LaneAutonomousArtifactError::PayloadEnvelopeByteLimitExceeded);
@@ -936,8 +936,8 @@ pub(crate) fn autonomous_lane_payload_envelope(
 /// Canonically decode and validate one globally anchored autonomous payload.
 ///
 /// Both the opaque payload frame and the complete envelope are checked against
-/// their actual encoded byte budgets. Decoding followed by exact re-encoding
-/// rejects alternate layouts and trailing data before any identity is trusted.
+/// their actual encoded byte budgets. Canonical decoding rejects alternate
+/// layouts and trailing data before any identity is trusted.
 pub(crate) fn decode_autonomous_lane_payload_envelope(
     envelope: &AutonomousLanePayloadEnvelopeV1,
     expected_chain_id_hash: Hash,
@@ -951,22 +951,17 @@ pub(crate) fn decode_autonomous_lane_payload_envelope(
     {
         return Err(LaneAutonomousArtifactError::PayloadEnvelopeByteLimitExceeded);
     }
-    let envelope_bytes = norito::to_bytes(envelope)
+    let envelope_bytes = norito::encode_canonical(envelope)
         .map_err(|_| LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding)?;
     if envelope_bytes.len() > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES {
         return Err(LaneAutonomousArtifactError::PayloadEnvelopeByteLimitExceeded);
     }
 
-    let payload = norito::decode_from_bytes_with_limits::<LaneExecutablePayloadV1>(
+    let payload = norito::decode_canonical_with_limits::<LaneExecutablePayloadV1>(
         &envelope.canonical_payload,
         AUTONOMOUS_LANE_PAYLOAD_DECODE_LIMITS,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding)?;
-    let canonical_payload = norito::to_bytes(&payload)
-        .map_err(|_| LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding)?;
-    if canonical_payload != envelope.canonical_payload {
-        return Err(LaneAutonomousArtifactError::InvalidCanonicalPayloadEncoding);
-    }
     if payload.origin_proposal.payload_block_hint.is_some()
         || payload.origin_proposal.descriptor.lane_block_view != 0
     {
@@ -1095,7 +1090,7 @@ fn validate_lane_payload_availability_body_shape(
     {
         return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
     }
-    if norito::to_bytes(body).map_or(true, |encoded| {
+    if norito::encode_canonical(body).map_or(true, |encoded| {
         encoded.len() > MAX_LANE_PAYLOAD_AVAILABILITY_BODY_BYTES
     }) {
         return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
@@ -1340,7 +1335,7 @@ pub(crate) fn validate_lane_payload_availability_qc(
     {
         return Err(LaneAutonomousArtifactError::InvalidAvailabilityBitmap);
     }
-    if norito::to_bytes(qc).map_or(true, |encoded| {
+    if norito::encode_canonical(qc).map_or(true, |encoded| {
         encoded.len() > MAX_LANE_PAYLOAD_AVAILABILITY_QC_BYTES
     }) {
         return Err(LaneAutonomousArtifactError::InvalidAvailabilityBody);
@@ -1426,7 +1421,7 @@ pub(crate) fn compute_lane_executable_payload_hash(
         routing_plans: routing_plans.to_vec(),
         native_amx_receipts: native_amx_receipts.to_vec(),
     };
-    let bytes = norito::to_bytes(&preimage)
+    let bytes = norito::encode_canonical(&preimage)
         .map_err(|_| LaneAutonomousArtifactError::PayloadHashMismatch)?;
     Ok(Hash::new(bytes))
 }
@@ -1927,7 +1922,8 @@ impl LaneDrainVoteV1 {
         if !self.body.intent.validator_set.contains(&self.signer) {
             return Err(LaneDrainCertificateError::SignerNotInCommittee);
         }
-        if norito::to_bytes(self).map_or(true, |encoded| encoded.len() > MAX_LANE_DRAIN_VOTE_BYTES)
+        if norito::encode_canonical(self)
+            .map_or(true, |encoded| encoded.len() > MAX_LANE_DRAIN_VOTE_BYTES)
         {
             return Err(LaneDrainCertificateError::VoteTooLarge);
         }
@@ -2039,7 +2035,7 @@ pub(crate) fn validate_lane_drain_certificate(
     if certificate.validator_set.as_slice() != body.intent.validator_set.as_slice() {
         return Err(LaneDrainCertificateError::InvalidValidatorSet);
     }
-    if norito::to_bytes(certificate).map_or(true, |encoded| {
+    if norito::encode_canonical(certificate).map_or(true, |encoded| {
         encoded.len() > MAX_LANE_DRAIN_CERTIFICATE_BYTES
     }) {
         return Err(LaneDrainCertificateError::CertificateTooLarge);
@@ -6239,6 +6235,37 @@ mod tests {
             .expect("canonical autonomous anchor decodes");
         assert_eq!(decoded, payload);
         assert_eq!(decoded.reservation_keys.encode(), reservation_bytes);
+        let payload_hash = payload
+            .computed_payload_hash()
+            .expect("compute canonical payload identity");
+        let producer_preimage = payload.producer_signature_preimage();
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                autonomous_lane_payload_envelope(&payload, chain_id_hash, epoch)
+                    .expect("encode envelope under alternate ambient layout"),
+                envelope,
+                "autonomous envelope bytes must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                decode_autonomous_lane_payload_envelope(&envelope, chain_id_hash, epoch)
+                    .expect("decode canonical envelope under alternate ambient layout"),
+                payload
+            );
+            assert_eq!(
+                payload
+                    .computed_payload_hash()
+                    .expect("compute payload identity under alternate ambient layout"),
+                payload_hash
+            );
+            assert_eq!(
+                payload.producer_signature_preimage(),
+                producer_preimage,
+                "producer signature identity must ignore the caller's ambient Norito layout"
+            );
+        }
 
         let producer_key = keypairs
             .iter()

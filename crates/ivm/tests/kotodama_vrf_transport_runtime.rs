@@ -133,7 +133,7 @@ seiyaku VrfEntrypointBytes {
 }
 
 #[test]
-fn vrf_verify_batch_accepts_empty_entrypoint_bytes() {
+fn vrf_verify_batch_rejects_empty_entrypoint_bytes() {
     let source = r#"
 seiyaku VrfBatchEntrypointBytes {
   view fn run(bytes batch) -> bytes {
@@ -149,13 +149,9 @@ seiyaku VrfBatchEntrypointBytes {
     }));
     let vm = compile_and_run(source, Some(&arguments));
 
-    let output = vm
-        .validate_tlv(vm.register(10))
-        .expect("empty VRF batch output pointer");
-    assert_eq!(output.type_id, PointerType::NoritoBytes);
-    let outputs: Vec<[u8; 32]> =
-        norito::decode_from_bytes(output.payload).expect("decode empty VRF output vector");
-    assert!(outputs.is_empty());
+    assert_eq!(vm.register(10), 0);
+    assert_eq!(vm.register(11), 9, "empty batch bound status");
+    assert_eq!(vm.register(12), u64::MAX);
 }
 
 #[test]

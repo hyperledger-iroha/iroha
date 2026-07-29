@@ -319,7 +319,7 @@ impl LaneDrainIntentV1 {
     /// Return the domain-separated canonical intent hash.
     #[must_use]
     pub fn canonical_hash(&self) -> HashOf<Self> {
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .expect("lane drain intent must have a canonical Norito encoding");
         HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
             LANE_DRAIN_INTENT_HASH_DOMAIN,
@@ -354,7 +354,7 @@ impl LaneDrainCertificateBodyV1 {
     /// Build the domain-separated BLS signature preimage.
     #[must_use]
     pub fn signature_preimage(&self) -> Vec<u8> {
-        let encoded = norito::to_bytes(self)
+        let encoded = norito::encode_canonical(self)
             .expect("lane drain certificate body must have a canonical Norito encoding");
         let mut preimage =
             Vec::with_capacity(LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN.len() + encoded.len());
@@ -388,7 +388,7 @@ impl LaneDrainCertificateV1 {
     /// Return the domain-separated canonical certificate hash.
     #[must_use]
     pub fn canonical_hash(&self) -> HashOf<Self> {
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .expect("lane drain certificate must have a canonical Norito encoding");
         HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
             LANE_DRAIN_CERTIFICATE_HASH_DOMAIN,
@@ -657,12 +657,12 @@ pub struct MergeLaneExecution {
     ///
     /// The concrete reservation type belongs to `iroha_core`, so the data model
     /// retains its exact canonical bytes without introducing a dependency cycle.
-    /// Producers must use [`norito::to_bytes`]; headerless codec payloads are not
+    /// Producers must use [`norito::encode_canonical`]; headerless codec payloads are not
     /// valid at this protocol boundary.
     pub reservation_keys: Vec<Vec<u8>>,
     /// Canonical framed Norito encodings of the complete routing plans, aligned
     /// one-for-one with `entrypoints` and `reservation_keys`.
-    /// Producers must use [`norito::to_bytes`]; headerless codec payloads are not
+    /// Producers must use [`norito::encode_canonical`]; headerless codec payloads are not
     /// valid at this protocol boundary.
     pub routing_plans: Vec<Vec<u8>>,
     /// Producer-authenticated native-AMX receipts aligned one-for-one with
@@ -777,7 +777,8 @@ impl MergeLedgerEntry {
     /// Return the canonical framed Norito bytes used by hash-addressed entry sidecars.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        norito::to_bytes(self).expect("merge-ledger entry must have a canonical Norito encoding")
+        norito::encode_canonical(self)
+            .expect("merge-ledger entry must have a canonical Norito encoding")
     }
 
     /// Return the single canonical, domain-separated hash used by compact block
@@ -1307,6 +1308,23 @@ mod tests {
         assert_eq!(entry.lane_count(), 2);
         assert_eq!(entry.lane_tips().len(), 2);
         assert_eq!(entry.merge_hint_roots().len(), 2);
+        let canonical_entry_bytes = entry.canonical_bytes();
+        let canonical_entry_hash = entry.canonical_hash();
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                entry.canonical_bytes(),
+                canonical_entry_bytes,
+                "merge entry bytes must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                entry.canonical_hash(),
+                canonical_entry_hash,
+                "merge entry identity must ignore the caller's ambient Norito layout"
+            );
+        }
 
         let encoded = Encode::encode(&entry);
         let decoded = MergeLedgerEntry::decode(&mut &encoded[..])
@@ -1592,6 +1610,26 @@ mod tests {
         let certificate = sample_lane_drain_certificate();
         let certificate_hash = certificate.canonical_hash();
         let signature_preimage = certificate.body.signature_preimage();
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                intent.canonical_hash(),
+                intent_hash,
+                "drain intent identity must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                certificate.body.signature_preimage(),
+                signature_preimage,
+                "drain signature preimage must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                certificate.canonical_hash(),
+                certificate_hash,
+                "drain certificate identity must ignore the caller's ambient Norito layout"
+            );
+        }
         let encoded = certificate.encode();
         let decoded = LaneDrainCertificateV1::decode(&mut encoded.as_slice())
             .expect("lane drain certificate round-trips");

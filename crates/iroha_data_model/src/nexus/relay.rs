@@ -102,8 +102,8 @@ impl PartialOrd for LaneRelayEnvelope {
 
 impl Ord for LaneRelayEnvelope {
     fn cmp(&self, other: &Self) -> Ordering {
-        let lhs = norito::to_bytes(self).expect("lane relay envelope should encode");
-        let rhs = norito::to_bytes(other).expect("lane relay envelope should encode");
+        let lhs = norito::encode_canonical(self).expect("lane relay envelope should encode");
+        let rhs = norito::encode_canonical(other).expect("lane relay envelope should encode");
         lhs.cmp(&rhs)
     }
 }
@@ -280,7 +280,7 @@ pub fn lane_relay_fastpq_claim_digest(
         settlement_commitment: envelope.settlement_commitment.clone(),
         settlement_hash: envelope.settlement_hash,
     };
-    let bytes = norito::to_bytes(&claim)?;
+    let bytes = norito::encode_canonical(&claim)?;
     Ok(Hash::new(bytes))
 }
 
@@ -635,7 +635,7 @@ impl LaneRelayEnvelope {
             settlement_hash: self.settlement_hash,
             rbc_bytes_total: self.rbc_bytes_total,
         };
-        let bytes = norito::to_bytes(&hint)?;
+        let bytes = norito::encode_canonical(&hint)?;
         Ok(Hash::new(bytes))
     }
 
@@ -957,7 +957,7 @@ impl VerifiedFeeSponsorVaultAllocation {
 pub fn compute_settlement_hash(
     settlement: &LaneBlockCommitment,
 ) -> Result<HashOf<LaneBlockCommitment>, LaneRelayError> {
-    let bytes = norito::to_bytes(settlement)?;
+    let bytes = norito::encode_canonical(settlement)?;
     Ok(HashOf::from_untyped_unchecked(Hash::new(bytes)))
 }
 
@@ -1412,6 +1412,52 @@ mod tests {
     }
 
     #[test]
+    fn relay_consensus_identities_ignore_ambient_layout_flags() {
+        let qc = qc_with_bitmap(vec![0b0000_0001], 8, vec![0xCC; 48]);
+        let envelope = build_envelope(8, Some(qc))
+            .with_manifest_root(Some([0x42; 32]))
+            .with_lane_block_descriptor_hash(Some(Hash::new(b"canonical-relay-descriptor")));
+        let mut ordered_peer = envelope.clone();
+        ordered_peer.rbc_bytes_total = ordered_peer.rbc_bytes_total.saturating_add(1);
+        let baseline = (
+            envelope.cmp(&ordered_peer),
+            lane_relay_fastpq_claim_digest(&envelope).expect("canonical FASTPQ claim digest"),
+            envelope
+                .merge_hint_root()
+                .expect("canonical merge hint root"),
+            compute_settlement_hash(&envelope.settlement_commitment)
+                .expect("canonical settlement hash"),
+        );
+        let canonical_wire =
+            norito::encode_canonical(&envelope).expect("encode canonical relay envelope");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+        let (alternate_wire, alternate) = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            (
+                norito::to_bytes(&envelope).expect("encode alternate-layout relay envelope"),
+                (
+                    envelope.cmp(&ordered_peer),
+                    lane_relay_fastpq_claim_digest(&envelope)
+                        .expect("ambient-independent FASTPQ claim digest"),
+                    envelope
+                        .merge_hint_root()
+                        .expect("ambient-independent merge hint root"),
+                    compute_settlement_hash(&envelope.settlement_commitment)
+                        .expect("ambient-independent settlement hash"),
+                ),
+            )
+        };
+
+        assert_ne!(alternate_wire, canonical_wire);
+        assert_eq!(
+            alternate, baseline,
+            "relay ordering and consensus identity hashes must use canonical framing"
+        );
+    }
+
+    #[test]
     fn verify_rejects_settlement_total_mismatch_when_receipts_are_present() {
         let mut envelope = build_envelope(6, None);
         let one_micro = "0.000001"
@@ -1850,6 +1896,16 @@ mod tests {
             lease_id: Hash::new(b"lease-a"),
         };
         let original = fee_sponsor_vault_allocation_claim_digest(&claim);
+        let ambient = {
+            let alternate_flags =
+                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            fee_sponsor_vault_allocation_claim_digest(&claim)
+        };
+        assert_eq!(
+            ambient, original,
+            "the sponsor allocation proof preimage must ignore ambient Norito layout"
+        );
 
         let mut changed = claim.clone();
         changed.verified_allocation = Quantity::from(11_u32);
@@ -1887,6 +1943,23 @@ mod tests {
             &Quantity::from(10_u32),
             DataSpaceId::new(2),
             40,
+        );
+        let ambient = {
+            let alternate_flags =
+                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            fee_sponsor_vault_source_state_root(
+                &program_id,
+                3,
+                &asset_definition_id,
+                &Quantity::from(10_u32),
+                DataSpaceId::new(2),
+                40,
+            )
+        };
+        assert_eq!(
+            ambient, original,
+            "the sponsor source-state commitment must ignore ambient Norito layout"
         );
 
         assert_ne!(

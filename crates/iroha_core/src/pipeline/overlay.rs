@@ -540,6 +540,18 @@ fn map_program_analysis_error(err: ProgramAnalysisError) -> OverlayBuildError {
     }
 }
 
+fn reject_state_free_axt_syscalls(bytecode: &[u8]) -> Result<(), OverlayBuildError> {
+    let analysis = ivm::analysis::analyze_program(bytecode).map_err(map_program_analysis_error)?;
+    if let Some(usage) = analysis
+        .syscalls
+        .iter()
+        .find(|usage| ivm::syscalls::is_axt_syscall(usage.number))
+    {
+        return Err(OverlayBuildError::StateRequiredSyscall(usage.number));
+    }
+    Ok(())
+}
+
 fn map_program_summary_error(error: ivm::VMError) -> OverlayBuildError {
     OverlayBuildError::HeaderPolicy(crate::smartcontracts::ivm::admission_reason_from_vm_error(
         error,
@@ -2067,6 +2079,7 @@ fn tx_overlay_from_host_queued<R: StateReadOnly>(
     state_ro: &R,
     queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
     ivm_gas_used: u64,
+    completed_axt: Vec<ivm::axt::HostAxtState>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
     durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
 ) -> TxOverlay {
@@ -2091,7 +2104,7 @@ fn tx_overlay_from_host_queued<R: StateReadOnly>(
         queued_instructions,
         execution_contexts,
         ivm_gas_used,
-        Vec::new(),
+        completed_axt,
         durable_state_overlay,
         durable_state_authorizations,
     )
@@ -2219,16 +2232,13 @@ where
     let amx_limits =
         crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
     host.set_amx_limits(amx_limits);
-    host.set_axt_timing(state_ro.nexus().axt);
-    host.hydrate_axt_replay_ledger(state_ro);
+    host.hydrate_axt_state(state_ro)?;
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
     host.set_bound_contract_records_by_subject_snapshot(
         code::snapshot_bound_contract_records_by_subject(state_ro),
     );
-    let snapshot = state_ro.axt_policy_snapshot();
-    host = host.with_axt_policy_snapshot(&snapshot);
     apply_streaming_metadata(&mut host, streaming_meta);
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
@@ -2252,10 +2262,12 @@ where
     let queued = host.drain_queued_instructions_with_contract_runtime_context(None);
     let (durable_state_overlay, durable_state_authorizations) =
         host.drain_durable_state_overlay_with_authorizations();
+    let completed_axt = host.drain_completed_axt_states();
     let overlay = tx_overlay_from_host_queued(
         state_ro,
         queued,
         ivm_gas_used,
+        completed_axt,
         durable_state_overlay,
         durable_state_authorizations,
     );
@@ -2412,8 +2424,7 @@ where
                 state_ro.pipeline(),
             );
             host.set_amx_limits(amx_limits);
-            host.set_axt_timing(state_ro.nexus().axt);
-            host.hydrate_axt_replay_ledger(state_ro);
+            host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -2422,8 +2433,6 @@ where
             if let Some(pending) = lifecycle_transition {
                 host.set_contract_lifecycle_transition(&call.contract_address, pending);
             }
-            let snapshot = state_ro.axt_policy_snapshot();
-            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
@@ -2444,6 +2453,7 @@ where
             );
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
+            let completed_axt = host.drain_completed_axt_states();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
                 if !trace.is_empty() {
@@ -2474,6 +2484,7 @@ where
                 state_ro,
                 queued,
                 ivm_gas_used,
+                completed_axt,
                 durable_state_overlay,
                 durable_state_authorizations,
             )
@@ -2587,8 +2598,7 @@ where
                 state_ro.pipeline(),
             );
             host.set_amx_limits(amx_limits);
-            host.set_axt_timing(state_ro.nexus().axt);
-            host.hydrate_axt_replay_ledger(state_ro);
+            host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -2597,8 +2607,6 @@ where
             host.set_bound_contract_records_by_subject_snapshot(
                 code::snapshot_bound_contract_records_by_subject(state_ro),
             );
-            let snapshot = state_ro.axt_policy_snapshot();
-            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
@@ -2619,6 +2627,7 @@ where
             );
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
+            let completed_axt = host.drain_completed_axt_states();
             // Emit a ZK-lane job with the formal trace (non-forking background verification)
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
@@ -2659,6 +2668,7 @@ where
                 state_ro,
                 queued,
                 ivm_gas_used,
+                completed_axt,
                 durable_state_overlay,
                 durable_state_authorizations,
             )
@@ -2782,11 +2792,12 @@ pub fn build_overlay_for_transaction_with_accounts(
                     Arc::new(accounts.to_vec()),
                 )
             };
-            host.set_generic_execution();
+            host.set_state_free_generic_execution();
             apply_streaming_metadata(&mut host, StreamingOverlayMetadata::default());
             vm.set_host(host);
             vm.load_program(bytecode.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
+            reject_state_free_axt_syscalls(bytecode.as_ref())?;
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             run_vm(&mut vm)?;
@@ -2962,15 +2973,12 @@ where
                 state_ro.pipeline(),
             );
             host.set_amx_limits(amx_limits);
-            host.set_axt_timing(state_ro.nexus().axt);
-            host.hydrate_axt_replay_ledger(state_ro);
+            host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
-            let snapshot = state_ro.axt_policy_snapshot();
-            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
@@ -3005,6 +3013,7 @@ where
             );
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
+            let completed_axt = host.drain_completed_axt_states();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
                 if !trace.is_empty() {
@@ -3035,6 +3044,7 @@ where
                     state_ro,
                     queued,
                     ivm_gas_used,
+                    completed_axt,
                     durable_state_overlay,
                     durable_state_authorizations,
                 )
@@ -3157,8 +3167,7 @@ where
                 state_ro.pipeline(),
             );
             host.set_amx_limits(amx_limits);
-            host.set_axt_timing(state_ro.nexus().axt);
-            host.hydrate_axt_replay_ledger(state_ro);
+            host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -3167,8 +3176,6 @@ where
             host.set_bound_contract_records_by_subject_snapshot(
                 code::snapshot_bound_contract_records_by_subject(state_ro),
             );
-            let snapshot = state_ro.axt_policy_snapshot();
-            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
@@ -3200,6 +3207,7 @@ where
             );
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
+            let completed_axt = host.drain_completed_axt_states();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
                 if !trace.is_empty() {
@@ -3239,6 +3247,7 @@ where
                     state_ro,
                     queued,
                     ivm_gas_used,
+                    completed_axt,
                     durable_state_overlay,
                     durable_state_authorizations,
                 )
@@ -3457,8 +3466,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 state_ro.pipeline(),
             );
             host.set_amx_limits(amx_limits);
-            host.set_axt_timing(state_ro.nexus().axt);
-            host.hydrate_axt_replay_ledger(state_ro);
+            host.hydrate_axt_state(state_ro)?;
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -3467,8 +3475,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             if let Some(pending) = lifecycle_transition {
                 host.set_contract_lifecycle_transition(&call.contract_address, pending);
             }
-            let snapshot = state_ro.axt_policy_snapshot();
-            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
             #[cfg(feature = "telemetry")]
             host.set_telemetry(state_ro.metrics().clone());
@@ -3505,11 +3511,13 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             );
             let (durable_state_overlay, durable_state_authorizations) =
                 host.drain_durable_state_overlay_with_authorizations();
+            let completed_axt = host.drain_completed_axt_states();
             Ok(PreparedTxOverlay::new(
                 tx_overlay_from_host_queued(
                     state_ro,
                     queued,
                     ivm_gas_used,
+                    completed_axt,
                     durable_state_overlay,
                     durable_state_authorizations,
                 )
@@ -3566,6 +3574,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             if max_cycles_cap > 0 {
                 eff = eff.min(max_cycles_cap);
             }
+            let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
                 .ok_or_else(|| {
@@ -3613,32 +3622,47 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 .checkout_runtime(tx_gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
             let mut host = if let Some(context) = contract_call_context.as_ref() {
-                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_argument_record(
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_argument_record(
                     tx.authority().clone(),
                     Arc::clone(&accounts),
                     context.argument_record.clone(),
                 )
             } else {
-                crate::smartcontracts::ivm::host::CoreHost::with_accounts(
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
                     tx.authority().clone(),
                     Arc::clone(&accounts),
                 )
             };
             host.set_prepared_contract_cache(summary.prepared_contract_cache());
+            host.set_amx_analysis(amx_analysis);
+            let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
+                state_ro.pipeline(),
+            );
+            host.set_amx_limits(amx_limits);
+            host.hydrate_axt_state(state_ro)?;
+            host.set_public_inputs_from_parameters(state_ro.world().parameters());
+            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_query_state(state_ro);
             host.set_contract_runtime_context(contract_runtime_context.clone());
             host.set_contract_entrypoint_authorization(Some(entrypoint_authorization.clone()));
             host.set_bound_contract_records_by_subject_snapshot(
                 code::snapshot_bound_contract_records_by_subject(state_ro),
             );
             apply_streaming_metadata(&mut host, streaming_meta);
-            vm.set_host(host);
+            #[cfg(feature = "telemetry")]
+            host.set_telemetry(state_ro.metrics().clone());
+            host.set_crypto_config(state_ro.crypto());
+            host.set_zk_config(state_ro.zk());
+            host.set_chain_id(state_ro.chain_id());
+            host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
+                .map_err(OverlayBuildError::IvmRun)?;
             vm.set_max_cycles(eff);
             vm.set_gas_limit(tx_gas_limit);
             apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             // Run with a simple wall-clock budget check (post-hoc reject).
             #[cfg(feature = "telemetry")]
             let t_start = std::time::Instant::now();
-            let res = run_vm(&mut vm);
+            let res = run_vm_with_host(&mut vm, &mut host);
             // Check wall-clock budget
             if max_millis_cap > 0 {
                 let elapsed_ms = {
@@ -3657,24 +3681,18 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             }
             res?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-            let (queued, durable_state_overlay, durable_state_authorizations) = if let Some(h) =
-                vm.host_mut_any()
-                && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
-            {
-                let queued = host.drain_queued_instructions_with_contract_runtime_context(
-                    contract_runtime_context.clone(),
-                );
-                let (durable_state_overlay, durable_state_authorizations) =
-                    host.drain_durable_state_overlay_with_authorizations();
-                (queued, durable_state_overlay, durable_state_authorizations)
-            } else {
-                (Vec::new(), BTreeMap::new(), BTreeMap::new())
-            };
+            let queued = host.drain_queued_instructions_with_contract_runtime_context(
+                contract_runtime_context.clone(),
+            );
+            let (durable_state_overlay, durable_state_authorizations) =
+                host.drain_durable_state_overlay_with_authorizations();
+            let completed_axt = host.drain_completed_axt_states();
             Ok(PreparedTxOverlay::new(
                 tx_overlay_from_host_queued(
                     state_ro,
                     queued,
                     ivm_gas_used,
+                    completed_axt,
                     durable_state_overlay,
                     durable_state_authorizations,
                 )
@@ -3780,6 +3798,19 @@ mod tests_overlay_manifest {
         );
         assert!(
             !OverlayBuildError::IvmLoad(ivm::VMError::InvalidMetadata).may_change_with_live_state()
+        );
+        assert!(
+            !OverlayBuildError::StateRequiredSyscall(ivm::syscalls::SYSCALL_AXT_BEGIN)
+                .may_change_with_live_state()
+        );
+        assert!(
+            !OverlayBuildError::InvalidAxtPolicySnapshot(
+                iroha_data_model::nexus::AxtPolicySnapshotValidationError::VersionMismatch {
+                    expected: 0,
+                    actual: 1,
+                },
+            )
+            .may_change_with_live_state()
         );
         assert!(
             OverlayBuildError::IvmProvedReplay("state-dependent replay".to_owned())
@@ -4434,6 +4465,38 @@ mod tests_overlay_manifest {
                 error,
                 OverlayBuildError::IvmLoad(ivm::VMError::GenericSyscallNotAllowed { syscall })
             );
+        }
+    }
+
+    #[test]
+    fn state_free_generic_overlay_rejects_every_axt_syscall_before_execution() {
+        let (authority, keypair) = gen_account_in("wonderland");
+
+        for syscall in [
+            ivm::syscalls::SYSCALL_AXT_BEGIN,
+            ivm::syscalls::SYSCALL_AXT_TOUCH,
+            ivm::syscalls::SYSCALL_AXT_COMMIT,
+            ivm::syscalls::SYSCALL_VERIFY_DS_PROOF,
+            ivm::syscalls::SYSCALL_USE_ASSET_HANDLE,
+        ] {
+            let program = minimal_generic_program_with_syscall(syscall);
+            assert!(
+                matches!(
+                    IvmCache::new().summarize_executable(&program),
+                    Ok(ExecutableProgramSummary::Generic(_))
+                ),
+                "live-state generic ABI V1 admission must retain AXT syscall 0x{syscall:02x}"
+            );
+            let transaction = state_free_generic_transaction(
+                authority.clone(),
+                &keypair,
+                program,
+                Metadata::default(),
+            );
+
+            let error = build_overlay_for_transaction_with_accounts(&transaction, &[])
+                .expect_err("state-free execution must reject the complete AXT surface");
+            assert_eq!(error, OverlayBuildError::StateRequiredSyscall(syscall));
         }
     }
 
@@ -6266,6 +6329,92 @@ mod tests {
     }
 
     #[test]
+    fn ivm_proved_canonical_boundaries_reject_alternate_outer_and_nested_layouts() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![[7_u8; 32]]],
+            envelope_bytes: vec![1, 2, 3],
+        };
+        let canonical_open = norito::encode_canonical(&open).expect("canonical STARK open proof");
+        assert_eq!(
+            decode_ivm_proved_stark_open_proof(&canonical_open)
+                .expect("canonical nested proof must decode"),
+            open
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_open = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&open).expect("alternate-layout STARK open proof")
+        };
+        assert_ne!(alternate_open, canonical_open);
+        assert!(decode_ivm_proved_stark_open_proof(&alternate_open).is_err());
+
+        let envelope = ZkOpenVerifyEnvelope {
+            backend: ZkBackendTag::Stark,
+            circuit_id: "stark/fri/sha256-goldilocks:ivm-execution-v1".to_owned(),
+            vk_hash: [9_u8; 32],
+            public_inputs: b"ivm-execution-v1".to_vec(),
+            proof_bytes: canonical_open,
+            aux: Vec::new(),
+        };
+        let canonical_envelope =
+            norito::encode_canonical(&envelope).expect("canonical OpenVerifyEnvelope");
+        assert_eq!(
+            decode_ivm_proved_open_envelope(&canonical_envelope)
+                .expect("canonical outer envelope must decode"),
+            envelope
+        );
+
+        let alternate_envelope = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("alternate-layout OpenVerifyEnvelope")
+        };
+        assert_ne!(alternate_envelope, canonical_envelope);
+        assert!(decode_ivm_proved_open_envelope(&alternate_envelope).is_err());
+
+        let nested_alternate_envelope = ZkOpenVerifyEnvelope {
+            proof_bytes: alternate_open,
+            ..envelope
+        };
+        let nested_alternate_bytes = norito::encode_canonical(&nested_alternate_envelope)
+            .expect("canonical outer envelope with alternate nested proof");
+        let decoded_outer = decode_ivm_proved_open_envelope(&nested_alternate_bytes)
+            .expect("outer envelope remains canonical");
+        assert!(decode_ivm_proved_stark_open_proof(&decoded_outer.proof_bytes).is_err());
+    }
+
+    #[test]
+    fn ivm_proved_commitment_encoders_ignore_ambient_norito_layout() {
+        let trace = IvmTraceBundleV1 {
+            register_trace: Vec::new(),
+            constraints: Vec::new(),
+            memory_log: Vec::new(),
+            register_log: Vec::new(),
+            step_log: Vec::new(),
+        };
+        let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = Vec::new().into();
+        let expected_trace_hash =
+            expected_ivm_trace_hash(&trace).expect("canonical trace commitment");
+        let expected_overlay =
+            norito::encode_canonical(&overlay).expect("canonical overlay encoding");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_eq!(
+            expected_ivm_trace_hash(&trace).expect("ambient-independent trace commitment"),
+            expected_trace_hash
+        );
+        assert_eq!(
+            encode_proved_overlay_bounded(&overlay, expected_overlay.len())
+                .expect("bounded canonical overlay"),
+            expected_overlay
+        );
+    }
+
+    #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
@@ -6335,6 +6484,123 @@ mod tests {
     }
 
     #[test]
+    fn plain_ivm_axt_only_overlay_persists_envelope_and_replay_guard() {
+        use iroha_data_model::{
+            block::BlockHeader,
+            nexus::{AxtHandleReplayKey, DataSpaceId, LaneId},
+        };
+        use ivm::axt::{
+            AssetHandle, GroupBinding, HandleBudget, HandleSubject, HandleUsage, ProofBlob,
+            RemoteSpendIntent, SpendOp, TouchManifest,
+        };
+        use nonzero_ext::nonzero;
+
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let dsid = DataSpaceId::UNIVERSAL;
+        let lane = LaneId::new(0);
+        let (descriptor, binding) = ivm::axt::AxtDescriptor::builder()
+            .dataspace(dsid)
+            .build_with_binding()
+            .expect("AXT descriptor");
+        let handle = AssetHandle {
+            scope: vec!["transfer".to_owned()],
+            subject: HandleSubject {
+                account: authority.to_string(),
+                origin_dsid: Some(dsid),
+            },
+            budget: HandleBudget {
+                remaining: "10".parse().expect("canonical handle quantity"),
+                per_use: Some("10".parse().expect("canonical per-use quantity")),
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![0xA5; 32],
+                epoch_id: 1,
+            },
+            target_lane: lane,
+            axt_binding: binding.to_vec(),
+            manifest_view_root: vec![0x5A; 32],
+            expiry_slot: 40,
+            max_clock_skew_ms: Some(0),
+        };
+        let intent = RemoteSpendIntent {
+            asset_dsid: dsid,
+            op: SpendOp {
+                kind: "transfer".to_owned(),
+                from: authority.to_string(),
+                to: "destination".to_owned(),
+                amount: Some("5".parse().expect("canonical spend quantity")),
+            },
+        };
+        let replay_key = AxtHandleReplayKey::from_parts(binding, 1, 1, lane);
+        let mut completed = ivm::axt::HostAxtState::new(descriptor, binding);
+        completed
+            .record_touch(
+                dsid,
+                TouchManifest {
+                    read: Vec::new(),
+                    write: Vec::new(),
+                },
+            )
+            .expect("record empty canonical touch");
+        completed
+            .record_proof(
+                dsid,
+                Some(ProofBlob {
+                    payload: vec![1],
+                    expiry_slot: None,
+                }),
+                None,
+            )
+            .expect("record AXT proof");
+        completed
+            .record_handle(HandleUsage {
+                handle,
+                intent,
+                proof: None,
+                amount: "5".parse().expect("canonical used quantity"),
+                amount_commitment: None,
+            })
+            .expect("record AXT handle");
+        completed.validate_commit().expect("completed AXT fixture");
+
+        let state = crate::state::State::new_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let overlay = tx_overlay_from_host_queued(
+            &state.view(),
+            Vec::new(),
+            1,
+            vec![completed],
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        assert!(
+            !overlay.is_empty(),
+            "AXT-only plain IVM execution must not collapse into an empty overlay"
+        );
+        assert!(overlay.has_durable_state_changes());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        overlay
+            .apply(&mut state_tx, &authority)
+            .expect("AXT-only plain IVM overlay applies");
+        state_tx.apply();
+
+        assert_eq!(block.axt_envelopes().len(), 1);
+        assert_eq!(block.axt_envelopes()[0].binding.as_bytes(), &binding);
+        assert!(
+            block.world.axt_replay_ledger.get(&replay_key).is_some(),
+            "plain overlay application must retain the consumed handle replay guard"
+        );
+    }
+
+    #[test]
     fn ivm_proved_axt_only_replay_is_not_dropped() {
         use iroha_data_model::block::BlockHeader;
         use nonzero_ext::nonzero;
@@ -6391,7 +6657,7 @@ mod tests {
         let envelopes = block.axt_envelopes();
         assert_eq!(envelopes.len(), 1, "verified AXT envelope must persist");
         assert_eq!(envelopes[0].binding.as_bytes(), &binding);
-        assert_eq!(envelopes[0].commit_height, Some(1));
+        assert_eq!(envelopes[0].commit_height, 1);
     }
 
     #[test]
@@ -7161,10 +7427,10 @@ seiyaku ProtectedProvedOverlay {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -7310,10 +7576,10 @@ seiyaku ProtectedProvedOverlay {
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
         };
@@ -9937,6 +10203,10 @@ pub enum OverlayBuildError {
     IvmLoad(IvmError),
     /// Running the VM to collect queued ISIs failed.
     IvmRun(IvmError),
+    /// A syscall requiring coherent live world state appeared in a state-free run.
+    StateRequiredSyscall(u32),
+    /// The replicated AXT policy snapshot is not canonical.
+    InvalidAxtPolicySnapshot(iroha_data_model::nexus::AxtPolicySnapshotValidationError),
     /// AXT policy rejected the envelope with structured context.
     AxtReject(AxtRejectContext),
     /// AMX budget violation during overlay execution.
@@ -9974,12 +10244,25 @@ impl core::fmt::Display for OverlayBuildError {
             OverlayBuildError::GasLimit(msg) => write!(f, "{msg}"),
             OverlayBuildError::IvmLoad(e) => write!(f, "ivm.load_program: {e}"),
             OverlayBuildError::IvmRun(e) => write!(f, "ivm.run: {e}"),
+            OverlayBuildError::StateRequiredSyscall(syscall) => write!(
+                f,
+                "IVM syscall 0x{syscall:06x} requires a coherent live state view"
+            ),
+            OverlayBuildError::InvalidAxtPolicySnapshot(e) => {
+                write!(f, "invalid AXT policy snapshot: {e}")
+            }
             OverlayBuildError::AxtReject(ctx) => write!(f, "axt_reject: {ctx}"),
             OverlayBuildError::AmxBudgetViolation(v) => write!(f, "{}", amx_timeout_message(v)),
             OverlayBuildError::QuarantineOverflow => write!(f, "quarantine overflow"),
             OverlayBuildError::ZkProof(msg) => write!(f, "zk_proof: {msg}"),
             OverlayBuildError::IvmProvedReplay(msg) => write!(f, "zk_proof: {msg}"),
         }
+    }
+}
+
+impl From<iroha_data_model::nexus::AxtPolicySnapshotValidationError> for OverlayBuildError {
+    fn from(error: iroha_data_model::nexus::AxtPolicySnapshotValidationError) -> Self {
+        Self::InvalidAxtPolicySnapshot(error)
     }
 }
 
@@ -10326,7 +10609,7 @@ fn append_len_prefixed_str(out: &mut Vec<u8>, value: &str) {
 }
 
 fn expected_ivm_trace_hash(trace_bundle: &IvmTraceBundleV1) -> Result<Hash, OverlayBuildError> {
-    let trace_bytes = norito::to_bytes(trace_bundle)
+    let trace_bytes = norito::encode_canonical(trace_bundle)
         .map_err(|_| OverlayBuildError::ZkProof("failed to encode IVM trace bundle".to_owned()))?;
     Ok(sha256_to_hash(&trace_bytes))
 }
@@ -10486,8 +10769,7 @@ where
     let amx_limits =
         crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
     host.set_amx_limits(amx_limits);
-    host.set_axt_timing(state_ro.nexus().axt);
-    host.hydrate_axt_replay_ledger(state_ro);
+    host.hydrate_axt_state(state_ro)?;
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
@@ -10498,8 +10780,6 @@ where
     host.set_bound_contract_records_by_subject_snapshot(
         code::snapshot_bound_contract_records_by_subject(state_ro),
     );
-    let snapshot = state_ro.axt_policy_snapshot();
-    host = host.with_axt_policy_snapshot(&snapshot);
     apply_streaming_metadata(
         &mut host,
         resolve_streaming_metadata(state_ro, tx.authority()),
@@ -10597,6 +10877,20 @@ pub(crate) struct IvmProvedReplay {
     pub(crate) events_commitment: Hash,
     pub(crate) gas_used: u64,
     pub(crate) trace_hash: Hash,
+}
+
+fn decode_ivm_proved_open_envelope(
+    bytes: &[u8],
+) -> Result<ZkOpenVerifyEnvelope, OverlayBuildError> {
+    norito::decode_canonical(bytes)
+        .map_err(|_| OverlayBuildError::ZkProof("malformed OpenVerifyEnvelope".to_owned()))
+}
+
+fn decode_ivm_proved_stark_open_proof(
+    bytes: &[u8],
+) -> Result<StarkFriOpenProofV1, OverlayBuildError> {
+    norito::decode_canonical(bytes)
+        .map_err(|_| OverlayBuildError::ZkProof("malformed STARK open proof".to_owned()))
 }
 
 pub(crate) fn verify_ivm_proved_execution<R>(
@@ -10794,8 +11088,7 @@ where
     }
 
     // Decode and sanity-check the OpenVerifyEnvelope carried in the proof box.
-    let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
-        .map_err(|_| OverlayBuildError::ZkProof("malformed OpenVerifyEnvelope".to_owned()))?;
+    let env = decode_ivm_proved_open_envelope(&attachment.proof.bytes)?;
     let max_envelope_proof_bytes = match backend_kind {
         IvmProvedBackendKind::Halo2Ipa => zk_cfg.halo2.max_proof_bytes,
         IvmProvedBackendKind::StarkFriV1 => zk_cfg.stark.max_proof_bytes,
@@ -10862,7 +11155,7 @@ where
         ));
     }
     let overlay_hash = {
-        let bytes = norito::to_bytes(&proved.overlay).map_err(|_| {
+        let bytes = norito::encode_canonical(&proved.overlay).map_err(|_| {
             OverlayBuildError::ZkProof("failed to encode proved overlay".to_owned())
         })?;
         Hash::new(&bytes)
@@ -10886,8 +11179,7 @@ where
             })?
         }
         IvmProvedBackendKind::StarkFriV1 => {
-            let open: StarkFriOpenProofV1 = norito::decode_from_bytes(&env.proof_bytes)
-                .map_err(|_| OverlayBuildError::ZkProof("malformed STARK open proof".to_owned()))?;
+            let open = decode_ivm_proved_stark_open_proof(&env.proof_bytes)?;
             if open.version != 1 {
                 return Err(OverlayBuildError::ZkProof(
                     "unsupported STARK open proof version".to_owned(),
@@ -11007,6 +11299,8 @@ fn encode_proved_overlay_bounded<T: norito::NoritoSerialize>(
     max_bytes: usize,
 ) -> Result<Vec<u8>, OverlayBuildError> {
     let mut writer = BoundedSeekBuffer::new(max_bytes);
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     norito::core::to_writer_seek(&mut writer, value).map_err(|_| {
         OverlayBuildError::ZkProof(format!(
             "proved overlay exceeds the {max_bytes}-byte tooling transport limit"
@@ -11174,8 +11468,7 @@ where
     let amx_limits =
         crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(state_ro.pipeline());
     host.set_amx_limits(amx_limits);
-    host.set_axt_timing(state_ro.nexus().axt);
-    host.hydrate_axt_replay_ledger(state_ro);
+    host.hydrate_axt_state(state_ro)?;
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
@@ -11186,8 +11479,6 @@ where
     host.set_bound_contract_records_by_subject_snapshot(
         code::snapshot_bound_contract_records_by_subject(state_ro),
     );
-    let snapshot = state_ro.axt_policy_snapshot();
-    host = host.with_axt_policy_snapshot(&snapshot);
     apply_streaming_metadata(&mut host, streaming_meta);
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
@@ -11244,7 +11535,7 @@ where
         let bytes = if let Some(max_output_bytes) = max_output_bytes {
             encode_proved_overlay_bounded(&overlay, max_output_bytes)?
         } else {
-            norito::to_bytes(&overlay).map_err(|_| {
+            norito::encode_canonical(&overlay).map_err(|_| {
                 OverlayBuildError::ZkProof("failed to encode proved overlay".to_owned())
             })?
         };

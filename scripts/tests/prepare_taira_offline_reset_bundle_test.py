@@ -277,6 +277,28 @@ class TairaOfflineConfigTests(unittest.TestCase):
             config["nexus"]["storage"]["disk_budget_weights"],
             offline_reset.PUBLIC_TAIRA_STORAGE_BUDGET_WEIGHTS,
         )
+        staged = tomllib.loads(
+            offline_reset.staged_check_config_text(
+                rendered, bundle, "ab" * 32
+            )
+        )
+        staged_offline = staged["settlement"]["offline"]
+        self.assertEqual(
+            staged_offline["kagemusha_release_policy_path"],
+            str(bundle / "kagemusha/release-policy-v1.norito"),
+        )
+        self.assertEqual(
+            staged_offline["kagemusha_artifact_dir"],
+            str(bundle / "kagemusha/catalog"),
+        )
+        self.assertEqual(
+            config["settlement"]["offline"]["kagemusha_artifact_dir"],
+            str(
+                offline_reset.TAIRA_RELEASE_INSTALL_ROOT
+                / ("ab" * 32)
+                / "catalog"
+            ),
+        )
 
     def test_replaces_existing_storage_budget_without_losing_other_settings(
         self,

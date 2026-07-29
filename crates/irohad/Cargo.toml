@@ -30,7 +30,7 @@ embedded-soracloud-runtime = []
 # test explicitly requests it.
 test-network-message-control = []
 fastpq-gpu = ["fastpq_prover/fastpq-gpu", "iroha_core/fastpq-gpu"]
-zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
+zk-stark = ["dep:sha2", "iroha_core/zk-stark", "iroha_torii/zk-stark"]
 sm = [
     "iroha_core/sm",
     "iroha_crypto/sm",
@@ -72,6 +72,11 @@ required-features = ["build-i2"]
 name = "irohad"
 path = "src/bin/irohad.rs"
 required-features = ["build-i3"]
+
+[[bin]]
+name = "taira_privacy_prebundle_gate"
+path = "src/bin/taira_privacy_prebundle_gate.rs"
+required-features = ["zk-stark"]
 
 [badges]
 is-it-maintained-issue-resolution = { repository = "https://github.com/hyperledger-iroha/iroha" }

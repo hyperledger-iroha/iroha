@@ -14,8 +14,8 @@ mod mixed_hardware_consensus;
 mod mixed_ops;
 #[path = "../mock_wsv.rs"]
 mod mock_wsv;
-#[path = "../mock_wsv_decode_fallback.rs"]
-mod mock_wsv_decode_fallback;
+#[path = "../mock_wsv_instruction_box.rs"]
+mod mock_wsv_instruction_box;
 #[path = "../nop.rs"]
 mod nop;
 #[path = "../norito_nft_decode.rs"]

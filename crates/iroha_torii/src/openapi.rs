@@ -24518,7 +24518,7 @@ fn openapi_schemas() -> Map {
         "TimeNowResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["now", "offset_ms", "confidence_ms", "sample_count", "peer_count", "fallback", "health"],
+            "required": ["now", "offset_ms", "confidence_ms", "sample_count", "peer_count", "enforcement_mode", "fallback", "health"],
             "additionalProperties": false,
             "properties": {
                 "now": {
@@ -24545,6 +24545,11 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Number of peers with recent samples."
+                },
+                "enforcement_mode": {
+                    "type": "string",
+                    "enum": ["warn", "reject"],
+                    "description": "Configured admission behavior while network time is unhealthy."
                 },
                 "fallback": {
                     "type": "boolean",
@@ -24631,7 +24636,7 @@ fn openapi_schemas() -> Map {
         "TimeStatusResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["peers", "samples_used", "offset_ms", "confidence_ms", "fallback", "health", "samples", "rtt", "note"],
+            "required": ["peers", "samples_used", "offset_ms", "confidence_ms", "enforcement_mode", "fallback", "health", "samples", "rtt", "note"],
             "additionalProperties": false,
             "properties": {
                 "peers": {
@@ -24653,6 +24658,11 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Confidence interval (±ms) reported by the network time service."
+                },
+                "enforcement_mode": {
+                    "type": "string",
+                    "enum": ["warn", "reject"],
+                    "description": "Configured admission behavior while network time is unhealthy."
                 },
                 "fallback": {
                     "type": "boolean",
@@ -27206,10 +27216,9 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         "iroha-ivm-private-note-stark-v1",
         "pq-masp-stark-v0",
     ];
-    const PROOF_SYSTEM_LABELS: [&str; 10] = [
+    const PROOF_SYSTEM_LABELS: [&str; 9] = [
         "stark-fri-sha256-goldilocks",
-        "stark-fri-poseidon2-goldilocks",
-        "zk-ams-transparent-stark-poseidon2-goldilocks-mlsags-ristretto255-sha3-512",
+        "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
         "anonymous-pgc-p256",
         "iroha-verange-p256",
         "vega-neutron-nova-spartan-hyrax-t256",
@@ -27220,7 +27229,7 @@ fn privacy_capability_schemas(schemas: &mut Map) {
     ];
     const ENGINE_LABELS: [&str; 9] = [
         "native-goldilocks-stark-fri",
-        "native-zk-ams-transparent-stark-mlsags-ristretto255",
+        "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
         "native-anonymous-pgc-p256",
         "native-verange-p256",
         "native-vega",

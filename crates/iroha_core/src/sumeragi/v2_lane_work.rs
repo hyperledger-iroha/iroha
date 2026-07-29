@@ -20,7 +20,7 @@ use std::sync::{Barrier, mpsc};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     block::{
-        BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
+        AutonomousLanePayloadEnvelopeV1, BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
             CertPhase, LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockDescriptorV1,
             LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
@@ -362,13 +362,11 @@ fn merge_lane_execution_carries_lane(
         .zip(&execution.native_amx_receipts)
         .any(
             |((((entrypoint, entrypoint_hash), encoded_reservation), encoded_plan), receipt)| {
-                let Ok(reservation) =
-                    norito::decode_from_bytes::<LaneQueueReservationKeyV2>(encoded_reservation)
+                let Some(reservation) = decode_canonical_merge_reservation_key(encoded_reservation)
                 else {
                     return true;
                 };
-                let Ok(routing_plan) = norito::decode_from_bytes::<RoutingPlan>(encoded_plan)
-                else {
+                let Some(routing_plan) = decode_canonical_merge_routing_plan(encoded_plan) else {
                     return true;
                 };
                 let computed_entrypoint_hash = entrypoint.hash();
@@ -404,6 +402,14 @@ fn merge_lane_execution_carries_lane(
                 })
             },
         )
+}
+
+fn decode_canonical_merge_reservation_key(encoded: &[u8]) -> Option<LaneQueueReservationKeyV2> {
+    norito::decode_canonical(encoded).ok()
+}
+
+fn decode_canonical_merge_routing_plan(encoded: &[u8]) -> Option<RoutingPlan> {
+    norito::decode_canonical(encoded).ok()
 }
 
 fn merge_execution_batch_carries_lane(
@@ -1730,6 +1736,12 @@ enum AutonomousProducerBatchOutcome {
     Released,
 }
 
+fn canonical_autonomous_lane_payload_envelope_len(
+    envelope: &AutonomousLanePayloadEnvelopeV1,
+) -> Result<usize, norito::Error> {
+    norito::encode_canonical(envelope).map(|bytes| bytes.len())
+}
+
 #[cfg(test)]
 struct LanePersistencePause {
     entered: mpsc::SyncSender<()>,
@@ -2474,9 +2486,9 @@ impl V2LaneWorkAdapter {
             self.context.epoch,
         )
         .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
-        let envelope_bytes = norito::to_bytes(&envelope)
+        let envelope_len = canonical_autonomous_lane_payload_envelope_len(&envelope)
             .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
-        if envelope_bytes.len() > batch.envelope_byte_limit {
+        if envelope_len > batch.envelope_byte_limit {
             self.release_autonomous_reservation_batch(&batch)?;
             return Ok(AutonomousProducerBatchOutcome::Released);
         }
@@ -11719,11 +11731,8 @@ impl V2LaneWorkAdapter {
             .leader_candidate_body
             .as_ref()
             .ok_or_else(|| "merge leader candidate body is absent".to_owned())?;
-        let candidate = norito::decode_from_bytes::<crate::merge::MergeLedgerCandidate>(body)
-            .map_err(|error| format!("merge leader candidate body does not decode: {error}"))?;
-        if candidate.canonical_bytes() != *body {
-            return Err("merge leader candidate body is not canonical".to_owned());
-        }
+        let candidate = norito::decode_canonical::<crate::merge::MergeLedgerCandidate>(body)
+            .map_err(|error| format!("merge leader candidate body is not canonical: {error}"))?;
         let expected_epoch = self
             .state
             .merge_ledger()
@@ -26528,6 +26537,52 @@ pub(super) mod tests {
         assert!(prepared.native_amx_receipts.is_empty());
         assert!(prepared.lane_payload_ownerships.is_empty());
         assert_eq!(prepared.autonomous_lane_payloads.len(), 1);
+        let baseline_len =
+            canonical_autonomous_lane_payload_envelope_len(&prepared.autonomous_lane_payloads[0])
+                .expect("measure canonical autonomous envelope");
+        let alternate_len = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            canonical_autonomous_lane_payload_envelope_len(&prepared.autonomous_lane_payloads[0])
+                .expect("measure ambient-independent autonomous envelope")
+        };
+        assert_eq!(
+            alternate_len, baseline_len,
+            "producer byte accounting must use the canonical envelope layout"
+        );
+        let canonical_reservation = norito::encode_canonical(&payload.reservation_keys[0])
+            .expect("encode canonical autonomous reservation identity");
+        let canonical_routing_plan =
+            norito::encode_canonical(&routing_plan).expect("encode canonical autonomous route");
+        let (alternate_reservation, alternate_routing_plan) = {
+            let alternate_flags =
+                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            (
+                norito::to_bytes(&payload.reservation_keys[0])
+                    .expect("encode alternate-layout autonomous reservation"),
+                norito::to_bytes(&routing_plan).expect("encode alternate-layout autonomous route"),
+            )
+        };
+        assert_ne!(alternate_reservation, canonical_reservation);
+        assert_ne!(alternate_routing_plan, canonical_routing_plan);
+        assert_eq!(
+            decode_canonical_merge_reservation_key(&canonical_reservation),
+            Some(payload.reservation_keys[0].clone())
+        );
+        assert_eq!(
+            decode_canonical_merge_routing_plan(&canonical_routing_plan),
+            Some(routing_plan.clone())
+        );
+        assert!(
+            decode_canonical_merge_reservation_key(&alternate_reservation).is_none(),
+            "alternate-layout reservation identity must fail closed"
+        );
+        assert!(
+            decode_canonical_merge_routing_plan(&alternate_routing_plan).is_none(),
+            "alternate-layout routing identity must fail closed"
+        );
         assert_eq!(
             decode_autonomous_lane_payload_envelope(
                 &prepared.autonomous_lane_payloads[0],
@@ -27671,6 +27726,57 @@ pub(super) mod tests {
                 .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
                 .expect("read untouched signing guard"),
             None
+        );
+    }
+
+    #[test]
+    fn merge_leader_candidate_body_is_canonical_under_ambient_layout() {
+        let (mut adapter, keys) = fixture_with_durable_parent(wire::ConsensusMode::Permissioned);
+        let view = remote_merge_leader_view(&adapter);
+        let candidate =
+            record_production_merge_candidate_for_persistence_retry(&adapter, &keys, view);
+        adapter
+            .retain_merge_sidecars_for_global_view(view, None, None)
+            .expect("install exact unlocked follower directive");
+        adapter.drain_effects(usize::MAX);
+        let leader = adapter.context.leader(view);
+        let share = signed_merge_share_for_test(&adapter, &keys, &candidate, leader);
+        let parent = adapter
+            .state
+            .latest_block_header_fast()
+            .expect("fixture has exact committed parent");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+
+        let decoded = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            adapter.decode_and_validate_leader_candidate(&share, view, &parent)
+        }
+        .expect("canonical leader body remains valid under alternate ambient flags");
+        assert_eq!(decoded, candidate);
+
+        let canonical_body =
+            norito::encode_canonical(&candidate).expect("encode canonical merge candidate");
+        assert_eq!(
+            share.leader_candidate_body.as_deref(),
+            Some(canonical_body.as_slice())
+        );
+        let alternate_body = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&candidate).expect("encode alternate-layout merge candidate")
+        };
+        assert_ne!(alternate_body, canonical_body);
+        let mut noncanonical = share;
+        noncanonical.leader_candidate_body = Some(alternate_body);
+        let reason = {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            adapter
+                .decode_and_validate_leader_candidate(&noncanonical, view, &parent)
+                .expect_err("alternate-layout leader body must fail closed")
+        };
+        assert!(
+            reason.contains("not canonical"),
+            "unexpected alternate-layout rejection: {reason}"
         );
     }
 

@@ -3,14 +3,14 @@
 //! Keeping ABI-shape validation independent of instruction emission ensures
 //! `check` and `build` reject the same oversized or unsupported typed values.
 
-use crate::semantic::{self, ExprKind, Type, TypedExpr};
+use crate::semantic::{ExprKind, Type, TypedExpr};
 
 pub(crate) fn state_value_kind_for_type(
     ty: &Type,
 ) -> Option<ivm_abi::state_value::StateValueKindV1> {
     use ivm_abi::state_value::StateValueKindV1 as Kind;
 
-    Some(match semantic::resolve_struct_type(ty) {
+    Some(match ty {
         Type::Int => Kind::Int,
         Type::Decimal => Kind::Decimal,
         Type::Quantity => Kind::Quantity,
@@ -42,73 +42,100 @@ pub(crate) fn state_value_kind_for_type(
     })
 }
 
-fn append_state_value_schema_nodes(
-    ty: &Type,
-    nodes: &mut Vec<ivm_abi::state_value::StateValueNodeV1>,
-) -> bool {
+fn state_value_schema_nodes(ty: &Type) -> Option<Vec<ivm_abi::state_value::StateValueNodeV1>> {
     use ivm_abi::state_value::StateValueNodeV1 as Node;
 
-    match semantic::resolve_struct_type(ty) {
-        Type::Struct { name, fields } => {
-            nodes.push(Node::Struct {
-                name,
-                fields: fields.iter().map(|(name, _)| name.clone()).collect(),
-            });
-            fields
-                .iter()
-                .all(|(_, field_ty)| append_state_value_schema_nodes(field_ty, nodes))
-        }
-        Type::Tuple(items) => {
-            let Ok(arity) = u16::try_from(items.len()) else {
-                return false;
-            };
-            nodes.push(Node::Tuple { arity });
-            items
-                .iter()
-                .all(|item| append_state_value_schema_nodes(item, nodes))
-        }
-        Type::Option(inner) => {
-            nodes.push(Node::Option);
-            append_state_value_schema_nodes(&inner, nodes)
-        }
-        Type::Result(ok, err) => {
-            nodes.push(Node::Result);
-            append_state_value_schema_nodes(&ok, nodes)
-                && append_state_value_schema_nodes(&err, nodes)
-        }
-        Type::List(element, capacity) => {
-            let mut element_nodes = Vec::new();
-            if !append_state_value_schema_nodes(&element, &mut element_nodes) {
-                return false;
-            }
-            let element = ivm_abi::state_value::StateValueSchemaV1 {
-                nodes: element_nodes,
-            };
-            if !element.validate() {
-                return false;
-            }
-            nodes.push(Node::List {
-                element: Box::new(element),
+    enum Pending<'a> {
+        Visit {
+            ty: &'a Type,
+            target: usize,
+        },
+        FinishList {
+            target: usize,
+            element_target: usize,
+            capacity: u8,
+        },
+    }
+
+    let mut node_streams = vec![Vec::new()];
+    let mut pending = vec![Pending::Visit { ty, target: 0 }];
+    while let Some(item) = pending.pop() {
+        match item {
+            Pending::FinishList {
+                target,
+                element_target,
                 capacity,
-            });
-            true
-        }
-        leaf => {
-            let Some(kind) = state_value_kind_for_type(&leaf) else {
-                return false;
-            };
-            nodes.push(Node::Leaf(kind));
-            true
+            } => {
+                let element_nodes = std::mem::take(node_streams.get_mut(element_target)?);
+                let element = ivm_abi::state_value::StateValueSchemaV1 {
+                    nodes: element_nodes,
+                };
+                if !element.validate() {
+                    return None;
+                }
+                node_streams.get_mut(target)?.push(Node::List {
+                    element: Box::new(element),
+                    capacity,
+                });
+            }
+            Pending::Visit { ty, target } => match ty {
+                Type::Struct { name, fields } => {
+                    node_streams.get_mut(target)?.push(Node::Struct {
+                        name: name.clone(),
+                        fields: fields.iter().map(|(name, _)| name.clone()).collect(),
+                    });
+                    pending.extend(fields.iter().rev().map(|(_, field_ty)| Pending::Visit {
+                        ty: field_ty,
+                        target,
+                    }));
+                }
+                Type::Tuple(items) => {
+                    let arity = u16::try_from(items.len()).ok()?;
+                    node_streams.get_mut(target)?.push(Node::Tuple { arity });
+                    pending.extend(
+                        items
+                            .iter()
+                            .rev()
+                            .map(|item| Pending::Visit { ty: item, target }),
+                    );
+                }
+                Type::Option(inner) => {
+                    node_streams.get_mut(target)?.push(Node::Option);
+                    pending.push(Pending::Visit { ty: inner, target });
+                }
+                Type::Result(ok, err) => {
+                    node_streams.get_mut(target)?.push(Node::Result);
+                    pending.push(Pending::Visit { ty: err, target });
+                    pending.push(Pending::Visit { ty: ok, target });
+                }
+                Type::List(element, capacity) => {
+                    let element_target = node_streams.len();
+                    node_streams.push(Vec::new());
+                    pending.push(Pending::FinishList {
+                        target,
+                        element_target,
+                        capacity: *capacity,
+                    });
+                    pending.push(Pending::Visit {
+                        ty: element,
+                        target: element_target,
+                    });
+                }
+                leaf => {
+                    node_streams
+                        .get_mut(target)?
+                        .push(Node::Leaf(state_value_kind_for_type(leaf)?));
+                }
+            },
         }
     }
+    node_streams.into_iter().next()
 }
 
 pub(crate) fn state_value_schema(ty: &Type) -> Option<ivm_abi::state_value::StateValueSchemaV1> {
-    let mut nodes = Vec::new();
-    if !append_state_value_schema_nodes(ty, &mut nodes) {
-        return None;
-    }
-    let schema = ivm_abi::state_value::StateValueSchemaV1 { nodes };
+    let schema = ivm_abi::state_value::StateValueSchemaV1 {
+        nodes: state_value_schema_nodes(ty)?,
+    };
     schema.validate().then_some(schema)
 }
 
@@ -118,35 +145,34 @@ fn append_json_construction_schema_nodes(
 ) -> bool {
     use ivm_abi::json::JsonConstructionNodeV1 as Node;
 
-    match expression.kind() {
-        ExprKind::JsonObject(entries) => {
-            nodes.push(Node::Object {
-                keys: entries.iter().map(|(key, _)| key.clone()).collect(),
-            });
-            entries
-                .iter()
-                .all(|(_, value)| append_json_construction_schema_nodes(value, nodes))
-        }
-        ExprKind::JsonArray(elements) => {
-            let Ok(arity) = u16::try_from(elements.len()) else {
-                return false;
-            };
-            nodes.push(Node::Array { arity });
-            elements
-                .iter()
-                .all(|element| append_json_construction_schema_nodes(element, nodes))
-        }
-        _ => {
-            let Some(schema) = state_value_schema(&expression.ty) else {
-                return false;
-            };
-            if !ivm_abi::json::json_value_schema_is_supported(&schema) {
-                return false;
+    let mut pending = vec![expression];
+    while let Some(expression) = pending.pop() {
+        match expression.kind() {
+            ExprKind::JsonObject(entries) => {
+                nodes.push(Node::Object {
+                    keys: entries.iter().map(|(key, _)| key.clone()).collect(),
+                });
+                pending.extend(entries.iter().rev().map(|(_, value)| value));
             }
-            nodes.push(Node::Value { schema });
-            true
+            ExprKind::JsonArray(elements) => {
+                let Ok(arity) = u16::try_from(elements.len()) else {
+                    return false;
+                };
+                nodes.push(Node::Array { arity });
+                pending.extend(elements.iter().rev());
+            }
+            _ => {
+                let Some(schema) = state_value_schema(&expression.ty) else {
+                    return false;
+                };
+                if !ivm_abi::json::json_value_schema_is_supported(&schema) {
+                    return false;
+                }
+                nodes.push(Node::Value { schema });
+            }
         }
     }
+    true
 }
 
 /// A fully validated V1 native-JSON construction schema.
@@ -188,7 +214,8 @@ pub(crate) fn json_construction_schema(
     let word_count = schema
         .word_count()
         .ok_or(JsonConstructionSchemaError::InvalidShape)?;
-    let encoded = norito::to_bytes(&schema).map_err(|_| JsonConstructionSchemaError::Encoding)?;
+    let encoded = ivm_abi::codec::encode_canonical_norito(&schema)
+        .map_err(|_| JsonConstructionSchemaError::Encoding)?;
     if encoded.len() > ivm_abi::json::MAX_JSON_CONSTRUCTION_SCHEMA_BYTES_V1 {
         return Err(JsonConstructionSchemaError::EncodedSize);
     }
@@ -196,4 +223,36 @@ pub(crate) fn json_construction_schema(
         encoded,
         word_count,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_schema_construction_accepts_the_255_list_boundary_on_a_small_stack() {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut accepted = Type::Bool;
+                for _ in 0..255 {
+                    accepted = Type::List(Box::new(accepted), 1);
+                }
+                assert!(state_value_schema(&accepted).is_some());
+
+                let mut rejected = Type::Bool;
+                for _ in 0..256 {
+                    rejected = Type::List(Box::new(rejected), 1);
+                }
+                assert!(state_value_schema(&rejected).is_none());
+
+                // These source-type fixtures intentionally exercise construction rather
+                // than the recursive derived drop glue of the semantic-only test value.
+                std::mem::forget(accepted);
+                std::mem::forget(rejected);
+            })
+            .expect("spawn small-stack schema worker")
+            .join()
+            .expect("small-stack schema worker");
+    }
 }

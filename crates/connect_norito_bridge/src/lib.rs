@@ -57,7 +57,11 @@ use iroha_data_model::{
     name::Name,
     nexus::DataSpaceId,
     offline::{KagemushaConfidentialMerklePathV2, KagemushaNoteMembershipWitnessV2},
-    privacy::{PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1},
+    privacy::{
+        PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
+        PrivacyCapabilityArchiveValidationStatusV1, PrivacyCapabilitySnapshotV1,
+        PrivacyConsensusPolicyV1, PrivacyProtocolIdV1, validate_privacy_capability_archive_v1,
+    },
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
@@ -113,7 +117,7 @@ mod kagemusha_candidate_apple;
 #[cfg(all(feature = "kagemusha-candidate-evidence-lab", unix))]
 pub use kagemusha_candidate_scenario::validate_kagemusha_candidate_scenario_directory_v1;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 256 * 1024 * 1024;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -1252,10 +1256,6 @@ fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
     }
 }
 
-const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
-const PRIVACY_NORITO_SCHEMA_START: usize = 6;
-const PRIVACY_NORITO_SCHEMA_END: usize = 22;
-const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE: u8 = 0x50;
 const PRIVACY_BUFFER_HEADER_MAGIC: u64 = 0x4952_5041_484f_5249;
 const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHeader>();
 #[repr(C)]
@@ -1263,22 +1263,6 @@ const PRIVACY_BUFFER_HEADER_BYTES: usize = std::mem::size_of::<PrivacyBufferHead
 struct PrivacyBufferHeader {
     magic: u64,
     len: usize,
-}
-
-fn privacy_patch_archive_schema_hash(bytes: &mut [u8], schema_hash: [u8; 16]) -> bool {
-    let Some(schema) = bytes.get_mut(PRIVACY_NORITO_SCHEMA_START..PRIVACY_NORITO_SCHEMA_END) else {
-        return false;
-    };
-    schema.copy_from_slice(&schema_hash);
-    true
-}
-
-fn privacy_patch_archive_repeated_schema_byte(bytes: &mut [u8], schema_byte: u8) -> bool {
-    let Some(schema) = bytes.get_mut(PRIVACY_NORITO_SCHEMA_START..PRIVACY_NORITO_SCHEMA_END) else {
-        return false;
-    };
-    schema.fill(schema_byte);
-    true
 }
 
 fn privacy_capabilities() -> PrivacyCapabilitySnapshotV1 {
@@ -1328,7 +1312,7 @@ unsafe fn write_privacy_bytes(
         }
         return Ok(());
     }
-    if len > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES {
+    if len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
         return Err(ERR_CONNECT_ENCODE);
     }
     let total = PRIVACY_BUFFER_HEADER_BYTES
@@ -1370,7 +1354,7 @@ unsafe fn clear_privacy_allocated_buffer(ptr_: *mut c_uchar) -> *mut c_uchar {
     let valid = unsafe {
         (*header).magic == PRIVACY_BUFFER_HEADER_MAGIC
             && (*header).len > 0
-            && (*header).len <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
+            && (*header).len <= PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
     };
     if !valid {
         return ptr_;
@@ -1383,23 +1367,22 @@ unsafe fn clear_privacy_allocated_buffer(ptr_: *mut c_uchar) -> *mut c_uchar {
     header.cast::<c_uchar>()
 }
 
-fn write_privacy_payload<T: norito::NoritoSerialize>(
+fn write_privacy_payload(
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
-    payload: &T,
-    schema_byte: u8,
+    payload: &PrivacyCapabilitySnapshotV1,
 ) -> c_int {
     clear_privacy_output(out_ptr, out_len);
     if out_ptr.is_null() || out_len.is_null() {
         return ERR_NULL_PTR;
     }
-    let bytes = match norito::to_bytes(payload) {
+    let bytes = match norito::encode_canonical(payload) {
         Ok(bytes) => bytes,
         Err(_) => return ERR_CONNECT_ENCODE,
     };
     let mut bytes = bytes;
-    let result = if !privacy_patch_archive_repeated_schema_byte(&mut bytes, schema_byte)
-        || bytes.len() > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
+    let result = if bytes.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1
+        || !validate_privacy_capability_archive_v1(&bytes).is_valid()
     {
         ERR_CONNECT_ENCODE
     } else {
@@ -1421,12 +1404,35 @@ pub unsafe extern "C" fn iroha_privacy_capabilities_v1(
     if out_ptr.is_null() || out_len.is_null() {
         return ERR_NULL_PTR;
     }
-    write_privacy_payload(
-        out_ptr,
-        out_len,
-        &privacy_capabilities(),
-        PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-    )
+    write_privacy_payload(out_ptr, out_len, &privacy_capabilities())
+}
+
+/// Validate one untrusted canonical typed privacy capability snapshot.
+///
+/// The return value is a stable
+/// [`PrivacyCapabilityArchiveValidationStatusV1`] discriminant. Only zero
+/// means the archive is accepted.
+///
+/// # Safety
+///
+/// For a non-zero `archive_len`, `archive_ptr` must reference at least that
+/// many readable bytes for the duration of this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn iroha_privacy_validate_capabilities_v1(
+    archive_ptr: *const c_uchar,
+    archive_len: c_ulong,
+) -> c_int {
+    if archive_ptr.is_null() {
+        return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
+    }
+    let Ok(archive_len) = usize::try_from(archive_len) else {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    };
+    if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    }
+    let archive = unsafe { slice::from_raw_parts(archive_ptr, archive_len) };
+    validate_privacy_capability_archive_v1(archive).code()
 }
 
 fn parse_multisig_spec_bytes(ptr: *const c_char, len: c_ulong) -> BridgeResult<MultisigSpec> {
@@ -38139,20 +38145,23 @@ fn java_native_kagemusha_project_operation_status_v4(
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_privacy_public_archive<T: norito::NoritoSerialize>(
-    payload: &T,
-    schema_byte: u8,
+fn java_privacy_public_archive(
+    payload: &PrivacyCapabilitySnapshotV1,
     context: &str,
 ) -> Result<Vec<u8>, String> {
-    let mut archive =
-        norito::to_bytes(payload).map_err(|err| format!("failed to encode {context}: {err}"))?;
-    if !privacy_patch_archive_repeated_schema_byte(&mut archive, schema_byte) {
-        archive.fill(0);
-        return Err(format!("failed to patch {context} public schema"));
-    }
-    if archive.len() > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES {
+    let mut archive = norito::encode_canonical(payload)
+        .map_err(|err| format!("failed to encode {context}: {err}"))?;
+    if archive.len() > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
         archive.fill(0);
         return Err(format!("{context} archive exceeds maximum length"));
+    }
+    let status = validate_privacy_capability_archive_v1(&archive);
+    if !status.is_valid() {
+        archive.fill(0);
+        return Err(format!(
+            "{context} archive validation failed with status {}",
+            status.code()
+        ));
     }
     Ok(archive)
 }
@@ -38164,11 +38173,38 @@ fn java_privacy_public_archive<T: norito::NoritoSerialize>(
     target_os = "windows"
 ))]
 fn java_privacy_capabilities_archive() -> Result<Vec<u8>, String> {
-    java_privacy_public_archive(
-        &privacy_capabilities(),
-        PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE,
-        "privacy capabilities",
-    )
+    java_privacy_public_archive(&privacy_capabilities(), "privacy capabilities")
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_privacy_validate_capabilities(
+    env: &mut jni::JNIEnv<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    if archive.is_null() {
+        return PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code();
+    }
+    let archive_len = match env.get_array_length(&archive) {
+        Ok(value) => match usize::try_from(value) {
+            Ok(value) => value,
+            Err(_) => {
+                return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+            }
+        },
+        Err(_) => return PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
+    };
+    if archive_len > PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1 {
+        return PrivacyCapabilityArchiveValidationStatusV1::ArchiveTooLarge.code();
+    }
+    match env.convert_byte_array(&archive) {
+        Ok(bytes) => validate_privacy_capability_archive_v1(&bytes).code(),
+        Err(_) => PrivacyCapabilityArchiveValidationStatusV1::MalformedArchive.code(),
+    }
 }
 
 #[cfg(any(
@@ -38712,6 +38748,22 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNati
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeValidateCapabilities(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_capabilities(&mut env, archive)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeBridgeAbiVersion(
     _env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -38732,6 +38784,22 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jbyteArray {
     java_native_privacy_capabilities(&mut env)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeValidateCapabilities(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jint {
+    java_native_privacy_validate_capabilities(&mut env, archive)
 }
 
 #[cfg(any(
@@ -45695,12 +45763,8 @@ mod tests {
         out_len: c_ulong,
     ) -> PrivacyCapabilitySnapshotV1 {
         assert!(!out_ptr.is_null());
-        let mut bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
         iroha_privacy_free_buffer(out_ptr);
-        assert!(privacy_patch_archive_schema_hash(
-            &mut bytes,
-            <PrivacyCapabilitySnapshotV1 as norito::NoritoSerialize>::schema_hash(),
-        ));
         norito::decode_from_bytes(&bytes).expect("decode canonical privacy snapshot")
     }
 
@@ -45710,6 +45774,30 @@ mod tests {
         let mut out_len: c_ulong = 0;
         let status = unsafe { iroha_privacy_capabilities_v1(&mut out_ptr, &mut out_len) };
         assert_eq!(status, 0);
+        assert_eq!(
+            unsafe { iroha_privacy_validate_capabilities_v1(out_ptr, out_len) },
+            PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
+        assert_eq!(
+            unsafe { iroha_privacy_validate_capabilities_v1(ptr::null(), out_len) },
+            PrivacyCapabilityArchiveValidationStatusV1::NullPointer.code()
+        );
+        assert_eq!(
+            unsafe { iroha_privacy_validate_capabilities_v1(out_ptr, 0) },
+            PrivacyCapabilityArchiveValidationStatusV1::Empty.code()
+        );
+        let archive = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) };
+        let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("encode one-byte fake");
+        one_byte_fake[6..22].copy_from_slice(&archive[6..22]);
+        assert_ne!(
+            unsafe {
+                iroha_privacy_validate_capabilities_v1(
+                    one_byte_fake.as_ptr(),
+                    c_ulong::try_from(one_byte_fake.len()).expect("one-byte fake length"),
+                )
+            },
+            PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
+        );
         let snapshot = take_privacy_snapshot_output(out_ptr, out_len);
         snapshot.validate().expect("FFI capability snapshot");
         assert_eq!(snapshot.protocols.len(), PrivacyProtocolIdV1::COUNT);

@@ -467,6 +467,24 @@ pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;
 /// Use a capability handle granted by an asset DS inside an AXT.
 pub const SYSCALL_USE_ASSET_HANDLE: u32 = 0xB4;
 
+/// Return whether `number` is one of the state-backed AXT envelope syscalls.
+///
+/// AXT remains available to both contract and generic ABI V1 programs when
+/// execution is bound to a live world-state snapshot. State-free tools use
+/// this predicate to reject the whole envelope surface before execution
+/// instead of running against an implicit allow-all policy.
+#[must_use]
+pub const fn is_axt_syscall(number: u32) -> bool {
+    matches!(
+        number,
+        SYSCALL_AXT_BEGIN
+            | SYSCALL_AXT_TOUCH
+            | SYSCALL_AXT_COMMIT
+            | SYSCALL_VERIFY_DS_PROOF
+            | SYSCALL_USE_ASSET_HANDLE
+    )
+}
+
 /// Open and fund a native asset escrow.
 pub const SYSCALL_ESCROW_OPEN_OFFER: u32 = 0xB8;
 /// Accept an open native asset escrow.
@@ -2027,6 +2045,15 @@ struct AbiTypedStateValueSurface {
     norito_version_minor: u8,
     norito_default_encode_flags: u8,
     enum_discriminant_layout: &'static str,
+    schema_payload_magic: [u8; 4],
+    schema_node_count_bytes: u8,
+    schema_node_tag_bytes: u8,
+    schema_kind_tag_bytes: u8,
+    record_payload_magic: [u8; 4],
+    record_stream_count_bytes: u8,
+    record_atom_tag_bytes: u8,
+    record_pointer_length_bytes: u8,
+    record_list_item_count_bytes: u8,
     schema_hash_domain: &'static [u8],
     schema_hash_algorithm: &'static str,
     schema_name: &'static str,
@@ -2065,6 +2092,13 @@ struct AbiDurableStateSurface {
     embedded_state_type_max_depth: u64,
     embedded_state_type_validation: &'static str,
     embedded_state_types: Vec<AbiEmbeddedStateTypeSurface>,
+    dynamic_access_hint_validation_version: u8,
+    dynamic_access_hint_max_keys: u32,
+    dynamic_access_hint_key_types: Vec<&'static str>,
+    dynamic_access_hint_bound_kinds: Vec<&'static str>,
+    dynamic_access_hint_reserved_state_identifiers: Vec<&'static str>,
+    dynamic_access_hint_reserved_state_prefixes: Vec<&'static str>,
+    dynamic_access_hint_validation: &'static str,
     keys_max_items: u64,
     max_path_bytes: u64,
     max_value_bytes: u64,
@@ -2508,7 +2542,7 @@ fn semantic_abi_surface_v1() -> Result<
                 },
                 AbiNamedTypeSurface {
                     name: "next_offset",
-                    ty: "Option<i64>",
+                    ty: "Option<int>",
                 },
             ],
             items_capacity: query_page_capacity,
@@ -3080,6 +3114,42 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
                 record.field("canonical_sample_frame", &state_type.canonical_sample_frame)
             },
         )?;
+        state.u8(
+            "dynamic_access_hint_validation_version",
+            surface.durable_state.dynamic_access_hint_validation_version,
+        )?;
+        state.u32(
+            "dynamic_access_hint_max_keys",
+            surface.durable_state.dynamic_access_hint_max_keys,
+        )?;
+        state.sequence(
+            "dynamic_access_hint_key_types",
+            &surface.durable_state.dynamic_access_hint_key_types,
+            |record, key_type| record.text("key_type", key_type),
+        )?;
+        state.sequence(
+            "dynamic_access_hint_bound_kinds",
+            &surface.durable_state.dynamic_access_hint_bound_kinds,
+            |record, bound_kind| record.text("bound_kind", bound_kind),
+        )?;
+        state.sequence(
+            "dynamic_access_hint_reserved_state_identifiers",
+            &surface
+                .durable_state
+                .dynamic_access_hint_reserved_state_identifiers,
+            |record, identifier| record.text("identifier", identifier),
+        )?;
+        state.sequence(
+            "dynamic_access_hint_reserved_state_prefixes",
+            &surface
+                .durable_state
+                .dynamic_access_hint_reserved_state_prefixes,
+            |record, prefix| record.text("prefix", prefix),
+        )?;
+        state.text(
+            "dynamic_access_hint_validation",
+            surface.durable_state.dynamic_access_hint_validation,
+        )?;
         state.u64("keys_max_items", surface.durable_state.keys_max_items)?;
         state.u64("max_path_bytes", surface.durable_state.max_path_bytes)?;
         state.u64("max_value_bytes", surface.durable_state.max_value_bytes)?;
@@ -3133,6 +3203,21 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
                 value.norito_default_encode_flags,
             )?;
             typed.text("enum_discriminant_layout", value.enum_discriminant_layout)?;
+            typed.field("schema_payload_magic", &value.schema_payload_magic)?;
+            typed.u8("schema_node_count_bytes", value.schema_node_count_bytes)?;
+            typed.u8("schema_node_tag_bytes", value.schema_node_tag_bytes)?;
+            typed.u8("schema_kind_tag_bytes", value.schema_kind_tag_bytes)?;
+            typed.field("record_payload_magic", &value.record_payload_magic)?;
+            typed.u8("record_stream_count_bytes", value.record_stream_count_bytes)?;
+            typed.u8("record_atom_tag_bytes", value.record_atom_tag_bytes)?;
+            typed.u8(
+                "record_pointer_length_bytes",
+                value.record_pointer_length_bytes,
+            )?;
+            typed.u8(
+                "record_list_item_count_bytes",
+                value.record_list_item_count_bytes,
+            )?;
             typed.field("schema_hash_domain", value.schema_hash_domain)?;
             typed.text("schema_hash_algorithm", value.schema_hash_algorithm)?;
             typed.text("schema_name", value.schema_name)?;
@@ -3443,9 +3528,8 @@ fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, 
         .into_iter()
         .map(|(name, value, layout)| {
             let tag = value.wire_tag();
-            let _flags = norito::core::DecodeFlagsGuard::enter(ABI_V1_NORITO_ENCODE_FLAGS);
             let canonical_sample_frame =
-                norito::to_bytes(&value).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
+                norito::encode_canonical(&value).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
             Ok(AbiEmbeddedStateTypeSurface {
                 name,
                 tag,
@@ -3461,7 +3545,12 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         DECODED_STATE_VALUE_TABLE_OFFSET, DECODED_STATE_VALUE_WORD_BYTES,
         MAX_STATE_VALUE_LIST_CAPACITY_V1, MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_RECORD_BYTES,
         MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, MIN_STATE_VALUE_LIST_CAPACITY_V1,
-        STATE_VALUE_RECORD_NAME_V1, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1, STATE_VALUE_SCHEMA_NAME_V1,
+        STATE_VALUE_RECORD_ATOM_TAG_BYTES_V1, STATE_VALUE_RECORD_LIST_ITEM_COUNT_BYTES_V1,
+        STATE_VALUE_RECORD_NAME_V1, STATE_VALUE_RECORD_PAYLOAD_MAGIC_V1,
+        STATE_VALUE_RECORD_POINTER_LENGTH_BYTES_V1, STATE_VALUE_RECORD_STREAM_COUNT_BYTES_V1,
+        STATE_VALUE_SCHEMA_HASH_DOMAIN_V1, STATE_VALUE_SCHEMA_KIND_TAG_BYTES_V1,
+        STATE_VALUE_SCHEMA_NAME_V1, STATE_VALUE_SCHEMA_NODE_COUNT_BYTES_V1,
+        STATE_VALUE_SCHEMA_NODE_TAG_BYTES_V1, STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1,
         StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
         StateValueSchemaV1,
     };
@@ -3579,54 +3668,54 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         AbiTaggedLayoutSurface {
             name: "Struct",
             tag: StateValueNodeV1::STRUCT_TAG,
-            layout: "u32le-tag+String(name)+Vec<String>(ordered-field-names);one-immediate-child-per-field",
+            layout: "u8-tag+canonical-Norito-String(name)+canonical-Norito-Vec<String>(ordered-field-names);one-inline-immediate-child-subtree-per-field",
         },
         AbiTaggedLayoutSurface {
             name: "Tuple",
             tag: StateValueNodeV1::TUPLE_TAG,
-            layout: "u32le-tag+u16le(arity);arity-at-least-2;one-immediate-child-per-position",
+            layout: "u8-tag+u16le(arity);arity-at-least-2;one-inline-immediate-child-subtree-per-position",
         },
         AbiTaggedLayoutSurface {
             name: "Option",
             tag: StateValueNodeV1::OPTION_TAG,
-            layout: "u32le-tag;exactly-one-immediate-child",
+            layout: "u8-tag;exactly-one-inline-immediate-child-subtree",
         },
         AbiTaggedLayoutSurface {
             name: "Result",
             tag: StateValueNodeV1::RESULT_TAG,
-            layout: "u32le-tag;exactly-two-immediate-children-in-ok-then-error-order",
+            layout: "u8-tag;exactly-two-inline-immediate-child-subtrees-in-ok-then-error-order",
         },
         AbiTaggedLayoutSurface {
             name: "List",
             tag: StateValueNodeV1::LIST_TAG,
-            layout: "u32le-tag+StateValueSchemaV1(element)+u8(capacity);element-schema-is-recursive-and-capacity-is-schema-bound",
+            layout: "u8-tag+u8(capacity)+one-inline-element-subtree;capacity-is-schema-bound;element-schema-boundary-is-reconstructed-from-the-flat-preorder-tree",
         },
         AbiTaggedLayoutSurface {
             name: "Leaf",
             tag: StateValueNodeV1::LEAF_TAG,
-            layout: "u32le-tag+StateValueKindV1",
+            layout: "u8-tag+u8(StateValueKindV1-tag)",
         },
     ];
     let atoms = vec![
         AbiTaggedLayoutSurface {
             name: "Tag",
             tag: StateValueAtomV1::TAG_TAG,
-            layout: "u32le-tag+bool;compiler-owned-option-or-result-discriminant",
+            layout: "KRV1-u8-tag+u8-bool(only-0-or-1);compiler-owned-option-or-result-discriminant",
         },
         AbiTaggedLayoutSurface {
             name: "Bool",
             tag: StateValueAtomV1::BOOL_TAG,
-            layout: "u32le-tag+bool",
+            layout: "KRV1-u8-tag+u8-bool(only-0-or-1)",
         },
         AbiTaggedLayoutSurface {
             name: "Pointer",
             tag: StateValueAtomV1::POINTER_TAG,
-            layout: "u32le-tag+Vec<u8>(complete-validated-pointer-ABI-TLV-envelope)",
+            layout: "KRV1-u8-tag+u32le(byte-length)+raw-bytes(complete-validated-pointer-ABI-TLV-envelope)",
         },
         AbiTaggedLayoutSurface {
             name: "List",
             tag: StateValueAtomV1::LIST_TAG,
-            layout: "u32le-tag+Vec<Vec<StateValueAtomV1>>(items-in-order;each-item-one-active-only-element-atom-stream)",
+            layout: "KRV1-u8-tag+u8(item-count-0..64)+each-item-as-u16le(atom-count-1..256)+inline-active-only-element-atom-stream;items-in-order",
         },
     ];
 
@@ -3637,15 +3726,24 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
         norito_version_major: norito::core::VERSION_MAJOR,
         norito_version_minor: norito::core::VERSION_MINOR,
         norito_default_encode_flags: ABI_V1_NORITO_ENCODE_FLAGS,
-        enum_discriminant_layout: "explicit-u32-little-endian-codec-index-followed-by-variant-fields-in-declaration-order",
+        enum_discriminant_layout: "standalone-StateValueKindV1-StateValueNodeV1-and-StateValueAtomV1=explicit-u32le-codec-index-followed-by-variant-fields;KSV1-flat-schema-node-and-kind-tags=explicit-u8;KRV1-flat-record-atom-tags=explicit-u8",
+        schema_payload_magic: STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1,
+        schema_node_count_bytes: STATE_VALUE_SCHEMA_NODE_COUNT_BYTES_V1,
+        schema_node_tag_bytes: STATE_VALUE_SCHEMA_NODE_TAG_BYTES_V1,
+        schema_kind_tag_bytes: STATE_VALUE_SCHEMA_KIND_TAG_BYTES_V1,
+        record_payload_magic: STATE_VALUE_RECORD_PAYLOAD_MAGIC_V1,
+        record_stream_count_bytes: STATE_VALUE_RECORD_STREAM_COUNT_BYTES_V1,
+        record_atom_tag_bytes: STATE_VALUE_RECORD_ATOM_TAG_BYTES_V1,
+        record_pointer_length_bytes: STATE_VALUE_RECORD_POINTER_LENGTH_BYTES_V1,
+        record_list_item_count_bytes: STATE_VALUE_RECORD_LIST_ITEM_COUNT_BYTES_V1,
         schema_hash_domain: STATE_VALUE_SCHEMA_HASH_DOMAIN_V1,
         schema_hash_algorithm: "iroha_crypto::Hash::new(schema-hash-domain||exact-canonical-Norito-schema-frame)",
         schema_name: STATE_VALUE_SCHEMA_NAME_V1,
         schema_hash: <StateValueSchemaV1 as norito::NoritoSerialize>::schema_hash(),
         record_name: STATE_VALUE_RECORD_NAME_V1,
         record_hash: <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash(),
-        schema_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;StateValueSchemaV1{nodes:Vec<StateValueNodeV1>};preorder-node-stream",
-        record_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;StateValueRecordV1{schema_hash:[u8;32],atoms:Vec<StateValueAtomV1>};field-order-as-written",
+        schema_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;archived-value=Vec<u8>(KSV1||u16le(total-logical-node-count)||flat-preorder-u8-node-and-kind-tag-stream);List-capacity-precedes-inline-element-subtree;exactly-one-root;iterative-encode-decode",
+        record_layout: "canonical-Norito-v1-frame;header=NRT0+version+schema+compression-none+payload-length+crc64+advertised-layout-flags;archived-value=Vec<u8>(KRV1||schema-hash-[u8;32]||root-u16le-atom-count||flat-active-only-atom-stream);atom=u8-tag+variant-payload;Tag-and-Bool=u8(only-0-or-1);Pointer=u32le-byte-length+raw-bytes;List=u8-item-count(0..64)+each-item-u16le-atom-count(1..256)+inline-item-stream;iterative-encode-decode-drop",
         traversal_semantics: "schema-is-exactly-one-preorder-tree;products-store-children-in-order;sums-and-lists-consume-one-compiler-owned-word;record-atoms-contain-only-active-sum-payloads",
         option_tag_semantics: "false=None-with-no-payload;true=Some-with-one-active-child-payload",
         result_tag_semantics: "false=Err-with-error-child-payload;true=Ok-with-ok-child-payload",
@@ -3709,7 +3807,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         reserved_transaction_metadata: "reject-presence-before-decode-in-order:contract_manifest,gov_contract_address,gov_manifest_approvers,contract_address,contract_alias,contract_entrypoint,contract_payload",
     };
     let durable_state = AbiDurableStateSurface {
-        semantics_version: 3,
+        semantics_version: 4,
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
         contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_codes);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
         contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
@@ -3725,6 +3823,17 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         embedded_state_type_validation: "top-level-state-is-scalar-or-exactly-one-StateMap;StateMap-forbidden-below-top-level;map-key-in-{Int,Decimal,Quantity,Bool,String,Bytes,DataSpaceId,AccountId,AssetDefinitionId,AssetId,NftId,DomainId,Name};Tuple-arity-at-least-2;Struct-name-and-nonempty-field-names-are-canonical-and-fields-are-unique-and-nonempty;List-capacity=1..64-and-no-StateMap-descendant",
         embedded_state_types: embedded_state_type_surface_v1()?,
+        dynamic_access_hint_validation_version: 1,
+        dynamic_access_hint_max_keys: crate::access_hints::DYNAMIC_ACCESS_HINT_MAX_KEYS_V1,
+        dynamic_access_hint_key_types: crate::access_hints::DYNAMIC_ACCESS_HINT_KEY_TYPES_V1
+            .to_vec(),
+        dynamic_access_hint_bound_kinds: crate::access_hints::DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1
+            .to_vec(),
+        dynamic_access_hint_reserved_state_identifiers:
+            crate::access_hints::DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1.to_vec(),
+        dynamic_access_hint_reserved_state_prefixes:
+            crate::access_hints::DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1.to_vec(),
+        dynamic_access_hint_validation: "base_key=ASCII-state-colon-plus-one-generated-exact-canonical-state-declaration-identifier-with-no-aliasing-or-trimming;target=exact-declared-top-level-StateMap;key_type=exact-declared-map-key-type;bound_kind=exact-{range,take};max_keys=1..64;duplicate=full-{base_key,key_type,bound_kind,max_keys}-record-equality-rejected-independently-within-each-list;cross-read-write-repeat=allowed;metadata=advisory-and-never-scheduler-authoritative",
         keys_max_items: STATE_KEYS_MAX_ITEMS,
         max_path_bytes: u64::try_from(STATE_MAX_PATH_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
@@ -3747,7 +3856,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         operation_path_rules_version: 1,
         operation_path_rules: "CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;scan-operations(STATE_KEYS,STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;CNTR-absent=all-durable-state-syscalls-rejected-by-generic-program-profile",
         state_value_validation_version: 1,
-        state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;require-canonical-StateValueRecordV1-with-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=unavailable",
+        state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;schema-frame=canonical-Norito-Vec<u8>(KSV1+u16le-total-logical-node-count+flat-preorder-u8-node-and-kind-tags);record-frame=canonical-Norito-Vec<u8>(KRV1+schema-hash+root-u16le-atom-count+flat-active-only-u8-tagged-atom-stream);require-exact-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=unavailable",
         typed_value: typed_state_value_surface_v1()?,
     };
     Ok(AbiSurface {
@@ -3964,6 +4073,11 @@ mod tests {
             SYSCALL_INT_ADD,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            SYSCALL_AXT_BEGIN,
+            SYSCALL_AXT_TOUCH,
+            SYSCALL_AXT_COMMIT,
+            SYSCALL_VERIFY_DS_PROOF,
+            SYSCALL_USE_ASSET_HANDLE,
         ] {
             assert!(is_generic_program_syscall_allowed(
                 crate::SyscallPolicy::AbiV1,
@@ -3974,6 +4088,27 @@ mod tests {
             crate::SyscallPolicy::AbiV1,
             u32::MAX
         ));
+    }
+
+    #[test]
+    fn axt_syscall_classifier_is_exact() {
+        for syscall in [
+            SYSCALL_AXT_BEGIN,
+            SYSCALL_AXT_TOUCH,
+            SYSCALL_AXT_COMMIT,
+            SYSCALL_VERIFY_DS_PROOF,
+            SYSCALL_USE_ASSET_HANDLE,
+        ] {
+            assert!(is_axt_syscall(syscall));
+        }
+        for syscall in [
+            SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
+            SYSCALL_ESCROW_OPEN_OFFER,
+            SYSCALL_STATE_GET,
+            u32::MAX,
+        ] {
+            assert!(!is_axt_syscall(syscall));
+        }
     }
 
     #[test]
@@ -4201,12 +4336,17 @@ mod tests {
             DECODED_STATE_VALUE_TABLE_OFFSET, DECODED_STATE_VALUE_WORD_BYTES,
             MAX_STATE_VALUE_LIST_CAPACITY_V1, MAX_STATE_VALUE_NODES, MAX_STATE_VALUE_RECORD_BYTES,
             MAX_STATE_VALUE_SCHEMA_BYTES, MAX_STATE_VALUE_WORDS, MIN_STATE_VALUE_LIST_CAPACITY_V1,
-            STATE_VALUE_RECORD_NAME_V1, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1,
-            STATE_VALUE_SCHEMA_NAME_V1, StateValueRecordV1, StateValueSchemaV1,
+            STATE_VALUE_RECORD_ATOM_TAG_BYTES_V1, STATE_VALUE_RECORD_LIST_ITEM_COUNT_BYTES_V1,
+            STATE_VALUE_RECORD_NAME_V1, STATE_VALUE_RECORD_PAYLOAD_MAGIC_V1,
+            STATE_VALUE_RECORD_POINTER_LENGTH_BYTES_V1, STATE_VALUE_RECORD_STREAM_COUNT_BYTES_V1,
+            STATE_VALUE_SCHEMA_HASH_DOMAIN_V1, STATE_VALUE_SCHEMA_KIND_TAG_BYTES_V1,
+            STATE_VALUE_SCHEMA_NAME_V1, STATE_VALUE_SCHEMA_NODE_COUNT_BYTES_V1,
+            STATE_VALUE_SCHEMA_NODE_TAG_BYTES_V1, STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1,
+            StateValueRecordV1, StateValueSchemaV1,
         };
 
         let state = canonical_surface().durable_state;
-        assert_eq!(state.semantics_version, 3);
+        assert_eq!(state.semantics_version, 4);
         assert_eq!(
             state.contract_interface_section_magic,
             crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
@@ -4269,14 +4409,64 @@ mod tests {
         for state_type in &state.embedded_state_types {
             assert!(!state_type.layout.is_empty());
             let decoded: crate::metadata::EmbeddedStateType =
-                norito::decode_from_bytes(&state_type.canonical_sample_frame)
+                norito::decode_canonical(&state_type.canonical_sample_frame)
                     .expect("ABI-bound state-type sample frame must decode");
             assert_eq!(decoded.wire_tag(), state_type.tag);
             assert_eq!(
-                norito::to_bytes(&decoded).expect("re-encode ABI-bound state-type sample"),
+                norito::encode_canonical(&decoded)
+                    .expect("re-encode canonical ABI-bound state-type sample"),
                 state_type.canonical_sample_frame
             );
         }
+        assert_eq!(state.dynamic_access_hint_validation_version, 1);
+        assert_eq!(
+            state.dynamic_access_hint_max_keys,
+            crate::access_hints::DYNAMIC_ACCESS_HINT_MAX_KEYS_V1
+        );
+        assert_eq!(
+            state.dynamic_access_hint_key_types,
+            crate::access_hints::DYNAMIC_ACCESS_HINT_KEY_TYPES_V1
+        );
+        assert_eq!(
+            state.dynamic_access_hint_bound_kinds,
+            crate::access_hints::DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1
+        );
+        assert_eq!(
+            state.dynamic_access_hint_reserved_state_identifiers,
+            crate::access_hints::DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1
+        );
+        assert_eq!(
+            state.dynamic_access_hint_reserved_state_prefixes,
+            crate::access_hints::DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1
+        );
+        assert!(
+            state
+                .dynamic_access_hint_reserved_state_identifiers
+                .contains(&"state")
+        );
+        assert!(
+            !state
+                .dynamic_access_hint_reserved_state_identifiers
+                .contains(&"amount")
+        );
+        assert!(
+            state
+                .dynamic_access_hint_validation
+                .contains("target=exact-declared-top-level-StateMap")
+        );
+        assert!(state.dynamic_access_hint_validation.contains(
+            "duplicate=full-{base_key,key_type,bound_kind,max_keys}-record-equality-rejected-independently-within-each-list"
+        ));
+        assert!(
+            state
+                .dynamic_access_hint_validation
+                .contains("cross-read-write-repeat=allowed")
+        );
+        assert!(
+            state
+                .dynamic_access_hint_validation
+                .contains("metadata=advisory-and-never-scheduler-authoritative")
+        );
         assert_eq!(state.keys_max_items, STATE_KEYS_MAX_ITEMS);
         assert_eq!(state.max_path_bytes, STATE_MAX_PATH_BYTES as u64);
         assert_eq!(state.max_value_bytes, STATE_MAX_VALUE_BYTES as u64);
@@ -4300,6 +4490,8 @@ mod tests {
                 .state_value_validation
                 .contains("present-STATE_GET-before-publication")
         );
+        assert!(state.state_value_validation.contains("KSV1+u16le"));
+        assert!(state.state_value_validation.contains("KRV1+schema-hash"));
         let typed = &state.typed_value;
         assert_eq!(typed.wire_format_version, 1);
         assert_eq!(
@@ -4317,6 +4509,47 @@ mod tests {
             norito::core::default_encode_flags(),
             "Norito's workspace default must remain aligned with the pinned ABI-v1 layout"
         );
+        assert_eq!(
+            typed.schema_payload_magic,
+            STATE_VALUE_SCHEMA_PAYLOAD_MAGIC_V1
+        );
+        assert_eq!(
+            typed.schema_node_count_bytes,
+            STATE_VALUE_SCHEMA_NODE_COUNT_BYTES_V1
+        );
+        assert_eq!(
+            typed.schema_node_tag_bytes,
+            STATE_VALUE_SCHEMA_NODE_TAG_BYTES_V1
+        );
+        assert_eq!(
+            typed.schema_kind_tag_bytes,
+            STATE_VALUE_SCHEMA_KIND_TAG_BYTES_V1
+        );
+        assert_eq!(
+            typed.record_payload_magic,
+            STATE_VALUE_RECORD_PAYLOAD_MAGIC_V1
+        );
+        assert_eq!(
+            typed.record_stream_count_bytes,
+            STATE_VALUE_RECORD_STREAM_COUNT_BYTES_V1
+        );
+        assert_eq!(
+            typed.record_atom_tag_bytes,
+            STATE_VALUE_RECORD_ATOM_TAG_BYTES_V1
+        );
+        assert_eq!(
+            typed.record_pointer_length_bytes,
+            STATE_VALUE_RECORD_POINTER_LENGTH_BYTES_V1
+        );
+        assert_eq!(
+            typed.record_list_item_count_bytes,
+            STATE_VALUE_RECORD_LIST_ITEM_COUNT_BYTES_V1
+        );
+        assert!(typed.schema_layout.contains("KSV1"));
+        assert!(typed.schema_layout.contains("flat-preorder-u8"));
+        assert!(typed.record_layout.contains("KRV1"));
+        assert!(typed.record_layout.contains("root-u16le-atom-count"));
+        assert!(typed.record_layout.contains("u32le-byte-length"));
         assert_eq!(typed.schema_hash_domain, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1);
         assert_eq!(
             typed.schema_hash_algorithm,
@@ -4398,6 +4631,38 @@ mod tests {
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.embedded_state_types.swap(0, 1);
         });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.dynamic_access_hint_validation_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.dynamic_access_hint_max_keys += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed
+                .durable_state
+                .dynamic_access_hint_key_types
+                .swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed
+                .durable_state
+                .dynamic_access_hint_bound_kinds
+                .swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed
+                .durable_state
+                .dynamic_access_hint_reserved_state_identifiers
+                .swap(0, 1);
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed
+                .durable_state
+                .dynamic_access_hint_reserved_state_prefixes[0] = "mutated-reserved-prefix";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.dynamic_access_hint_validation = "accept-unvalidated-hints";
+        });
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.keys_max_items += 1);
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_path_bytes += 1);
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_value_bytes += 1);
@@ -4464,6 +4729,39 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.typed_value.enum_discriminant_layout = "host-enum-layout";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_payload_magic[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_node_count_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_node_tag_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.schema_kind_tag_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.record_payload_magic[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.record_stream_count_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.durable_state.typed_value.record_atom_tag_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed
+                .durable_state
+                .typed_value
+                .record_pointer_length_bytes += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed
+                .durable_state
+                .typed_value
+                .record_list_item_count_bytes += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.typed_value.schema_hash_domain = b"mutated-domain";
@@ -4701,7 +4999,7 @@ mod tests {
                 .iter()
                 .map(|field| (field.name, field.ty))
                 .collect::<Vec<_>>(),
-            vec![("items", "List<T,64>"), ("next_offset", "Option<i64>")]
+            vec![("items", "List<T,64>"), ("next_offset", "Option<int>")]
         );
         assert_eq!(
             surface.query_page.next_offset_semantics,

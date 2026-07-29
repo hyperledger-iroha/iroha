@@ -33,21 +33,22 @@ COMMON_CARGO_ENVIRONMENT = frozenset(
         "TMPDIR",
     }
 )
+APPLE_CARGO_ENVIRONMENT = COMMON_CARGO_ENVIRONMENT | {"RUSTC_BOOTSTRAP"}
 PROFILES = {
-    "apple-ios-device": COMMON_CARGO_ENVIRONMENT
+    "apple-ios-device": APPLE_CARGO_ENVIRONMENT
     | {
         "DEVELOPER_DIR",
         "IPHONEOS_DEPLOYMENT_TARGET",
         "SDKROOT",
     },
-    "apple-ios-simulator": COMMON_CARGO_ENVIRONMENT
+    "apple-ios-simulator": APPLE_CARGO_ENVIRONMENT
     | {
         "DEVELOPER_DIR",
         "IPHONEOS_DEPLOYMENT_TARGET",
         "IPHONESIMULATOR_DEPLOYMENT_TARGET",
         "SDKROOT",
     },
-    "apple-macos": COMMON_CARGO_ENVIRONMENT
+    "apple-macos": APPLE_CARGO_ENVIRONMENT
     | {
         "DEVELOPER_DIR",
         "MACOSX_DEPLOYMENT_TARGET",

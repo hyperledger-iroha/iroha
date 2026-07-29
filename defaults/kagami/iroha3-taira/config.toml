@@ -9,7 +9,7 @@ role = "validator"
 
 [sumeragi.block]
 max_transactions = 96
-max_payload_bytes = 16777216
+max_payload_bytes = 22020096
 proposal_queue_scan_multiplier = 4
 
 [sumeragi.queues]
@@ -18,8 +18,8 @@ proposal_queue_scan_multiplier = 4
 # The validator-bundle renderer scales body_bytes to at least
 # (N + authenticated_non_validator_sources + 1) * body_source_bytes.
 authenticated_non_validator_sources = 2
-body_bytes = 242221056
-body_source_bytes = 34603008
+body_bytes = 315621376
+body_source_bytes = 45088768
 
 [confidential]
 enabled = true
@@ -47,6 +47,9 @@ submitters = ["testuﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉV
 [network]
 address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:127.0.0.1:1337#8F78"
+max_frame_bytes = 23068700
+max_frame_bytes_block_sync = 23068672
+max_frame_bytes_tx_gossip = 11534336
 
 [nexus]
 enabled = true

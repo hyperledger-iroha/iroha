@@ -85,12 +85,28 @@ koto check ignored.ko
             ):
                 DOCS.extract_source_fences(Path("docs/source/demo.md"), text)
 
-    def test_extracts_ko_heredocs_and_ignores_unrelated_fence_damage(self) -> None:
+    def test_rejects_missing_misspelled_aliased_and_nested_labels(self) -> None:
+        invalid = (
+            ("```\nseiyaku Missing {}\n```\n", "no language label"),
+            ("```\nseiyaku {\n```\n", "apparent Kotodama"),
+            ("```kotodma\nseiyaku Misspelled {}\n```\n", "non-canonical"),
+            ("```koto\nseiyaku Aliased {}\n```\n", "non-canonical"),
+            ("```{.kotodama}\nseiyaku ClassAlias {}\n```\n", "non-canonical"),
+            ("```text kotodama\nseiyaku Nested {}\n```\n", "first info-string"),
+            ("```rust\nmodule WrongLanguage {}\n```\n", "apparent Kotodama"),
+        )
+        for text, message in invalid:
+            with self.subTest(text=text), self.assertRaisesRegex(
+                DOCS.DocumentationCheckError, message
+            ):
+                DOCS.extract_source_fences(Path("docs/source/demo.md"), text)
+
+    def test_extracts_ko_heredocs_without_treating_them_as_mislabeled(self) -> None:
         text = """```sh
 cat > target/demo.ko <<'KO'
 seiyaku ShellDemo {}
 KO
-```trailing text that does not close the shell fence
+```
 
 ```kotodama
 seiyaku ExplicitDemo {}
@@ -111,6 +127,53 @@ seiyaku ExplicitDemo {}
                 Path("docs/demo.md"),
                 "cat > demo.ko <<'KO'\ncontract Demo {}\n",
             )
+
+    def test_unrelated_fences_remain_legal_but_cannot_hide_source(self) -> None:
+        text = """```rust
+mod demo {}
+```
+
+```text
+module names do not require braces in this prose
+```
+
+```ebnf
+seiyaku = keyword, identifier, body;
+```
+
+````markdown
+```kotodama
+this is a literal Markdown example, not source
+```
+````
+
+```bash
+echo 'an unrelated unterminated shell example'
+"""
+        self.assertEqual(
+            DOCS.extract_source_fences(Path("docs/demo.md"), text),
+            (),
+        )
+
+        hidden = """```sh
+echo 'missing the closing fence'
+
+```kotodama
+seiyaku Hidden {}
+```
+"""
+        with self.assertRaisesRegex(
+            DOCS.DocumentationCheckError, "with 'sh'.*apparent Kotodama"
+        ):
+            DOCS.extract_source_fences(Path("docs/demo.md"), hidden)
+
+        unterminated = """```text
+seiyaku Hidden {}
+"""
+        with self.assertRaisesRegex(
+            DOCS.DocumentationCheckError, "unterminated.*apparent Kotodama"
+        ):
+            DOCS.extract_source_fences(Path("docs/demo.md"), unterminated)
 
     def test_dash_heredoc_matches_shell_tab_stripping(self) -> None:
         fences = DOCS.extract_source_fences(
@@ -212,6 +275,29 @@ seiyaku ExplicitDemo {}
         )
         with self.assertRaisesRegex(DOCS.DocumentationCheckError, "normalized"):
             DOCS.load_document_set(escaped, self.root)
+
+    def test_manifest_requires_every_document_below_a_scanned_root(self) -> None:
+        source = "```ko\nseiyaku A {}\n```\n"
+        self.write_document("docs/source/grammar.md", source)
+        self.write_document("examples/outside.md", source)
+        manifest = self.write_manifest(
+            json.dumps(
+                {
+                    "schema": 2,
+                    "normative_grammar": "docs/source/grammar.md",
+                    "source_roots": ["docs"],
+                    "source_documents": [
+                        "docs/source/grammar.md",
+                        "examples/outside.md",
+                    ],
+                }
+            )
+        )
+
+        with self.assertRaisesRegex(
+            DOCS.DocumentationCheckError, "every source_document.*uncovered"
+        ):
+            DOCS.load_document_set(manifest, self.root)
 
     def test_each_inventoried_document_must_contain_source(self) -> None:
         grammar = self.write_document(

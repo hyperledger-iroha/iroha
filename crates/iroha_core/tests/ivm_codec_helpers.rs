@@ -172,7 +172,7 @@ fn schema_encode_decode_roundtrip() {
 }
 
 #[test]
-fn production_schema_host_rejects_unknown_and_malformed_inputs_for_both_abis() {
+fn production_schema_host_rejects_unknown_and_malformed_inputs_for_regular_and_direct_syscalls() {
     let unknown_name: Name = "UnknownSchema".parse().expect("unknown schema name");
     let unknown_name_body = norito::to_bytes(&unknown_name).expect("encode unknown schema name");
     let unknown_json =

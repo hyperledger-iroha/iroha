@@ -13,7 +13,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::AccountId,
     asset::{
@@ -22,11 +22,11 @@ use iroha_data_model::{
     },
     confidential::ConfidentialStatus,
     isi::{
-        error::{InstructionExecutionError, MathError},
+        error::InstructionExecutionError,
         offline::{
-            ActivateKagemushaRecursiveReleaseV4, AuditOfflineNote, IssueOfflineNote,
-            RedeemKagemushaRecursiveV4, RedeemOfflineNote, RegisterOfflineDeviceAttestation,
-            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV4,
+            ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
+            RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
+            TopUpKagemushaRecursiveV4,
         },
     },
     name::Name,
@@ -42,11 +42,9 @@ use iroha_data_model::{
         KagemushaRequestAuthorizationV2, OFFLINE_REJECTION_REASON_PREFIX,
         OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
         OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
-        OfflineIosAppAttestationPolicy, OfflineNoteAuditOutputClaim, OfflineNoteIssuedClaim,
-        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
-        offline_note_recursive_public_inputs_schema_hash,
+        OfflineIosAppAttestationPolicy,
     },
-    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyRecord},
     transaction::SignedTransaction,
     zk::{BackendTag, OpenVerifyEnvelope},
 };
@@ -76,21 +74,11 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     InstructionExecutionError::InvariantViolation(boxed)
 }
 
-fn verify_legacy_note_signature(
-    signature: &Signature,
-    signer: &PublicKey,
-    payload: &[u8],
-) -> Result<(), iroha_crypto::Error> {
-    match signer.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-        }
-        _ => {}
-    }
-    signature.verify(signer, payload)
+fn decode_canonical_offline_proof_envelope(
+    bytes: &[u8],
+    message: &'static str,
+) -> Result<OpenVerifyEnvelope, Error> {
+    norito::decode_canonical(bytes).map_err(|_| labeled_invariant("invalid_proof", message).into())
 }
 
 /// Key-material-free projection of one authenticated ABI-21 recursive verifier.
@@ -396,18 +384,13 @@ fn decode_kagemusha_v4_consensus_release_state(
         return Ok(None);
     }
     let release_record: iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4 =
-        norito::decode_from_bytes(payload)
+        norito::decode_canonical(payload)
             .map_err(|error| format!("failed to decode Kagemusha V4 release state: {error}"))?;
     release_record
         .validate_structure()
         .map_err(|error| format!("invalid Kagemusha V4 release state: {error}"))?;
-    let canonical = norito::to_bytes(&release_record)
-        .map_err(|error| format!("failed to encode Kagemusha V4 release state: {error}"))?;
-    if canonical.as_slice() != payload {
-        return Err("Kagemusha V4 release state is not canonical Norito".to_owned());
-    }
     let manifest_sha256: [u8; 32] = Sha256::digest(
-        norito::to_bytes(&release_record.manifest)
+        norito::encode_canonical(&release_record.manifest)
             .map_err(|error| format!("failed to encode Kagemusha V4 manifest: {error}"))?,
     )
     .into();
@@ -630,7 +613,7 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
         );
     }
     let release_key = kagemusha_terminal_registry_v4::release_state_key(binding)?;
-    let expected_record = norito::to_bytes(cached.release_record())
+    let expected_record = norito::encode_canonical(cached.release_record())
         .map_err(|error| format!("failed to encode cached Kagemusha V4 release record: {error}"))?;
     if world
         .smart_contract_state()
@@ -699,7 +682,7 @@ pub fn ensure_kagemusha_active_release_material_v4(
             };
             covered_manifest_digests.insert(binding.manifest_sha256);
             let release_key = kagemusha_terminal_registry_v4::release_state_key(&binding)?;
-            let expected = norito::to_bytes(cached.release_record()).map_err(|error| {
+            let expected = norito::encode_canonical(cached.release_record()).map_err(|error| {
                 format!("failed to encode Kagemusha V4 release record: {error}")
             })?;
             if world
@@ -1190,530 +1173,9 @@ fn reserve_kagemusha_escrow(
     Ok(())
 }
 
-/// Credit one legacy online redemption from the same governed escrow used by
-/// ABI-21/V4 top-up. This helper never selects or advertises a peer mode.
-fn credit_legacy_note_from_offline_escrow(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    asset: &AssetId,
-    recipient: &AccountId,
-    amount: &Numeric,
-) -> Result<(), Error> {
-    let definition_id = asset.definition().clone();
-    let claim_asset = canonical_kagemusha_asset_id(state_transaction, asset)?;
-    let recipient_asset = AssetId::with_scope(
-        definition_id.clone(),
-        recipient.clone(),
-        claim_asset.scope().clone(),
-    );
-    let spec = state_transaction.numeric_spec_for(&definition_id)?;
-    assert_numeric_spec_with(amount, spec)?;
-    let amount =
-        Quantity::from_canonical_numeric(amount.clone()).map_err(|_| MathError::NegativeValue)?;
-    state_transaction.world.account(recipient)?;
-
-    let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?
-        .ok_or_else(|| {
-            labeled_invariant(
-                "escrow_missing",
-                format!(
-                    "offline escrow account not configured for asset definition `{definition_id}`"
-                ),
-            )
-        })?;
-    ensure_distinct_offline_escrow_account(
-        &escrow_account,
-        recipient,
-        "recipient",
-        &definition_id,
-    )?;
-
-    let escrow_asset = kagemusha_escrow_asset_id(&recipient_asset, escrow_account);
-    crate::smartcontracts::isi::asset::isi::apply_resolved_numeric_asset_transfer_delta(
-        state_transaction,
-        &escrow_asset,
-        &recipient_asset,
-        &amount,
-    )?;
-    Ok(())
-}
-
 /// Execution logic for Kagemusha offline-cash instructions.
 pub mod isi {
     use super::*;
-
-    // BOI wire-compatibility replay domains. These are ledger-only settlement
-    // markers: none is consulted by mandatory-offline readiness, peer-mode
-    // selection, receiver snapshots, or ABI-21/V4 ownership checks.
-    const LEGACY_OFFLINE_NOTE_VERIFIER_NAMESPACE: &str = "offline_note";
-    const LEGACY_NOTE_ISSUE_DOMAIN: &str = "offline-note-issued-note";
-    const LEGACY_NOTE_CERTIFICATE_DOMAIN: &str = "offline-note-issued-key-certificate";
-    const LEGACY_NOTE_ISSUED_CLAIM_DOMAIN: &str = "offline-note-issued-claim";
-    const LEGACY_NOTE_SPENT_CLAIM_DOMAIN: &str = "offline-note-spent-claim";
-    const LEGACY_NOTE_NULLIFIER_DOMAIN: &str = "offline-note-spent-nullifier";
-    const LEGACY_NOTE_AUDIT_TOKEN_DOMAIN: &str = "offline-note-audit-token";
-    const LEGACY_NOTE_AUDIT_RECORD_DOMAIN: &str = "offline-note-audit-record";
-    const LEGACY_NOTE_AUDIT_NULLIFIER_DOMAIN: &str = "offline-note-audit-nullifier";
-    const LEGACY_NOTE_AUDIT_OUTPUT_DOMAIN: &str = "offline-note-audit-output";
-
-    fn legacy_note_marker(domain: &str, value: &Hash) -> Hash {
-        let mut preimage = Vec::with_capacity(domain.len() + Hash::LENGTH + 1);
-        preimage.extend_from_slice(domain.as_bytes());
-        preimage.push(b':');
-        preimage.extend_from_slice(value.as_ref());
-        Hash::new(&preimage)
-    }
-
-    fn legacy_note_issue_marker(commitment: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_ISSUE_DOMAIN, commitment)
-    }
-
-    fn legacy_note_certificate_marker(payload_hash: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_CERTIFICATE_DOMAIN, payload_hash)
-    }
-
-    fn legacy_note_issued_claim_marker(claim_hash: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_ISSUED_CLAIM_DOMAIN, claim_hash)
-    }
-
-    fn legacy_note_spent_claim_marker(claim_hash: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_SPENT_CLAIM_DOMAIN, claim_hash)
-    }
-
-    fn legacy_note_nullifier_marker(nullifier: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_NULLIFIER_DOMAIN, nullifier)
-    }
-
-    fn legacy_note_audit_token_marker(token_id: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_AUDIT_TOKEN_DOMAIN, token_id)
-    }
-
-    fn legacy_note_audit_record_marker(public_inputs_hash: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_AUDIT_RECORD_DOMAIN, public_inputs_hash)
-    }
-
-    fn legacy_note_audit_nullifier_marker(nullifier: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_AUDIT_NULLIFIER_DOMAIN, nullifier)
-    }
-
-    fn legacy_note_audit_output_marker(commitment: &Hash) -> Hash {
-        legacy_note_marker(LEGACY_NOTE_AUDIT_OUTPUT_DOMAIN, commitment)
-    }
-
-    fn legacy_audit_evidence_markers(
-        token_id: &Hash,
-        public_inputs_hash: &Hash,
-        input_nullifiers: &[Hash],
-        output_commitments: &[Hash],
-    ) -> Vec<Hash> {
-        [
-            legacy_note_audit_token_marker(token_id),
-            legacy_note_audit_record_marker(public_inputs_hash),
-        ]
-        .into_iter()
-        .chain(
-            input_nullifiers
-                .iter()
-                .map(legacy_note_audit_nullifier_marker),
-        )
-        .chain(
-            output_commitments
-                .iter()
-                .map(legacy_note_audit_output_marker),
-        )
-        .collect()
-    }
-
-    fn ensure_unique_legacy_note_hashes(
-        hashes: &[Hash],
-        label: &'static str,
-        message: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        let mut seen = BTreeSet::new();
-        for hash in hashes {
-            if !seen.insert(*hash) {
-                return Err(labeled_invariant(label, message));
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_disjoint_legacy_note_hashes(
-        left: &[Hash],
-        right: &[Hash],
-        label: &'static str,
-        message: &'static str,
-    ) -> Result<(), InstructionExecutionError> {
-        let left = left.iter().copied().collect::<BTreeSet<_>>();
-        if right.iter().any(|hash| left.contains(hash)) {
-            return Err(labeled_invariant(label, message));
-        }
-        Ok(())
-    }
-
-    fn validate_legacy_note_certificate(
-        certificate: &OfflineNoteKeyCertificate,
-    ) -> Result<(), InstructionExecutionError> {
-        if certificate.version != iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
-            || !certificate.one_use
-            || certificate
-                .assertion_usage_count_limit
-                .is_some_and(|limit| limit != 1)
-        {
-            return Err(labeled_invariant(
-                "invalid_issuer_cert",
-                "legacy note operation requires a compact one-use key certificate",
-            ));
-        }
-        for (field, value) in [
-            ("platform", certificate.platform.as_str()),
-            ("key_id", certificate.key_id.as_str()),
-            ("device_id", certificate.device_id.as_str()),
-            ("assertion_scheme", certificate.assertion_scheme.as_str()),
-            (
-                "assertion_key_algorithm",
-                certificate.assertion_key_algorithm.as_str(),
-            ),
-        ] {
-            if value.trim().is_empty() || value.trim() != value {
-                return Err(labeled_invariant(
-                    "invalid_issuer_cert",
-                    format!("legacy note certificate {field} is not canonical"),
-                ));
-            }
-        }
-        if certificate.public_key.is_empty()
-            || PublicKey::from_bytes(Algorithm::Ed25519, &certificate.public_key).is_err()
-        {
-            return Err(labeled_invariant(
-                "invalid_issuer_cert",
-                "legacy note certificate public key must be Ed25519",
-            ));
-        }
-        if certificate.assertion_public_key.len()
-            != OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
-            || certificate.assertion_public_key.first() != Some(&0x04)
-            || p256_public_key_has_zero_coordinate_material(&certificate.assertion_public_key)
-            || P256PublicKey::from_sec1_bytes(&certificate.assertion_public_key).is_err()
-        {
-            return Err(labeled_invariant(
-                "invalid_issuer_cert",
-                "legacy note assertion key must be a valid uncompressed P-256 point",
-            ));
-        }
-        let profile_is_valid = match certificate.platform.as_str() {
-            OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
-                certificate.assertion_scheme == OFFLINE_ATTESTATION_IOS_ASSERTION_SCHEME
-                    && certificate.assertion_key_algorithm
-                        == OFFLINE_ATTESTATION_IOS_ASSERTION_ALGORITHM
-                    && certificate.assertion_usage_count_limit.is_none()
-            }
-            OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
-                certificate.assertion_scheme == OFFLINE_ATTESTATION_ANDROID_ASSERTION_SCHEME
-                    && certificate.assertion_key_algorithm
-                        == OFFLINE_ATTESTATION_ANDROID_ASSERTION_ALGORITHM
-                    && certificate.assertion_usage_count_limit == Some(1)
-            }
-            _ => false,
-        };
-        if !profile_is_valid {
-            return Err(labeled_invariant(
-                "invalid_issuer_cert",
-                "legacy note certificate assertion profile is unsupported",
-            ));
-        }
-        Ok(())
-    }
-
-    fn legacy_note_certificate_payload_hash_authorized_by(
-        certificate: &OfflineNoteKeyCertificate,
-        issuers: &[&AccountId],
-    ) -> Result<Hash, Error> {
-        let payload = certificate.signing_bytes().map_err(|error| {
-            labeled_invariant(
-                "invalid_issuer_cert",
-                format!("failed to encode legacy note certificate: {error}"),
-            )
-        })?;
-        let mut first_error = None;
-        for issuer in issuers {
-            let result = issuer.try_signatory().ok_or_else(|| {
-                labeled_invariant(
-                    "invalid_issuer_cert",
-                    "legacy note certificate issuer must be a single-signature account",
-                )
-            });
-            match result.and_then(|key| {
-                verify_legacy_note_signature(&certificate.issuer_signature, key, &payload).map_err(
-                    |_| {
-                        labeled_invariant(
-                            "invalid_issuer_cert",
-                            "legacy note certificate signature does not match issuer account",
-                        )
-                    },
-                )
-            }) {
-                Ok(()) => {
-                    return certificate.payload_hash().map_err(|error| {
-                        labeled_invariant(
-                            "invalid_issuer_cert",
-                            format!("failed to hash legacy note certificate: {error}"),
-                        )
-                        .into()
-                    });
-                }
-                Err(error) if first_error.is_none() => first_error = Some(error),
-                Err(_) => {}
-            }
-        }
-        Err(first_error
-            .unwrap_or_else(|| {
-                labeled_invariant(
-                    "invalid_issuer_cert",
-                    "legacy note certificate has no issuer candidates",
-                )
-            })
-            .into())
-    }
-
-    fn legacy_note_claim_hash(claim: OfflineNoteIssuedClaim) -> Result<Hash, Error> {
-        claim.claim_hash().map_err(|error| {
-            labeled_invariant(
-                "invalid_proof",
-                format!("failed to encode legacy issued-note claim: {error}"),
-            )
-            .into()
-        })
-    }
-
-    fn ensure_can_submit_legacy_note_for_account(
-        account: &AccountId,
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        if account == authority || is_offline_escrow_manager(authority, state_transaction) {
-            Ok(())
-        } else {
-            Err(labeled_invariant(
-                "unauthorized_controller",
-                "only the bearer account or an offline escrow manager may submit a legacy redemption",
-            )
-            .into())
-        }
-    }
-
-    fn ensure_can_issue_legacy_note(
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        if is_offline_escrow_manager(authority, state_transaction) {
-            Ok(())
-        } else {
-            Err(labeled_invariant(
-                "unauthorized_controller",
-                "legacy note issuance requires the exact offline escrow manager permission",
-            )
-            .into())
-        }
-    }
-
-    fn legacy_note_resolve_verifier(
-        proof: &OfflineNoteRecursiveProof,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(VerifyingKeyBox, OpenVerifyEnvelope), Error> {
-        let verifier_id: &VerifyingKeyId = &proof.verifier_key_id;
-        if proof.proof.backend != verifier_id.backend
-            || verifier_id.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
-            || verifier_id.name.trim().is_empty()
-        {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "legacy note proofs require a named canonical halo2/ipa verifier",
-            )
-            .into());
-        }
-        let record = state_transaction
-            .world
-            .verifying_keys
-            .get(verifier_id)
-            .cloned()
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "verifier_key_invalid",
-                    "legacy note verifier key is not registered",
-                )
-            })?;
-        let executing_height = state_transaction.block_hashes().len() as u64;
-        if record.status != ConfidentialStatus::Active || !record.is_active_at(executing_height) {
-            return Err(labeled_invariant(
-                "verifier_key_inactive",
-                "legacy note verifier key is not active at the executing height",
-            )
-            .into());
-        }
-        if record.namespace != LEGACY_OFFLINE_NOTE_VERIFIER_NAMESPACE
-            || record.circuit_id != crate::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.public_inputs_schema_hash
-                != offline_note_recursive_public_inputs_schema_hash()
-            || record.max_proof_bytes == 0
-            || proof.proof.bytes.len() > record.max_proof_bytes as usize
-        {
-            return Err(labeled_invariant(
-                "verifier_schema_mismatch",
-                "legacy note verifier record is not the canonical compatibility circuit",
-            )
-            .into());
-        }
-        let circuit_key = (record.circuit_id.clone(), record.version);
-        if state_transaction
-            .world
-            .verifying_keys_by_circuit
-            .get(&circuit_key)
-            != Some(verifier_id)
-        {
-            return Err(labeled_invariant(
-                "verifier_key_inactive",
-                "legacy note verifier circuit/version is not active",
-            )
-            .into());
-        }
-        let vk_box = record.key.ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "legacy note verifier key bytes are unavailable",
-            )
-        })?;
-        if vk_box.backend != verifier_id.backend
-            || u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len)
-            || crate::zk::hash_vk(&vk_box) != record.commitment
-        {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "legacy note verifier key material does not match its registry record",
-            )
-            .into());
-        }
-        crate::zk::ensure_offline_note_recursive_canonical_vk_box(&vk_box)
-            .map_err(|error| labeled_invariant("verifier_key_invalid", error))?;
-        let envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
-                labeled_invariant(
-                    "invalid_proof",
-                    "legacy note proof must be an OpenVerifyEnvelope",
-                )
-            })?;
-        if envelope.validate_for_admission().is_err()
-            || envelope.backend != BackendTag::Halo2IpaPasta
-            || envelope.circuit_id != record.circuit_id
-            || envelope.vk_hash != record.commitment
-            || !envelope.aux.is_empty()
-            || envelope.public_inputs
-                != iroha_data_model::offline::OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA
-        {
-            return Err(labeled_invariant(
-                "invalid_proof",
-                "legacy note proof envelope metadata is not canonical",
-            )
-            .into());
-        }
-        Ok((vk_box, envelope))
-    }
-
-    fn verify_legacy_note_proof(
-        proof: &OfflineNoteRecursiveProof,
-        expected_public_inputs_hash: &Hash,
-        expected_instances: Vec<Vec<[u8; 32]>>,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        if &proof.public_inputs_hash != expected_public_inputs_hash {
-            return Err(labeled_invariant(
-                "proof_binding",
-                "legacy note proof is not bound to the submitted payload",
-            )
-            .into());
-        }
-        let (vk_box, envelope) = legacy_note_resolve_verifier(proof, state_transaction)?;
-        let actual_instances = crate::zk::extract_pasta_instance_columns_bytes(
-            &envelope.proof_bytes,
-        )
-        .ok_or_else(|| {
-            labeled_invariant(
-                "invalid_proof",
-                "legacy note proof does not expose canonical Halo2 public instances",
-            )
-        })?;
-        if actual_instances != expected_instances {
-            return Err(labeled_invariant(
-                "proof_binding",
-                "legacy note proof instances do not match the submitted payload",
-            )
-            .into());
-        }
-        state_transaction.register_confidential_proof(proof.proof.bytes.len())?;
-        let report = crate::zk::verify_backend_with_timing_checked(
-            proof.proof.backend.as_str(),
-            &proof.proof,
-            Some(&vk_box),
-            &state_transaction.zk,
-        );
-        if !report.ok {
-            return Err(labeled_invariant(
-                "invalid_proof",
-                "legacy note Halo2 verification failed",
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    fn ensure_legacy_audit_claims(
-        input_claims: &[OfflineNoteIssuedClaim],
-        output_claims: &[OfflineNoteAuditOutputClaim],
-        certificate_payload_hash: &Hash,
-    ) -> Result<(), Error> {
-        let definition = input_claims
-            .first()
-            .ok_or_else(|| labeled_invariant("invalid_proof", "legacy audit requires inputs"))?
-            .asset
-            .definition();
-        let mut input_total = Numeric::zero();
-        for claim in input_claims {
-            if &claim.key_certificate_payload_hash != certificate_payload_hash
-                || claim.amount <= Numeric::zero()
-                || claim.asset.definition() != definition
-            {
-                return Err(labeled_invariant(
-                    "proof_binding",
-                    "legacy audit input claims must bind the sender certificate and one positive asset",
-                )
-                .into());
-            }
-            input_total = input_total
-                .checked_add(claim.amount.clone())
-                .ok_or(MathError::Overflow)?;
-        }
-        let mut output_total = Numeric::zero();
-        for claim in output_claims {
-            if claim.amount <= Numeric::zero() || claim.asset.definition() != definition {
-                return Err(labeled_invariant(
-                    "asset_mismatch",
-                    "legacy audit output claims must conserve the input asset",
-                )
-                .into());
-            }
-            output_total = output_total
-                .checked_add(claim.amount.clone())
-                .ok_or(MathError::Overflow)?;
-        }
-        if input_total != output_total {
-            return Err(labeled_invariant(
-                "amount_conservation",
-                "legacy audit input and output totals must match",
-            )
-            .into());
-        }
-        Ok(())
-    }
 
     const KAGEMUSHA_DEVICE_REGISTRATION_DOMAIN: &str = "kagemusha-device-registration";
     const KAGEMUSHA_ATTESTATION_CHALLENGE_REPLAY_DOMAIN: &str = "kagemusha-attestation-challenge";
@@ -2276,26 +1738,13 @@ pub mod isi {
             .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
         {
             Some(bytes) => {
-                let policy = norito::decode_from_bytes::<OfflineDeviceAttestationPolicy>(bytes)
+                let policy = norito::decode_canonical::<OfflineDeviceAttestationPolicy>(bytes)
                     .map_err(|err| {
                         labeled_invariant(
                             "invalid_attestation_policy",
                             format!("failed to decode Offline device attestation policy: {err}"),
                         )
                     })?;
-                let canonical = norito::to_bytes(&policy).map_err(|err| {
-                    labeled_invariant(
-                        "invalid_attestation_policy",
-                        format!("failed to re-encode Offline device attestation policy: {err}"),
-                    )
-                })?;
-                if canonical.as_slice() != bytes.as_slice() {
-                    return Err(labeled_invariant(
-                        "invalid_attestation_policy",
-                        "Offline device attestation policy state is not canonically encoded",
-                    )
-                    .into());
-                }
                 Ok(policy)
             }
             None => Err(labeled_invariant(
@@ -3156,13 +2605,10 @@ pub mod isi {
         }
         crate::zk::confidential_v2::ensure_kagemusha_topup_shield_v2_canonical_vk_box(&vk_box)
             .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
-        let envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
-                labeled_invariant(
-                    "invalid_proof",
-                    "Kagemusha top-up shield proof must be an OpenVerifyEnvelope",
-                )
-            })?;
+        let envelope = decode_canonical_offline_proof_envelope(
+            &proof.proof.bytes,
+            "Kagemusha top-up shield proof must be a canonical OpenVerifyEnvelope",
+        )?;
         if envelope.backend != BackendTag::Halo2IpaPasta
             || envelope.circuit_id
                 != crate::zk::confidential_v2::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
@@ -3343,13 +2789,10 @@ pub mod isi {
         }
         crate::zk::confidential_v2::ensure_confidential_unshield_v3_canonical_vk_box(&vk_box)
             .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
-        let envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
-                labeled_invariant(
-                    "invalid_proof",
-                    "recursive Kagemusha redeem proof must be an OpenVerifyEnvelope",
-                )
-            })?;
+        let envelope = decode_canonical_offline_proof_envelope(
+            &proof.proof.bytes,
+            "recursive Kagemusha redeem proof must be a canonical OpenVerifyEnvelope",
+        )?;
         if envelope.vk_hash == [0u8; 32] {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
@@ -3560,7 +3003,7 @@ pub mod isi {
             KAGEMUSHA_V4_PAYLOAD_DOMAIN,
             &[authority.as_bytes(), &authorization.payload_digest],
         );
-        let authorization_archive = norito::to_bytes(authorization).map_err(|err| {
+        let authorization_archive = norito::encode_canonical(authorization).map_err(|err| {
             labeled_invariant(
                 "invalid_authorization",
                 format!("failed to encode exact Kagemusha authorization: {err}"),
@@ -3680,7 +3123,7 @@ pub mod isi {
     fn canonical_registration_hash(
         registration: &OfflineDeviceAttestationRegistration,
     ) -> Result<Hash, Error> {
-        norito::to_bytes(registration)
+        norito::encode_canonical(registration)
             .map(Hash::new)
             .map_err(|err| {
                 labeled_invariant(
@@ -3694,7 +3137,7 @@ pub mod isi {
     fn canonical_offline_device_attestation_policy_hash(
         policy: &OfflineDeviceAttestationPolicy,
     ) -> Result<[u8; 32], Error> {
-        norito::to_bytes(policy)
+        norito::encode_canonical(policy)
             .map(Hash::new)
             .map(|hash| exact_hash_bytes(&hash))
             .map_err(|err| {
@@ -3717,12 +3160,9 @@ pub mod isi {
                 "the governed offline device-attestation policy is not installed".to_owned()
             })?;
         let policy: OfflineDeviceAttestationPolicy =
-            norito::decode_from_bytes(archive).map_err(|error| {
+            norito::decode_canonical(archive).map_err(|error| {
                 format!("the governed device-attestation policy is corrupt: {error}")
             })?;
-        if norito::to_bytes(&policy).map_err(|error| error.to_string())? != *archive {
-            return Err("the governed device-attestation policy is non-canonical".to_owned());
-        }
         validate_offline_attestation_policy(&policy, evaluated_at_ms).map_err(|error| {
             format!("the governed device-attestation policy is invalid: {error}")
         })?;
@@ -3798,7 +3238,7 @@ pub mod isi {
                     "protected Kagemusha registration key `{state_key}` is non-canonical"
                 ));
             }
-            let state: KagemushaOnlineRegistrationStateV3 = match norito::decode_from_bytes(archive)
+            let state: KagemushaOnlineRegistrationStateV3 = match norito::decode_canonical(archive)
             {
                 Ok(state) => state,
                 Err(error) => {
@@ -3807,11 +3247,6 @@ pub mod isi {
                     ));
                 }
             };
-            if norito::to_bytes(&state).map_err(|error| error.to_string())? != *archive {
-                return fail_closed(format!(
-                    "protected Kagemusha registration `{state_key}` is non-canonical"
-                ));
-            }
             let registration_hash = canonical_registration_hash(&state.registration)
                 .map(|hash| exact_hash_bytes(&hash))
                 .map_err(|error| error.to_string())?;
@@ -3930,7 +3365,7 @@ pub mod isi {
                     .map(|value| value.registration_state_hash)
                     .collect::<Vec<_>>();
                 let hashes_archive =
-                    norito::to_bytes(&hashes).map_err(|error| error.to_string())?;
+                    norito::encode_canonical(&hashes).map_err(|error| error.to_string())?;
                 entries.push(KagemushaActiveReceiverEntryV1::Ambiguous(
                     KagemushaActiveReceiverAmbiguousEntryV1 {
                         key,
@@ -3978,11 +3413,8 @@ pub mod isi {
                 "active registration archive hash differs from the snapshot leaf".to_owned(),
             );
         }
-        let state: KagemushaOnlineRegistrationStateV3 = norito::decode_from_bytes(archive)
+        let state: KagemushaOnlineRegistrationStateV3 = norito::decode_canonical(archive)
             .map_err(|error| format!("active registration archive is corrupt: {error}"))?;
-        if norito::to_bytes(&state).map_err(|error| error.to_string())? != *archive {
-            return Err("active registration archive is non-canonical".to_owned());
-        }
         let canonical_hash = canonical_registration_hash(&state.registration)
             .map(|hash| exact_hash_bytes(&hash))
             .map_err(|error| format!("active registration cannot be hashed: {error}"))?;
@@ -4070,15 +3502,10 @@ pub mod isi {
                     "Kagemusha registration state key `{state_key}` is non-canonical"
                 ));
             }
-            let state: KagemushaOnlineRegistrationStateV3 = norito::decode_from_bytes(archive)
+            let state: KagemushaOnlineRegistrationStateV3 = norito::decode_canonical(archive)
                 .map_err(|error| {
                     format!("Kagemusha registration state `{state_key}` is corrupt: {error}")
                 })?;
-            if norito::to_bytes(&state).map_err(|error| error.to_string())? != *archive {
-                return Err(format!(
-                    "Kagemusha registration state `{state_key}` is non-canonical"
-                ));
-            }
             let registration_hash = canonical_registration_hash(&state.registration)
                 .map(|hash| exact_hash_bytes(&hash))
                 .map_err(|error| {
@@ -4184,8 +3611,8 @@ pub mod isi {
     fn assertion_consumption(
         authorization: &KagemushaRequestAuthorizationV2,
     ) -> Result<KagemushaOnlineHardwareAssertionConsumptionV1, Error> {
-        let assertion_archive =
-            norito::to_bytes(&authorization.hardware_assertion).map_err(|err| {
+        let assertion_archive = norito::encode_canonical(&authorization.hardware_assertion)
+            .map_err(|err| {
                 labeled_invariant(
                     "invalid_authorization",
                     format!("failed to encode Kagemusha hardware assertion: {err}"),
@@ -4224,22 +3651,15 @@ pub mod isi {
                 )
             })?;
         let mut state: KagemushaOnlineRegistrationStateV3 =
-            norito::decode_from_bytes(&previous_archive).map_err(|err| {
+            norito::decode_canonical(&previous_archive).map_err(|err| {
                 labeled_invariant(
                     "invalid_attestation",
                     format!("failed to decode persisted Kagemusha registration: {err}"),
                 )
             })?;
-        let canonical_archive = norito::to_bytes(&state).map_err(|err| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("failed to re-encode persisted Kagemusha registration: {err}"),
-            )
-        })?;
         let registration_hash = canonical_registration_hash(&state.registration)?;
         if state.version != 3
             || state.admission_height == 0
-            || canonical_archive != previous_archive
             || exact_hash_bytes(&registration_hash) != authorization.registration_hash
         {
             return Err(labeled_invariant(
@@ -4337,7 +3757,7 @@ pub mod isi {
                 .into());
             }
         }
-        let updated_archive = norito::to_bytes(&state).map_err(|err| {
+        let updated_archive = norito::encode_canonical(&state).map_err(|err| {
             labeled_invariant(
                 "invalid_attestation",
                 format!("failed to encode updated Kagemusha registration state: {err}"),
@@ -4797,7 +4217,7 @@ pub mod isi {
             operation_id,
             Some(archive.as_slice()),
         );
-        let anchor: KagemushaRecursiveSpendTopUpAnchorV4 = norito::decode_from_bytes(archive)
+        let anchor: KagemushaRecursiveSpendTopUpAnchorV4 = norito::decode_canonical(archive)
             .map_err(|err| {
                 labeled_invariant(
                     "topup_anchor_invalid",
@@ -4807,17 +4227,7 @@ pub mod isi {
         anchor
             .validate_public_binding()
             .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
-        if anchor.topup_operation_id != operation_id
-            || norito::to_bytes(&anchor)
-                .map_err(|err| {
-                    labeled_invariant(
-                        "topup_anchor_invalid",
-                        format!("failed to re-encode persisted Kagemusha V4 top-up anchor: {err}"),
-                    )
-                })?
-                .as_slice()
-                != archive.as_slice()
-        {
+        if anchor.topup_operation_id != operation_id {
             return Err(labeled_invariant(
                 "topup_anchor_invalid",
                 "persisted Kagemusha V4 top-up anchor is non-canonical or keyed incorrectly",
@@ -4867,7 +4277,7 @@ pub mod isi {
             anchor.topup_operation_id,
             None,
         );
-        let archive = norito::to_bytes(anchor).map_err(|err| {
+        let archive = norito::encode_canonical(anchor).map_err(|err| {
             labeled_invariant(
                 "topup_anchor_invalid",
                 format!("failed to encode Kagemusha V4 top-up anchor: {err}"),
@@ -6987,7 +6397,7 @@ pub mod isi {
             registration.expires_at_ms,
         )?;
 
-        let bytes = norito::to_bytes(registration).map_err(|err| {
+        let bytes = norito::encode_canonical(registration).map_err(|err| {
             labeled_invariant(
                 "invalid_attestation",
                 format!("failed to encode Kagemusha device registration: {err}"),
@@ -6997,418 +6407,6 @@ pub mod isi {
             Hash::new(bytes),
             canonical_offline_device_attestation_policy_hash(&policy)?,
         ))
-    }
-
-    impl Execute for IssueOfflineNote {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let issue = self.issue;
-            validate_legacy_note_certificate(&issue.key_certificate)?;
-            if issue.amount <= Numeric::zero() {
-                return Err(labeled_invariant(
-                    "invalid_amount",
-                    "legacy offline note issue amount must be positive",
-                )
-                .into());
-            }
-            if issue.key_certificate.account_id != *issue.asset.account() {
-                return Err(labeled_invariant(
-                    "invalid_issuer_cert",
-                    "legacy note certificate account must match the debited asset owner",
-                )
-                .into());
-            }
-            ensure_can_issue_legacy_note(authority, state_transaction)?;
-            let certificate_payload_hash = legacy_note_certificate_payload_hash_authorized_by(
-                &issue.key_certificate,
-                &[authority],
-            )?;
-            let spec = state_transaction.numeric_spec_for(issue.asset.definition())?;
-            assert_numeric_spec_with(&issue.amount, spec)?;
-            let amount = Quantity::from_canonical_numeric(issue.amount.clone())
-                .map_err(|_| MathError::NegativeValue)?;
-
-            let issue_marker = legacy_note_issue_marker(&issue.note_commitment);
-            let certificate_marker = legacy_note_certificate_marker(&certificate_payload_hash);
-            let claim_hash = legacy_note_claim_hash(
-                OfflineNoteIssuedClaim::from_issue(&issue).map_err(|error| {
-                    labeled_invariant(
-                        "invalid_proof",
-                        format!("failed to encode legacy issued claim: {error}"),
-                    )
-                })?,
-            )?;
-            let claim_marker = legacy_note_issued_claim_marker(&claim_hash);
-            if state_transaction
-                .world
-                .kagemusha_replay_keys
-                .get(&issue_marker)
-                .is_some()
-            {
-                return Err(labeled_invariant(
-                    "duplicate_issue",
-                    "legacy note commitment is already known",
-                )
-                .into());
-            }
-            if state_transaction
-                .world
-                .kagemusha_replay_keys
-                .get(&certificate_marker)
-                .is_some()
-            {
-                return Err(labeled_invariant(
-                    "duplicate_key_certificate",
-                    "legacy one-use certificate was already issued",
-                )
-                .into());
-            }
-
-            // Issuance only moves online funds into governed escrow. It does
-            // not advertise or enable a peer mode.
-            reserve_kagemusha_escrow(state_transaction, &issue.asset, &amount)?;
-            for marker in [issue_marker, certificate_marker, claim_marker] {
-                state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .insert(marker, ());
-            }
-            Ok(())
-        }
-    }
-
-    impl Execute for RedeemOfflineNote {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let redemption = self.redemption;
-            if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
-                return Err(labeled_invariant(
-                    "invalid_proof",
-                    "legacy redemption requires 1 to 4 input nullifiers",
-                )
-                .into());
-            }
-            ensure_unique_legacy_note_hashes(
-                &redemption.input_nullifiers,
-                "duplicate_nullifier",
-                "legacy redemption nullifiers must be unique",
-            )?;
-            if redemption
-                .input_nullifiers
-                .iter()
-                .any(|hash| is_zero_hash(hash))
-            {
-                return Err(labeled_invariant(
-                    "invalid_proof",
-                    "legacy redemption nullifiers must be non-zero",
-                )
-                .into());
-            }
-            if redemption.amount <= Numeric::zero() {
-                return Err(labeled_invariant(
-                    "invalid_amount",
-                    "legacy redemption amount must be positive",
-                )
-                .into());
-            }
-            validate_legacy_note_certificate(&redemption.sender_key_certificate)?;
-            if redemption.asset.account() != &redemption.recipient
-                || redemption.sender_key_certificate.account_id != redemption.recipient
-            {
-                return Err(labeled_invariant(
-                    "proof_binding",
-                    "legacy redemption must name the exact current bearer account and certificate",
-                )
-                .into());
-            }
-            ensure_can_submit_legacy_note_for_account(
-                &redemption.recipient,
-                authority,
-                state_transaction,
-            )?;
-            let spec = state_transaction.numeric_spec_for(redemption.asset.definition())?;
-            assert_numeric_spec_with(&redemption.amount, spec)?;
-
-            let expected_public_inputs_hash = redemption.public_inputs_hash().map_err(|error| {
-                labeled_invariant(
-                    "invalid_proof",
-                    format!("failed to encode legacy redemption inputs: {error}"),
-                )
-            })?;
-            if redemption.recursive_proof.public_inputs_hash != expected_public_inputs_hash {
-                return Err(labeled_invariant(
-                    "proof_binding",
-                    "legacy redemption proof is not bound to its payload",
-                )
-                .into());
-            }
-            let expected_instances = crate::zk::offline_note_redeem_instance_values(&redemption)
-                .map_err(|error| labeled_invariant("invalid_proof", error))?
-                .public_instance_columns();
-            let claim_hash = legacy_note_claim_hash(
-                OfflineNoteIssuedClaim::from_redemption(&redemption).map_err(|error| {
-                    labeled_invariant(
-                        "invalid_proof",
-                        format!("failed to encode legacy redemption claim: {error}"),
-                    )
-                })?,
-            )?;
-            let issue_marker = legacy_note_issue_marker(&redemption.source_note_commitment);
-            let claim_marker = legacy_note_issued_claim_marker(&claim_hash);
-            let spent_marker = legacy_note_spent_claim_marker(&claim_hash);
-            if state_transaction
-                .world
-                .kagemusha_replay_keys
-                .get(&issue_marker)
-                .is_none()
-                || state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .get(&claim_marker)
-                    .is_none()
-            {
-                return Err(labeled_invariant(
-                    "note_not_issued",
-                    "legacy redemption does not match an exact issued bearer branch",
-                )
-                .into());
-            }
-            if state_transaction
-                .world
-                .kagemusha_replay_keys
-                .get(&spent_marker)
-                .is_some()
-            {
-                return Err(labeled_invariant(
-                    "duplicate_redeem",
-                    "legacy bearer branch was already redeemed",
-                )
-                .into());
-            }
-            let nullifier_markers = redemption
-                .input_nullifiers
-                .iter()
-                .map(legacy_note_nullifier_marker)
-                .collect::<Vec<_>>();
-            if nullifier_markers.iter().any(|marker| {
-                state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .get(marker)
-                    .is_some()
-            }) {
-                return Err(labeled_invariant(
-                    "duplicate_nullifier",
-                    "legacy redemption consumes an already-spent nullifier",
-                )
-                .into());
-            }
-
-            verify_legacy_note_proof(
-                &redemption.recursive_proof,
-                &expected_public_inputs_hash,
-                expected_instances,
-                state_transaction,
-            )?;
-            credit_legacy_note_from_offline_escrow(
-                state_transaction,
-                &redemption.asset,
-                &redemption.recipient,
-                &redemption.amount,
-            )?;
-            for marker in nullifier_markers.into_iter().chain([spent_marker]) {
-                state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .insert(marker, ());
-            }
-            Ok(())
-        }
-    }
-
-    impl Execute for AuditOfflineNote {
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let audit = self.audit;
-            if audit.input_nullifiers.is_empty()
-                || audit.input_nullifiers.len() > 4
-                || audit.input_claims.len() != audit.input_nullifiers.len()
-                || audit.output_commitments.is_empty()
-                || audit.output_commitments.len() > 2
-                || audit.output_claims.len() != audit.output_commitments.len()
-            {
-                return Err(labeled_invariant(
-                    "invalid_proof",
-                    "legacy audit requires 1..=4 matched inputs and 1..=2 matched outputs",
-                )
-                .into());
-            }
-            for (commitment, claim) in audit.output_commitments.iter().zip(&audit.output_claims) {
-                if commitment != &claim.note_commitment {
-                    return Err(labeled_invariant(
-                        "proof_binding",
-                        "legacy audit output claims must match commitments in canonical order",
-                    )
-                    .into());
-                }
-            }
-            ensure_unique_legacy_note_hashes(
-                &audit.input_nullifiers,
-                "audit_duplicate_nullifier",
-                "legacy audit input nullifiers must be unique",
-            )?;
-            ensure_unique_legacy_note_hashes(
-                &audit.output_commitments,
-                "audit_duplicate_output",
-                "legacy audit output commitments must be unique",
-            )?;
-            ensure_disjoint_legacy_note_hashes(
-                &audit.input_nullifiers,
-                &audit.output_commitments,
-                "proof_binding",
-                "legacy audit inputs and outputs must be disjoint",
-            )?;
-            validate_legacy_note_certificate(&audit.sender_key_certificate)?;
-            let sender_payload_hash = legacy_note_certificate_payload_hash_authorized_by(
-                &audit.sender_key_certificate,
-                &[&audit.sender_key_certificate.account_id],
-            )?;
-            ensure_legacy_audit_claims(
-                &audit.input_claims,
-                &audit.output_claims,
-                &sender_payload_hash,
-            )?;
-            for output in &audit.output_claims {
-                validate_legacy_note_certificate(&output.key_certificate)?;
-                if output.key_certificate.account_id != *output.asset.account() {
-                    return Err(labeled_invariant(
-                        "proof_binding",
-                        "legacy audit output certificate must name its bearer asset account",
-                    )
-                    .into());
-                }
-                legacy_note_certificate_payload_hash_authorized_by(
-                    &output.key_certificate,
-                    &[&output.key_certificate.account_id],
-                )?;
-                let spec = state_transaction.numeric_spec_for(output.asset.definition())?;
-                assert_numeric_spec_with(&output.amount, spec)?;
-            }
-            let acknowledged_by_output_bearer = audit
-                .output_claims
-                .iter()
-                .any(|claim| &claim.key_certificate.account_id == authority);
-            if !acknowledged_by_output_bearer
-                && !is_offline_escrow_manager(authority, state_transaction)
-            {
-                return Err(labeled_invariant(
-                    "unauthorized_controller",
-                    "legacy audit evidence must be acknowledged by an output bearer",
-                )
-                .into());
-            }
-
-            let expected_public_inputs_hash = audit.public_inputs_hash().map_err(|error| {
-                labeled_invariant(
-                    "invalid_proof",
-                    format!("failed to encode legacy audit inputs: {error}"),
-                )
-            })?;
-            if audit.recursive_proof.public_inputs_hash != expected_public_inputs_hash {
-                return Err(labeled_invariant(
-                    "proof_binding",
-                    "legacy audit proof is not bound to its payload",
-                )
-                .into());
-            }
-            let expected_instances = crate::zk::offline_note_audit_instance_values(&audit)
-                .map_err(|error| labeled_invariant("invalid_proof", error))?
-                .public_instance_columns();
-
-            for claim in &audit.input_claims {
-                let claim_hash = legacy_note_claim_hash(claim.clone())?;
-                if state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .get(&legacy_note_issue_marker(&claim.note_commitment))
-                    .is_none()
-                    || state_transaction
-                        .world
-                        .kagemusha_replay_keys
-                        .get(&legacy_note_issued_claim_marker(&claim_hash))
-                        .is_none()
-                    || state_transaction
-                        .world
-                        .kagemusha_replay_keys
-                        .get(&legacy_note_spent_claim_marker(&claim_hash))
-                        .is_some()
-                {
-                    return Err(labeled_invariant(
-                        "note_not_issued",
-                        "legacy audit evidence does not reference a live exact issued branch",
-                    )
-                    .into());
-                }
-            }
-
-            let token_marker = legacy_note_audit_token_marker(&audit.token_id);
-            let record_marker = legacy_note_audit_record_marker(&expected_public_inputs_hash);
-            if state_transaction
-                .world
-                .kagemusha_replay_keys
-                .get(&token_marker)
-                .is_some()
-            {
-                if state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .get(&record_marker)
-                    .is_some()
-                {
-                    return Ok(());
-                }
-                return Err(labeled_invariant(
-                    "audit_conflict",
-                    "legacy audit token is already bound to different evidence",
-                )
-                .into());
-            }
-
-            verify_legacy_note_proof(
-                &audit.recursive_proof,
-                &expected_public_inputs_hash,
-                expected_instances,
-                state_transaction,
-            )?;
-
-            // Audit is receiver-acknowledged, optional evidence only. It does
-            // not spend the source claim/nullifier, issue an output claim,
-            // credit/reverse funds, or write any ABI-21/V4 branch marker. Thus
-            // earlier publication can never decide ownership or reconcile a
-            // `cash_handoff_v1` payment; only exact redemption consumption can.
-            let evidence_markers = legacy_audit_evidence_markers(
-                &audit.token_id,
-                &expected_public_inputs_hash,
-                &audit.input_nullifiers,
-                &audit.output_commitments,
-            );
-            for marker in evidence_markers {
-                state_transaction
-                    .world
-                    .kagemusha_replay_keys
-                    .insert(marker, ());
-            }
-            Ok(())
-        }
     }
 
     impl Execute for RegisterOfflineDeviceAttestation {
@@ -7483,7 +6481,7 @@ pub mod isi {
                     continue;
                 }
                 let existing: KagemushaOnlineRegistrationStateV3 =
-                    norito::decode_from_bytes(existing_archive).map_err(|error| {
+                    norito::decode_canonical(existing_archive).map_err(|error| {
                         labeled_invariant(
                             "invalid_attestation",
                             format!(
@@ -7491,16 +6489,7 @@ pub mod isi {
                             ),
                         )
                     })?;
-                if existing.version != 3
-                    || norito::to_bytes(&existing).map_err(|error| {
-                        labeled_invariant(
-                            "invalid_attestation",
-                            format!(
-                                "failed to re-encode existing Kagemusha registration state: {error}"
-                            ),
-                        )
-                    })? != *existing_archive
-                {
+                if existing.version != 3 {
                     return Err(labeled_invariant(
                         "invalid_attestation",
                         "existing Kagemusha registration state is non-canonical",
@@ -7542,7 +6531,7 @@ pub mod isi {
                 }
             };
             let registration_state_archive =
-                norito::to_bytes(&KagemushaOnlineRegistrationStateV3 {
+                norito::encode_canonical(&KagemushaOnlineRegistrationStateV3 {
                     version: 3,
                     admission_policy_hash,
                     admission_height,
@@ -7600,7 +6589,7 @@ pub mod isi {
                 &policy,
                 state_transaction.block_unix_timestamp_ms(),
             )?;
-            let bytes = norito::to_bytes(&policy).map_err(|err| {
+            let bytes = norito::encode_canonical(&policy).map_err(|err| {
                 labeled_invariant(
                     "invalid_attestation_policy",
                     format!("failed to encode Offline device attestation policy: {err}"),
@@ -8061,12 +7050,13 @@ pub mod isi {
     fn kagemusha_v4_release_binding(
         release_record: &iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
     ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4, Error> {
-        let manifest_bytes = norito::to_bytes(&release_record.manifest).map_err(|error| {
-            labeled_invariant(
-                "recursive_release_invalid",
-                format!("failed to encode Kagemusha V4 manifest: {error}"),
-            )
-        })?;
+        let manifest_bytes =
+            norito::encode_canonical(&release_record.manifest).map_err(|error| {
+                labeled_invariant(
+                    "recursive_release_invalid",
+                    format!("failed to encode Kagemusha V4 manifest: {error}"),
+                )
+            })?;
         Ok(
             iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
                 version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
@@ -8172,7 +7162,7 @@ pub mod isi {
                 &policy,
                 state_transaction.block_unix_timestamp_ms(),
             )?;
-            let policy_bytes = norito::to_bytes(&policy).map_err(|error| {
+            let policy_bytes = norito::encode_canonical(&policy).map_err(|error| {
                 labeled_invariant(
                     "invalid_attestation_policy",
                     format!("failed to encode atomic Offline device attestation policy: {error}"),
@@ -8296,12 +7286,13 @@ pub mod isi {
                 )
                 .into());
             }
-            let release_bytes = norito::to_bytes(&activation.release_record).map_err(|error| {
-                labeled_invariant(
-                    "recursive_release_invalid",
-                    format!("failed to encode Kagemusha V4 release record: {error}"),
-                )
-            })?;
+            let release_bytes =
+                norito::encode_canonical(&activation.release_record).map_err(|error| {
+                    labeled_invariant(
+                        "recursive_release_invalid",
+                        format!("failed to encode Kagemusha V4 release record: {error}"),
+                    )
+                })?;
 
             // Every fallible validation completed above. Publish the exact device policy,
             // release, and paired verifier records in this transaction overlay.
@@ -8849,7 +7840,7 @@ pub mod isi {
             permission::Permission,
             role::{Role, RoleId},
         };
-        use iroha_primitives::{json::Json, numeric::Numeric};
+        use iroha_primitives::{json::Json, numeric::Quantity};
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         use p256::{
             ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _},
@@ -8867,102 +7858,41 @@ pub mod isi {
         const POLICY_TEST_TIME_MS: u64 = 1_800_000_000_000;
 
         #[test]
-        fn legacy_audit_markers_are_evidence_only_and_peer_state_isolated() {
-            let token = Hash::new(b"legacy-audit-token");
-            let public_inputs = Hash::new(b"legacy-audit-public-inputs");
-            let inputs = [Hash::new(b"legacy-audit-input")];
-            let outputs = [Hash::new(b"legacy-audit-output")];
-            let markers = legacy_audit_evidence_markers(&token, &public_inputs, &inputs, &outputs);
-
+        fn offline_proof_boundary_rejects_alternate_norito_layout() {
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: "halo2/pasta/ipa/offline-boundary-v1".to_owned(),
+                vk_hash: [7_u8; 32],
+                public_inputs: b"offline-boundary-v1".to_vec(),
+                proof_bytes: vec![1, 2, 3],
+                aux: Vec::new(),
+            };
+            let canonical =
+                norito::encode_canonical(&envelope).expect("canonical offline proof envelope");
             assert_eq!(
-                markers,
-                vec![
-                    legacy_note_audit_token_marker(&token),
-                    legacy_note_audit_record_marker(&public_inputs),
-                    legacy_note_audit_nullifier_marker(&inputs[0]),
-                    legacy_note_audit_output_marker(&outputs[0]),
-                ]
+                decode_canonical_offline_proof_envelope(&canonical, "fixture")
+                    .expect("canonical envelope must decode"),
+                envelope
             );
-            for marker in &markers {
-                assert_ne!(*marker, legacy_note_issue_marker(&outputs[0]));
-                assert_ne!(*marker, legacy_note_issued_claim_marker(&outputs[0]));
-                assert_ne!(*marker, legacy_note_spent_claim_marker(&inputs[0]));
-                assert_ne!(*marker, legacy_note_nullifier_marker(&inputs[0]));
-                assert_ne!(
-                    *marker,
-                    kagemusha_v2_marker(KAGEMUSHA_V4_BRANCH_EXACT_DOMAIN, &[inputs[0].as_ref()]),
-                );
-            }
-        }
 
-        #[test]
-        fn legacy_audit_cannot_reverse_or_replace_bearer_ownership() {
-            let source = include_str!("offline.rs");
-            let issue_start = source
-                .find("impl Execute for IssueOfflineNote")
-                .expect("legacy issue executor");
-            let redeem_start = source
-                .find("impl Execute for RedeemOfflineNote")
-                .expect("legacy redemption executor");
-            let audit_start = source
-                .find("impl Execute for AuditOfflineNote")
-                .expect("legacy audit executor");
-            let register_start = source
-                .find("impl Execute for RegisterOfflineDeviceAttestation")
-                .expect("device registration executor");
-            let issue = &source[issue_start..redeem_start];
-            let redemption = &source[redeem_start..audit_start];
-            let audit = &source[audit_start..register_start];
-
-            assert!(!issue.contains("legacy_note_audit_token_marker"));
-            assert!(!issue.contains("legacy_note_audit_output_marker"));
-
-            for exact_bearer_guard in [
-                "legacy_note_issue_marker",
-                "legacy_note_issued_claim_marker",
-                "legacy_note_spent_claim_marker",
-                "legacy_note_nullifier_marker",
-                "sender_key_certificate.account_id != redemption.recipient",
-            ] {
-                assert!(
-                    redemption.contains(exact_bearer_guard),
-                    "redemption must retain exact-bearer guard {exact_bearer_guard}",
-                );
-            }
-            assert!(!redemption.contains("legacy_note_audit_token_marker"));
-            assert!(!redemption.contains("legacy_note_audit_output_marker"));
-
-            assert!(audit.contains("legacy_audit_evidence_markers"));
-            assert!(!audit.contains("credit_legacy_note_from_offline_escrow"));
-            assert!(!audit.contains("reserve_kagemusha_escrow"));
-            assert!(!audit.contains("commit_kagemusha_v2_consumed_branch"));
-            assert!(!audit.contains("KAGEMUSHA_V4_BRANCH_EXACT_DOMAIN"));
-        }
-
-        #[test]
-        fn legacy_execution_is_not_a_readiness_or_peer_mode_candidate() {
-            let source = include_str!("offline.rs");
-            let readiness_start = source
-                .find("pub fn resolve_kagemusha_recursive_readiness_v4")
-                .expect("V4 readiness resolver");
-            let readiness_end = source[readiness_start..]
-                .find("fn exact_kagemusha_v4_transaction_verifier_record")
-                .map(|offset| readiness_start + offset)
-                .expect("next V4 resolver");
-            let readiness = &source[readiness_start..readiness_end];
-
-            for forbidden in [
-                "IssueOfflineNote",
-                "AuditOfflineNote",
-                "RedeemOfflineNote",
-                "legacy_note_",
-                "offline-note-recursive",
-            ] {
-                assert!(
-                    !readiness.contains(forbidden),
-                    "mandatory V4 readiness must not consult legacy compatibility token {forbidden}",
-                );
-            }
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let alternate = {
+                let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+                norito::to_bytes(&envelope).expect("alternate-layout offline proof envelope")
+            };
+            assert_ne!(alternate, canonical);
+            let error = decode_canonical_offline_proof_envelope(
+                &alternate,
+                "alternate offline envelope rejected",
+            )
+            .expect_err("alternate-layout envelope must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("alternate offline envelope rejected"),
+                "unexpected boundary error: {error}"
+            );
         }
 
         #[test]
@@ -9173,33 +8103,6 @@ pub mod isi {
         }
 
         #[test]
-        fn legacy_redemption_holding_limit_failure_is_atomic() {
-            let (state, definition_id, source_asset, _) =
-                offline_holding_limit_test_state(Some(10));
-            let mut block = state.block(offline_test_header());
-            let mut state_transaction = block.transaction();
-            set_offline_holding_limit(&mut state_transaction, &BOB_ID, &definition_id, 0);
-            let entries_before = offline_asset_entries(&state_transaction);
-            let events_before = state_transaction.world.internal_event_buf.len();
-
-            let error = credit_legacy_note_from_offline_escrow(
-                &mut state_transaction,
-                &source_asset,
-                &BOB_ID,
-                &Numeric::from(1_u32),
-            )
-            .expect_err("legacy redemption above the recipient holding limit must fail");
-
-            assert_holding_limit_exceeded(&error);
-            assert_eq!(offline_asset_entries(&state_transaction), entries_before);
-            assert_eq!(
-                state_transaction.world.internal_event_buf.len(),
-                events_before,
-                "rejected legacy redemption must not emit events",
-            );
-        }
-
-        #[test]
         fn kagemusha_redemption_plan_rejects_holding_limit_without_mutation() {
             let (state, definition_id, source_asset, _) =
                 offline_holding_limit_test_state(Some(10));
@@ -9261,9 +8164,6 @@ pub mod isi {
         fn every_offline_executor_is_independent_of_local_service_switch() {
             let source = include_str!("offline.rs");
             let executor_names = [
-                "IssueOfflineNote",
-                "RedeemOfflineNote",
-                "AuditOfflineNote",
                 "RegisterOfflineDeviceAttestation",
                 "SetOfflineDeviceAttestationPolicy",
                 "ActivateKagemushaRecursiveReleaseV4",

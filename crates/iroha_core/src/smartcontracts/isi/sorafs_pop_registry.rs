@@ -31,7 +31,7 @@ use iroha_data_model::{
     },
 };
 use mv::storage::StorageReadOnly;
-use norito::{DecodeLimits, decode_from_bytes_with_limits};
+use norito::{DecodeLimits, decode_canonical_with_limits};
 use sorafs_manifest::pop_credentials::{
     POP_REVOCATION_ENTRIES_MAX_V1, PopCommitmentRootV1, PopRevocationEntryV1, PopRevocationListV1,
     PopRevocationReasonV1, verify_pop_commitment_root_signature_v1,
@@ -205,7 +205,7 @@ fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
 ) -> Result<Vec<u8>, InstructionExecutionError> {
-    norito::to_bytes(value)
+    norito::encode_canonical(value)
         .map_err(|error| corrupt_state(format!("failed to encode {label}: {error}")))
 }
 
@@ -227,31 +227,18 @@ where
             invalid_parameter(message)
         });
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
-        let message = format!("failed to decode {label}: {error}");
+    decode_canonical_with_limits::<T>(bytes, limits).map_err(|error| {
+        let message = if matches!(&error, norito::Error::NonCanonicalEncoding) {
+            format!("{label} is not exact canonical Norito")
+        } else {
+            format!("failed to decode {label}: {error}")
+        };
         if state {
             corrupt_state(message)
         } else {
             invalid_parameter(message)
         }
-    })?;
-    let canonical = norito::to_bytes(&value).map_err(|error| {
-        let message = format!("failed to re-encode {label}: {error}");
-        if state {
-            corrupt_state(message)
-        } else {
-            invalid_parameter(message)
-        }
-    })?;
-    if canonical != bytes {
-        let message = format!("{label} is not exact canonical Norito");
-        return Err(if state {
-            corrupt_state(message)
-        } else {
-            invalid_parameter(message)
-        });
-    }
-    Ok(value)
+    })
 }
 
 fn decode_state<T>(bytes: &[u8], label: &str) -> Result<T, InstructionExecutionError>
@@ -307,7 +294,7 @@ fn read_policy(
             "stored PoP issuer policy digest or activation timestamp is invalid",
         ));
     }
-    let policy_payload = norito::to_bytes(&record.policy)
+    let policy_payload = norito::encode_canonical(&record.policy)
         .map_err(|error| corrupt_state(format!("failed to encode stored PoP policy: {error}")))?;
     validate_audit_binding(
         world,
@@ -1003,7 +990,7 @@ impl Execute for SetSorafsPopIssuerPolicy {
             }
         };
 
-        let policy_payload = norito::to_bytes(&self.policy).map_err(|error| {
+        let policy_payload = norito::encode_canonical(&self.policy).map_err(|error| {
             invalid_parameter(format!("failed to encode SoraFS PoP policy: {error}"))
         })?;
         let audit = prepare_audit(
@@ -1351,7 +1338,7 @@ impl Execute for PublishSorafsPopRevocationList {
         verify_pop_revocation_list_signature_v1(&publication).map_err(|error| {
             invalid_parameter(format!("invalid signed PoP revocation list: {error}"))
         })?;
-        let operation_payload = norito::to_bytes(&self).map_err(|error| {
+        let operation_payload = norito::encode_canonical(&self).map_err(|error| {
             invalid_parameter(format!(
                 "failed to encode PoP revocation publication instruction: {error}"
             ))
@@ -1888,7 +1875,21 @@ mod tests {
     }
 
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
-        norito::to_bytes(value).expect("encode canonical fixture")
+        norito::encode_canonical(value).expect("encode canonical fixture")
+    }
+
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout PoP registry fixture")
+    }
+
+    fn encode_state_with_alternate_ambient<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        encode_state(value, "PoP registry fixture").expect("encode canonical PoP registry state")
     }
 
     fn activate(operator: &KeyPair, state_transaction: &mut StateTransaction<'_, '_>) -> AccountId {
@@ -2046,8 +2047,50 @@ mod tests {
                 .is_err()
         );
 
+        let canonical_batch = initial_batch(&operator);
+        assert_eq!(
+            encode_state_with_alternate_ambient(&canonical_batch),
+            encode(&canonical_batch)
+        );
+        let alternate = encode_with_alternate_norito_layout(&canonical_batch);
+        let input_error = decode_exact::<PopCredentialCommitmentBatchV1>(
+            &alternate,
+            BATCH_LIMITS,
+            BATCH_PAYLOAD_MAX_BYTES,
+            "PoP credential commitment batch",
+            false,
+        )
+        .expect_err("alternate-layout input must be rejected");
+        assert!(matches!(
+            &input_error,
+            InstructionExecutionError::InvalidParameter(_)
+        ));
+        assert!(
+            input_error
+                .to_string()
+                .contains("not exact canonical Norito")
+        );
+        let state_error = decode_exact::<PopCredentialCommitmentBatchV1>(
+            &alternate,
+            BATCH_LIMITS,
+            BATCH_PAYLOAD_MAX_BYTES,
+            "PoP credential commitment batch",
+            true,
+        )
+        .expect_err("alternate-layout state must be rejected");
+        assert!(matches!(
+            &state_error,
+            InstructionExecutionError::InvariantViolation(_)
+        ));
+        assert!(
+            state_error
+                .to_string()
+                .contains("not exact canonical Norito")
+        );
+
         for payload in [
             vec![0xFF, 0x00],
+            alternate,
             {
                 let mut payload = encode(&initial_batch(&operator));
                 payload.push(0);

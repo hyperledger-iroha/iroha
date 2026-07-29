@@ -13,6 +13,7 @@ from unittest import mock
 
 SCRIPT = Path(__file__).parents[1] / "norito_bridge_source_seal.py"
 APPLE_BUILDER = Path(__file__).parents[1] / "build_norito_xcframework.sh"
+HERMETIC_RUNNER = Path(__file__).parents[1] / "run_mobile_hermetic_command.py"
 SPEC = importlib.util.spec_from_file_location("norito_bridge_source_seal", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 seal = importlib.util.module_from_spec(SPEC)
@@ -23,7 +24,7 @@ SPEC.loader.exec_module(seal)
 class NoritoBridgeSourceSealTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         for relative, contents in {
             "Cargo.toml": "[workspace]\n",
             "Cargo.lock": "# locked\n",
@@ -104,6 +105,55 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         )
         self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
 
+    def test_selected_lock_replaces_root_lock_in_metadata_and_fingerprint(self) -> None:
+        alternate = self.root / "alternate/Cargo.lock"
+        alternate.parent.mkdir()
+        alternate.write_text("# alternate lock\n", encoding="utf-8")
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+            inputs = seal.seal_inputs(self.root, "apple", alternate)
+
+        original = seal.fingerprint(self.root, inputs, alternate)
+        (self.root / "Cargo.lock").write_text("# changed root lock\n", encoding="utf-8")
+        self.assertEqual(original, seal.fingerprint(self.root, inputs, alternate))
+        alternate.write_text("# changed alternate lock\n", encoding="utf-8")
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs, alternate))
+
+        cargo = object()
+        rustc = object()
+        git = Path("/usr/bin/git")
+        with (
+            mock.patch.object(
+                seal, "source_seal_tools", return_value=(cargo, rustc, git)
+            ),
+            mock.patch.object(seal, "source_seal_environment", return_value={}),
+            mock.patch.object(seal, "run", return_value=b"{}") as run,
+        ):
+            seal.metadata(self.root, "aarch64-apple-darwin", alternate)
+        arguments = run.call_args.args[2]
+        self.assertIn("-Z", arguments)
+        self.assertIn("unstable-options", arguments)
+        self.assertEqual(
+            arguments[arguments.index("--lockfile-path") + 1],
+            str(alternate),
+        )
+
+    def test_selected_lock_must_be_absolute_regular_and_non_symbolic(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "must be absolute"):
+            seal.selected_lockfile_path(self.root, Path("Cargo.lock"))
+
+        directory = self.root / "lock-directory"
+        directory.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+            seal.selected_lockfile_path(self.root, directory)
+
+        with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+            seal.selected_lockfile_path(self.root, self.root / "missing-Cargo.lock")
+
+        symlink = self.root / "symlinked-Cargo.lock"
+        symlink.symlink_to(self.root / "Cargo.lock")
+        with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+            seal.selected_lockfile_path(self.root, symlink)
+
     def test_apple_fingerprint_and_dirty_state_bind_mobile_transport_bytes(self) -> None:
         inputs = self.inputs("apple")
         original = seal.fingerprint(self.root, inputs)
@@ -141,6 +191,29 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertEqual(len(invocations), 2)
         for invocation in invocations:
             self.assertIn("--platform apple", invocation)
+        self.assertGreaterEqual(
+            builder.count('--lockfile-path "$CARGO_LOCKFILE"'),
+            3,
+        )
+
+    def test_apple_builder_uses_one_selected_lock_for_all_four_builds(self) -> None:
+        builder = APPLE_BUILDER.read_text(encoding="utf-8")
+        self.assertEqual(builder.count("  run_hermetic_apple_cargo \\\n"), 4)
+        self.assertIn(
+            '-Z unstable-options --lockfile-path "$CARGO_LOCKFILE"',
+            builder,
+        )
+        self.assertIn('--set "RUSTC_BOOTSTRAP=1"', builder)
+        self.assertIn(
+            '"cargo_lock_sha256": "$CARGO_LOCK_SHA256_START"',
+            builder,
+        )
+
+        runner = HERMETIC_RUNNER.read_text(encoding="utf-8")
+        self.assertIn(
+            'APPLE_CARGO_ENVIRONMENT = COMMON_CARGO_ENVIRONMENT | {"RUSTC_BOOTSTRAP"}',
+            runner,
+        )
 
     def test_symlinked_rustup_style_proxies_preserve_dispatch_and_fail_on_retarget(
         self,

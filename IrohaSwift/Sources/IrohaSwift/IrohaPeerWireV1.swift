@@ -6,7 +6,6 @@ import zlib
 public enum IrohaPeerWireProfileV1: UInt16, CaseIterable, Sendable {
     /// Reserved on the wire so a zero-filled or omitted profile is never accepted.
     case reject = 0
-    case offlineNote = 1
     case kagemusha = 2
 }
 
@@ -28,7 +27,6 @@ public extension IrohaPeerWireProfileV1 {
     var requiredSchemaVersion: UInt16 {
         switch self {
         case .reject: return 0
-        case .offlineNote: return 1
         case .kagemusha: return 0x0102
         }
     }
@@ -72,23 +70,19 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
     public static let maximumKagemushaProfileBytes = 24_576
 
     public let maximumCanonicalBytes: Int
-    public let maximumOfflineNoteEncodedBytes: Int
     public let maximumKagemushaEncodedBytes: Int
 
     public init(
         maximumCanonicalBytes: Int = 32 * 1024,
-        maximumOfflineNoteEncodedBytes: Int = 24_576,
         maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
     ) {
         precondition(
             Self.areValid(
                 maximumCanonicalBytes: maximumCanonicalBytes,
-                maximumOfflineNoteEncodedBytes: maximumOfflineNoteEncodedBytes,
                 maximumKagemushaEncodedBytes: maximumKagemushaEncodedBytes
             )
         )
         self.maximumCanonicalBytes = maximumCanonicalBytes
-        self.maximumOfflineNoteEncodedBytes = maximumOfflineNoteEncodedBytes
         self.maximumKagemushaEncodedBytes = maximumKagemushaEncodedBytes
     }
 
@@ -96,11 +90,9 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
 
     static func areValid(
         maximumCanonicalBytes: Int,
-        maximumOfflineNoteEncodedBytes: Int,
         maximumKagemushaEncodedBytes: Int
     ) -> Bool {
         (1...(32 * 1_024)).contains(maximumCanonicalBytes) &&
-            (1...24_576).contains(maximumOfflineNoteEncodedBytes) &&
             (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
     }
 
@@ -108,8 +100,6 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
         switch profile {
         case .reject:
             throw IrohaPeerWireMessageErrorV1.invalidProfile(profile.rawValue)
-        case .offlineNote:
-            return maximumOfflineNoteEncodedBytes
         case .kagemusha:
             return maximumKagemushaEncodedBytes
         }

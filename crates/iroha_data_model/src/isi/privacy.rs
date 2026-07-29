@@ -10,8 +10,9 @@ use crate::privacy::{
     PrivacyConsensusLimitsV1, PrivacyOrchardPoolBootstrapV1, PrivacyPgcAccountBootstrapV1,
     PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
     PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1, PrivacyZkAcePolicyRecordDigestV1,
-    PrivacyZkAcePolicyRecordV1, PrivacyZkAmsRegistryBootstrapV1,
+    PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1, PrivacyVegaIssuerRecordDigestV1,
+    PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyRecordDigestV1, PrivacyZkAcePolicyRecordV1,
+    PrivacyZkAmsRegistryBootstrapV1,
     PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
     PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
     PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
@@ -459,6 +460,100 @@ impl RevokePrivacyBootleLanternIssuerPolicyV1 {
 }
 
 isi! {
+    /// Register one canonical authoritative Vega issuer-key/policy lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RegisterPrivacyVegaIssuerV1 {
+        /// Complete active origin revision, including its canonical self-digest.
+        pub record: PrivacyVegaIssuerRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RegisterPrivacyVegaIssuerV1 {}
+
+impl RegisterPrivacyVegaIssuerV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.register_vega_issuer.v1";
+
+    /// Construct an authoritative Vega issuer registration.
+    #[must_use]
+    pub const fn new(record: PrivacyVegaIssuerRecordV1) -> Self {
+        Self { record }
+    }
+}
+
+isi! {
+    /// Rotate one active Vega issuer lineage by exactly one immutable epoch.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RotatePrivacyVegaIssuerV1 {
+        /// Exact self-digest of the active revision being replaced.
+        pub expected_current_record_digest: PrivacyVegaIssuerRecordDigestV1,
+        /// Complete active successor revision.
+        pub successor: PrivacyVegaIssuerRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RotatePrivacyVegaIssuerV1 {}
+
+impl RotatePrivacyVegaIssuerV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.rotate_vega_issuer.v1";
+
+    /// Construct an exact Vega issuer compare-and-swap rotation.
+    #[must_use]
+    pub const fn new(
+        expected_current_record_digest: PrivacyVegaIssuerRecordDigestV1,
+        successor: PrivacyVegaIssuerRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
+    /// Irreversibly revoke one active Vega issuer lineage.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    pub struct RevokePrivacyVegaIssuerV1 {
+        /// Exact self-digest of the active revision being revoked.
+        pub expected_current_record_digest: PrivacyVegaIssuerRecordDigestV1,
+        /// Complete terminal successor revision.
+        pub successor: PrivacyVegaIssuerRecordV1,
+    }
+}
+
+impl crate::seal::Instruction for RevokePrivacyVegaIssuerV1 {}
+
+impl RevokePrivacyVegaIssuerV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.revoke_vega_issuer.v1";
+
+    /// Construct an exact irreversible Vega issuer revocation.
+    #[must_use]
+    pub const fn new(
+        expected_current_record_digest: PrivacyVegaIssuerRecordDigestV1,
+        successor: PrivacyVegaIssuerRecordV1,
+    ) -> Self {
+        Self {
+            expected_current_record_digest,
+            successor,
+        }
+    }
+}
+
+isi! {
     /// Register one canonical authoritative X.509 trust-anchor lineage.
     #[cfg_attr(
         feature = "json",
@@ -849,6 +944,17 @@ impl_privacy_decode_from_slice!(RevokePrivacyBootleLanternIssuerPolicyV1 {
     expected_current_record_digest: PrivacyBootleLanternIssuerPolicyDigestV1,
     successor: BootleLanternIssuerPolicyV1,
 });
+impl_privacy_decode_from_slice!(RegisterPrivacyVegaIssuerV1 {
+    record: PrivacyVegaIssuerRecordV1,
+});
+impl_privacy_decode_from_slice!(RotatePrivacyVegaIssuerV1 {
+    expected_current_record_digest: PrivacyVegaIssuerRecordDigestV1,
+    successor: PrivacyVegaIssuerRecordV1,
+});
+impl_privacy_decode_from_slice!(RevokePrivacyVegaIssuerV1 {
+    expected_current_record_digest: PrivacyVegaIssuerRecordDigestV1,
+    successor: PrivacyVegaIssuerRecordV1,
+});
 impl_privacy_decode_from_slice!(RegisterPrivacyZkX509TrustAnchorV1 {
     record: PrivacyZkX509TrustAnchorRecordV1,
 });
@@ -907,24 +1013,27 @@ mod tests {
             IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1, IrohaJindoPolynomialCommitmentStatementV1,
             JindoActivationLimitsV1, PrivacyActiveLifecycleV1, PrivacyAssuranceV1,
             PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCommitmentV1,
-            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyFcmpPoolBootstrapV1,
-            PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1,
-            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapV1,
-            PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
-            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
-            PrivacyProofBytesV1, PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1, PrivacyRootRoleV1,
-            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
-            PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
-            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
-            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyConsensusLimitsV1, PrivacyEngineManifestDigestV1, PrivacyFcmpOutputTupleV1,
+            PrivacyFcmpPoolBootstrapV1, PrivacyIssuerIdV1, PrivacyJindoFieldElementV1,
+            PrivacyJindoLatticeCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+            PrivacyOrchardPoolBootstrapV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+            PrivacyPgcAccountV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
+            PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofManagedPoolBootstrapV1,
+            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+            PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementContextV1,
+            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+            PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
+            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
+            PrivacyVerifierDigestV1, PrivacyX509CrlDerDigestV1,
+            PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
+            PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
             PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsRegistryIdV1,
             PrivacyZkX509RecordLifecycleV1,
         },
     };
 
-    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 25] = [
+    const PRIVACY_ISI_WIRE_IDS_V1: [&str; 28] = [
         RegisterPrivacyProtocolActivationV1::WIRE_ID,
         SchedulePrivacyConsensusPolicyTighteningV1::WIRE_ID,
         SchedulePrivacyProtocolLimitsTighteningV1::WIRE_ID,
@@ -940,6 +1049,9 @@ mod tests {
         RegisterPrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
         RotatePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
         RevokePrivacyBootleLanternIssuerPolicyV1::WIRE_ID,
+        RegisterPrivacyVegaIssuerV1::WIRE_ID,
+        RotatePrivacyVegaIssuerV1::WIRE_ID,
+        RevokePrivacyVegaIssuerV1::WIRE_ID,
         RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
         RotatePrivacyZkX509TrustAnchorV1::WIRE_ID,
         RevokePrivacyZkX509TrustAnchorV1::WIRE_ID,
@@ -984,7 +1096,11 @@ mod tests {
                 DomainId::try_new("privacy", "universal").expect("domain"),
                 Name::from_str("fcmp").expect("asset name"),
             ),
-            initial_output_commitments: vec![PrivacyCommitmentV1::new(digest(26))],
+            initial_outputs: vec![PrivacyFcmpOutputTupleV1 {
+                output_key: digest(26),
+                linking_tag_generator: digest(27),
+                amount_commitment: digest(28),
+            }],
         })
     }
 
@@ -1214,6 +1330,27 @@ mod tests {
         successor
     }
 
+    fn vega_issuer_record(
+        epoch: u64,
+        key_seed: u8,
+        previous_record_digest: Option<PrivacyVegaIssuerRecordDigestV1>,
+        lifecycle: PrivacyVegaIssuerRecordLifecycleV1,
+    ) -> PrivacyVegaIssuerRecordV1 {
+        PrivacyVegaIssuerRecordV1::new(
+            PrivacyIssuerIdV1::new(digest(48)),
+            epoch,
+            p256_point(2, key_seed),
+            crate::privacy::PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+            PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+            PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            previous_record_digest,
+            lifecycle,
+        )
+        .expect("canonical Vega issuer record")
+    }
+
     fn zk_x509_trust_anchor(
         epoch: u64,
         trust_store_seed: u8,
@@ -1299,7 +1436,7 @@ mod tests {
         crl_number: u64,
         crl_der_seed: u8,
         this_update_unix_seconds: u64,
-        revoked_root_seed: u8,
+        _revoked_root_seed: u8,
         previous_record_digest: Option<PrivacyZkX509CrlRecordDigestV1>,
     ) -> PrivacyZkX509CrlRecordV1 {
         PrivacyZkX509CrlRecordV1::new(
@@ -1311,8 +1448,6 @@ mod tests {
             PrivacyX509CrlIssuerSpkiDigestV1::new(digest(52)),
             this_update_unix_seconds,
             this_update_unix_seconds + 300,
-            PrivacyRootV1::new(digest(revoked_root_seed)),
-            epoch,
             previous_record_digest,
             PrivacyZkX509RecordLifecycleV1::Active,
         )
@@ -1329,8 +1464,6 @@ mod tests {
             current.issuer_spki_digest,
             current.this_update_unix_seconds,
             current.next_update_unix_seconds,
-            current.revoked_serials_root,
-            current.root_epoch,
             Some(current.record_digest),
             PrivacyZkX509RecordLifecycleV1::Revoked,
         )
@@ -1429,6 +1562,44 @@ mod tests {
                 let current = bootle_lantern_policy();
                 let successor = revoked_bootle_lantern_policy(&current);
                 RevokePrivacyBootleLanternIssuerPolicyV1::new(current.record_digest, successor)
+            });
+            $check!(RegisterPrivacyVegaIssuerV1::WIRE_ID, {
+                RegisterPrivacyVegaIssuerV1::new(vega_issuer_record(
+                    1,
+                    49,
+                    None,
+                    PrivacyVegaIssuerRecordLifecycleV1::Active,
+                ))
+            });
+            $check!(RotatePrivacyVegaIssuerV1::WIRE_ID, {
+                let current = vega_issuer_record(
+                    1,
+                    49,
+                    None,
+                    PrivacyVegaIssuerRecordLifecycleV1::Active,
+                );
+                let successor = vega_issuer_record(
+                    2,
+                    50,
+                    Some(current.record_digest),
+                    PrivacyVegaIssuerRecordLifecycleV1::Active,
+                );
+                RotatePrivacyVegaIssuerV1::new(current.record_digest, successor)
+            });
+            $check!(RevokePrivacyVegaIssuerV1::WIRE_ID, {
+                let current = vega_issuer_record(
+                    1,
+                    49,
+                    None,
+                    PrivacyVegaIssuerRecordLifecycleV1::Active,
+                );
+                let successor = vega_issuer_record(
+                    2,
+                    49,
+                    Some(current.record_digest),
+                    PrivacyVegaIssuerRecordLifecycleV1::Revoked,
+                );
+                RevokePrivacyVegaIssuerV1::new(current.record_digest, successor)
             });
             $check!(
                 RegisterPrivacyZkX509TrustAnchorV1::WIRE_ID,
@@ -1650,12 +1821,12 @@ mod tests {
 
     #[test]
     fn stable_wire_ids_have_no_retired_compatibility_names() {
-        assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 24);
+        assert_eq!(PRIVACY_ISI_WIRE_IDS_V1.len(), 28);
         let mut sorted_wire_ids = PRIVACY_ISI_WIRE_IDS_V1;
         sorted_wire_ids.sort_unstable();
         assert!(
             sorted_wire_ids.windows(2).all(|pair| pair[0] != pair[1]),
-            "all 24 canonical first-release privacy ISIs must have unique wire IDs"
+            "all 28 canonical first-release privacy ISIs must have unique wire IDs"
         );
 
         for wire_id in PRIVACY_ISI_WIRE_IDS_V1 {

@@ -389,7 +389,7 @@ struct NativeAmxHeightBindingV2 {
 
 impl NativeAmxHeightBindingV2 {
     fn genesis_head(&self) -> Result<Hash, NativeAmxSigningGuardError> {
-        let encoded = norito::to_bytes(self)
+        let encoded = norito::encode_canonical(self)
             .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
         Ok(Hash::new_from_chunks(&[
             NATIVE_AMX_SIGNING_GENESIS_DOMAIN,
@@ -416,7 +416,7 @@ impl NativeAmxSigningRecordV2 {
         body: &NativeAmxAttestationBodyV2,
         signer: &PeerId,
     ) -> Result<Self, NativeAmxSigningGuardError> {
-        let encoded_body = norito::to_bytes(body)
+        let encoded_body = norito::encode_canonical(body)
             .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
         let mut record = Self {
             version: NATIVE_AMX_SIGNING_GUARD_VERSION,
@@ -435,7 +435,7 @@ impl NativeAmxSigningRecordV2 {
     }
 
     fn computed_body_digest(&self) -> Result<Hash, NativeAmxSigningGuardError> {
-        let encoded = norito::to_bytes(&self.body)
+        let encoded = norito::encode_canonical(&self.body)
             .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
         Ok(Hash::new_from_chunks(&[
             NATIVE_AMX_SIGNING_BODY_DOMAIN,
@@ -446,7 +446,7 @@ impl NativeAmxSigningRecordV2 {
     fn computed_record_hash(&self) -> Result<Hash, NativeAmxSigningGuardError> {
         let mut hashable = self.clone();
         hashable.record_hash = Hash::prehashed([0; Hash::LENGTH]);
-        let encoded = norito::to_bytes(&hashable)
+        let encoded = norito::encode_canonical(&hashable)
             .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
         Ok(Hash::new_from_chunks(&[
             NATIVE_AMX_SIGNING_RECORD_DOMAIN,
@@ -917,9 +917,7 @@ impl NativeAmxSigningGuard {
             Err(error) => return Err(native_amx_unsafe_journal(&path, error.to_string())),
         }
         let bytes = native_amx_read_secure_file(&path, max_anchor_bytes, owner_uid)?;
-        let anchor = norito::decode_from_bytes::<NativeAmxSigningAnchorV2>(&bytes)
-            .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
-        let canonical = norito::to_bytes(&anchor)
+        let anchor = norito::decode_canonical::<NativeAmxSigningAnchorV2>(&bytes)
             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
         if anchor.version != NATIVE_AMX_SIGNING_GUARD_VERSION
             || anchor.binding.active_height == 0
@@ -929,7 +927,6 @@ impl NativeAmxSigningGuard {
             || usize::try_from(anchor.binding.max_records)
                 .map_or(true, |max| max > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)
             || anchor.record_count > anchor.binding.max_records
-            || canonical != bytes
         {
             return Err(native_amx_unsafe_journal(
                 &path,
@@ -946,14 +943,11 @@ impl NativeAmxSigningGuard {
         max_record_bytes: usize,
     ) -> Result<NativeAmxSigningRecordV2, NativeAmxSigningGuardError> {
         let bytes = native_amx_read_secure_file(path, max_record_bytes, owner_uid)?;
-        let record = norito::decode_from_bytes::<NativeAmxSigningRecordV2>(&bytes)
-            .map_err(|error| native_amx_unsafe_journal(path, error.to_string()))?;
-        let canonical = norito::to_bytes(&record)
+        let record = norito::decode_canonical::<NativeAmxSigningRecordV2>(&bytes)
             .map_err(|error| native_amx_unsafe_journal(path, error.to_string()))?;
         let expected_key = NativeAmxSigningKeyV2::from_body(&record.body, &record.key.signer);
         if record.version != NATIVE_AMX_SIGNING_GUARD_VERSION
             || record.sequence == 0
-            || canonical != bytes
             || !native_amx_body_shape_valid(&record.body)
             || record.key != expected_key
             || record.body_digest != record.computed_body_digest()?
@@ -1205,7 +1199,7 @@ impl NativeAmxSigningGuard {
         anchor: &NativeAmxSigningAnchorV2,
         max_anchor_bytes: usize,
     ) -> Result<(), NativeAmxSigningGuardError> {
-        let bytes = norito::to_bytes(anchor)
+        let bytes = norito::encode_canonical(anchor)
             .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
         if bytes.len() > max_anchor_bytes {
             return Err(native_amx_unsafe_journal(
@@ -1367,7 +1361,7 @@ impl NativeAmxSigningGuard {
             body,
             &binding.signer,
         )?;
-        let bytes = norito::to_bytes(&record)
+        let bytes = norito::encode_canonical(&record)
             .map_err(|error| native_amx_unsafe_journal(&self.directory, error.to_string()))?;
         if bytes.len() > self.limits.max_record_bytes.get() {
             return Err(native_amx_unsafe_journal(
@@ -1555,7 +1549,7 @@ fn native_amx_signer_directory_digest(
     store_root: &Path,
     signer: &PeerId,
 ) -> Result<Hash, NativeAmxSigningGuardError> {
-    let signer_bytes = norito::to_bytes(signer)
+    let signer_bytes = norito::encode_canonical(signer)
         .map_err(|error| native_amx_unsafe_journal(store_root, error.to_string()))?;
     Ok(Hash::new_from_chunks(&[
         NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN,
@@ -3453,6 +3447,60 @@ mod tests {
             iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
         )
         .expect("test signing guard limits are valid")
+    }
+
+    #[test]
+    fn signing_journal_identity_ignores_ambient_norito_layout() {
+        let (_, signer) = signing_guard_signer(0x6D);
+        let body = body(NativeAmxPhase::Prepare);
+        let binding = NativeAmxHeightBindingV2 {
+            active_height: body.authority_context_height,
+            context_id: body.round.context_id,
+            epoch: body.epoch,
+            chain_id_hash: body.chain_id_hash,
+            signer: signer.clone(),
+            max_records: 8,
+        };
+        let genesis_head = binding
+            .genesis_head()
+            .expect("derive canonical genesis head");
+        let record = NativeAmxSigningRecordV2::from_body(1, genesis_head, &body, &signer)
+            .expect("derive canonical signing record");
+        let body_digest = record
+            .computed_body_digest()
+            .expect("derive canonical body digest");
+        let record_hash = record
+            .computed_record_hash()
+            .expect("derive canonical record hash");
+        let canonical_record =
+            norito::encode_canonical(&record).expect("encode canonical signing record");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert_ne!(
+            norito::to_bytes(&record).expect("encode alternate-layout signing record"),
+            canonical_record,
+            "fixture must exercise a distinct ambient Norito layout"
+        );
+        assert_eq!(
+            binding
+                .genesis_head()
+                .expect("derive genesis head under alternate layout"),
+            genesis_head
+        );
+        assert_eq!(
+            record
+                .computed_body_digest()
+                .expect("derive body digest under alternate layout"),
+            body_digest
+        );
+        assert_eq!(
+            record
+                .computed_record_hash()
+                .expect("derive record hash under alternate layout"),
+            record_hash
+        );
     }
 
     #[cfg(unix)]

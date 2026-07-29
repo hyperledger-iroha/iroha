@@ -116,10 +116,8 @@ mod model {
         /// Trigger completion events recorded while executing the block.
         #[norito(default)]
         pub trigger_completions: Vec<TriggerCompletedEvent>,
-        /// Optional AXT policy snapshot used while executing the block.
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
-        pub axt_policy_snapshot: Option<crate::nexus::AxtPolicySnapshot>,
+        /// Canonical AXT policy snapshot used while executing the block.
+        pub axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
     }
 }
 
@@ -641,12 +639,12 @@ impl SignedBlock {
             .unwrap_or(&[])
     }
 
-    /// AXT policy snapshot captured during execution (if any).
+    /// AXT policy snapshot captured during execution, when results are present.
     #[inline]
     pub fn axt_policy_snapshot(&self) -> Option<&crate::nexus::AxtPolicySnapshot> {
         self.result
             .as_ref()
-            .and_then(|result| result.axt_policy_snapshot.as_ref())
+            .map(|result| &result.axt_policy_snapshot)
     }
 
     /// Successful transaction indices and data trigger sequences.

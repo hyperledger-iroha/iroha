@@ -3,9 +3,13 @@
 //!   cargo run -p ivm --bin gen_header_doc -- --write
 //!   cargo run -p ivm --bin gen_header_doc -- --check
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
+use std::path::{Path, PathBuf};
+
+mod support;
+
+use support::{
+    EXPECTED_DOC_LOCALES, GeneratedOutput, exact_localized_markdown_paths, parse_generation_mode,
+    sync_generated_outputs,
 };
 
 const LAYOUT_BEGIN: &str = "<!-- BEGIN GENERATED HEADER LAYOUT -->";
@@ -54,31 +58,14 @@ fn render_header_policy_markdown() -> String {
 }
 
 fn header_doc_paths(source_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let entries = fs::read_dir(source_dir)
-        .map_err(|error| format!("read {}: {error}", source_dir.display()))?;
-    let mut paths = Vec::new();
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("read entry in {}: {error}", source_dir.display()))?;
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if path.is_file()
-            && (name == "ivm_header.md"
-                || (name.starts_with("ivm_header.") && name.ends_with(".md")))
-        {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    if paths.is_empty() {
-        return Err(format!(
-            "no IVM header documents found under {}",
-            source_dir.display()
-        ));
-    }
-    Ok(paths)
+    header_doc_paths_for(source_dir, EXPECTED_DOC_LOCALES)
+}
+
+fn header_doc_paths_for(
+    source_dir: &Path,
+    expected_locales: &[&str],
+) -> Result<Vec<PathBuf>, String> {
+    exact_localized_markdown_paths(source_dir, "ivm_header", true, expected_locales)
 }
 
 fn replace_generated_section(
@@ -87,21 +74,28 @@ fn replace_generated_section(
     end_marker: &str,
     expected: &str,
 ) -> Result<String, String> {
-    let begin = text
-        .find(begin_marker)
-        .ok_or_else(|| format!("begin marker `{begin_marker}` not found"))?;
-    if text[begin + begin_marker.len()..].contains(begin_marker) {
-        return Err(format!("multiple begin markers `{begin_marker}` found"));
+    let begin_matches = text.match_indices(begin_marker).collect::<Vec<_>>();
+    if begin_matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one begin marker `{begin_marker}`, found {}",
+            begin_matches.len()
+        ));
     }
-
-    let end_start = begin
-        + text[begin..]
-            .find(end_marker)
-            .ok_or_else(|| format!("end marker `{end_marker}` not found after begin marker"))?;
+    let end_matches = text.match_indices(end_marker).collect::<Vec<_>>();
+    if end_matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one end marker `{end_marker}`, found {}",
+            end_matches.len()
+        ));
+    }
+    let begin = begin_matches[0].0;
+    let end_start = end_matches[0].0;
+    if end_start <= begin {
+        return Err(format!(
+            "end marker `{end_marker}` precedes begin marker `{begin_marker}`"
+        ));
+    }
     let end = end_start + end_marker.len();
-    if text[end..].contains(end_marker) {
-        return Err(format!("multiple end markers `{end_marker}` found"));
-    }
 
     let mut rendered = text.to_owned();
     rendered.replace_range(begin..end, expected);
@@ -122,44 +116,31 @@ fn render_header_document(
     replace_generated_section(&rendered, POLICY_BEGIN, POLICY_END, expected_policy)
 }
 
-fn process(path: &Path, expected_layout: &str, expected_policy: &str, write: bool, check: bool) {
-    let text =
-        fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let include_layout = path.file_name().and_then(|name| name.to_str()) == Some("ivm_header.md");
-    let rendered = render_header_document(&text, include_layout, expected_layout, expected_policy)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-
-    if check {
-        assert_eq!(
-            text,
-            rendered,
-            "{} generated header sections out of date; run: cargo run -p ivm --bin gen_header_doc -- --write",
-            path.display()
-        );
-    }
-    if write && text != rendered {
-        fs::write(path, rendered)
-            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-        eprintln!("updated: {}", path.display());
-    }
+fn prepare_header_outputs(
+    paths: &[PathBuf],
+    expected_layout: &str,
+    expected_policy: &str,
+) -> Result<Vec<GeneratedOutput>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            let include_layout =
+                path.file_name().and_then(|name| name.to_str()) == Some("ivm_header.md");
+            GeneratedOutput::render(path, |text| {
+                render_header_document(text, include_layout, expected_layout, expected_policy)
+            })
+        })
+        .collect()
 }
 
 fn main() {
-    let mut write = false;
-    let mut check = false;
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--write" => write = true,
-            "--check" => check = true,
-            _ => {}
+    let mode = match parse_generation_mode(std::env::args().skip(1)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
         }
-    }
-
-    if !write && !check {
-        eprintln!("usage: --write or --check");
-        return;
-    }
-
+    };
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let source_dir = PathBuf::from(manifest_dir)
         .parent()
@@ -173,8 +154,13 @@ fn main() {
 
     let paths = header_doc_paths(&source_dir)
         .unwrap_or_else(|error| panic!("discover IVM header documents: {error}"));
-    for path in paths {
-        process(&path, &expected_layout, &expected_policy, write, check);
+    let outputs = prepare_header_outputs(&paths, &expected_layout, &expected_policy)
+        .unwrap_or_else(|error| panic!("render IVM header documents: {error}"));
+    let regenerate_command = "cargo run --locked -p ivm --bin gen_header_doc -- --write";
+    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+        .unwrap_or_else(|error| panic!("{error}"));
+    for path in updated {
+        eprintln!("updated: {}", path.display());
     }
 }
 
@@ -186,8 +172,8 @@ mod tests {
     };
 
     use super::{
-        LAYOUT_BEGIN, LAYOUT_END, POLICY_BEGIN, POLICY_END, header_doc_paths,
-        render_header_document,
+        LAYOUT_BEGIN, LAYOUT_END, POLICY_BEGIN, POLICY_END, header_doc_paths_for,
+        prepare_header_outputs, render_header_document,
     };
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -224,6 +210,26 @@ mod tests {
                 .expect("replace English generated sections"),
             expected
         );
+        assert!(
+            render_header_document(
+                &format!("{LAYOUT_END}\n{LAYOUT_BEGIN}\n{POLICY_BEGIN}\nstale\n{POLICY_END}"),
+                true,
+                &expected_layout,
+                &expected_policy,
+            )
+            .is_err()
+        );
+        assert!(
+            render_header_document(
+                &format!(
+                    "{LAYOUT_BEGIN}\none\n{LAYOUT_END}\n{LAYOUT_BEGIN}\ntwo\n{LAYOUT_END}\n{POLICY_BEGIN}\nstale\n{POLICY_END}"
+                ),
+                true,
+                &expected_layout,
+                &expected_policy,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -240,7 +246,8 @@ mod tests {
         fs::write(source_dir.join("ivm_header_notes.md"), "ignore")
             .expect("write unrelated document");
 
-        let paths = header_doc_paths(&source_dir).expect("discover header documents");
+        let paths = header_doc_paths_for(&source_dir, &["am", "zh-hant"])
+            .expect("discover header documents");
         assert_eq!(
             paths,
             [
@@ -248,6 +255,33 @@ mod tests {
                 source_dir.join("ivm_header.md"),
                 source_dir.join("ivm_header.zh-hant.md"),
             ]
+        );
+
+        fs::remove_dir_all(source_dir).expect("remove temporary directory");
+    }
+
+    #[test]
+    fn late_localized_marker_failure_does_not_publish_earlier_document() {
+        let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let source_dir = std::env::temp_dir().join(format!(
+            "ivm-header-doc-late-failure-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&source_dir).expect("create source directory");
+        let first = source_dir.join("ivm_header.am.md");
+        let second = source_dir.join("ivm_header.zh-hant.md");
+        fs::write(&first, format!("{POLICY_BEGIN}\nstale\n{POLICY_END}\n"))
+            .expect("write first document");
+        fs::write(&second, "missing policy markers\n").expect("write malformed later document");
+        let before = fs::read(&first).expect("snapshot first document");
+        let expected_policy = format!("{POLICY_BEGIN}\ncurrent\n{POLICY_END}");
+
+        assert!(
+            prepare_header_outputs(&[first.clone(), second], "unused", &expected_policy,).is_err()
+        );
+        assert_eq!(
+            fs::read(&first).expect("read first after late failure"),
+            before
         );
 
         fs::remove_dir_all(source_dir).expect("remove temporary directory");

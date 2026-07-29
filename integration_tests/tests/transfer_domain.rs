@@ -481,11 +481,10 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([
-        Register::asset_definition(
+        InstructionBox::from(Register::asset_definition(
             AssetDefinition::numeric(asset_definition).with_name("alias-safe coin".to_owned()),
-        )
-        .into(),
-        Mint::asset_quantity(10_u32, source_asset.clone()).into(),
+        )),
+        InstructionBox::from(Mint::asset_quantity(10_u32, source_asset.clone())),
     ])
     .sign(definition_owner_keypair.private_key());
     client.submit_transaction_blocking(&issue)?;

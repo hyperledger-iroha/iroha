@@ -1,31 +1,34 @@
 package org.hyperledger.iroha.android.privacy;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 public final class PrivacyNativeBridgeTest {
+  private static final List<List<String>> MATRIX = loadExact12Matrix();
+  private static final List<List<String>> PROTOCOL_ROWS = rows("protocol");
+  private static final List<List<String>> TYPED_ENVELOPE_ROWS = rows("typed-envelope");
+  private static final List<String> RETIRED =
+      rows("retired").stream().map(row -> row.get(1)).collect(Collectors.toUnmodifiableList());
   private static final List<String> EXPECTED =
-      Arrays.asList(
-          "zk-ace-pq-authorization-v0",
-          "anonymous-pgc-k-out-of-n-v1",
-          "verange-transparent-range-v1",
-          "iroha-zk-ams-v1",
-          "vega-existing-credential-zk-v0",
-          "iroha-zk-x509-stark-p256-v0",
-          "iroha-jindo-polynomial-commitment-v0",
-          "iroha-bootle-lantern-anoncred-v1",
-          "orchard-halo2-actions-v1",
-          "monero-fcmp-plus-plus-v1",
-          "iroha-ivm-private-note-stark-v1",
-          "pq-masp-stark-v0");
+      PROTOCOL_ROWS.stream().map(row -> row.get(2)).collect(Collectors.toUnmodifiableList());
 
   private PrivacyNativeBridgeTest() {}
 
   public static void main(final String[] args) {
     exactClosedRegistryIsStable();
+    sharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests();
     aliasesAndNonCanonicalSpellingsAreRejected();
-    capabilityArchiveValidationFailsClosed();
-    capabilityArchiveReturnsDefensiveCopy();
+    sharedTypedValidatorStatusContractIsStable();
     retiredGenericProofSurfaceIsAbsent();
     System.out.println("[IrohaAndroid] PrivacyNativeBridgeTest passed.");
   }
@@ -42,41 +45,132 @@ public final class PrivacyNativeBridgeTest {
     assertThrows(() -> PrivacyNativeBridge.protocolsV1().clear());
   }
 
+  private static void sharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests() {
+    assert MATRIX.stream()
+        .allMatch(
+            row ->
+                Set.of(
+                        "matrix-version",
+                        "registry-sha256",
+                        "protocol",
+                        "typed-envelope",
+                        "retired")
+                    .contains(row.get(0)));
+    assert rows("matrix-version").equals(List.of(List.of("matrix-version", "1")));
+    assert PROTOCOL_ROWS.size() == 12;
+    for (int index = 0; index < PROTOCOL_ROWS.size(); index++) {
+      assert PROTOCOL_ROWS.get(index).size() == 5;
+      assert PROTOCOL_ROWS.get(index).get(1).equals(Integer.toString(index));
+    }
+    assert EXPECTED.stream().distinct().count() == 12;
+    final StringBuilder registryPreimage = new StringBuilder();
+    EXPECTED.forEach(value -> registryPreimage.append(value).append('\n'));
+    assert rows("registry-sha256")
+        .equals(List.of(List.of("registry-sha256", sha256Hex(registryPreimage.toString()))));
+    assert TYPED_ENVELOPE_ROWS.stream()
+        .map(row -> row.subList(1, 4))
+        .collect(Collectors.toList())
+        .equals(
+            PROTOCOL_ROWS.stream()
+                .map(row -> row.subList(2, 5))
+                .collect(Collectors.toList()));
+    assert TYPED_ENVELOPE_ROWS.size() == 12;
+    for (final List<String> row : TYPED_ENVELOPE_ROWS) {
+      assert row.size() == 6;
+      for (final String digest : row.subList(4, 6)) {
+        assert digest.matches("[0-9a-f]{64}");
+        assert !digest.equals("0".repeat(64));
+      }
+    }
+    assert RETIRED.stream().distinct().count() == RETIRED.size();
+    assert RETIRED.stream().noneMatch(EXPECTED::contains);
+  }
+
   private static void aliasesAndNonCanonicalSpellingsAreRejected() {
-    for (final String rejected :
+    final List<String> rejectedLabels = new ArrayList<>(RETIRED);
+    rejectedLabels.addAll(
         Arrays.asList(
-            "jindo-lattice-pcs-zk-v0",
-            "sis-hints-anoncred-pq-v0",
-            "silent-threshold-anoncred-v0",
-            "zk-ams-recursive-admission-v0",
             "iroha-zk-ams-v1 ",
             "Iroha-Zk-Ams-V1",
             "",
-            "unknown-privacy-protocol-v1")) {
+            "unknown-privacy-protocol-v1"));
+    for (final String rejected : rejectedLabels) {
       assertThrows(() -> PrivacyNativeBridge.ProtocolIdV1.fromCanonicalLabel(rejected));
     }
     assertThrows(() -> PrivacyNativeBridge.ProtocolIdV1.fromCanonicalLabel(null));
   }
 
-  private static void capabilityArchiveValidationFailsClosed() {
-    assertThrows(() -> PrivacyNativeBridge.requireCapabilityArchive(null));
-    assertThrows(() -> PrivacyNativeBridge.requireCapabilityArchive(new byte[39]));
-
-    final byte[] badMagic = capabilityArchive();
-    badMagic[0] = 'X';
-    assertThrows(() -> PrivacyNativeBridge.requireCapabilityArchive(badMagic));
-
-    final byte[] badSchema = capabilityArchive();
-    badSchema[13] = 0x51;
-    assertThrows(() -> PrivacyNativeBridge.requireCapabilityArchive(badSchema));
+  private static List<List<String>> rows(final String kind) {
+    return MATRIX.stream()
+        .filter(row -> row.get(0).equals(kind))
+        .collect(Collectors.toUnmodifiableList());
   }
 
-  private static void capabilityArchiveReturnsDefensiveCopy() {
-    final byte[] archive = capabilityArchive();
-    final byte[] accepted = PrivacyNativeBridge.requireCapabilityArchive(archive);
-    assert accepted != archive;
-    archive[0] = 'X';
-    assert accepted[0] == 'N';
+  private static List<List<String>> loadExact12Matrix() {
+    Path cursor = Path.of("").toAbsolutePath().normalize();
+    Path fixture = null;
+    while (cursor != null) {
+      final Path candidate = cursor.resolve("fixtures/privacy/exact12_v1.tsv");
+      if (Files.isRegularFile(candidate)) {
+        fixture = candidate;
+        break;
+      }
+      cursor = cursor.getParent();
+    }
+    if (fixture == null) {
+      throw new IllegalStateException("cannot locate fixtures/privacy/exact12_v1.tsv");
+    }
+    try {
+      final String text = Files.readString(fixture, StandardCharsets.UTF_8);
+      if (!text.endsWith("\n") || text.contains("\r")) {
+        throw new IllegalStateException("exact12 fixture is not canonical LF text");
+      }
+      if (Arrays.stream(text.substring(0, text.length() - 1).split("\n", -1))
+          .anyMatch(String::isEmpty)) {
+        throw new IllegalStateException("exact12 fixture contains an empty row");
+      }
+      final List<List<String>> result = new ArrayList<>();
+      for (final String line : text.split("\n")) {
+        if (!line.isEmpty() && !line.startsWith("#")) {
+          result.add(Collections.unmodifiableList(Arrays.asList(line.split("\t", -1))));
+        }
+      }
+      return Collections.unmodifiableList(result);
+    } catch (final IOException error) {
+      throw new IllegalStateException("cannot read exact12 fixture", error);
+    }
+  }
+
+  private static String sha256Hex(final String value) {
+    try {
+      final byte[] digest =
+          MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+      final StringBuilder output = new StringBuilder(64);
+      for (final byte octet : digest) {
+        output.append(String.format("%02x", octet & 0xff));
+      }
+      return output.toString();
+    } catch (final NoSuchAlgorithmException error) {
+      throw new IllegalStateException("SHA-256 is unavailable", error);
+    }
+  }
+
+  private static void sharedTypedValidatorStatusContractIsStable() {
+    assert PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024;
+    final PrivacyNativeBridge.ValidationStatusV1[] statuses =
+        PrivacyNativeBridge.ValidationStatusV1.values();
+    assert statuses.length == 9;
+    for (int index = 0; index < statuses.length; index++) {
+      assert statuses[index].code() == index;
+    }
+    try {
+      final java.lang.reflect.Method validator =
+          PrivacyNativeBridge.class.getDeclaredMethod("nativeValidateCapabilities", byte[].class);
+      assert java.lang.reflect.Modifier.isNative(validator.getModifiers());
+      assert validator.getReturnType() == int.class;
+    } catch (final NoSuchMethodException error) {
+      throw new AssertionError("shared native typed validator is missing", error);
+    }
   }
 
   private static void retiredGenericProofSurfaceIsAbsent() {
@@ -88,16 +182,6 @@ public final class PrivacyNativeBridgeTest {
       assert !name.equals("buildProof") : name;
       assert !name.equals("verifyProof") : name;
     }
-  }
-
-  private static byte[] capabilityArchive() {
-    final byte[] archive = new byte[40];
-    archive[0] = 'N';
-    archive[1] = 'R';
-    archive[2] = 'T';
-    archive[3] = '0';
-    Arrays.fill(archive, 6, 22, (byte) 0x50);
-    return archive;
   }
 
   private static void assertThrows(final Runnable runnable) {

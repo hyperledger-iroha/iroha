@@ -96,6 +96,14 @@ macro_rules! define_instruction_handlers {
             $(dispatch_instruction::<$instruction>),*
         ];
 
+        #[cfg(test)]
+        trait NativeInstructionRegistered {}
+
+        $(
+            #[cfg(test)]
+            impl NativeInstructionRegistered for $instruction {}
+        )*
+
         /// Return the concrete type registered by the native dispatcher for `instruction`.
         ///
         /// Validation-fee admission uses this matcher as its deny-by-default boundary: adding a
@@ -495,6 +503,18 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1>,
     dispatch_instruction::<
+        iroha_data_model::isi::privacy::RegisterPrivacyBootleLanternIssuerPolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RotatePrivacyBootleLanternIssuerPolicyV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RevokePrivacyBootleLanternIssuerPolicyV1
+    >,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyVegaIssuerV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyVegaIssuerV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyVegaIssuerV1>,
+    dispatch_instruction::<
         iroha_data_model::isi::privacy::RegisterPrivacyZkX509TrustAnchorV1
     >,
     dispatch_instruction::<
@@ -512,6 +532,9 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::privacy::RevokePrivacyZkX509CertificatePolicyV1
     >,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RegisterPrivacyZkX509CrlV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RotatePrivacyZkX509CrlV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1>,
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1>,
 }
 
@@ -552,6 +575,42 @@ mod registry_dispatch_tests {
 
     fn has_dispatch_handler(type_name: &str) -> bool {
         registered_native_instruction_type_names().contains(&type_name)
+    }
+
+    fn assert_native_registration<T: NativeInstructionRegistered>() {}
+
+    #[test]
+    fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {
+        use iroha_data_model::isi::privacy;
+
+        assert_native_registration::<privacy::RegisterPrivacyProtocolActivationV1>();
+        assert_native_registration::<privacy::SchedulePrivacyConsensusPolicyTighteningV1>();
+        assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsTighteningV1>();
+        assert_native_registration::<privacy::TransitionPrivacyProtocolLifecycleV1>();
+        assert_native_registration::<privacy::PublishPrivacyRootV1>();
+        assert_native_registration::<privacy::BootstrapPrivacyOrchardPoolV1>();
+        assert_native_registration::<privacy::BootstrapPrivacyProofManagedPoolV1>();
+        assert_native_registration::<privacy::BootstrapPrivacyPgcAccountsV1>();
+        assert_native_registration::<privacy::BootstrapPrivacyZkAmsRegistryV1>();
+        assert_native_registration::<privacy::RegisterPrivacyZkAcePolicyV1>();
+        assert_native_registration::<privacy::RotatePrivacyZkAcePolicyV1>();
+        assert_native_registration::<privacy::RevokePrivacyZkAcePolicyV1>();
+        assert_native_registration::<privacy::RegisterPrivacyBootleLanternIssuerPolicyV1>();
+        assert_native_registration::<privacy::RotatePrivacyBootleLanternIssuerPolicyV1>();
+        assert_native_registration::<privacy::RevokePrivacyBootleLanternIssuerPolicyV1>();
+        assert_native_registration::<privacy::RegisterPrivacyVegaIssuerV1>();
+        assert_native_registration::<privacy::RotatePrivacyVegaIssuerV1>();
+        assert_native_registration::<privacy::RevokePrivacyVegaIssuerV1>();
+        assert_native_registration::<privacy::RegisterPrivacyZkX509TrustAnchorV1>();
+        assert_native_registration::<privacy::RotatePrivacyZkX509TrustAnchorV1>();
+        assert_native_registration::<privacy::RevokePrivacyZkX509TrustAnchorV1>();
+        assert_native_registration::<privacy::RegisterPrivacyZkX509CertificatePolicyV1>();
+        assert_native_registration::<privacy::RotatePrivacyZkX509CertificatePolicyV1>();
+        assert_native_registration::<privacy::RevokePrivacyZkX509CertificatePolicyV1>();
+        assert_native_registration::<privacy::RegisterPrivacyZkX509CrlV1>();
+        assert_native_registration::<privacy::RotatePrivacyZkX509CrlV1>();
+        assert_native_registration::<privacy::RevokePrivacyZkX509CrlV1>();
+        assert_native_registration::<privacy::SubmitPrivacyProofV1>();
     }
 
     #[test]

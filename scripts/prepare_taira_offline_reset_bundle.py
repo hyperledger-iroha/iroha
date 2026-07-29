@@ -2258,6 +2258,35 @@ def validate_runtime_config(
         fail("validator config does not use the bundle's signed genesis")
 
 
+def staged_check_config_text(
+    source: str, bundle: Path, release_tree_sha256: str
+) -> str:
+    """Retarget only a temporary ``--check-config`` copy to staged artifacts."""
+
+    release_tree_sha256 = require_sha256(
+        release_tree_sha256, "Kagemusha release tree SHA-256"
+    )
+    installed_root = TAIRA_RELEASE_INSTALL_ROOT / release_tree_sha256
+    expected_policy = str(installed_root / RELEASE_POLICY_FILE_NAME)
+    expected_catalog = str(installed_root / RELEASE_CATALOG_DIRECTORY_NAME)
+    if source.count(expected_policy) != 1 or source.count(expected_catalog) != 1:
+        fail("final runtime config lacks one exact installed release-path binding")
+    text = replace_section_assignment(
+        source,
+        "settlement.offline",
+        "kagemusha_release_policy_path",
+        quote_toml(str(bundle / "kagemusha" / RELEASE_POLICY_FILE_NAME)),
+    )
+    return replace_section_assignment(
+        text,
+        "settlement.offline",
+        "kagemusha_artifact_dir",
+        quote_toml(
+            str(bundle / "kagemusha" / RELEASE_CATALOG_DIRECTORY_NAME)
+        ),
+    )
+
+
 def update_manifest(
     bundle: Path,
     *,
@@ -2446,23 +2475,36 @@ def check_bundle(
         release_tree_digest = manifest.get("kagemusha_release_tree_sha256")
         if not isinstance(release_tree_digest, str):
             fail("v21 manifest lacks the Kagemusha release tree identity")
-        validate_runtime_config(
-            parse_config(config_path), bundle, release_tree_digest
-        )
+        validate_runtime_config(parse_config(config_path), bundle, release_tree_digest)
         storage = workdir / "storage"
         require_private_directory(storage)
         if any(storage.iterdir()):
             fail(f"v21 storage is not empty for {slug}")
-        run_checked(
-            [
-                str(irohad),
-                "--sora",
-                "--config",
-                str(config_path),
-                "--check-config",
-            ],
-            cwd=workdir,
-        )
+        staged_config = workdir / f".deploy-check-config-{os.getpid()}.toml"
+        if staged_config.exists() or staged_config.is_symlink():
+            fail(f"staged config path already exists: {staged_config}")
+        try:
+            final_text = require_private_file(
+                config_path, MAX_CONFIG_BYTES
+            ).decode("utf-8")
+            empty_reset.write_private_file(
+                staged_config,
+                staged_check_config_text(
+                    final_text, bundle, release_tree_digest
+                ).encode("utf-8"),
+            )
+            run_checked(
+                [
+                    str(irohad),
+                    "--sora",
+                    "--config",
+                    str(staged_config),
+                    "--check-config",
+                ],
+                cwd=workdir,
+            )
+        finally:
+            staged_config.unlink(missing_ok=True)
     return {
         "bundle": str(bundle),
         "chain": PUBLIC_TAIRA_CHAIN_ID,

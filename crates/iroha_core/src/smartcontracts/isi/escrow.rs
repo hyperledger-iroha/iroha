@@ -1240,7 +1240,7 @@ fn ensure_close_proof_uses_canonical_transfer_v2_envelope(
         ));
     }
     let envelope: OpenVerifyEnvelope =
-        norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
+        norito::decode_canonical(&proof.proof.bytes).map_err(|_| {
             validation_err("anonymous escrow close proof must use OpenVerifyEnvelope payload")
         })?;
     if envelope.backend != BackendTag::Halo2IpaPasta {
@@ -3464,6 +3464,7 @@ mod tests {
             disputed_at_ms: None,
             closed_at_ms: None,
             resolution: None,
+            conditions: Vec::new(),
         }
     }
 
@@ -3552,7 +3553,7 @@ mod tests {
             proof_bytes: inner,
             aux: Vec::new(),
         };
-        let proof_bytes = norito::to_bytes(&outer).expect("encode proof envelope");
+        let proof_bytes = norito::encode_canonical(&outer).expect("encode proof envelope");
         ProofAttachment {
             backend: crate::zk::ZK_BACKEND_HALO2_IPA.into(),
             proof: iroha_data_model::proof::ProofBox::new(
@@ -3574,11 +3575,11 @@ mod tests {
         mutate: impl FnOnce(&mut OpenVerifyEnvelope),
     ) -> ProofAttachment {
         let mut envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.proof.bytes).expect("decode proof envelope");
+            norito::decode_canonical(&proof.proof.bytes).expect("decode proof envelope");
         mutate(&mut envelope);
         proof.proof = iroha_data_model::proof::ProofBox::new(
             proof.proof.backend.clone(),
-            norito::to_bytes(&envelope).expect("encode proof envelope"),
+            norito::encode_canonical(&envelope).expect("encode proof envelope"),
         );
         proof
     }
@@ -3813,6 +3814,32 @@ mod tests {
                 "case {suffix}: expected {expected_msg:?}, got {msg:?}"
             );
         }
+    }
+
+    #[test]
+    fn anonymous_escrow_close_proof_rejects_alternate_norito_layout() {
+        let escrow_commitment = [0x22; 32];
+        let mut proof = anonymous_close_proof_with_input_commitments([escrow_commitment, [0; 32]]);
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_canonical(&proof.proof.bytes).expect("canonical fixture envelope");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope).expect("alternate-layout envelope")
+        };
+        assert_ne!(alternate, proof.proof.bytes);
+        proof.proof =
+            iroha_data_model::proof::ProofBox::new(proof.proof.backend.clone(), alternate);
+
+        let error = ensure_close_proof_spends_escrow_commitment(&proof, escrow_commitment)
+            .expect_err("alternate-layout close proof must fail before public-input trust");
+        assert!(
+            error
+                .to_string()
+                .contains("must use OpenVerifyEnvelope payload"),
+            "unexpected alternate-layout error: {error}"
+        );
     }
 
     #[test]

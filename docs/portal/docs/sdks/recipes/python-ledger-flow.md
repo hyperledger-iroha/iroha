@@ -81,12 +81,8 @@ tx = build_transaction(
 )
 
 envelope = tx.sign(ADMIN_PRIVATE_KEY)
-receipt = submit_transaction(client, envelope)
-if isinstance(receipt, dict):
-    hash_ = receipt.get("payload", {}).get("tx_hash")
-else:
-    hash_ = None
-print("Submitted tx:", hash_ or "<pending>")
+hash_ = submit_transaction(client, envelope)
+print("Submitted tx:", hash_)
 
 # 4) Verify receiver balance
 result = query.find_account_assets(client, RECEIVER_ACCOUNT)

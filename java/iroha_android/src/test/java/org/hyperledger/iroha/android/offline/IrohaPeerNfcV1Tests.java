@@ -5,37 +5,22 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import org.hyperledger.iroha.android.client.JsonParser;
-import org.hyperledger.iroha.android.crypto.Blake2b;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcAPDUCodecV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcCommandTypeV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcCommandV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcCommitDispositionV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcDurableAcknowledgementV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcDurablePaymentAdmissionV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcFlagsV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcInfoV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcLimitsV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcPhaseV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcPaymentAdmissionContextV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcProfilePolicyV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcReaderExchangeResultV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcReaderPlanningV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcReaderResponseV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcReceiverSessionV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcRequestIdentityV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcSenderActionV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcSenderCheckpointV1;
-import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcStatusV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcTwoTapReducerV1;
 import org.junit.Test;
 
@@ -55,166 +40,10 @@ public final class IrohaPeerNfcV1Tests {
   private static final int MAXIMUM_MESSAGE_BYTES = 84 + 24_576;
 
   @Test
-  @SuppressWarnings("unchecked")
-  public void matchesSharedInf1Nst1AndShortExtendedApduVectors() throws Exception {
-    final Map<String, Object> fixture = fixture();
-    final byte[] session = hexValue(fixture.get("session_hex"));
-    assertEquals(fixture.get("aid_hex"), IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX);
-    assertArrayEquals(hexValue(fixture.get("aid_hex")), IrohaPeerNfcV1.applicationIdentifier());
-
-    final IrohaPeerNfcRequestIdentityV1 identity =
-        new IrohaPeerNfcRequestIdentityV1(
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            session,
-            repeat(32, 0x11),
-            repeat(32, 0x22));
-    final IrohaPeerNfcInfoV1 info =
-        new IrohaPeerNfcInfoV1(
-            IrohaPeerNfcPhaseV1.REQUEST_READY,
-            IrohaPeerNfcFlagsV1.REQUEST,
-            identity,
-            300,
-            240,
-            240);
-    assertArrayEquals(hexValue(fixture.get("info_hex")), info.encode());
-    assertEquals(info, IrohaPeerNfcV1.decodeInfo(info.encode()));
-
-    final IrohaPeerNfcStatusV1 status =
-        new IrohaPeerNfcStatusV1(
-            IrohaPeerNfcPhaseV1.ACKNOWLEDGEMENT_READY,
-            IrohaPeerNfcFlagsV1.DURABLE,
-            identity,
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            700,
-            700,
-            repeat(32, 0x33),
-            org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            270,
-            repeat(32, 0x44),
-            240,
-            240);
-    assertArrayEquals(hexValue(fixture.get("ack_ready_status_hex")), status.encode());
-    assertEquals(status, IrohaPeerNfcV1.decodeStatus(status.encode()));
-
-    final Messages messages = messages(fixture);
-    final Map<String, Object> apdu = (Map<String, Object>) fixture.get("apdu_hex");
-    final Map<String, IrohaPeerNfcCommandV1> commands = new LinkedHashMap<>();
-    commands.put("select", IrohaPeerNfcCommandV1.SELECT_APPLICATION);
-    commands.put("get_info", IrohaPeerNfcCommandV1.GET_INFO);
-    commands.put(
-        "read_request",
-        IrohaPeerNfcCommandV1.readRequest(
-            session, messages.request.canonicalHash(), 0x0102_0304L, 240));
-    commands.put(
-        "begin_payment",
-        IrohaPeerNfcCommandV1.beginPayment(
-            session,
-            messages.request.canonicalHash(),
-            Arrays.copyOf(messages.payment.encode(), IrohaPeerWireMessageV1.HEADER_LENGTH)));
-    commands.put(
-        "write_300",
-        IrohaPeerNfcCommandV1.write(
-            session, messages.payment.wireHash(), 0x0102_0304L, repeat(300, 0x55)));
-    commands.put(
-        "commit",
-        IrohaPeerNfcCommandV1.commit(
-            session, messages.request.canonicalHash(), messages.payment.wireHash()));
-    commands.put(
-        "read_ack_1024",
-        IrohaPeerNfcCommandV1.readAcknowledgement(
-            session, messages.payment.wireHash(), 0x0102_0304L, 1_024));
-    commands.put(
-        "confirm_ack",
-        IrohaPeerNfcCommandV1.confirmAcknowledgement(
-            session, messages.payment.wireHash(), messages.acknowledgement.wireHash()));
-    commands.put(
-        "get_status",
-        IrohaPeerNfcCommandV1.getStatus(session, messages.request.canonicalHash()));
-
-    for (final Map.Entry<String, IrohaPeerNfcCommandV1> entry : commands.entrySet()) {
-      final byte[] encoded = IrohaPeerNfcV1.encodeCommand(entry.getValue());
-      assertArrayEquals(entry.getKey(), hexValue(apdu.get(entry.getKey())), encoded);
-      assertEquals(entry.getKey(), entry.getValue(), IrohaPeerNfcV1.decodeCommand(encoded));
-    }
-    assertTrue(IrohaPeerNfcV1.encodeCommand(commands.get("write_300")).length > 255);
-  }
-
-  @Test
-  @SuppressWarnings("unchecked")
-  public void matchesAllRetailIda1AndIsc1Fixtures() throws Exception {
-    final Map<String, Object> fixture = fixture();
-    final byte[] session = hexValue(fixture.get("session_hex"));
-    final Messages messages = messages(fixture);
-    final IrohaPeerNfcProfilePolicyV1 policy = retailPolicy();
-    final IrohaPeerNfcLimitsV1 limits = defaultLimits();
-    final IrohaPeerNfcSenderCheckpointV1 checkpoint =
-        IrohaPeerNfcV1.senderCheckpoint(
-            session,
-            messages.request.encode(),
-            messages.payment.encode(),
-            null,
-            policy,
-            limits);
-    final Map<String, Object> checkpointFixture = (Map<String, Object>) fixture.get("checkpoint");
-    assertEquals(((Number) checkpointFixture.get("without_ack_length")).intValue(), checkpoint.encode().length);
-    assertEquals(checkpointFixture.get("without_ack_blake2b_256_hex"), toHex(Blake2b.digest256(checkpoint.encode())));
-    assertEquals(checkpoint, IrohaPeerNfcSenderCheckpointV1.decode(checkpoint.encode(), policy, limits));
-    assertEquals(checkpoint, IrohaPeerNfcSenderCheckpointV1.decode(checkpoint.encode()));
-
-    final IrohaPeerNfcReceiverSessionV1 receiver =
-        IrohaPeerNfcV1.receiver(session, messages.request.encode(), null, policy, limits);
-    final byte[] paymentHeader =
-        Arrays.copyOf(messages.payment.encode(), IrohaPeerWireMessageV1.HEADER_LENGTH);
-    final IrohaPeerNfcPaymentAdmissionContextV1 admissionContext =
-        IrohaPeerNfcV1.paymentAdmissionContext(receiver, paymentHeader);
-    final IrohaPeerNfcDurablePaymentAdmissionV1 admission =
-        IrohaPeerNfcV1.durablePaymentAdmission(admissionContext, limits);
-    final Map<String, Object> admissionFixture =
-        (Map<String, Object>) fixture.get("payment_admission");
-    assertEquals(((Number) admissionFixture.get("length")).intValue(), admission.encode().length);
-    assertArrayEquals(hexValue(admissionFixture.get("encoded_hex")), admission.encode());
-    assertEquals(
-        admissionFixture.get("blake2b_256_hex"),
-        toHex(Blake2b.digest256(admission.encode())));
-    assertEquals(
-        admission,
-        IrohaPeerNfcV1.decodePaymentAdmission(admission.encode(), policy, limits));
-    receiver.installPaymentAdmission(admission);
-    writeAll(receiver, session, messages.payment, 113);
-    final IrohaPeerNfcCommitDispositionV1.RequiresDurableCommit required =
-        (IrohaPeerNfcCommitDispositionV1.RequiresDurableCommit)
-            receiver.prepareCommit(
-                IrohaPeerNfcCommandV1.commit(
-                    session, messages.request.canonicalHash(), messages.payment.wireHash()));
-    final IrohaPeerNfcDurableAcknowledgementV1 durable =
-        IrohaPeerNfcV1.durableAcknowledgement(
-            required.getContext(), messages.acknowledgement.encode(), limits);
-    final Map<String, Object> durableFixture = (Map<String, Object>) fixture.get("durable_ack");
-    assertEquals(((Number) durableFixture.get("length")).intValue(), durable.encode().length);
-    assertEquals(durableFixture.get("blake2b_256_hex"), toHex(Blake2b.digest256(durable.encode())));
-    assertEquals(
-        durable,
-        IrohaPeerNfcDurableAcknowledgementV1.decode(durable.encode(), policy, limits));
-    assertEquals(durable, IrohaPeerNfcDurableAcknowledgementV1.decode(durable.encode()));
-
-    final IrohaPeerNfcSenderCheckpointV1 checkpointWithAck =
-        IrohaPeerNfcV1.senderCheckpoint(
-            session,
-            messages.request.encode(),
-            messages.payment.encode(),
-            messages.acknowledgement.encode(),
-            policy,
-            limits);
-    assertEquals(((Number) checkpointFixture.get("with_ack_length")).intValue(), checkpointWithAck.encode().length);
-    assertEquals(checkpointFixture.get("with_ack_blake2b_256_hex"), toHex(Blake2b.digest256(checkpointWithAck.encode())));
-  }
-
-  @Test
   public void receiverCommitRemainsUnsuccessfulUntilExactDurableRecordIsInstalled() throws Exception {
-    final Map<String, Object> fixture = fixture();
-    final byte[] session = hexValue(fixture.get("session_hex"));
-    final Messages messages = messages(fixture);
-    final IrohaPeerNfcProfilePolicyV1 policy = retailPolicy();
+    final byte[] session = ascending(16, 1);
+    final Messages messages = currentMessages();
+    final IrohaPeerNfcProfilePolicyV1 policy = kagemushaPolicy();
     final IrohaPeerNfcLimitsV1 limits = new IrohaPeerNfcLimitsV1(MAXIMUM_MESSAGE_BYTES, 97, 113);
     final IrohaPeerNfcReceiverSessionV1 receiver =
         IrohaPeerNfcV1.receiver(session, messages.request.encode(), null, policy, limits);
@@ -271,10 +100,10 @@ public final class IrohaPeerNfcV1Tests {
     assertTrue(receiver.prepareCommit(commit) instanceof IrohaPeerNfcCommitDispositionV1.AlreadyCommitted);
     assertEquals(IrohaPeerNfcPhaseV1.ACKNOWLEDGEMENT_READY, receiver.status().getPhase());
     assertEquals(
-        org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+        org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
         receiver.status().getPaymentProfile());
     assertEquals(
-        org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.OFFLINE_NOTE,
+        org.hyperledger.iroha.sdk.offline.IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
         receiver.status().getAcknowledgementProfile());
   }
 
@@ -285,14 +114,17 @@ public final class IrohaPeerNfcV1Tests {
       final int remoteChunk = pair[1];
       final int expected = Math.min(localChunk, remoteChunk);
       final byte[] session = ascending(16, 1);
-      final IrohaPeerWireMessageV1 request = message(1, 1, 1, 0x61, 900);
-      final IrohaPeerWireMessageV1 payment = message(1, 2, 1, 0x62, 1_100);
-      final IrohaPeerWireMessageV1 acknowledgement = message(1, 3, 1, 0x63, 700);
+      final IrohaPeerWireMessageV1 request =
+          message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x61, 900);
+      final IrohaPeerWireMessageV1 payment =
+          message(IrohaPeerPayloadKind.PAYMENT, 0x62, 1_100);
+      final IrohaPeerWireMessageV1 acknowledgement =
+          message(IrohaPeerPayloadKind.ACKNOWLEDGEMENT, 0x63, 700);
       final IrohaPeerNfcLimitsV1 local =
           new IrohaPeerNfcLimitsV1(MAXIMUM_MESSAGE_BYTES, localChunk, localChunk);
       final IrohaPeerNfcLimitsV1 remote =
           new IrohaPeerNfcLimitsV1(MAXIMUM_MESSAGE_BYTES, remoteChunk, remoteChunk);
-      final IrohaPeerNfcProfilePolicyV1 policy = retailPolicy();
+      final IrohaPeerNfcProfilePolicyV1 policy = kagemushaPolicy();
       final IrohaPeerNfcReceiverSessionV1 receiver =
           IrohaPeerNfcV1.receiver(session, request.encode(), null, policy, remote);
       assertEquals(
@@ -333,10 +165,9 @@ public final class IrohaPeerNfcV1Tests {
 
   @Test
   public void javaFacadeRunsSharedDurableReaderWithoutDuplicatingStateMachine() throws Exception {
-    final Map<String, Object> fixture = fixture();
-    final byte[] session = hexValue(fixture.get("session_hex"));
-    final Messages messages = messages(fixture);
-    final IrohaPeerNfcProfilePolicyV1 policy = retailPolicy();
+    final byte[] session = ascending(16, 1);
+    final Messages messages = currentMessages();
+    final IrohaPeerNfcProfilePolicyV1 policy = kagemushaPolicy();
     final IrohaPeerNfcLimitsV1 limits =
         new IrohaPeerNfcLimitsV1(MAXIMUM_MESSAGE_BYTES, 240, 203);
     final IrohaPeerNfcReceiverSessionV1 receiver =
@@ -402,22 +233,6 @@ public final class IrohaPeerNfcV1Tests {
     }
   }
 
-  private static void writeAll(
-      final IrohaPeerNfcReceiverSessionV1 receiver,
-      final byte[] session,
-      final IrohaPeerWireMessageV1 payment,
-      final int chunk) {
-    final byte[] bytes = payment.encode();
-    int offset = 0;
-    while (offset < bytes.length) {
-      final int end = Math.min(offset + chunk, bytes.length);
-      receiver.handle(
-          IrohaPeerNfcCommandV1.write(
-              session, payment.wireHash(), offset, Arrays.copyOfRange(bytes, offset, end)));
-      offset = end;
-    }
-  }
-
   private static void admit(
       final IrohaPeerNfcReceiverSessionV1 receiver,
       final IrohaPeerNfcCommandV1 begin) {
@@ -429,79 +244,20 @@ public final class IrohaPeerNfcV1Tests {
         IrohaPeerNfcV1.durablePaymentAdmission(required.getContext(), receiver.getLimits()));
   }
 
-  private static IrohaPeerNfcProfilePolicyV1 retailPolicy() {
-    return IrohaPeerNfcV1.profilePolicy(IrohaPeerPayloadProfile.OFFLINE_NOTE);
+  private static IrohaPeerNfcProfilePolicyV1 kagemushaPolicy() {
+    return IrohaPeerNfcV1.profilePolicy(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND);
   }
 
-  private static IrohaPeerNfcLimitsV1 defaultLimits() {
-    return new IrohaPeerNfcLimitsV1(MAXIMUM_MESSAGE_BYTES, 4_096, 4_096);
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Messages messages(final Map<String, Object> fixture) {
-    final Map<String, Object> values = (Map<String, Object>) fixture.get("messages");
+  private static Messages currentMessages() {
     return new Messages(
-        vector((Map<String, Object>) values.get("request")),
-        vector((Map<String, Object>) values.get("payment")),
-        vector((Map<String, Object>) values.get("acknowledgement")));
-  }
-
-  private static IrohaPeerWireMessageV1 vector(final Map<String, Object> vector) {
-    final IrohaPeerWireMessageV1 message =
-        message(
-            ((Number) vector.get("profile")).intValue(),
-            ((Number) vector.get("kind")).intValue(),
-            ((Number) vector.get("schema_version")).intValue(),
-            ((Number) vector.get("repeat_byte")).intValue(),
-            ((Number) vector.get("count")).intValue());
-    assertEquals(vector.get("wire_hash_hex"), toHex(message.wireHash()));
-    return message;
+        message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x31, 900),
+        message(IrohaPeerPayloadKind.PAYMENT, 0x32, 1_100),
+        message(IrohaPeerPayloadKind.ACKNOWLEDGEMENT, 0x33, 700));
   }
 
   private static IrohaPeerWireMessageV1 message(
-      final int profile,
-      final int kind,
-      final int schemaVersion,
-      final int repeated,
-      final int count) {
-    return new IrohaPeerWireMessageV1(
-        new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.fromCode(profile),
-            IrohaPeerPayloadKind.fromCode(kind),
-            schemaVersion,
-            repeat(count, repeated)));
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Map<String, Object> fixture() throws Exception {
-    return (Map<String, Object>)
-        JsonParser.parse(new String(Files.readAllBytes(sharedFixture()), StandardCharsets.UTF_8));
-  }
-
-  private static Path sharedFixture() {
-    Path current = Paths.get("").toAbsolutePath();
-    while (current != null) {
-      final Path candidate = current.resolve("fixtures/offline/peer_nfc_v1.json");
-      if (Files.isRegularFile(candidate)) return candidate;
-      current = current.getParent();
-    }
-    throw new AssertionError("peer_nfc_v1.json was not found");
-  }
-
-  private static byte[] hexValue(final Object value) {
-    final String encoded;
-    if (value instanceof List<?> pieces) {
-      final StringBuilder joined = new StringBuilder();
-      for (final Object piece : pieces) joined.append((String) piece);
-      encoded = joined.toString();
-    } else {
-      encoded = (String) value;
-    }
-    final byte[] bytes = new byte[encoded.length() / 2];
-    for (int index = 0; index < bytes.length; index++) {
-      bytes[index] = (byte) Integer.parseInt(encoded.substring(index * 2, index * 2 + 2), 16);
-    }
-    return bytes;
+      final IrohaPeerPayloadKind kind, final int repeated, final int count) {
+    return IrohaPeerKagemushaStructuralTestV1.message(kind, repeat(count, repeated));
   }
 
   private static byte[] repeat(final int count, final int value) {
@@ -514,12 +270,6 @@ public final class IrohaPeerNfcV1Tests {
     final byte[] bytes = new byte[count];
     for (int index = 0; index < count; index++) bytes[index] = (byte) (first + index);
     return bytes;
-  }
-
-  private static String toHex(final byte[] value) {
-    final StringBuilder out = new StringBuilder(value.length * 2);
-    for (final byte element : value) out.append(String.format("%02x", element & 0xff));
-    return out.toString();
   }
 
   private record Messages(

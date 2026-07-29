@@ -19,7 +19,7 @@ use super::{
 };
 use crate::privacy_engines::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
-    TranscriptV1, random_nonzero_scalar,
+    TranscriptV1, health_checked_p256_rng_v1, random_nonzero_scalar,
 };
 
 /// Closed suite for the complete PGC account-bootstrap proof.
@@ -48,6 +48,20 @@ const AGGREGATE_SUPPLY_SUITE_V1: &[u8] =
     b"iroha.anonymous-pgc.account-bootstrap.aggregate-supply.v1";
 const RANGE_BITS: usize = 32;
 const MAX_PROVER_RESTARTS: usize = 128;
+
+fn bootstrap_proof_decode_limits(
+    statement: &AnonymousPgcBootstrapStatementV1<'_>,
+    payload_len: usize,
+) -> norito::DecodeLimits {
+    let account_count = statement.account_count();
+    norito::DecodeLimits::new(
+        account_count,
+        payload_len,
+        account_count,
+        MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1.saturating_mul(4),
+        24,
+    )
+}
 
 /// Public input for one complete PGC account bootstrap.
 #[derive(Clone, Copy, Debug)]
@@ -229,9 +243,9 @@ pub struct PgcBootstrapWellFormedProofV1 {
 )]
 #[norito(decode_from_slice)]
 pub struct PgcBootstrapUnsignedRangeProofV1 {
-    bit_commitments: Vec<CompressedPointV1>,
-    branch_challenges: Vec<CanonicalScalarV1>,
-    branch_responses: Vec<CanonicalScalarV1>,
+    bit_commitments: [CompressedPointV1; RANGE_BITS],
+    branch_challenges: [CanonicalScalarV1; RANGE_BITS * 2],
+    branch_responses: [CanonicalScalarV1; RANGE_BITS * 2],
 }
 
 /// Complete proof for one ordered bootstrap account.
@@ -296,8 +310,11 @@ impl AnonymousPgcBootstrapProofV1 {
                 max: MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
             });
         }
-        let proof = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
+        let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            bootstrap_proof_decode_limits(statement, bytes.len()),
+        )
+        .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
         if proof.encode().as_slice() != bytes {
             return Err(AnonymousPgcError::InvalidNoritoEncoding);
         }
@@ -336,12 +353,6 @@ impl PgcBootstrapWellFormedProofV1 {
 
 impl PgcBootstrapUnsignedRangeProofV1 {
     fn validate(&self) -> Result<(), AnonymousPgcError> {
-        if self.bit_commitments.len() != RANGE_BITS
-            || self.branch_challenges.len() != RANGE_BITS * 2
-            || self.branch_responses.len() != RANGE_BITS * 2
-        {
-            return Err(AnonymousPgcError::InvalidBootstrapRangeProofShape);
-        }
         for point in &self.bit_commitments {
             let _ = point.to_projective()?;
         }
@@ -693,15 +704,21 @@ where
                 real_masks[bit] + challenges[bit * 2 + selected] * bit_blindings[bit];
         }
         let proof = PgcBootstrapUnsignedRangeProofV1 {
-            bit_commitments,
+            bit_commitments: bit_commitments
+                .try_into()
+                .map_err(|_| AnonymousPgcError::InvalidBootstrapRangeProofShape)?,
             branch_challenges: challenges
                 .into_iter()
                 .map(CanonicalScalarV1::from_scalar)
-                .collect(),
+                .collect::<Vec<_>>()
+                .try_into()
+                .map_err(|_| AnonymousPgcError::InvalidBootstrapRangeProofShape)?,
             branch_responses: responses
                 .into_iter()
                 .map(CanonicalScalarV1::from_scalar)
-                .collect(),
+                .collect::<Vec<_>>()
+                .try_into()
+                .map_err(|_| AnonymousPgcError::InvalidBootstrapRangeProofShape)?,
         };
         proof.validate()?;
         return Ok(proof);
@@ -898,6 +915,7 @@ where
 {
     super::validate_binding(&statement.transcript_binding)?;
     let aggregate_randomness = validate_witness(statement, witness)?;
+    let mut checked_rng = health_checked_p256_rng_v1(rng)?;
     let mut accounts = Vec::with_capacity(statement.account_count());
     for index in 0..statement.account_count() {
         accounts.push(PgcBootstrapAccountProofV1 {
@@ -906,21 +924,25 @@ where
                 index,
                 witness.balances[index],
                 witness.randomness[index].expose_scalar(),
-                rng,
+                &mut checked_rng,
             )?,
             unsigned_range: prove_unsigned_range(
                 statement,
                 index,
                 witness.balances[index],
                 witness.randomness[index].expose_scalar(),
-                rng,
+                &mut checked_rng,
             )?,
         });
     }
     let proof = AnonymousPgcBootstrapProofV1 {
         version: PGC_BOOTSTRAP_PROOF_VERSION_V1,
         accounts,
-        aggregate_supply: prove_aggregate_supply(statement, aggregate_randomness, rng)?,
+        aggregate_supply: prove_aggregate_supply(
+            statement,
+            aggregate_randomness,
+            &mut checked_rng,
+        )?,
     };
     proof.validate_shape(statement)?;
     let encoded_len = proof.encode().len();
@@ -930,6 +952,7 @@ where
             max: MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         });
     }
+    verify_bootstrap(statement, &proof).map_err(|_| AnonymousPgcError::ProverSelfCheckFailed)?;
     Ok(proof)
 }
 
@@ -981,6 +1004,26 @@ mod tests {
 
     const TEST_NAMESPACE: &[u8] = b"canonical-norito:anonymous-pgc:taira-pool-7";
 
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyUnsignedRangeProofV1 {
+        bit_commitments: Vec<CompressedPointV1>,
+        branch_challenges: Vec<CanonicalScalarV1>,
+        branch_responses: Vec<CanonicalScalarV1>,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyAccountProofV1 {
+        well_formed: PgcBootstrapWellFormedProofV1,
+        unsigned_range: LegacyUnsignedRangeProofV1,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyBootstrapProofV1 {
+        version: u8,
+        accounts: Vec<LegacyAccountProofV1>,
+        aggregate_supply: PgcBootstrapAggregateSupplyProofV1,
+    }
+
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -1027,6 +1070,31 @@ mod tests {
     }
 
     impl CryptoRng for KatRng {}
+
+    struct PeriodicRng;
+
+    impl RngCore for PeriodicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("PGC bootstrap must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("PGC bootstrap must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("PGC bootstrap must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = ((index % 16) as u8).wrapping_mul(19).wrapping_add(7);
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for PeriodicRng {}
 
     fn secret(value: u64) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
@@ -1303,6 +1371,17 @@ mod tests {
         assert!(matches!(
             prove_bootstrap(&wrong_supply, &fixture.witness(), &mut rng),
             Err(AnonymousPgcError::InvalidBootstrapWitness)
+        ));
+    }
+
+    #[test]
+    fn complete_bootstrap_rejects_short_period_entropy_before_proof_emission() {
+        let fixture = Fixture::new_16();
+        assert!(matches!(
+            prove_bootstrap(&fixture.statement(), &fixture.witness(), &mut PeriodicRng,),
+            Err(AnonymousPgcError::P256(
+                P256EngineError::RandomnessHealthCheckFailed
+            ))
         ));
     }
 
@@ -1638,14 +1717,49 @@ mod tests {
             AnonymousPgcBootstrapProofV1::decode_exact(&wrong_account_shape.encode(), &statement),
             Err(AnonymousPgcError::InvalidBootstrapProofShape)
         ));
-        let mut wrong_range_shape = proof;
-        wrong_range_shape.accounts[0]
-            .unsigned_range
-            .bit_commitments
-            .pop();
+
+        let mut oversized_accounts = proof.clone();
+        oversized_accounts
+            .accounts
+            .push(oversized_accounts.accounts[0].clone());
+        let oversized = oversized_accounts.encode();
         assert!(matches!(
-            AnonymousPgcBootstrapProofV1::decode_exact(&wrong_range_shape.encode(), &statement),
-            Err(AnonymousPgcError::InvalidBootstrapRangeProofShape)
+            AnonymousPgcBootstrapProofV1::decode_exact(&oversized, &statement),
+            Err(AnonymousPgcError::InvalidNoritoEncoding)
+        ));
+        let encoded_count = 17_u64.to_le_bytes();
+        let count_offset = oversized
+            .windows(encoded_count.len())
+            .position(|window| window == encoded_count)
+            .expect("oversized account count is present in canonical wire");
+        let mut forged = oversized;
+        forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            AnonymousPgcBootstrapProofV1::decode_exact(&forged, &statement),
+            Err(AnonymousPgcError::InvalidNoritoEncoding)
+        ));
+
+        let legacy = LegacyBootstrapProofV1 {
+            version: proof.version,
+            accounts: proof
+                .accounts
+                .iter()
+                .map(|account| LegacyAccountProofV1 {
+                    well_formed: account.well_formed,
+                    unsigned_range: LegacyUnsignedRangeProofV1 {
+                        bit_commitments: account.unsigned_range.bit_commitments.to_vec(),
+                        branch_challenges: account.unsigned_range.branch_challenges.to_vec(),
+                        branch_responses: account.unsigned_range.branch_responses.to_vec(),
+                    },
+                })
+                .collect(),
+            aggregate_supply: proof.aggregate_supply,
+        };
+        let legacy_bytes = norito::codec::encode_adaptive(&legacy);
+        assert_ne!(legacy_bytes, proof.encode());
+        assert!(matches!(
+            AnonymousPgcBootstrapProofV1::decode_exact(&legacy_bytes, &statement),
+            Err(AnonymousPgcError::InvalidNoritoEncoding)
         ));
     }
 

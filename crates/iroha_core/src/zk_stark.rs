@@ -34,31 +34,23 @@ const GOLDILOCKS_GENERATOR: u64 = 7;
 pub const STARK_HASH_SHA256_V1: u8 = 1;
 /// Selector for a Poseidon2 transcript and Merkle commitments.
 pub const STARK_HASH_POSEIDON2_V1: u8 = 2;
-/// Canonical ZK-ACE v0 STARK evaluation domain size (`2^n_log2`).
-pub const ZK_ACE_STARK_FRI_V1_N_LOG2: u8 = 10;
-/// Canonical ZK-ACE v0 FRI blowup factor (`2^blowup_log2`).
-pub const ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2: u8 = 3;
-/// Canonical ZK-ACE v0 verifier query count.
+/// Minimum evaluation-domain exponent accepted by generic STARK admission.
+pub const STARK_FRI_CONSENSUS_MIN_N_LOG2: u8 = 10;
+/// Minimum FRI blowup exponent accepted by generic STARK admission.
+pub const STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2: u8 = 3;
+/// Minimum verifier query count accepted by generic STARK admission.
 ///
 /// With the fixed 8x blowup, 48 independent queries provide a conservative
 /// 144-bit proximity-sampling floor before accounting for the remaining FRI
 /// terms. The earlier 24-query development profile provided only a 72-bit
 /// floor and is not part of the first release.
-pub const ZK_ACE_STARK_FRI_V1_QUERIES: u16 = 48;
-/// Canonical max proof size for hardened ZK-ACE v0 STARK/FRI proofs.
-pub const ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES: u32 = 1024 * 1024;
-/// Minimum ZK-ACE STARK domain size accepted by ledger-grade admission.
-pub const ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2: u8 = ZK_ACE_STARK_FRI_V1_N_LOG2;
-/// Minimum ZK-ACE FRI blowup accepted by ledger-grade admission.
-pub const ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2: u8 = ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2;
-/// Minimum ZK-ACE FRI query count accepted by ledger-grade admission.
-pub const ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES: u16 = ZK_ACE_STARK_FRI_V1_QUERIES;
+pub const STARK_FRI_CONSENSUS_MIN_QUERIES: u16 = 48;
 /// Trace width of the generic OpenVerify binding AIR used by STARK/FRI v1 proofs.
 pub const STARK_BINDING_AIR_TRACE_WIDTH_V1: u16 = 6;
 
 const MAX_DOMAIN_LOG2: u8 = 24;
 const MAX_FRI_LAYERS: usize = 32;
-const MAX_FRI_QUERIES: usize = 32;
+const MAX_FRI_QUERIES: usize = 64;
 const MAX_MERKLE_DEPTH: usize = 32;
 const MAX_AUX_TERMS: usize = 64;
 const MAX_AIR_WIDTH: usize = 64;
@@ -72,7 +64,7 @@ const STARK_FRI_BOUNDED_QUERY_REJECTION_ATTEMPTS: usize = 8;
 const BFV_FULL_BOOTSTRAP_STARK_AIR_TRANSCRIPT_LABEL_ATTEMPTS: u32 = 1024;
 const GENERIC_STARK_AIR_BFV_FULL_BOOTSTRAP_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the BFV full-bootstrap circuit; use the BFV full-bootstrap STARK prover";
 const GENERIC_STARK_AIR_ZK_ACE_RESERVED_ERROR: &str =
-    "generic STARK AIR prover cannot target the ZK-ACE circuit; use the ZK-ACE STARK prover";
+    "generic STARK AIR prover cannot target the retired ZK-ACE relation; use SubmitPrivacyProofV1";
 const GENERIC_STARK_AIR_IVM_EXECUTION_RESERVED_ERROR: &str = "generic STARK AIR prover cannot target the IVM execution circuit; use the IVM execution STARK prover";
 
 fn validate_stark_transcript_label(label: &str, max_len: usize) -> Result<(), &'static str> {
@@ -703,75 +695,15 @@ mod tests {
     }
 
     #[test]
-    fn zk_ace_stark_fri_verifying_key_payload_validation_fails_closed() {
-        let valid = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            n_log2: ZK_ACE_STARK_FRI_V1_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
-            fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_V1_QUERIES,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        validate_zk_ace_stark_fri_verifying_key_payload(&valid)
-            .expect("canonical ZK-ACE STARK/FRI payload is accepted");
-
-        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 11] = [
-            ("version", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.version = 2
-            }),
-            ("circuit", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.circuit_id = "other".to_owned()
-            }),
-            ("hash", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.hash_fn = STARK_HASH_POSEIDON2_V1;
-            }),
-            ("fold", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.fold_arity = 4;
-            }),
-            ("merkle", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.merkle_arity = 4;
-            }),
-            ("n_log2_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.n_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
-            }),
-            ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.blowup_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 - 1;
-            }),
-            ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.blowup_log2 = payload.n_log2 + 1;
-            }),
-            ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.queries = ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES - 1;
-            }),
-            ("domain_limit", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.n_log2 = MAX_DOMAIN_LOG2 + 1;
-            }),
-            ("query_limit", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.queries = MAX_FRI_QUERIES as u16 + 1;
-            }),
-        ];
-        for (label, mutate) in mutations {
-            let mut invalid = valid.clone();
-            mutate(&mut invalid);
-            assert!(
-                validate_zk_ace_stark_fri_verifying_key_payload(&invalid).is_err(),
-                "{label} mutation must fail closed"
-            );
-        }
-    }
-
-    #[test]
     fn stark_fri_canonical_verifying_key_payload_validation_fails_closed() {
         const CIRCUIT_ID: &str = "soracloud:test-canonical-circuit";
         let valid = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: CIRCUIT_ID.to_owned(),
-            n_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn: STARK_HASH_SHA256_V1,
         };
@@ -800,16 +732,16 @@ mod tests {
                 payload.merkle_arity = 4;
             }),
             ("n_log2_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.n_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
+                payload.n_log2 = STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
             }),
             ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.blowup_log2 = ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 - 1;
+                payload.blowup_log2 = STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 - 1;
             }),
             ("blowup_domain", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.blowup_log2 = payload.n_log2 + 1;
             }),
             ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
-                payload.queries = ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES - 1;
+                payload.queries = STARK_FRI_CONSENSUS_MIN_QUERIES - 1;
             }),
             ("domain_limit", |payload: &mut StarkFriVerifyingKeyV1| {
                 payload.n_log2 = MAX_DOMAIN_LOG2 + 1;
@@ -4118,205 +4050,6 @@ mod tests {
         );
     }
 
-    fn zk_ace_test_account(seed: u8) -> iroha_data_model::account::AccountId {
-        let key_pair =
-            iroha_crypto::KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
-                .expect("fixture seed must derive a valid keypair");
-        iroha_data_model::account::AccountId::new(key_pair.public_key().clone())
-    }
-
-    #[test]
-    fn zk_ace_test_account_uses_checked_seed_derivation() {
-        assert_ne!(zk_ace_test_account(1), zk_ace_test_account(2));
-        assert!(
-            iroha_crypto::KeyPair::try_from_seed(vec![0; 32], iroha_crypto::Algorithm::Ed25519)
-                .is_err(),
-            "checked Ed25519 seed derivation must reject weak all-zero fixture seeds"
-        );
-    }
-
-    fn zk_ace_test_asset_definition_id() -> iroha_data_model::asset::AssetDefinitionId {
-        iroha_data_model::asset::AssetDefinitionId::new(
-            iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
-            "xor".parse().expect("asset name"),
-        )
-    }
-
-    fn zk_ace_test_public_inputs_and_witness() -> (
-        iroha_data_model::zk::ZkAcePublicInputsV1,
-        iroha_data_model::zk::ZkAceWitnessV1,
-    ) {
-        let witness = iroha_data_model::zk::ZkAceWitnessV1 {
-            identity_root: [0x11; 32],
-            identity_blinding: [0x22; 32],
-            replay_secret: [0x33; 32],
-        };
-        let policy_hash = [0x44; 32];
-        let chain_id: iroha_data_model::ChainId = "zk-ace-test-chain".parse().expect("chain id");
-        let from = zk_ace_test_account(1);
-        let to = zk_ace_test_account(2);
-        let asset = zk_ace_test_asset_definition_id();
-        let amount = 17;
-        let verifier_key_id = iroha_data_model::proof::VerifyingKeyId::new(
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        );
-        let identity_commitment = iroha_data_model::zk::derive_zk_ace_identity_commitment(
-            &witness.identity_root,
-            &witness.identity_blinding,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
-            &from,
-            &to,
-            &asset,
-            amount,
-            &chain_id,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            &policy_hash,
-        );
-        let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
-            &witness.replay_secret,
-            &tx_digest,
-            &chain_id,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        );
-        let public_inputs = iroha_data_model::zk::ZkAcePublicInputsV1::transparent_transfer(
-            identity_commitment,
-            tx_digest,
-            tx_digest,
-            chain_id,
-            replay_nullifier,
-            policy_hash,
-            from,
-            to,
-            asset,
-            amount,
-            verifier_key_id,
-        );
-        (public_inputs, witness)
-    }
-
-    #[test]
-    fn zk_ace_air_prover_self_verifies_generated_envelope() {
-        let params = StarkFriParamsV1 {
-            version: 1,
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-            domain_tag: "iroha:test:zk-ace-air-self-verify".to_owned(),
-        };
-        let (public_inputs, witness) = zk_ace_test_public_inputs_and_witness();
-        let public_digest = iroha_data_model::zk::derive_zk_ace_air_public_digest(&public_inputs)
-            .expect("ZK-ACE public AIR digest");
-        let bytes = prove_stark_fri_zk_ace_air_envelope_bytes(
-            params.clone(),
-            "IROHA-TEST-ZK-ACE-AIR".to_owned(),
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            public_digest,
-            &public_inputs,
-            &witness,
-        )
-        .expect("ZK-ACE AIR envelope");
-        assert!(verify_stark_fri_zk_ace_envelope_with_limits(
-            &bytes,
-            &StarkVerifierLimits::default(),
-            &public_inputs,
-        ));
-        let mut envelope: StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&bytes).expect("decode ZK-ACE AIR envelope");
-        let air = envelope.proof.air.as_ref().expect("AIR section");
-        let extra_query_roots = [air.trace_root, air.composition_root, air.public_digest];
-        let indices = validate_stark_fri_query_shape_and_indices_v1(
-            &envelope.params,
-            &envelope.transcript_label,
-            &envelope.proof.commits.roots,
-            &extra_query_roots,
-            &envelope.proof.queries,
-        )
-        .expect("ZK-ACE prover emits replayable duplicate-free queries");
-        let domain = 1_usize << usize::from(params.n_log2);
-        assert!(
-            indices
-                .iter()
-                .all(|&index| zk_ace_air_opening_is_safe(index, domain)),
-            "ZK-ACE prover must not open private witness rows"
-        );
-        let mut auxiliary_envelope = envelope.clone();
-        attach_valid_auxiliary_composition_values(&mut auxiliary_envelope);
-        let auxiliary_bytes =
-            norito::to_bytes(&auxiliary_envelope).expect("encode auxiliary ZK-ACE AIR envelope");
-        assert!(
-            !verify_stark_fri_zk_ace_envelope_with_limits(
-                &auxiliary_bytes,
-                &StarkVerifierLimits::default(),
-                &public_inputs,
-            ),
-            "ZK-ACE AIR must reject auxiliary generic composition commitments"
-        );
-
-        envelope.proof.air.as_mut().expect("AIR section").circuit_id =
-            "stark/fri/zk-ace-pq-authorization-v0:wrong".to_owned();
-        let wrong_circuit =
-            norito::to_bytes(&envelope).expect("encode wrong-circuit ZK-ACE AIR envelope");
-        assert!(
-            !verify_stark_fri_zk_ace_envelope_with_limits(
-                &wrong_circuit,
-                &StarkVerifierLimits::default(),
-                &public_inputs,
-            ),
-            "ZK-ACE AIR verification must bind the canonical circuit id"
-        );
-
-        let err = prove_stark_fri_zk_ace_air_envelope_bytes(
-            params,
-            "IROHA-TEST-ZK-ACE-AIR-WRONG-CIRCUIT".to_owned(),
-            "stark/fri/zk-ace-pq-authorization-v0:wrong".to_owned(),
-            public_digest,
-            &public_inputs,
-            &witness,
-        )
-        .expect_err("ZK-ACE AIR prover must reject wrong circuit ids");
-        assert!(
-            err.contains("circuit_id"),
-            "wrong-circuit ZK-ACE AIR error should mention circuit_id, got: {err}"
-        );
-    }
-
-    #[test]
-    fn zk_ace_air_prover_rejects_repeated_query_schedule() {
-        let params = StarkFriParamsV1 {
-            version: 1,
-            n_log2: 2,
-            blowup_log2: 1,
-            fold_arity: 2,
-            queries: 5,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-            domain_tag: "iroha:test:zk-ace-repeated-query".to_owned(),
-        };
-        let (public_inputs, witness) = zk_ace_test_public_inputs_and_witness();
-        let public_digest = iroha_data_model::zk::derive_zk_ace_air_public_digest(&public_inputs)
-            .expect("ZK-ACE public AIR digest");
-        let err = prove_stark_fri_zk_ace_air_envelope_bytes(
-            params,
-            "IROHA-TEST-ZK-ACE-REPEATED-QUERY".to_owned(),
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
-            public_digest,
-            &public_inputs,
-            &witness,
-        )
-        .expect_err("pigeonhole-small ZK-ACE query schedule must not emit proof bytes");
-        assert!(
-            err.contains("STARK query count exceeds domain size"),
-            "unexpected impossible-query rejection: {err}"
-        );
-    }
-
     #[test]
     fn synthesized_envelope_rejects_unsupported_fold_arity() {
         let params = StarkFriParamsV1 {
@@ -4661,16 +4394,16 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
             "{label} STARK/FRI verifier key must use binary Merkle paths"
         ));
     }
-    if payload.n_log2 < ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 {
+    if payload.n_log2 < STARK_FRI_CONSENSUS_MIN_N_LOG2 {
         return Err(format!(
             "{label} STARK/FRI n_log2 {} is below consensus floor {}",
-            payload.n_log2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2
+            payload.n_log2, STARK_FRI_CONSENSUS_MIN_N_LOG2
         ));
     }
-    if payload.blowup_log2 < ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 {
+    if payload.blowup_log2 < STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2 {
         return Err(format!(
             "{label} STARK/FRI blowup_log2 {} is below consensus floor {}",
-            payload.blowup_log2, ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2
+            payload.blowup_log2, STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2
         ));
     }
     if payload.blowup_log2 > payload.n_log2 {
@@ -4679,10 +4412,10 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
             payload.blowup_log2, payload.n_log2
         ));
     }
-    if payload.queries < ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES {
+    if payload.queries < STARK_FRI_CONSENSUS_MIN_QUERIES {
         return Err(format!(
             "{label} STARK/FRI queries {} is below consensus floor {}",
-            payload.queries, ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES
+            payload.queries, STARK_FRI_CONSENSUS_MIN_QUERIES
         ));
     }
     if payload.n_log2 > MAX_DOMAIN_LOG2
@@ -4692,25 +4425,6 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
         return Err(format!(
             "{label} STARK/FRI verifier key exceeds native verifier limits"
         ));
-    }
-    Ok(())
-}
-
-/// Validate that a STARK/FRI verifier-key payload is acceptable for ledger-grade ZK-ACE.
-///
-/// This is a control-plane floor, not a full algebraic soundness proof. It prevents
-/// governance or recovery paths from activating the historical PoC-sized ZK-ACE
-/// parameters for fresh ledger admission.
-pub fn validate_zk_ace_stark_fri_verifying_key_payload(
-    payload: &StarkFriVerifyingKeyV1,
-) -> Result<(), String> {
-    validate_stark_fri_canonical_verifying_key_payload(
-        payload,
-        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        "ZK-ACE",
-    )?;
-    if payload.hash_fn != STARK_HASH_SHA256_V1 {
-        return Err("ZK-ACE STARK/FRI verifier key must use SHA-256".to_owned());
     }
     Ok(())
 }
@@ -5407,19 +5121,6 @@ fn stark_air_trace_width() -> usize {
     usize::from(STARK_BINDING_AIR_TRACE_WIDTH_V1)
 }
 
-fn zk_ace_air_trace_width() -> usize {
-    31
-}
-
-const ZK_ACE_AIR_PRIVATE_ROW_INDEX: usize = 0;
-const ZK_ACE_AIR_SAFE_ROW_KIND: u64 = 0;
-const ZK_ACE_AIR_PRIVATE_ROW_KIND: u64 = 1;
-const ZK_ACE_AIR_PUBLIC_DIGEST_OFFSET: usize = 2;
-const ZK_ACE_AIR_WIDTH_OFFSET: usize = 6;
-const ZK_ACE_AIR_WITNESS_OFFSET: usize = 7;
-const ZK_ACE_AIR_WITNESS_LIMBS: usize = 15;
-const ZK_ACE_AIR_MAX_BLINDING_ATTEMPTS: u64 = 256;
-
 #[derive(Clone, Copy)]
 struct StarkAirExplicitVerificationContext<'a> {
     circuit_id: &'a str,
@@ -5438,9 +5139,6 @@ enum StarkAirVerificationContext<'a> {
         slot_index: u32,
         bound_mode: iroha_crypto::BfvFullBootstrapExecutionProofBoundModeV1,
     },
-    ZkAce {
-        public_inputs: &'a iroha_data_model::zk::ZkAcePublicInputsV1,
-    },
     Explicit(&'a StarkAirExplicitVerificationContext<'a>),
 }
 
@@ -5455,7 +5153,6 @@ impl StarkAirVerificationContext<'_> {
             Self::BfvFullBootstrapPublicPadding { .. } => {
                 usize::from(iroha_crypto::BFV_FULL_BOOTSTRAP_ARITHMETIC_TRACE_ROW_WIDTH_V1)
             }
-            Self::ZkAce { .. } => zk_ace_air_trace_width(),
             Self::Explicit(explicit) => explicit.rows.first().map(Vec::len).unwrap_or(usize::MAX),
         }
     }
@@ -5533,229 +5230,6 @@ fn stark_air_composition_value(
     Some(acc)
 }
 
-fn zk_ace_bytes_to_limbs(bytes: &[u8; 32]) -> Option<[u64; 5]> {
-    let packed = iroha_data_model::zk::zk_ace_pack_bytes_to_field_limbs(bytes);
-    let limbs: [u64; 5] = packed.limbs.try_into().ok()?;
-    if limbs[..4].iter().any(|limb| *limb >= (1u64 << 56)) || limbs[4] >= (1u64 << 32) {
-        return None;
-    }
-    Some(limbs)
-}
-
-fn zk_ace_limbs_to_bytes(limbs: &[u64]) -> Option<[u8; 32]> {
-    let limbs: &[u64; 5] = limbs.try_into().ok()?;
-    if limbs[..4].iter().any(|limb| *limb >= (1u64 << 56)) || limbs[4] >= (1u64 << 32) {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    let mut offset = 0usize;
-    for (index, limb) in limbs.iter().enumerate() {
-        let bytes = limb.to_le_bytes();
-        let take = if index == 4 { 4 } else { 7 };
-        out[offset..offset + take].copy_from_slice(&bytes[..take]);
-        offset += take;
-    }
-    Some(out)
-}
-
-fn zk_ace_witness_limbs(witness: &iroha_data_model::zk::ZkAceWitnessV1) -> Option<[u64; 15]> {
-    let root = zk_ace_bytes_to_limbs(&witness.identity_root)?;
-    let blinding = zk_ace_bytes_to_limbs(&witness.identity_blinding)?;
-    let replay = zk_ace_bytes_to_limbs(&witness.replay_secret)?;
-    let mut limbs = [0u64; 15];
-    limbs[..5].copy_from_slice(&root);
-    limbs[5..10].copy_from_slice(&blinding);
-    limbs[10..].copy_from_slice(&replay);
-    Some(limbs)
-}
-
-fn zk_ace_air_blinding(
-    statement_digest: &[u8; 32],
-    index: usize,
-    column_index: usize,
-    blinding_attempt: u64,
-) -> Option<Fq> {
-    let mut h = Sha256::new();
-    h.update(b"iroha:zk-ace:air-blinding:v2");
-    h.update(statement_digest);
-    h.update(&(index as u64).to_le_bytes());
-    h.update(&(column_index as u64).to_le_bytes());
-    h.update(&blinding_attempt.to_le_bytes());
-    let out = h.finalize();
-    let mut word = [0u8; 8];
-    word.copy_from_slice(&out[..8]);
-    Some(Fq::new(u64::from_le_bytes(word)))
-}
-
-fn zk_ace_air_row(
-    index: usize,
-    witness_limbs: &[u64; 15],
-    public_digest: &[u8; 32],
-    statement_digest: &[u8; 32],
-    blinding_attempt: u64,
-) -> Option<Vec<u64>> {
-    let width = zk_ace_air_trace_width();
-    let mut row = Vec::with_capacity(width);
-    row.push((u128::from(u64::try_from(index).ok()?) % MOD_P) as u64);
-    row.push(if index == ZK_ACE_AIR_PRIVATE_ROW_INDEX {
-        ZK_ACE_AIR_PRIVATE_ROW_KIND
-    } else {
-        ZK_ACE_AIR_SAFE_ROW_KIND
-    });
-    row.extend_from_slice(&stark_air_digest_limbs(public_digest));
-    row.push(u64::try_from(width).ok()?);
-    if index == ZK_ACE_AIR_PRIVATE_ROW_INDEX {
-        row.extend_from_slice(witness_limbs);
-    }
-    while row.len() < width {
-        let value = zk_ace_air_blinding(statement_digest, index, row.len(), blinding_attempt)?;
-        row.push(value.0);
-    }
-    if row.len() != width {
-        return None;
-    }
-    Some(row)
-}
-
-fn zk_ace_air_row_residue(
-    index: usize,
-    public_digest: &[u8; 32],
-    public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
-    row: &[u64],
-) -> Option<Fq> {
-    if row.len() != zk_ace_air_trace_width() {
-        return None;
-    }
-    for value in row {
-        Fq::from_canonical_u64(*value)?;
-    }
-    let mut acc = Fq::zero();
-    let mut coeff = Fq::from_canonical_u64(3)?;
-    let add_residue = |acc: &mut Fq, coeff: &mut Fq, actual: u64, expected: u64| -> Option<()> {
-        let residue = Fq::from_canonical_u64(actual)?.sub(Fq::from_canonical_u64(expected)?);
-        *acc = acc.add((*coeff).mul(residue));
-        *coeff = coeff.add(Fq::from_canonical_u64(2)?);
-        Some(())
-    };
-
-    let index = (u128::from(u64::try_from(index).ok()?) % MOD_P) as u64;
-    add_residue(&mut acc, &mut coeff, row[0], index)?;
-    let expected_kind = if usize::try_from(index).ok()? == ZK_ACE_AIR_PRIVATE_ROW_INDEX {
-        ZK_ACE_AIR_PRIVATE_ROW_KIND
-    } else {
-        ZK_ACE_AIR_SAFE_ROW_KIND
-    };
-    add_residue(&mut acc, &mut coeff, row[1], expected_kind)?;
-    for (offset, expected) in stark_air_digest_limbs(public_digest).iter().enumerate() {
-        add_residue(
-            &mut acc,
-            &mut coeff,
-            row[ZK_ACE_AIR_PUBLIC_DIGEST_OFFSET + offset],
-            *expected,
-        )?;
-    }
-    add_residue(
-        &mut acc,
-        &mut coeff,
-        row[ZK_ACE_AIR_WIDTH_OFFSET],
-        u64::try_from(zk_ace_air_trace_width()).ok()?,
-    )?;
-
-    let expected_air_digest =
-        iroha_data_model::zk::derive_zk_ace_air_public_digest(public_inputs).ok()?;
-    for (actual, expected) in public_digest.iter().zip(expected_air_digest.iter()) {
-        add_residue(
-            &mut acc,
-            &mut coeff,
-            u64::from(*actual),
-            u64::from(*expected),
-        )?;
-    }
-
-    if expected_kind == ZK_ACE_AIR_SAFE_ROW_KIND {
-        return Some(acc);
-    }
-
-    let witness_end = ZK_ACE_AIR_WITNESS_OFFSET + ZK_ACE_AIR_WITNESS_LIMBS;
-    let limbs: [u64; ZK_ACE_AIR_WITNESS_LIMBS] = row[ZK_ACE_AIR_WITNESS_OFFSET..witness_end]
-        .try_into()
-        .ok()?;
-    let identity_root = zk_ace_limbs_to_bytes(&limbs[..5])?;
-    let identity_blinding = zk_ace_limbs_to_bytes(&limbs[5..10])?;
-    let replay_secret = zk_ace_limbs_to_bytes(&limbs[10..15])?;
-    for witness_bytes in [&identity_root, &identity_blinding, &replay_secret] {
-        if witness_bytes == &[0u8; 32] {
-            acc = acc.add(coeff);
-        }
-        coeff = coeff.add(Fq::from_canonical_u64(2)?);
-    }
-
-    let identity_commitment = iroha_data_model::zk::derive_zk_ace_identity_commitment(
-        &identity_root,
-        &identity_blinding,
-        &public_inputs.domain_tag,
-    );
-    for (actual, expected) in identity_commitment
-        .iter()
-        .zip(public_inputs.identity_commitment.iter())
-    {
-        add_residue(
-            &mut acc,
-            &mut coeff,
-            u64::from(*actual),
-            u64::from(*expected),
-        )?;
-    }
-
-    let replay_nullifier = iroha_data_model::zk::derive_zk_ace_replay_nullifier(
-        &replay_secret,
-        &public_inputs.authorization_digest,
-        &public_inputs.chain_id,
-        &public_inputs.action_class,
-        &public_inputs.domain_tag,
-    );
-    for (actual, expected) in replay_nullifier
-        .iter()
-        .zip(public_inputs.replay_nullifier.iter())
-    {
-        add_residue(
-            &mut acc,
-            &mut coeff,
-            u64::from(*actual),
-            u64::from(*expected),
-        )?;
-    }
-
-    let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
-        &public_inputs.from,
-        &public_inputs.to,
-        &public_inputs.asset,
-        public_inputs.amount,
-        &public_inputs.chain_id,
-        public_inputs.action_class.trim(),
-        &public_inputs.policy_hash,
-    );
-    for (actual, expected) in tx_digest.iter().zip(public_inputs.tx_digest.iter()) {
-        add_residue(
-            &mut acc,
-            &mut coeff,
-            u64::from(*actual),
-            u64::from(*expected),
-        )?;
-    }
-
-    if public_inputs.identity_commitment == [0u8; 32]
-        || public_inputs.replay_nullifier == [0u8; 32]
-        || public_inputs.policy_hash == [0u8; 32]
-        || public_inputs.authorization_digest == [0u8; 32]
-        || public_inputs.domain_tag.trim().is_empty()
-        || public_inputs.action_class.trim().is_empty()
-    {
-        acc = acc.add(coeff);
-    }
-    Some(acc)
-}
-
 fn stark_air_composition_value_for_context(
     context: StarkAirVerificationContext<'_>,
     index: usize,
@@ -5796,22 +5270,6 @@ fn stark_air_composition_value_for_context(
             )
             .ok()?;
             Some(Fq::zero())
-        }
-        StarkAirVerificationContext::ZkAce { public_inputs } => {
-            if domain_size == 0
-                || row.len() != zk_ace_air_trace_width()
-                || next_row.len() != zk_ace_air_trace_width()
-            {
-                return None;
-            }
-            let current = zk_ace_air_row_residue(index, public_digest, public_inputs, row)?;
-            let next = zk_ace_air_row_residue(
-                (index + 1) % domain_size,
-                public_digest,
-                public_inputs,
-                next_row,
-            )?;
-            Some(current.add(Fq::from_canonical_u64(17)?.mul(next)))
         }
         StarkAirVerificationContext::Explicit(explicit) => {
             if domain_size == 0
@@ -5855,9 +5313,6 @@ fn stark_air_context_matches_statement(
             ) && bfv_full_bootstrap_stark_air_params_match_v1(params, &expected_params)
                 && air.circuit_id == iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1
                 && air.public_digest == <[u8; iroha_crypto::Hash::LENGTH]>::from(*statement_hash)
-        }
-        StarkAirVerificationContext::ZkAce { .. } => {
-            air.circuit_id == iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
         }
         StarkAirVerificationContext::Explicit(explicit) => {
             if air.circuit_id != explicit.circuit_id
@@ -5960,18 +5415,6 @@ fn stark_air_query_roots(roots: &[[u8; 32]], air: Option<&StarkAirProofV1>) -> V
         query_roots.push(air.public_digest);
     }
     query_roots
-}
-
-fn zk_ace_air_opening_is_private(index: usize, domain_size: usize) -> bool {
-    domain_size != 0 && index % domain_size == ZK_ACE_AIR_PRIVATE_ROW_INDEX
-}
-
-fn zk_ace_air_opening_is_safe(index: usize, domain_size: usize) -> bool {
-    if domain_size == 0 {
-        return false;
-    }
-    !zk_ace_air_opening_is_private(index, domain_size)
-        && !zk_ace_air_opening_is_private((index + 1) % domain_size, domain_size)
 }
 
 fn bfv_full_bootstrap_stark_air_params_v1(statement_hash: iroha_crypto::Hash) -> StarkFriParamsV1 {
@@ -6549,7 +5992,7 @@ fn prove_stark_fri_air_envelope_from_rows_and_composition_values_fq_bytes(
         trace_width,
         openings,
     });
-    let bytes = norito::to_bytes(&envelope)
+    let bytes = ivm::codec::encode_canonical_norito(&envelope)
         .map_err(|err| format!("failed to encode STARK envelope: {err}"))?;
     let mut limits = StarkVerifierLimits::default();
     limits.max_envelope_bytes = usize::MAX;
@@ -7002,169 +6445,6 @@ pub fn verify_stark_fri_bfv_full_bootstrap_air_envelope_with_limits(
     .is_ok()
 }
 
-/// Build a deterministic V1 STARK/FRI envelope for the ZK-ACE authorization AIR.
-pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
-    params: StarkFriParamsV1,
-    transcript_label: String,
-    circuit_id: String,
-    public_digest: [u8; 32],
-    public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
-    witness: &iroha_data_model::zk::ZkAceWitnessV1,
-) -> Result<Vec<u8>, String> {
-    validate_stark_circuit_id(&circuit_id)
-        .map_err(|err| format!("invalid STARK AIR circuit_id: {err}"))?;
-    if circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
-        return Err("ZK-ACE AIR circuit_id mismatch".to_owned());
-    }
-    validate_stark_prover_params(&params, &transcript_label)?;
-    let expected_public_digest =
-        iroha_data_model::zk::derive_zk_ace_air_public_digest(public_inputs)
-            .map_err(|err| format!("failed to derive ZK-ACE AIR public digest: {err}"))?;
-    if public_digest != expected_public_digest {
-        return Err("ZK-ACE AIR public digest mismatch".to_owned());
-    }
-    let statement_digest =
-        iroha_data_model::zk::derive_zk_ace_air_statement_digest(public_inputs, witness)
-            .map_err(|err| format!("failed to derive ZK-ACE AIR statement digest: {err}"))?;
-    let witness_limbs = zk_ace_witness_limbs(witness)
-        .ok_or_else(|| "failed to pack ZK-ACE witness limbs".to_owned())?;
-    let domain = 1usize
-        .checked_shl(u32::from(params.n_log2))
-        .ok_or_else(|| "STARK domain size overflow".to_owned())?;
-    let context = StarkAirVerificationContext::ZkAce { public_inputs };
-
-    for blinding_attempt in 0..ZK_ACE_AIR_MAX_BLINDING_ATTEMPTS {
-        let rows = (0..domain)
-            .map(|index| {
-                zk_ace_air_row(
-                    index,
-                    &witness_limbs,
-                    &public_digest,
-                    &statement_digest,
-                    blinding_attempt,
-                )
-                .ok_or_else(|| "failed to build ZK-ACE AIR row".to_owned())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let trace_leaves = rows
-            .iter()
-            .map(|row| {
-                stark_air_trace_leaf_hash(&params, row)
-                    .ok_or_else(|| "failed to hash ZK-ACE AIR row".to_owned())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let trace_levels = merkle_levels_from_hashes(&params, trace_leaves)
-            .ok_or_else(|| "failed to build ZK-ACE AIR trace commitment".to_owned())?;
-        let trace_root = merkle_root_from_levels(&trace_levels)
-            .ok_or_else(|| "failed to derive ZK-ACE AIR trace root".to_owned())?;
-
-        let composition_values = (0..domain)
-            .map(|index| {
-                stark_air_composition_value_for_context(
-                    context,
-                    index,
-                    domain,
-                    &public_digest,
-                    &rows[index],
-                    &rows[(index + 1) % domain],
-                )
-                .ok_or_else(|| "failed to evaluate ZK-ACE AIR composition".to_owned())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let composition_levels = merkle_levels_from_values(&params, &composition_values)
-            .ok_or_else(|| "failed to build ZK-ACE AIR composition commitment".to_owned())?;
-        let composition_root = merkle_root_from_levels(&composition_levels)
-            .ok_or_else(|| "failed to derive ZK-ACE AIR composition root".to_owned())?;
-        let extra_query_roots = [trace_root, composition_root, public_digest];
-
-        let mut envelope = match synthesize_stark_fri_envelope_from_values(
-            params.clone(),
-            transcript_label.clone(),
-            composition_values,
-            &extra_query_roots,
-        ) {
-            Ok(envelope) => envelope,
-            Err(err) if err == STARK_FRI_QUERY_INDEX_REPEATED_ERROR => continue,
-            Err(err) => return Err(err),
-        };
-        if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
-            return Err("ZK-ACE AIR composition root does not match FRI base root".to_owned());
-        }
-
-        let query_indices = match validate_stark_fri_query_shape_and_indices_v1(
-            &envelope.params,
-            &envelope.transcript_label,
-            &envelope.proof.commits.roots,
-            &extra_query_roots,
-            &envelope.proof.queries,
-        ) {
-            Ok(indices) => indices,
-            Err(STARK_FRI_QUERY_INDEX_REPEATED_ERROR) => continue,
-            Err(err) => {
-                return Err(format!(
-                    "ZK-ACE AIR FRI query shape failed validation: {err}"
-                ));
-            }
-        };
-        if query_indices
-            .iter()
-            .any(|&index| !zk_ace_air_opening_is_safe(index, domain))
-        {
-            continue;
-        }
-
-        let mut openings = Vec::with_capacity(envelope.proof.queries.len());
-        for index in query_indices {
-            let next_index = (index + 1) % domain;
-            let row_path = merkle_path_from_levels(index, &trace_levels)
-                .ok_or_else(|| "failed to open ZK-ACE AIR row".to_owned())?;
-            let next_row_path = merkle_path_from_levels(next_index, &trace_levels)
-                .ok_or_else(|| "failed to open next ZK-ACE AIR row".to_owned())?;
-            let composition_path = merkle_path_from_levels(index, &composition_levels)
-                .ok_or_else(|| "failed to open ZK-ACE AIR composition".to_owned())?;
-            let composition_value = stark_air_composition_value_for_context(
-                context,
-                index,
-                domain,
-                &public_digest,
-                &rows[index],
-                &rows[next_index],
-            )
-            .ok_or_else(|| "failed to evaluate opened ZK-ACE AIR composition".to_owned())?;
-            openings.push(StarkAirOpeningV1 {
-                index: u32::try_from(index)
-                    .map_err(|_| "ZK-ACE AIR query index does not fit u32".to_owned())?,
-                row: rows[index].clone(),
-                next_row: rows[next_index].clone(),
-                row_path,
-                next_row_path,
-                composition_value: composition_value.0,
-                composition_path,
-            });
-        }
-        envelope.proof.air = Some(StarkAirProofV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            public_digest,
-            trace_root,
-            composition_root,
-            trace_width: u16::try_from(zk_ace_air_trace_width())
-                .map_err(|_| "ZK-ACE AIR trace width does not fit u16".to_owned())?,
-            openings,
-        });
-        let bytes = norito::to_bytes(&envelope)
-            .map_err(|err| format!("failed to encode STARK envelope: {err}"))?;
-        let mut limits = StarkVerifierLimits::default();
-        limits.max_envelope_bytes = usize::MAX;
-        if !verify_stark_fri_zk_ace_envelope_with_limits(&bytes, &limits, public_inputs) {
-            return Err("ZK-ACE AIR envelope self-verification failed".to_owned());
-        }
-        return Ok(bytes);
-    }
-
-    Err("failed to derive ZK-ACE AIR blinding with duplicate-free public query openings".to_owned())
-}
-
 /// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
 pub fn prove_stark_fri_composition_envelope_bytes(
     params: StarkFriParamsV1,
@@ -7221,7 +6501,8 @@ pub fn prove_stark_fri_composition_envelope_bytes(
     let comp_values = vec![comp_value; envelope.proof.queries.len()];
     envelope.proof.commits.comp_root = Some(comp_root);
     envelope.proof.comp_values = Some(comp_values);
-    norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
+    ivm::codec::encode_canonical_norito(&envelope)
+        .map_err(|err| format!("failed to encode STARK envelope: {err}"))
 }
 
 fn verify_stark_air_opening(
@@ -7320,19 +6601,6 @@ pub fn verify_stark_fri_envelope_with_limits(bytes: &[u8], limits: &StarkVerifie
     verify_stark_fri_envelope_with_context(bytes, limits, StarkAirVerificationContext::Binding)
 }
 
-/// Verify a ZK-ACE STARK FRI envelope under `zk-stark` with caller-provided limits.
-pub fn verify_stark_fri_zk_ace_envelope_with_limits(
-    bytes: &[u8],
-    limits: &StarkVerifierLimits,
-    public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
-) -> bool {
-    verify_stark_fri_envelope_with_context(
-        bytes,
-        limits,
-        StarkAirVerificationContext::ZkAce { public_inputs },
-    )
-}
-
 /// Verify a STARK FRI AIR envelope against caller-provided trace rows and composition values.
 #[cfg(test)]
 pub(crate) fn verify_stark_fri_air_envelope_from_rows_and_composition_values(
@@ -7406,18 +6674,11 @@ fn verify_stark_fri_envelope_with_context(
     if bytes.len() > effective_max_envelope_bytes(limits) {
         return false;
     }
-    // Decode envelope
-    let env: StarkVerifyEnvelopeV1 = match norito::decode_from_bytes(bytes) {
+    // Decode the single canonical V1 representation.
+    let env: StarkVerifyEnvelopeV1 = match ivm::codec::decode_canonical_norito(bytes) {
         Ok(e) => e,
         Err(_) => return false,
     };
-    let canonical_bytes = match norito::to_bytes(&env) {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-    if canonical_bytes.as_slice() != bytes {
-        return false;
-    }
     if validate_stark_transcript_label(
         &env.transcript_label,
         effective_max_transcript_label_len(limits),
