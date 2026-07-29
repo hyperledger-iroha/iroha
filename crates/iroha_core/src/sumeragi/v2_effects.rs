@@ -99,6 +99,7 @@ use iroha_data_model::{
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
+use norito::codec::Encode as _;
 
 use super::{
     FairV2IngressOwnershipEvidence,
@@ -113,8 +114,9 @@ use super::{
     v2_recovery::PendingKuraApply,
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError, NetworkIngressError,
-        RetiredBodyPipelineCompletions, RuntimeClockError, RuntimeQueueLaneSnapshot,
-        RuntimeQueueSnapshot, RuntimeStep, SerializedV2Runtime,
+        RetiredBodyPipelineCompletions, RuntimeClockError, RuntimeEffectOwnership,
+        RuntimeLifecycleOwner, RuntimeQueueLaneSnapshot, RuntimeQueueSnapshot, RuntimeStep,
+        SerializedV2Runtime,
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
@@ -721,16 +723,18 @@ pub(crate) struct ConsensusSignTask {
     id: EffectWorkId,
     tag: EventTag,
     request: SignRequest,
+    ownership: RuntimeEffectOwnership,
 }
 
 impl ConsensusSignTask {
     /// Construct an exact signing task for service-boundary unit tests.
     #[cfg(test)]
-    pub(crate) const fn for_test(id: u64, tag: EventTag, request: SignRequest) -> Self {
+    pub(crate) fn for_test(id: u64, tag: EventTag, request: SignRequest) -> Self {
         Self {
             id: EffectWorkId(id),
             tag,
             request,
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag, u128::from(id)),
         }
     }
 
@@ -748,6 +752,15 @@ impl ConsensusSignTask {
     pub(crate) const fn request(&self) -> &SignRequest {
         &self.request
     }
+
+    /// Immutable actor-global lifecycle ordinal retained across asynchronous I/O.
+    pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
+        self.ownership.owner().lifecycle_ordinal()
+    }
+
+    fn ownership(&self) -> &RuntimeEffectOwnership {
+        &self.ownership
+    }
 }
 
 /// Body reconstruction or certified-fetch request.
@@ -760,6 +773,7 @@ pub(crate) struct BodyFetchTask {
     manifest: Option<wire::PayloadManifest>,
     sources: Vec<PeerId>,
     certified_request: Option<wire::CertifiedBodyRequest>,
+    ownership: RuntimeEffectOwnership,
 }
 
 impl BodyFetchTask {
@@ -778,6 +792,7 @@ impl BodyFetchTask {
             manifest: Some(manifest),
             sources: Vec::new(),
             certified_request: None,
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag, u128::from(id)),
         }
     }
 
@@ -798,6 +813,7 @@ impl BodyFetchTask {
             manifest,
             sources,
             certified_request: Some(certified_request),
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag, u128::from(id)),
         }
     }
 
@@ -827,6 +843,7 @@ impl BodyFetchTask {
             && self.tag == other.tag
             && self.round == other.round
             && self.subject == other.subject
+            && self.ownership == other.ownership
     }
 
     /// Whether this task is an exact monotonic acquisition upgrade of `previous`.
@@ -880,6 +897,7 @@ impl BodyFetchTask {
             && self.manifest == previous.manifest
             && self.sources == previous.sources
             && self.certified_request == previous.certified_request
+            && self.ownership == previous.ownership
     }
 
     /// Canonically ordered frozen-roster archive fetch sources.
@@ -891,6 +909,15 @@ impl BodyFetchTask {
     pub(crate) const fn certified_request(&self) -> Option<&wire::CertifiedBodyRequest> {
         self.certified_request.as_ref()
     }
+
+    /// Immutable actor-global lifecycle ordinal retained through reconstruction.
+    pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
+        self.ownership.owner().lifecycle_ordinal()
+    }
+
+    fn ownership(&self) -> &RuntimeEffectOwnership {
+        &self.ownership
+    }
 }
 
 /// Tagged exact-body persistence work executed outside the reducer owner.
@@ -900,6 +927,7 @@ pub(crate) struct BodyStoreTask {
     tag: EventTag,
     manifest: wire::PayloadManifest,
     canonical_wire: Arc<[u8]>,
+    ownership: RuntimeEffectOwnership,
 }
 
 impl BodyStoreTask {
@@ -916,6 +944,7 @@ impl BodyStoreTask {
             tag,
             manifest,
             canonical_wire: Arc::from(canonical_wire),
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag, u128::from(id)),
         }
     }
 
@@ -938,6 +967,15 @@ impl BodyStoreTask {
     pub(crate) fn canonical_wire(&self) -> &[u8] {
         &self.canonical_wire
     }
+
+    /// Immutable actor-global lifecycle ordinal retained across asynchronous I/O.
+    pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
+        self.ownership.owner().lifecycle_ordinal()
+    }
+
+    fn ownership(&self) -> &RuntimeEffectOwnership {
+        &self.ownership
+    }
 }
 
 /// Immutable deterministic-validation work for one exact durable body.
@@ -945,15 +983,19 @@ impl BodyStoreTask {
 pub(crate) struct BodyValidationTask {
     id: EffectWorkId,
     durable_receipt: DurableBodyReceipt,
+    ownership: RuntimeEffectOwnership,
 }
 
 impl BodyValidationTask {
     /// Construct exact deterministic-validation work for body-store boundary tests.
     #[cfg(test)]
-    pub(crate) const fn for_test(id: u64, durable_receipt: DurableBodyReceipt) -> Self {
+    pub(crate) fn for_test(id: u64, durable_receipt: DurableBodyReceipt) -> Self {
+        let round = durable_receipt.round();
+        let tag = EventTag::new(round.height, round.view, super::v2_core::Generation::new(0));
         Self {
             id: EffectWorkId(id),
             durable_receipt,
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag, u128::from(id)),
         }
     }
 
@@ -975,6 +1017,15 @@ impl BodyValidationTask {
     /// Non-forgeable durable receipt whose body must be reloaded.
     pub(crate) const fn durable_receipt(&self) -> &DurableBodyReceipt {
         &self.durable_receipt
+    }
+
+    /// Immutable actor-global lifecycle ordinal retained across asynchronous I/O.
+    pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
+        self.ownership.owner().lifecycle_ordinal()
+    }
+
+    fn ownership(&self) -> &RuntimeEffectOwnership {
+        &self.ownership
     }
 }
 
@@ -999,12 +1050,13 @@ pub(crate) struct ApplyTask {
     subject: wire::BlockSubject,
     certificate: wire::QuorumCertificate,
     validated_receipt: ValidatedBodyReceipt,
+    ownership: RuntimeEffectOwnership,
 }
 
 impl ApplyTask {
     /// Construct an exact application task for crash-boundary unit tests.
     #[cfg(test)]
-    pub(crate) const fn for_test(
+    pub(crate) fn for_test(
         id: u64,
         tag: EventTag,
         subject: wire::BlockSubject,
@@ -1018,6 +1070,7 @@ impl ApplyTask {
             subject,
             certificate,
             validated_receipt,
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag, u128::from(id)),
         }
     }
 
@@ -1029,6 +1082,15 @@ impl ApplyTask {
     /// Original reducer incarnation tag.
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
+    }
+
+    /// Immutable actor-global lifecycle ordinal retained across asynchronous I/O.
+    pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
+        self.ownership.owner().lifecycle_ordinal()
+    }
+
+    fn ownership(&self) -> &RuntimeEffectOwnership {
+        &self.ownership
     }
 
     /// Reducer owner independently captured when the task was authorized.
@@ -1529,6 +1591,7 @@ impl From<V2TransportError> for EffectTransportError {
 struct PendingSignature {
     tag: EventTag,
     request: SignRequest,
+    ownership: RuntimeEffectOwnership,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1545,21 +1608,33 @@ enum StorePurpose {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum StoreConsumer {
-    Reducer { tag: EventTag },
-    LocalProposal { tag: EventTag },
+    Reducer {
+        tag: EventTag,
+        ownership: RuntimeEffectOwnership,
+    },
+    LocalProposal {
+        tag: EventTag,
+        ownership: RuntimeEffectOwnership,
+    },
 }
 
 impl StoreConsumer {
-    const fn new(tag: EventTag, purpose: StorePurpose) -> Self {
+    fn new(tag: EventTag, purpose: StorePurpose, ownership: RuntimeEffectOwnership) -> Self {
         match purpose {
-            StorePurpose::Reducer => Self::Reducer { tag },
-            StorePurpose::LocalProposal => Self::LocalProposal { tag },
+            StorePurpose::Reducer => Self::Reducer { tag, ownership },
+            StorePurpose::LocalProposal => Self::LocalProposal { tag, ownership },
         }
     }
 
     const fn tag(&self) -> EventTag {
         match self {
-            Self::Reducer { tag } | Self::LocalProposal { tag } => *tag,
+            Self::Reducer { tag, .. } | Self::LocalProposal { tag, .. } => *tag,
+        }
+    }
+
+    fn ownership(&self) -> &RuntimeEffectOwnership {
+        match self {
+            Self::Reducer { ownership, .. } | Self::LocalProposal { ownership, .. } => ownership,
         }
     }
 }
@@ -1574,17 +1649,25 @@ struct PendingStore {
 enum ValidationConsumer {
     Reducer {
         tag: EventTag,
+        ownership: RuntimeEffectOwnership,
     },
     LocalProposal {
         tag: EventTag,
         manifest: wire::PayloadManifest,
+        ownership: RuntimeEffectOwnership,
     },
 }
 
 impl ValidationConsumer {
     const fn tag(&self) -> EventTag {
         match self {
-            Self::Reducer { tag } | Self::LocalProposal { tag, .. } => *tag,
+            Self::Reducer { tag, .. } | Self::LocalProposal { tag, .. } => *tag,
+        }
+    }
+
+    fn ownership(&self) -> &RuntimeEffectOwnership {
+        match self {
+            Self::Reducer { ownership, .. } | Self::LocalProposal { ownership, .. } => ownership,
         }
     }
 }
@@ -2013,17 +2096,20 @@ enum ValidationAdmissionPlan {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         receipt: ValidatedBodyReceipt,
+        ownership: RuntimeEffectOwnership,
     },
     RuntimeFailed {
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
+        ownership: RuntimeEffectOwnership,
     },
     RuntimeLocalProposal {
         tag: EventTag,
         manifest: wire::PayloadManifest,
         durable_receipt: DurableBodyReceipt,
         validated_receipt: ValidatedBodyReceipt,
+        ownership: RuntimeEffectOwnership,
     },
 }
 
@@ -2075,8 +2161,14 @@ type DurableDecision = (
 /// classified by [`RestartEffectSource`] rather than from this adapter memory.
 #[derive(Debug)]
 struct RetainedEffectBatch {
-    effects: VecDeque<AdapterEffect>,
+    effects: VecDeque<OwnedAdapterEffect>,
     oldest_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+struct OwnedAdapterEffect {
+    effect: AdapterEffect,
+    ownership: RuntimeEffectOwnership,
 }
 
 /// Exhaustive source inventory of effects which may create pending work.
@@ -2110,6 +2202,29 @@ pub(crate) trait EffectRuntime {
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
     fn step_recovery_effects(&mut self, now: Instant)
     -> Result<RuntimeStep<AdapterEffect>, String>;
+    /// Consume the exact positional lifecycle sidecar for one returned batch.
+    fn take_effect_ownership(
+        &mut self,
+        effects: &[AdapterEffect],
+    ) -> Result<Vec<RuntimeEffectOwnership>, String>;
+    /// Publish the bounded owners retained outside runtime ingress before the
+    /// next clock arbitration.
+    fn set_external_lifecycle_owners(
+        &mut self,
+        owners: Vec<RuntimeLifecycleOwner>,
+    ) -> Result<(), String>;
+    /// Bind the runtime's external-owner bound to this executor's configured
+    /// asynchronous pending-work capacity.
+    fn configure_external_lifecycle_owner_capacity(
+        &mut self,
+        max_pending_work: usize,
+    ) -> Result<(), String>;
+    /// Allocate the bounded `AssembleBody` root for a local proposal.
+    fn mint_local_proposal_effect_ownership(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<RuntimeEffectOwnership, String>;
     /// Consume and validate the exact scheduler owner created by the preceding
     /// successful live or recovery step.
     fn take_scheduler_ownership(&mut self) -> Result<(), String>;
@@ -2138,8 +2253,23 @@ pub(crate) trait EffectRuntime {
         tag: EventTag,
         manifest: wire::PayloadManifest,
     ) -> Result<BodyAvailableReservation, EnqueueError>;
-    /// Publish one previously reserved body completion infallibly.
-    fn commit_body_available(&mut self, reservation: BodyAvailableReservation);
+    /// Reserve a body completion under the immutable Fetch lifecycle owner.
+    fn reserve_body_available_with_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<BodyAvailableReservation, EnqueueError> {
+        self.reserve_body_available(tag, manifest)
+    }
+    /// Publish one previously reserved body completion.
+    ///
+    /// A mismatched token is an internal ownership violation and must fail
+    /// closed instead of silently dropping the trusted completion.
+    fn commit_body_available(
+        &mut self,
+        reservation: BodyAvailableReservation,
+    ) -> Result<(), EnqueueError>;
     /// Release one unpublished body-completion reservation infallibly.
     fn abort_body_available(&mut self, reservation: BodyAvailableReservation);
     /// Rebind one already queued exact-body completion to a later reducer incarnation.
@@ -2191,6 +2321,16 @@ pub(crate) trait EffectRuntime {
         subject: wire::BlockSubject,
         receipt: DurableBodyReceipt,
     ) -> Result<(), EnqueueError>;
+    fn enqueue_body_stored_with_owner(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: DurableBodyReceipt,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        self.enqueue_body_stored(tag, round, subject, receipt)
+    }
     fn enqueue_validation_succeeded(
         &mut self,
         tag: EventTag,
@@ -2198,23 +2338,73 @@ pub(crate) trait EffectRuntime {
         subject: wire::BlockSubject,
         receipt: ValidatedBodyReceipt,
     ) -> Result<(), EnqueueError>;
+    fn enqueue_validation_succeeded_with_owner(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: ValidatedBodyReceipt,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        self.enqueue_validation_succeeded(tag, round, subject, receipt)
+    }
     fn enqueue_validation_failed(
         &mut self,
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
     ) -> Result<(), EnqueueError>;
+    fn enqueue_validation_failed_with_owner(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        self.enqueue_validation_failed(tag, round, subject)
+    }
     /// Atomically admit every deterministic validation rejection in one set.
     fn enqueue_validation_failures_atomically(
         &mut self,
         failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
     ) -> Result<(), EnqueueError>;
+    fn enqueue_validation_failures_atomically_with_owners(
+        &mut self,
+        failures: &[(
+            EventTag,
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            RuntimeEffectOwnership,
+        )],
+    ) -> Result<(), EnqueueError> {
+        let unowned = failures
+            .iter()
+            .map(|(tag, round, subject, _)| (*tag, *round, *subject))
+            .collect::<Vec<_>>();
+        self.enqueue_validation_failures_atomically(&unowned)
+    }
     fn enqueue_signature(&mut self, tag: EventTag, signature: Vec<u8>) -> Result<(), EnqueueError>;
+    fn enqueue_signature_with_owner(
+        &mut self,
+        tag: EventTag,
+        signature: Vec<u8>,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        self.enqueue_signature(tag, signature)
+    }
     fn enqueue_application_completed(
         &mut self,
         tag: EventTag,
         subject: wire::BlockSubject,
     ) -> Result<(), EnqueueError>;
+    fn enqueue_application_completed_with_owner(
+        &mut self,
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        self.enqueue_application_completed(tag, subject)
+    }
     fn enqueue_local_proposal(
         &mut self,
         tag: EventTag,
@@ -2222,6 +2412,16 @@ pub(crate) trait EffectRuntime {
         durable_receipt: DurableBodyReceipt,
         validated_receipt: ValidatedBodyReceipt,
     ) -> Result<(), EnqueueError>;
+    fn enqueue_local_proposal_with_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        durable_receipt: DurableBodyReceipt,
+        validated_receipt: ValidatedBodyReceipt,
+        _ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        self.enqueue_local_proposal(tag, manifest, durable_receipt, validated_receipt)
+    }
     fn verify_certificate(
         &self,
         context: &wire::HeightContext,
@@ -2243,6 +2443,35 @@ impl EffectRuntime for SerializedV2Runtime {
         now: Instant,
     ) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step_recovery(now).map_err(|error| error.to_string())
+    }
+
+    fn take_effect_ownership(
+        &mut self,
+        effects: &[AdapterEffect],
+    ) -> Result<Vec<RuntimeEffectOwnership>, String> {
+        SerializedV2Runtime::take_effect_ownership(self, effects.len())
+    }
+
+    fn set_external_lifecycle_owners(
+        &mut self,
+        owners: Vec<RuntimeLifecycleOwner>,
+    ) -> Result<(), String> {
+        SerializedV2Runtime::set_external_lifecycle_owners(self, owners)
+    }
+
+    fn configure_external_lifecycle_owner_capacity(
+        &mut self,
+        max_pending_work: usize,
+    ) -> Result<(), String> {
+        SerializedV2Runtime::configure_external_lifecycle_owner_capacity(self, max_pending_work)
+    }
+
+    fn mint_local_proposal_effect_ownership(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<RuntimeEffectOwnership, String> {
+        SerializedV2Runtime::mint_local_proposal_effect_ownership(self, tag, manifest)
     }
 
     fn take_scheduler_ownership(&mut self) -> Result<(), String> {
@@ -2290,8 +2519,20 @@ impl EffectRuntime for SerializedV2Runtime {
         SerializedV2Runtime::reserve_body_available(self, tag, manifest)
     }
 
-    fn commit_body_available(&mut self, reservation: BodyAvailableReservation) {
-        SerializedV2Runtime::commit_body_available(self, reservation);
+    fn reserve_body_available_with_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<BodyAvailableReservation, EnqueueError> {
+        SerializedV2Runtime::reserve_body_available_with_owner(self, tag, manifest, ownership)
+    }
+
+    fn commit_body_available(
+        &mut self,
+        reservation: BodyAvailableReservation,
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::commit_body_available(self, reservation)
     }
 
     fn abort_body_available(&mut self, reservation: BodyAvailableReservation) {
@@ -2358,6 +2599,19 @@ impl EffectRuntime for SerializedV2Runtime {
         SerializedV2Runtime::enqueue_body_stored(self, tag, round, subject, receipt)
     }
 
+    fn enqueue_body_stored_with_owner(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: DurableBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_body_stored_with_owner(
+            self, tag, round, subject, receipt, ownership,
+        )
+    }
+
     fn enqueue_validation_succeeded(
         &mut self,
         tag: EventTag,
@@ -2366,6 +2620,19 @@ impl EffectRuntime for SerializedV2Runtime {
         receipt: ValidatedBodyReceipt,
     ) -> Result<(), EnqueueError> {
         SerializedV2Runtime::enqueue_validation_succeeded(self, tag, round, subject, receipt)
+    }
+
+    fn enqueue_validation_succeeded_with_owner(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: ValidatedBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_validation_succeeded_with_owner(
+            self, tag, round, subject, receipt, ownership,
+        )
     }
 
     fn enqueue_validation_failed(
@@ -2377,6 +2644,18 @@ impl EffectRuntime for SerializedV2Runtime {
         SerializedV2Runtime::enqueue_validation_failed(self, tag, round, subject)
     }
 
+    fn enqueue_validation_failed_with_owner(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_validation_failed_with_owner(
+            self, tag, round, subject, ownership,
+        )
+    }
+
     fn enqueue_validation_failures_atomically(
         &mut self,
         failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
@@ -2384,8 +2663,29 @@ impl EffectRuntime for SerializedV2Runtime {
         SerializedV2Runtime::enqueue_validation_failures_atomically(self, failures)
     }
 
+    fn enqueue_validation_failures_atomically_with_owners(
+        &mut self,
+        failures: &[(
+            EventTag,
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            RuntimeEffectOwnership,
+        )],
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_validation_failures_atomically_with_owners(self, failures)
+    }
+
     fn enqueue_signature(&mut self, tag: EventTag, signature: Vec<u8>) -> Result<(), EnqueueError> {
         SerializedV2Runtime::enqueue_signature(self, tag, signature)
+    }
+
+    fn enqueue_signature_with_owner(
+        &mut self,
+        tag: EventTag,
+        signature: Vec<u8>,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_signature_with_owner(self, tag, signature, ownership)
     }
 
     fn enqueue_application_completed(
@@ -2394,6 +2694,15 @@ impl EffectRuntime for SerializedV2Runtime {
         subject: wire::BlockSubject,
     ) -> Result<(), EnqueueError> {
         SerializedV2Runtime::enqueue_application_completed(self, tag, subject)
+    }
+
+    fn enqueue_application_completed_with_owner(
+        &mut self,
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_application_completed_with_owner(self, tag, subject, ownership)
     }
 
     fn enqueue_local_proposal(
@@ -2409,6 +2718,24 @@ impl EffectRuntime for SerializedV2Runtime {
             manifest,
             durable_receipt,
             validated_receipt,
+        )
+    }
+
+    fn enqueue_local_proposal_with_owner(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+        durable_receipt: DurableBodyReceipt,
+        validated_receipt: ValidatedBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_local_proposal_with_owner(
+            self,
+            tag,
+            manifest,
+            durable_receipt,
+            validated_receipt,
+            ownership,
         )
     }
 
@@ -2537,6 +2864,24 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         executor.validated_bodies = recovered_validations;
         construction.complete();
         Ok((executor, body_store))
+    }
+
+    /// Publish all executor-retained lifecycle owners, freeze due runtime
+    /// clocks, and test whether one older owner predates an exact Serve ticket.
+    ///
+    /// The mutable executor borrow makes publication and comparison one actor
+    /// operation. The runner may use a `true` result for one bounded episode
+    /// only; this method never drains or loops on behalf of the caller.
+    pub(crate) fn older_runtime_lifecycle_predates_exact_serve(
+        &mut self,
+        now: Instant,
+        serve_lifecycle_ordinal: u128,
+    ) -> Result<bool, EffectExecutorError> {
+        self.ensure_open()?;
+        self.publish_external_lifecycle_owners()?;
+        self.runtime
+            .older_lifecycle_predates_exact_serve(now, serve_lifecycle_ordinal)
+            .map_err(EffectExecutorError::Runtime)
     }
 
     /// Arm the runtime pacemaker after all height startup work has completed.
@@ -2950,7 +3295,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     fn with_runtime_and_guard(
-        runtime: R,
+        mut runtime: R,
         recovered_bodies: BTreeMap<
             (wire::ConsensusRound, wire::BlockSubject),
             (wire::PayloadManifest, DurableBodyReceipt),
@@ -2975,6 +3320,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         }
         let config = config.validate()?;
+        runtime
+            .configure_external_lifecycle_owner_capacity(config.max_pending_work)
+            .map_err(EffectExecutorError::Runtime)?;
         let outstanding_requests =
             OutstandingCertifiedBodyRequests::new(config.max_certified_requests)
                 .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
@@ -3500,7 +3848,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(EffectExecutorError::Service(error.to_string()));
             }
             self.commit_retained_locked_body(retention);
-            self.commit_fetch_completion(plan);
+            if let Err(error) = self.commit_fetch_completion(plan) {
+                let error = self.fail_closed_transport(runtime_enqueue_error(error), services);
+                return Err(EffectExecutorError::Service(error.to_string()));
+            }
             return self.publish_status(services);
         }
 
@@ -3518,7 +3869,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
-        if let Err(error) = self.retain_effect_batch(effects) {
+        let ownership = self
+            .runtime
+            .take_effect_ownership(&effects)
+            .map_err(EffectExecutorError::Runtime)?;
+        if let Err(error) = self.retain_effect_batch(effects, ownership) {
             return Err(self.close(error, services));
         }
         self.drain_retained_effect_batch(services)
@@ -3534,6 +3889,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn retain_effect_batch(
         &mut self,
         effects: Vec<AdapterEffect>,
+        ownership: Vec<RuntimeEffectOwnership>,
     ) -> Result<(), EffectExecutorError> {
         if self.retained_effect_batch.is_some() {
             return Err(EffectExecutorError::Contract(
@@ -3546,6 +3902,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 effects.len()
             )));
         }
+        if effects.len() != ownership.len() {
+            return Err(EffectExecutorError::Contract(
+                "one adapter macro-step had mismatched lifecycle ownership".to_owned(),
+            ));
+        }
         if effects.is_empty() {
             return Ok(());
         }
@@ -3554,18 +3915,72 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 || Self::pending_work_producer(effect).is_none()
         }));
         self.retained_effect_batch = Some(RetainedEffectBatch {
-            effects: effects.into(),
+            effects: effects
+                .into_iter()
+                .zip(ownership)
+                .map(|(effect, ownership)| OwnedAdapterEffect { effect, ownership })
+                .collect(),
             oldest_at: Instant::now(),
         });
         Ok(())
     }
 
+    /// Snapshot every lifecycle owner retained beyond runtime ingress.
+    ///
+    /// The executor's maps and retained effect batch are already bounded by
+    /// the configured pending-work/completion capacities. Deduplicating by the
+    /// immutable ordinal keeps a fan-out lifecycle constant-size for clock
+    /// arbitration; two different owners claiming one ordinal fail closed.
+    fn external_lifecycle_owners(&self) -> Result<Vec<RuntimeLifecycleOwner>, EffectExecutorError> {
+        let mut owners = BTreeMap::<u128, RuntimeLifecycleOwner>::new();
+        let mut insert = |ownership: &RuntimeEffectOwnership| {
+            let owner = ownership.owner();
+            match owners.get(&owner.lifecycle_ordinal()) {
+                Some(existing) if existing != owner => Err(EffectExecutorError::Contract(
+                    "two external lifecycle owners claimed one admission ordinal".to_owned(),
+                )),
+                Some(_) => Ok(()),
+                None => {
+                    owners.insert(owner.lifecycle_ordinal(), owner.clone());
+                    Ok(())
+                }
+            }
+        };
+        if let Some(batch) = &self.retained_effect_batch {
+            for owned in &batch.effects {
+                insert(&owned.ownership)?;
+            }
+        }
+        for pending in self.pending_signatures.values() {
+            insert(&pending.ownership)?;
+        }
+        for pending in self.pending_fetches.values() {
+            insert(pending.task.ownership())?;
+        }
+        for pending in self.pending_stores.values() {
+            insert(pending.task.ownership())?;
+        }
+        for pending in self.pending_validations.values() {
+            insert(pending.task.ownership())?;
+        }
+        for pending in self.pending_applications.values() {
+            insert(pending.task.ownership())?;
+        }
+        Ok(owners.into_values().collect())
+    }
+
+    fn publish_external_lifecycle_owners(&mut self) -> Result<(), EffectExecutorError> {
+        let owners = self.external_lifecycle_owners()?;
+        self.runtime
+            .set_external_lifecycle_owners(owners)
+            .map_err(EffectExecutorError::Runtime)
+    }
+
     /// Drain the retained causal suffix in exact FIFO order.
     ///
-    /// Pending-work exhaustion is retryable for every pending-work producer.
-    /// Certified-request exhaustion never reaches this queue: `FetchBody`
-    /// remains reconstructible reducer debt and is re-emitted by periodic
-    /// retransmission after request capacity changes. Exact body transport
+    /// Pending-work and certified-request exhaustion are retryable for every
+    /// pending-work producer. The exact owned `FetchBody` remains at the FIFO
+    /// head until capacity changes; periodic production only coalesces. Exact body transport
     /// completions remain admissible while retained pending-work debt exists
     /// and can release that resource. Every other boundary failure remains
     /// fail-closed. Durable Decision ownership is reconciled before every
@@ -3587,7 +4002,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             // chunks that finality has deliberately released.
             batch
                 .effects
-                .retain(|effect| Self::effect_survives_decision(effect, decision));
+                .retain(|owned| Self::effect_survives_decision(&owned.effect, decision));
         }
         if self
             .retained_effect_batch
@@ -3599,7 +4014,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
         let mut consumed = 0usize;
         loop {
-            let Some(effect) = self
+            let Some(owned) = self
                 .retained_effect_batch
                 .as_ref()
                 .and_then(|batch| batch.effects.front())
@@ -3607,8 +4022,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             else {
                 break;
             };
-            let pending_work_producer = Self::pending_work_producer(&effect);
-            match self.consume_one(effect, services) {
+            let pending_work_producer = Self::pending_work_producer(&owned.effect);
+            match self.consume_one(owned.effect, owned.ownership, services) {
                 Ok(()) => {
                     let batch = self
                         .retained_effect_batch
@@ -3625,7 +4040,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         break;
                     }
                 }
-                Err(EffectExecutorError::PendingWorkCapacity { .. }) => {
+                Err(
+                    EffectExecutorError::PendingWorkCapacity { .. }
+                    | EffectExecutorError::CertifiedRequestCapacity { .. },
+                ) => {
                     debug_assert!(pending_work_producer.is_some());
                     break;
                 }
@@ -3747,7 +4165,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(error, services));
             }
         }
-        if let Err(error) = self.retain_effect_batch(effects) {
+        let ownership = self
+            .runtime
+            .take_effect_ownership(&effects)
+            .map_err(EffectExecutorError::Runtime)
+            .map_err(|error| self.close(error, services))?;
+        if let Err(error) = self.retain_effect_batch(effects, ownership) {
             return Err(self.close(error, services));
         }
         self.drain_retained_effect_batch(services)
@@ -3770,6 +4193,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             } else {
                 EffectExecutorStep::Advanced { effects: count }
             });
+        }
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
         }
         let wal_step = self
             .output_guard
@@ -3832,6 +4258,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.publish_status(services)
                 .map_err(|error| self.close(error, services))?;
             return Ok(step);
+        }
+        if let Err(error) = self.publish_external_lifecycle_owners() {
+            return Err(self.close(error, services));
         }
         let wal_step = self
             .output_guard
@@ -3912,6 +4341,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         let owner_plan = self.plan_body_pipeline_owner(tag, &manifest)?;
+        let ownership = self
+            .runtime
+            .mint_local_proposal_effect_ownership(tag, &manifest)
+            .map_err(EffectExecutorError::Runtime)?;
         if let Err(error) = self.begin_store_with_plans(
             tag,
             manifest,
@@ -3919,6 +4352,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             StorePurpose::LocalProposal,
             None,
             Some(owner_plan),
+            ownership,
             services,
         ) {
             return Err(self.close(error, services));
@@ -3950,7 +4384,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         let tag = pending.tag;
-        if let Err(error) = self.runtime.enqueue_signature(tag, signature) {
+        let ownership = pending.ownership.clone();
+        if let Err(error) = self
+            .runtime
+            .enqueue_signature_with_owner(tag, signature, &ownership)
+        {
             return Err(self.close(runtime_enqueue_error(error), services));
         }
         self.pending_signatures.remove(&work_id);
@@ -4020,7 +4458,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         if let Some(consumer) = &pending.consumer {
             let consumer_tag = match consumer {
-                StoreConsumer::Reducer { tag } | StoreConsumer::LocalProposal { tag } => *tag,
+                StoreConsumer::Reducer { tag, .. } | StoreConsumer::LocalProposal { tag, .. } => {
+                    *tag
+                }
             };
             if !self.exact_body_pipeline_stage_owned(consumer_tag, key, HashOf::new(&manifest)) {
                 return Err(self.close(
@@ -4070,7 +4510,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         let validation_plan = match &pending.consumer {
-            Some(StoreConsumer::LocalProposal { tag }) => Some(
+            Some(StoreConsumer::LocalProposal { tag, ownership }) => Some(
                 self.plan_begin_validation(
                     manifest.round,
                     manifest.subject,
@@ -4078,6 +4518,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ValidationConsumer::LocalProposal {
                         tag: *tag,
                         manifest: manifest.clone(),
+                        ownership: ownership.clone(),
                     },
                     Some(&receipt),
                     None,
@@ -4088,9 +4529,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             Some(StoreConsumer::Reducer { .. }) | None => None,
         };
         match &pending.consumer {
-            Some(StoreConsumer::Reducer { tag }) => self
+            Some(StoreConsumer::Reducer { tag, ownership }) => self
                 .runtime
-                .enqueue_body_stored(*tag, manifest.round, manifest.subject, receipt.clone())
+                .enqueue_body_stored_with_owner(
+                    *tag,
+                    manifest.round,
+                    manifest.subject,
+                    receipt.clone(),
+                    ownership,
+                )
                 .map_err(runtime_enqueue_error)
                 .map_err(|error| self.close(error, services))?,
             Some(StoreConsumer::LocalProposal { .. }) => self
@@ -4187,17 +4634,28 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(error, services));
             }
             let admission = match &pending.consumer {
-                Some(ValidationConsumer::Reducer { tag }) => self
+                Some(ValidationConsumer::Reducer { tag, ownership }) => self
                     .runtime
-                    .enqueue_validation_succeeded(*tag, round, subject, validated.clone())
+                    .enqueue_validation_succeeded_with_owner(
+                        *tag,
+                        round,
+                        subject,
+                        validated.clone(),
+                        ownership,
+                    )
                     .map_err(runtime_enqueue_error),
-                Some(ValidationConsumer::LocalProposal { tag, manifest }) => self
+                Some(ValidationConsumer::LocalProposal {
+                    tag,
+                    manifest,
+                    ownership,
+                }) => self
                     .runtime
-                    .enqueue_local_proposal(
+                    .enqueue_local_proposal_with_owner(
                         *tag,
                         manifest.clone(),
                         pending.task.durable_receipt().clone(),
                         validated.clone(),
+                        ownership,
                     )
                     .map_err(runtime_enqueue_error),
                 None => Ok(()),
@@ -4222,9 +4680,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 return Err(self.close(error, services));
             }
             let admission = match &pending.consumer {
-                Some(ValidationConsumer::Reducer { tag }) => self
+                Some(ValidationConsumer::Reducer { tag, ownership }) => self
                     .runtime
-                    .enqueue_validation_failed(*tag, round, subject)
+                    .enqueue_validation_failed_with_owner(*tag, round, subject, ownership)
                     .map_err(runtime_enqueue_error),
                 Some(ValidationConsumer::LocalProposal { .. }) | None => Ok(()),
             };
@@ -4389,14 +4847,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             if let Err(error) = self.preflight_rejected_body(key, &durable) {
                 return Err(self.close(error, services));
             }
-            if let Some(ValidationConsumer::Reducer { tag }) = &pending.consumer {
-                failures.push((*tag, round, subject));
+            if let Some(ValidationConsumer::Reducer { tag, ownership }) = &pending.consumer {
+                failures.push((*tag, round, subject, ownership.clone()));
             }
             plans.push((*work_id, key, durable));
         }
         if let Err(error) = self
             .runtime
-            .enqueue_validation_failures_atomically(&failures)
+            .enqueue_validation_failures_atomically_with_owners(&failures)
         {
             return Err(self.close(runtime_enqueue_error(error), services));
         }
@@ -4848,7 +5306,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.abort_fetch_completion(plan);
             return Err(self.fail_closed_transport(error, services));
         }
-        self.commit_fetch_completion(plan);
+        if let Err(error) = self.commit_fetch_completion(plan) {
+            return Err(self.fail_closed_transport(runtime_enqueue_error(error), services));
+        }
         let owner_after = self.body_pipeline_owners.get(&key).copied();
         let observed_trace = historical_body_pipeline_projection(
             &self.context,
@@ -4911,7 +5371,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         let tag = task.tag;
         let subject = task.subject;
-        if let Err(error) = self.runtime.enqueue_application_completed(tag, subject) {
+        let ownership = task.ownership().clone();
+        if let Err(error) = self
+            .runtime
+            .enqueue_application_completed_with_owner(tag, subject, &ownership)
+        {
             return Err(self.close(runtime_enqueue_error(error), services));
         }
         self.pending_applications.remove(&completion.work_id);
@@ -5049,6 +5513,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn consume_one<S: V2EffectServices>(
         &mut self,
         effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         let recovery_transition = self
@@ -5100,10 +5565,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     PendingSignature {
                         tag,
                         request: request.clone(),
+                        ownership: ownership.clone(),
                     },
                 );
                 services
-                    .enqueue_consensus_sign(ConsensusSignTask { id, tag, request })
+                    .enqueue_consensus_sign(ConsensusSignTask {
+                        id,
+                        tag,
+                        request,
+                        ownership,
+                    })
                     .map_err(service_error)
             }
             AdapterEffect::Broadcast(message) => {
@@ -5126,23 +5597,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 manifest,
                 certified_sources,
                 certificate,
+                ownership,
                 services,
             ),
             AdapterEffect::StoreBody {
                 tag,
                 round,
                 subject,
-            } => self.store_body(tag, round, subject, services),
+            } => self.store_body(tag, round, subject, ownership, services),
             AdapterEffect::ValidateBody {
                 tag,
                 round,
                 subject,
-            } => self.validate_body(tag, round, subject, services),
+            } => self.validate_body(tag, round, subject, ownership, services),
             AdapterEffect::Apply {
                 tag,
                 subject,
                 certificate,
-            } => self.begin_apply(tag, subject, certificate, services),
+            } => self.begin_apply(tag, subject, certificate, ownership, services),
             AdapterEffect::EnterView {
                 tag,
                 certificate,
@@ -5652,6 +6124,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         manifest: Option<wire::PayloadManifest>,
         sources: Vec<PeerId>,
         certificate: Option<wire::QuorumCertificate>,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         if round.context_id != self.context.id()
@@ -5693,6 +6166,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .get(&existing_id)
                 .expect("pending fetch ID came from this map")
                 .clone();
+            if existing.task.ownership != ownership {
+                return Err(EffectExecutorError::Contract(
+                    "body-fetch retry changed its causal lifecycle owner".to_owned(),
+                ));
+            }
             if existing.task.tag != tag {
                 return Err(EffectExecutorError::Contract(
                     "conflicting retransmission for one body-fetch round/subject".to_owned(),
@@ -5739,17 +6217,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ) {
                     Ok(plan) => plan,
                     Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
-                        // The ordinary acquisition remains live, while the reducer stays in
-                        // Missing and periodically recreates this exact authority upgrade.
-                        // Keeping it out of the retained FIFO prevents an unresponsive older
-                        // certified request from head-blocking a later durable Sign effect.
+                        // The existing acquisition and this exact owned upgrade remain live.
+                        // The retained effect FIFO retries the same owner after request capacity
+                        // changes; a periodic tick must not mint a replacement lifecycle.
                         iroha_logger::debug!(
                             height = round.height,
                             view = round.view,
                             capacity,
                             "deferred certified Sumeragi v2 body-fetch authority upgrade at request capacity"
                         );
-                        return Ok(());
+                        return Err(EffectExecutorError::CertifiedRequestCapacity { capacity });
                     }
                     Err(error) => return Err(error),
                 };
@@ -5775,6 +6252,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 manifest: merged_manifest,
                 sources: merged_sources,
                 certified_request: merged_request,
+                ownership: existing.task.ownership.clone(),
             };
             if !merged.monotonically_extends(&existing.task) {
                 return Err(EffectExecutorError::Contract(
@@ -5791,6 +6269,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "pending body fetch lost its exact pipeline ownership".to_owned(),
                 ));
             }
+            if merged == existing.task {
+                // The retained FIFO head already materialized this exact service owner.
+                // Keep the admission barrier until its completion releases the lifecycle,
+                // but do not submit duplicate service work on every executor poll.
+                return Err(EffectExecutorError::PendingWorkCapacity {
+                    capacity: self.config.max_pending_work,
+                });
+            }
             services
                 .enqueue_body_fetch(merged.clone())
                 .map_err(service_error)?;
@@ -5804,7 +6290,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .expect("serialized body-fetch owner remains present after admission");
             pending.task = merged;
             pending.request_hash = request_hash;
-            return Ok(());
+            return Err(EffectExecutorError::PendingWorkCapacity {
+                capacity: self.config.max_pending_work,
+            });
         }
 
         let mut staged_release = None;
@@ -5817,8 +6305,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .is_none_or(|manifest| manifest == &staged_manifest)
             {
                 let owner_plan = self.plan_body_pipeline_owner(tag, &staged_manifest)?;
+                // This fast path has no later fallible service boundary.
+                let reservation = self
+                    .runtime
+                    .reserve_body_available_with_owner(tag, staged_manifest, &ownership)
+                    .map_err(runtime_enqueue_error)?;
                 self.runtime
-                    .enqueue_body_available(tag, staged_manifest)
+                    .commit_body_available(reservation)
                     .map_err(runtime_enqueue_error)?;
                 self.commit_body_pipeline_owner(owner_plan);
                 return Ok(());
@@ -5859,8 +6352,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 let ready_plan =
                     self.plan_ready_body_install(key, genesis, staged_release.clone())?;
                 let owner_plan = self.plan_body_pipeline_owner(tag, &genesis_manifest)?;
+                let reservation = self
+                    .runtime
+                    .reserve_body_available_with_owner(tag, genesis_manifest, &ownership)
+                    .map_err(runtime_enqueue_error)?;
                 self.runtime
-                    .enqueue_body_available(tag, genesis_manifest)
+                    .commit_body_available(reservation)
                     .map_err(runtime_enqueue_error)?;
                 self.commit_body_pipeline_owner(owner_plan);
                 self.commit_ready_body_install(ready_plan);
@@ -5883,8 +6380,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 let ready_plan =
                     self.plan_ready_body_install(key, retained, staged_release.clone())?;
                 let owner_plan = self.plan_body_pipeline_owner(tag, &retained_manifest)?;
+                let reservation = self
+                    .runtime
+                    .reserve_body_available_with_owner(tag, retained_manifest, &ownership)
+                    .map_err(runtime_enqueue_error)?;
                 self.runtime
-                    .enqueue_body_available(tag, retained_manifest)
+                    .commit_body_available(reservation)
                     .map_err(runtime_enqueue_error)?;
                 self.commit_body_pipeline_owner(owner_plan);
                 self.commit_ready_body_install(ready_plan);
@@ -5949,8 +6450,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             let owner_plan = self.plan_body_pipeline_owner(tag, &stored_manifest)?;
+            let reservation = self
+                .runtime
+                .reserve_body_available_with_owner(tag, stored_manifest, &ownership)
+                .map_err(runtime_enqueue_error)?;
             self.runtime
-                .enqueue_body_available(tag, stored_manifest)
+                .commit_body_available(reservation)
                 .map_err(runtime_enqueue_error)?;
             if let Some(release) = staged_release {
                 self.commit_ready_body_release(release);
@@ -5990,8 +6495,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             let owner_plan = self.plan_body_pipeline_owner(tag, &recovered_manifest)?;
+            let reservation = self
+                .runtime
+                .reserve_body_available_with_owner(tag, recovered_manifest, &ownership)
+                .map_err(runtime_enqueue_error)?;
             self.runtime
-                .enqueue_body_available(tag, recovered_manifest)
+                .commit_body_available(reservation)
                 .map_err(runtime_enqueue_error)?;
             if let Some(release) = staged_release {
                 self.commit_ready_body_release(release);
@@ -6007,19 +6516,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         if self.pending_work() == self.config.max_pending_work {
-            // FetchBody is a reconstruction request, not successful body
-            // delivery. The reducer deliberately remains in Missing and its
-            // periodic proposal/QC/lock/Decision retransmission re-emits this
-            // exact request after capacity changes. Do not retain it in the
-            // causal effect suffix: an unresponsive Byzantine proposal source
-            // must never sit ahead of the timeout/signing path after GST.
+            // Retain this exact effect and lifecycle owner at the causal FIFO
+            // head. Capacity release retries it directly; periodic producer
+            // ticks may coalesce with it but may not replace its admission age.
             iroha_logger::debug!(
                 height = round.height,
                 view = round.view,
                 certified = certificate.is_some(),
                 "deferred reconstructible Sumeragi v2 body fetch at pending-work capacity"
             );
-            return Ok(());
+            return Err(EffectExecutorError::PendingWorkCapacity {
+                capacity: self.config.max_pending_work,
+            });
         }
         let work = self.plan_work_id()?;
         let request_plan = if let Some(certificate) = certificate {
@@ -6027,17 +6535,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             {
                 Ok(plan) => Some(plan),
                 Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
-                    // As with pending-work pressure, the reducer remains in Missing and its
-                    // authenticated QC/lock/Decision retransmission recreates this FetchBody.
-                    // Do not retain a causal-dispatch head which only an unrelated peer response
-                    // could release; later durable signing must remain serviceable after GST.
+                    // Retain and retry this exact owned request after capacity release. A later
+                    // periodic producer may coalesce with it but cannot mint a younger owner.
                     iroha_logger::debug!(
                         height = round.height,
                         view = round.view,
                         capacity,
                         "deferred certified Sumeragi v2 body fetch at request capacity"
                     );
-                    return Ok(());
+                    return Err(EffectExecutorError::CertifiedRequestCapacity { capacity });
                 }
                 Err(error) => return Err(error),
             }
@@ -6054,6 +6560,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             manifest,
             sources,
             certified_request,
+            ownership,
         };
         let owner_plan =
             self.plan_body_pipeline_owner_hash(tag, key, task.manifest.as_ref().map(HashOf::new))?;
@@ -6476,6 +6983,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         let key = (round, subject);
@@ -6510,7 +7018,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 None
             };
             self.runtime
-                .enqueue_body_stored(tag, round, subject, receipt)
+                .enqueue_body_stored_with_owner(tag, round, subject, receipt, &ownership)
                 .map_err(runtime_enqueue_error)?;
             if let Some(release) = ready_release {
                 self.commit_ready_body_release(release);
@@ -6535,6 +7043,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 manifest,
                 canonical_wire,
                 StorePurpose::Reducer,
+                ownership,
                 services,
             );
         }
@@ -6545,6 +7054,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             Arc::clone(&release.body.bytes),
             StorePurpose::Reducer,
             Some(release),
+            ownership,
             services,
         )
     }
@@ -6554,6 +7064,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         let key = (round, subject);
@@ -6566,7 +7077,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             round,
             subject,
             receipt,
-            ValidationConsumer::Reducer { tag },
+            ValidationConsumer::Reducer { tag, ownership },
             services,
         )
     }
@@ -6577,9 +7088,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         manifest: wire::PayloadManifest,
         canonical_wire: Arc<[u8]>,
         purpose: StorePurpose,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
-        self.begin_store_with_release(tag, manifest, canonical_wire, purpose, None, services)
+        self.begin_store_with_release(
+            tag,
+            manifest,
+            canonical_wire,
+            purpose,
+            None,
+            ownership,
+            services,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6590,6 +7110,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         canonical_wire: Arc<[u8]>,
         purpose: StorePurpose,
         ready_release: Option<ReadyBodyReleasePlan>,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         self.begin_store_with_plans(
@@ -6599,6 +7120,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             purpose,
             ready_release,
             None,
+            ownership,
             services,
         )
     }
@@ -6612,10 +7134,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         purpose: StorePurpose,
         ready_release: Option<ReadyBodyReleasePlan>,
         supplied_owner_plan: Option<BodyPipelineOwnerBindingPlan>,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         let key = (manifest.round, manifest.subject);
-        let consumer = StoreConsumer::new(tag, purpose);
+        let consumer = StoreConsumer::new(tag, purpose, ownership);
         if let Some(release) = &ready_release
             && (release.key != key
                 || release.body.manifest != manifest
@@ -6668,7 +7191,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             match purpose {
                 StorePurpose::Reducer => self
                     .runtime
-                    .enqueue_body_stored(tag, manifest.round, manifest.subject, receipt)
+                    .enqueue_body_stored_with_owner(
+                        tag,
+                        manifest.round,
+                        manifest.subject,
+                        receipt,
+                        consumer.ownership(),
+                    )
                     .map_err(runtime_enqueue_error)?,
                 StorePurpose::LocalProposal => {
                     let validation = self.plan_begin_validation(
@@ -6678,6 +7207,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         ValidationConsumer::LocalProposal {
                             tag,
                             manifest: manifest.clone(),
+                            ownership: consumer.ownership().clone(),
                         },
                         None,
                         Some(&owner_plan),
@@ -6709,9 +7239,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .expect("pending store ID came from this map");
             if existing.task.manifest != manifest
                 || existing.task.canonical_wire.as_ref() != canonical_wire.as_ref()
+                || existing.task.ownership() != consumer.ownership()
             {
                 return Err(EffectExecutorError::Contract(
-                    "conflicting body-store retry for one round/subject".to_owned(),
+                    "body-store retry changed exact work or its lifecycle owner".to_owned(),
                 ));
             }
             if ready_release.is_some() {
@@ -6760,6 +7291,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             tag,
             manifest,
             canonical_wire,
+            ownership: consumer.ownership().clone(),
         };
         let pending_store_bytes = self
             .pending_store_bytes
@@ -6859,20 +7391,26 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             let admission = match consumer {
-                ValidationConsumer::Reducer { tag } => ValidationAdmissionPlan::RuntimeSucceeded {
-                    tag,
-                    round,
-                    subject,
-                    receipt: validated,
-                },
-                ValidationConsumer::LocalProposal { tag, manifest } => {
-                    ValidationAdmissionPlan::RuntimeLocalProposal {
+                ValidationConsumer::Reducer { tag, ownership } => {
+                    ValidationAdmissionPlan::RuntimeSucceeded {
                         tag,
-                        manifest,
-                        durable_receipt,
-                        validated_receipt: validated,
+                        round,
+                        subject,
+                        receipt: validated,
+                        ownership,
                     }
                 }
+                ValidationConsumer::LocalProposal {
+                    tag,
+                    manifest,
+                    ownership,
+                } => ValidationAdmissionPlan::RuntimeLocalProposal {
+                    tag,
+                    manifest,
+                    durable_receipt,
+                    validated_receipt: validated,
+                    ownership,
+                },
             };
             return Ok(ValidationStartPlan {
                 admission,
@@ -6886,11 +7424,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
             let admission = match consumer {
-                ValidationConsumer::Reducer { tag } => ValidationAdmissionPlan::RuntimeFailed {
-                    tag,
-                    round,
-                    subject,
-                },
+                ValidationConsumer::Reducer { tag, ownership } => {
+                    ValidationAdmissionPlan::RuntimeFailed {
+                        tag,
+                        round,
+                        subject,
+                        ownership,
+                    }
+                }
                 ValidationConsumer::LocalProposal { .. } => ValidationAdmissionPlan::None,
             };
             return Ok(ValidationStartPlan {
@@ -6904,9 +7445,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .find(|(_, pending)| pending.task.round() == round && pending.task.subject() == subject)
             .map(|(id, pending)| (*id, pending.clone()))
         {
-            if existing.task.durable_receipt != durable_receipt {
+            if existing.task.durable_receipt != durable_receipt
+                || existing.task.ownership() != consumer.ownership()
+            {
                 return Err(EffectExecutorError::Contract(
-                    "conflicting validation retry for one durable body".to_owned(),
+                    "validation retry changed exact work or its lifecycle owner".to_owned(),
                 ));
             }
             let commit = match &existing.consumer {
@@ -6945,7 +7488,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             let same_local_consumer = matches!(
                 (&store.consumer, &consumer),
                 (
-                    Some(StoreConsumer::LocalProposal { tag: store_tag }),
+                    Some(StoreConsumer::LocalProposal {
+                        tag: store_tag,
+                        ..
+                    }),
                     ValidationConsumer::LocalProposal {
                         tag: validation_tag,
                         ..
@@ -6969,9 +7515,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.ensure_pending_slot()?;
         }
         let work = self.plan_work_id()?;
+        let ownership = consumer.ownership().clone();
         let task = BodyValidationTask {
             id: work.id,
             durable_receipt,
+            ownership,
         };
         Ok(ValidationStartPlan {
             admission: ValidationAdmissionPlan::Service(task.clone()),
@@ -7000,30 +7548,40 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 round,
                 subject,
                 receipt,
+                ownership,
             } => self
                 .runtime
-                .enqueue_validation_succeeded(*tag, *round, *subject, receipt.clone())
+                .enqueue_validation_succeeded_with_owner(
+                    *tag,
+                    *round,
+                    *subject,
+                    receipt.clone(),
+                    ownership,
+                )
                 .map_err(runtime_enqueue_error),
             ValidationAdmissionPlan::RuntimeFailed {
                 tag,
                 round,
                 subject,
+                ownership,
             } => self
                 .runtime
-                .enqueue_validation_failed(*tag, *round, *subject)
+                .enqueue_validation_failed_with_owner(*tag, *round, *subject, ownership)
                 .map_err(runtime_enqueue_error),
             ValidationAdmissionPlan::RuntimeLocalProposal {
                 tag,
                 manifest,
                 durable_receipt,
                 validated_receipt,
+                ownership,
             } => self
                 .runtime
-                .enqueue_local_proposal(
+                .enqueue_local_proposal_with_owner(
                     *tag,
                     manifest.clone(),
                     durable_receipt.clone(),
                     validated_receipt.clone(),
+                    ownership,
                 )
                 .map_err(runtime_enqueue_error),
         }
@@ -7265,6 +7823,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         tag: EventTag,
         subject: wire::BlockSubject,
         certificate: wire::QuorumCertificate,
+        ownership: RuntimeEffectOwnership,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
         if self.runtime.authoritative_tag() != Some(tag)
@@ -7282,7 +7841,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Some(existing) = self.pending_applications.values().next() {
             let exact = existing.task.tag == tag
                 && existing.task.subject == subject
-                && existing.task.certificate == certificate;
+                && existing.task.certificate == certificate
+                && existing.task.ownership == ownership;
             if !exact {
                 return Err(EffectExecutorError::Contract(
                     "conflicting Apply retransmission for one height".to_owned(),
@@ -7339,6 +7899,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             subject,
             certificate,
             validated_receipt,
+            ownership,
         };
         self.pending_applications
             .insert(id, PendingApply { task: task.clone() });
@@ -7820,7 +8381,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 })?;
             FetchReadyCommitPlan::Install(install)
         };
-        let runtime_reservation = match self.runtime.reserve_body_available(tag, runtime_manifest) {
+        let runtime_reservation = match self.runtime.reserve_body_available_with_owner(
+            tag,
+            runtime_manifest,
+            task.ownership(),
+        ) {
             Ok(reservation) => reservation,
             Err(EnqueueError::Full | EnqueueError::ReservedCapacity) => {
                 return Err(EffectTransportError::Backpressure);
@@ -7844,7 +8409,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.runtime.abort_body_available(plan.runtime_reservation);
     }
 
-    fn commit_fetch_completion(&mut self, plan: FetchCompletionPlan) {
+    fn commit_fetch_completion(&mut self, plan: FetchCompletionPlan) -> Result<(), EnqueueError> {
+        // Publish the already-reserved reducer successor before retiring its
+        // external fetch owner. A mismatched token leaves all local ownership
+        // intact and forces the serialized runtime into fail-closed state.
+        self.runtime
+            .commit_body_available(plan.runtime_reservation)?;
         self.commit_body_pipeline_owner(plan.owner);
         match plan.ready {
             FetchReadyCommitPlan::Reuse { release } => {
@@ -7860,7 +8430,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Some(retirement) = plan.certified_retirement {
             self.commit_certified_fetch_retirement(retirement);
         }
-        self.runtime.commit_body_available(plan.runtime_reservation);
+        Ok(())
     }
 
     fn finish_fetch<S: V2EffectServices>(
@@ -7880,7 +8450,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.abort_fetch_completion(plan);
             return Err(self.fail_closed_transport(error, services));
         }
-        self.commit_fetch_completion(plan);
+        if let Err(error) = self.commit_fetch_completion(plan) {
+            return Err(self.fail_closed_transport(runtime_enqueue_error(error), services));
+        }
         Ok(CompletionDisposition::Accepted)
     }
 
@@ -8793,6 +9365,10 @@ mod tests {
         scheduler_ownership_ready: bool,
         omit_scheduler_ownership: bool,
         reject_scheduler_ownership: bool,
+        next_lifecycle_ordinal: u128,
+        effect_owners: BTreeMap<Hash, RuntimeEffectOwnership>,
+        external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
+        external_lifecycle_owner_capacity: Option<usize>,
     }
 
     /// Actual executor/runtime ownership projected without retaining a shadow
@@ -8862,6 +9438,57 @@ mod tests {
             self.completions.push(completion);
             Ok(())
         }
+
+        fn test_effect_ownership(&mut self, effect: &AdapterEffect) -> RuntimeEffectOwnership {
+            let mut identity = Vec::new();
+            match effect {
+                AdapterEffect::FetchBody { round, subject, .. }
+                | AdapterEffect::StoreBody { round, subject, .. }
+                | AdapterEffect::ValidateBody { round, subject, .. } => {
+                    identity.extend_from_slice(b"body-pipeline");
+                    identity.extend_from_slice(&round.encode());
+                    identity.extend_from_slice(&subject.encode());
+                }
+                AdapterEffect::Sign { request, .. } => {
+                    identity.extend_from_slice(b"sign");
+                    identity.extend_from_slice(&request.signature_preimage());
+                }
+                AdapterEffect::Apply {
+                    subject,
+                    certificate,
+                    ..
+                } => {
+                    identity.extend_from_slice(b"apply");
+                    identity.extend_from_slice(&subject.encode());
+                    identity.extend_from_slice(&certificate.as_ref().encode());
+                }
+                AdapterEffect::Broadcast(message) => {
+                    identity.extend_from_slice(b"broadcast");
+                    identity.extend_from_slice(&message.encode());
+                }
+                AdapterEffect::EnterView { tag, .. } => {
+                    identity.extend_from_slice(b"enter-view");
+                    identity.extend_from_slice(&tag.height().to_le_bytes());
+                    identity.extend_from_slice(&tag.view().to_le_bytes());
+                }
+                AdapterEffect::ReportEquivocation { .. }
+                | AdapterEffect::ReportInvalidCertifiedBody { .. } => {
+                    identity.extend_from_slice(format!("{effect:?}").as_bytes());
+                }
+            }
+            let identity = Hash::new(identity);
+            if let Some(existing) = self.effect_owners.get(&identity) {
+                return existing.clone();
+            }
+            let tag = self
+                .round_tag
+                .unwrap_or_else(|| EventTag::new(1, 0, Generation::new(0)));
+            let ownership =
+                RuntimeEffectOwnership::fresh_for_test(tag, self.next_lifecycle_ordinal);
+            self.next_lifecycle_ordinal = self.next_lifecycle_ordinal.saturating_add(1);
+            self.effect_owners.insert(identity, ownership.clone());
+            ownership
+        }
     }
 
     impl EffectRuntime for FakeRuntime {
@@ -8887,6 +9514,63 @@ mod tests {
             now: Instant,
         ) -> Result<RuntimeStep<AdapterEffect>, String> {
             self.step_effects(now)
+        }
+
+        fn take_effect_ownership(
+            &mut self,
+            effects: &[AdapterEffect],
+        ) -> Result<Vec<RuntimeEffectOwnership>, String> {
+            Ok(effects
+                .iter()
+                .map(|effect| self.test_effect_ownership(effect))
+                .collect())
+        }
+
+        fn set_external_lifecycle_owners(
+            &mut self,
+            owners: Vec<RuntimeLifecycleOwner>,
+        ) -> Result<(), String> {
+            if self
+                .external_lifecycle_owner_capacity
+                .is_some_and(|capacity| owners.len() > capacity)
+            {
+                return Err("fake external lifecycle-owner capacity exceeded".to_owned());
+            }
+            self.external_lifecycle_owners = owners;
+            Ok(())
+        }
+
+        fn configure_external_lifecycle_owner_capacity(
+            &mut self,
+            max_pending_work: usize,
+        ) -> Result<(), String> {
+            self.external_lifecycle_owner_capacity = Some(
+                max_pending_work
+                    .checked_add(MAX_EFFECTS_PER_STEP)
+                    .ok_or_else(|| {
+                        "fake external lifecycle-owner capacity overflowed".to_owned()
+                    })?,
+            );
+            Ok(())
+        }
+
+        fn mint_local_proposal_effect_ownership(
+            &mut self,
+            tag: EventTag,
+            manifest: &wire::PayloadManifest,
+        ) -> Result<RuntimeEffectOwnership, String> {
+            let mut semantic = Vec::from(b"body-pipeline".as_slice());
+            semantic.extend_from_slice(&manifest.round.encode());
+            semantic.extend_from_slice(&manifest.subject.encode());
+            let identity = Hash::new(semantic);
+            if let Some(existing) = self.effect_owners.get(&identity) {
+                return Ok(existing.clone());
+            }
+            let ownership =
+                RuntimeEffectOwnership::fresh_for_test(tag, self.next_lifecycle_ordinal);
+            self.next_lifecycle_ordinal = self.next_lifecycle_ordinal.saturating_add(1);
+            self.effect_owners.insert(identity, ownership.clone());
+            Ok(ownership)
         }
 
         fn take_scheduler_ownership(&mut self) -> Result<(), String> {
@@ -8951,18 +9635,22 @@ mod tests {
             Ok(reservation)
         }
 
-        fn commit_body_available(&mut self, reservation: BodyAvailableReservation) {
+        fn commit_body_available(
+            &mut self,
+            reservation: BodyAvailableReservation,
+        ) -> Result<(), EnqueueError> {
             if !reservation.owns_new_slot() {
-                return;
+                return Ok(());
             }
             if self.reserved_body_available.as_ref() != Some(&reservation) {
-                return;
+                return Err(EnqueueError::FailClosed);
             }
             self.reserved_body_available = None;
             self.completions.push(RuntimeCompletion::BodyAvailable(
                 reservation.tag(),
                 reservation.manifest().clone(),
             ));
+            Ok(())
         }
 
         fn abort_body_available(&mut self, reservation: BodyAvailableReservation) {
@@ -10455,9 +11143,11 @@ mod tests {
             subject,
             HashOf::new(&manifest),
         );
+        let ownership = RuntimeEffectOwnership::fresh_for_test(tag(3), 77);
         let task = BodyValidationTask {
             id: EffectWorkId(77),
             durable_receipt,
+            ownership: ownership.clone(),
         };
         let entry_hash = HashOf::from_untyped_unchecked(Hash::new(b"certified merge entry"));
         let reference = CertifiedMergeLedgerReference {
@@ -10489,7 +11179,10 @@ mod tests {
         (
             PendingValidation {
                 task,
-                consumer: Some(ValidationConsumer::Reducer { tag: tag(3) }),
+                consumer: Some(ValidationConsumer::Reducer {
+                    tag: tag(3),
+                    ownership,
+                }),
             },
             reference,
             entry_hash,
@@ -10532,6 +11225,10 @@ mod tests {
                 durable,
                 ValidationConsumer::Reducer {
                     tag: tag(round.view),
+                    ownership: RuntimeEffectOwnership::fresh_for_test(
+                        tag(round.view),
+                        u128::from(round.view),
+                    ),
                 },
                 services,
             )
@@ -10688,6 +11385,17 @@ mod tests {
         assert_eq!(executor.status().pending_signatures, 1);
         assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
         assert!(!executor.status().fail_closed);
+    }
+
+    #[test]
+    fn executor_threads_its_independent_pending_bound_into_runtime_ownership() {
+        let fixture = Fixture::new();
+        let config = EffectQueueConfig::default();
+        let executor = fixture.executor(config);
+        assert_eq!(
+            executor.runtime.external_lifecycle_owner_capacity,
+            Some(config.max_pending_work + MAX_EFFECTS_PER_STEP)
+        );
     }
 
     #[test]
@@ -10948,7 +11656,7 @@ mod tests {
     }
 
     #[test]
-    fn full_capacity_certified_fetch_remains_missing_and_retransmit_later_adopts_it() {
+    fn full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
         let mut services = fixture.services();
@@ -10977,17 +11685,27 @@ mod tests {
             certified_sources: certified_sources(&fixture, &prepare_b),
             certificate: Some(prepare_b.clone()),
         };
-        executor
-            .consume_effects(vec![fetch_b.clone()], &mut services)
-            .expect("full-capacity Fetch is deferred as reducer reconstruction debt");
+        assert_eq!(
+            executor
+                .consume_effects(vec![fetch_b], &mut services)
+                .expect("full-capacity Fetch retains its exact reducer effect owner"),
+            0
+        );
         assert_eq!(services.fetch_tasks.len(), 1);
         assert!(
             !executor
                 .body_pipeline_owners
                 .contains_key(&(prepare_b.round, prepare_b.subject))
         );
-        assert!(executor.retained_effect_batch.is_none());
-        assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
+        assert!(executor.retained_effect_batch.is_some());
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+        let retained_ownership = executor
+            .retained_effect_batch
+            .as_ref()
+            .and_then(|batch| batch.effects.front())
+            .expect("capacity-blocked Fetch B retains its exact FIFO owner")
+            .ownership
+            .clone();
         assert!(!executor.status().fail_closed);
 
         executor
@@ -10998,18 +11716,27 @@ mod tests {
                 &mut services,
             )
             .expect("Proposal A reconstruction terminates and releases capacity");
-        executor
-            .consume_effects(vec![fetch_b], &mut services)
-            .expect("reducer retransmission re-emits certified Fetch B");
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("released capacity drains the already-admitted Fetch B"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
         assert_eq!(services.fetch_tasks.len(), 2);
-        assert!(executor.pending_fetches.values().any(|pending| {
-            pending.task.round == prepare_b.round && pending.task.subject == prepare_b.subject
-        }));
+        let admitted_b = executor
+            .pending_fetches
+            .values()
+            .find(|pending| {
+                pending.task.round == prepare_b.round && pending.task.subject == prepare_b.subject
+            })
+            .expect("Fetch B acquires one pending service owner");
+        assert_eq!(admitted_b.task.ownership(), &retained_ownership);
+        assert!(executor.retained_effect_batch.is_none());
         assert!(!executor.status().fail_closed);
     }
 
     #[test]
-    fn certified_request_pressure_does_not_head_block_source_faithful_fetch_then_sign() {
+    fn certified_request_pressure_retains_source_faithful_fetch_ahead_of_timeout_signing() {
         let mut fixture = ProductionTransportFixture::new_validator();
         fixture.executor.config = EffectQueueConfig::new(2, 4, 1 << 20, 1);
         fixture.executor.outstanding_requests =
@@ -11085,45 +11812,34 @@ mod tests {
                 .executor
                 .body_pipeline_owners
                 .contains_key(&(certificate_b.round, certificate_b.subject)),
-            "request-saturated Fetch B must remain reducer retransmission debt"
+            "request-saturated Fetch B must not gain partial pipeline ownership"
         );
-        assert!(fixture.executor.retained_effect_batch.is_none());
-        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 0);
+        assert!(fixture.executor.retained_effect_batch.is_some());
+        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
+        let retained_b_ownership = fixture
+            .executor
+            .retained_effect_batch
+            .as_ref()
+            .and_then(|batch| batch.effects.front())
+            .expect("request-saturated Fetch B retains its exact runtime owner")
+            .ownership
+            .clone();
 
-        // The next source-refined producer is the durable TimeoutVote Sign. It must cross
-        // the dropped Fetch B rather than waiting for A's unresponsive certified source.
+        // The admitted Fetch B owns a frozen predecessor position. A later
+        // timeout/control producer cannot cross it while request capacity is
+        // still held by A.
         let timeout_now = started + Duration::from_secs(30);
-        assert!(matches!(
+        assert_eq!(
             fixture
                 .executor
                 .step(timeout_now, &mut services)
-                .expect("timeout signing crosses certified-request pressure"),
-            EffectExecutorStep::Advanced { .. }
-        ));
-        assert_eq!(fixture.executor.pending_signatures.len(), 1);
-        assert!(matches!(
-            services.sign_tasks.last().map(|task| &task.request),
-            Some(SignRequest::TimeoutVote(_))
-        ));
-        assert_eq!(fixture.executor.outstanding_requests.len(), 1);
-        assert!(fixture.executor.retained_effect_batch.is_none());
-
-        let sign_task = services
-            .sign_tasks
-            .last()
-            .expect("timeout Sign reached the production signer")
-            .clone();
-        let signature = Signature::new(
-            fixture.validator_keys[0].private_key(),
-            &sign_task.request.signature_preimage(),
-        )
-        .payload()
-        .to_vec();
-        fixture
-            .executor
-            .complete_consensus_signature(sign_task.id(), signature, &mut services)
-            .expect("complete the crossing timeout Sign");
+                .expect("request pressure preserves the exact Fetch B head"),
+            EffectExecutorStep::Idle
+        );
         assert!(fixture.executor.pending_signatures.is_empty());
+        assert!(services.sign_tasks.is_empty());
+        assert_eq!(fixture.executor.outstanding_requests.len(), 1);
+        assert!(fixture.executor.retained_effect_batch.is_some());
 
         let request_hash_a = HashOf::new(
             task_a
@@ -11155,31 +11871,32 @@ mod tests {
             CompletionDisposition::Accepted
         );
 
-        let retransmit_now = timeout_now + Duration::from_secs(30);
-        for _ in 0..8 {
-            let _ = fixture
+        assert_eq!(
+            fixture
                 .executor
-                .step(retransmit_now, &mut services)
-                .expect("drive completion/retransmission fairness");
-            if fixture.executor.pending_fetches.values().any(|pending| {
+                .step(timeout_now, &mut services)
+                .expect("released request capacity drains the admitted Fetch B"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
+        let admitted_b = fixture
+            .executor
+            .pending_fetches
+            .values()
+            .find(|pending| {
                 pending.task.round == certificate_b.round
                     && pending.task.subject == certificate_b.subject
-            }) {
-                break;
-            }
-        }
-        assert!(fixture.executor.pending_fetches.values().any(|pending| {
-            pending.task.round == certificate_b.round
-                && pending.task.subject == certificate_b.subject
-        }));
+            })
+            .expect("Fetch B acquires one exact pending owner");
+        assert_eq!(admitted_b.task.ownership(), &retained_b_ownership);
         assert_eq!(fixture.executor.outstanding_requests.len(), 1);
         assert_eq!(services.fetch_tasks.len(), 2);
+        assert!(services.sign_tasks.is_empty());
         assert!(fixture.executor.retained_effect_batch.is_none());
         assert!(!fixture.executor.status().fail_closed);
     }
 
     #[test]
-    fn serialized_runtime_periodic_retry_atomically_upgrades_existing_fetch_after_request_pressure()
+    fn serialized_runtime_retained_retry_atomically_upgrades_existing_fetch_after_request_pressure()
     {
         let mut fixture = ProductionTransportFixture::new_validator();
         fixture.executor.config = EffectQueueConfig::new(3, 4, 1 << 20, 1);
@@ -11338,8 +12055,8 @@ mod tests {
                 .certified_request()
                 .is_none()
         );
-        assert!(fixture.executor.retained_effect_batch.is_none());
-        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 0);
+        assert!(fixture.executor.retained_effect_batch.is_some());
+        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
 
         let mut response_a = wire::CertifiedBodyResponse {
             request_hash: request_hash_a,
@@ -11372,28 +12089,21 @@ mod tests {
             "releasing A does not replace B's ordinary service owner"
         );
 
-        let retransmit_now = started + fixture.executor.runtime.retransmit_interval();
-        for _ in 0..8 {
-            let _ = fixture
+        assert_eq!(
+            fixture
                 .executor
-                .step(retransmit_now, &mut services)
-                .expect("drive periodic production-runtime retry");
-            if fixture.executor.pending_fetches[&work_id_b]
-                .task
-                .certified_request()
-                .is_some()
-            {
-                break;
-            }
-        }
+                .step(started, &mut services)
+                .expect("retry the original admitted upgrade after capacity release"),
+            EffectExecutorStep::Idle
+        );
 
         let upgraded_b = services
             .fetch_tasks
             .last()
-            .expect("periodic retry reaches the body-fetch service");
+            .expect("retained retry reaches the body-fetch service");
         let request_b = upgraded_b
             .certified_request()
-            .expect("periodic retry certifies B's existing fetch");
+            .expect("retained retry certifies B's existing fetch");
         let request_hash_b = HashOf::new(request_b);
         assert_eq!(upgraded_b.id(), work_id_b);
         assert_eq!(upgraded_b.round, round_b);
@@ -11433,13 +12143,28 @@ mod tests {
                 .get(&(round_b, subject_b)),
             pipeline_owners_before_upgrade.get(&(round_b, subject_b))
         );
-        assert!(fixture.executor.retained_effect_batch.is_none());
-        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 0);
+        assert!(fixture.executor.retained_effect_batch.is_some());
+        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
         assert!(!fixture.executor.status().fail_closed);
+
+        assert_eq!(
+            fixture
+                .executor
+                .step(started, &mut services)
+                .expect("poll the admitted upgrade without duplicating service work"),
+            EffectExecutorStep::Idle
+        );
+        assert_eq!(
+            services.fetch_tasks.len(),
+            service_tasks_before_upgrade + 1,
+            "the retained lifecycle must coalesce repeated service polls"
+        );
+        assert_eq!(services.operation_calls.get("body-sign").copied(), Some(2));
+        assert!(fixture.executor.retained_effect_batch.is_some());
     }
 
     #[test]
-    fn certified_request_pressure_leaves_higher_authority_upgrade_for_retransmission() {
+    fn certified_request_pressure_retains_higher_authority_upgrade_under_one_owner() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::new(2, 4, 1 << 20, 1));
         let mut services = fixture.services();
@@ -11493,9 +12218,12 @@ mod tests {
             certificate: Some(higher_prepare),
         };
 
-        executor
-            .consume_effects(vec![certified_upgrade.clone()], &mut services)
-            .expect("request pressure is retryable rather than fatal");
+        assert_eq!(
+            executor
+                .consume_effects(vec![certified_upgrade], &mut services)
+                .expect("request pressure retains the exact authority upgrade"),
+            0
+        );
         assert_eq!(executor.pending_work(), 2);
         assert_eq!(executor.outstanding_requests.len(), 1);
         assert_eq!(services.fetch_tasks.len(), 2);
@@ -11507,8 +12235,8 @@ mod tests {
                 .is_some_and(|pending| pending.task.certified_request().is_none()),
             "the ordinary acquisition remains live without a partial authority upgrade"
         );
-        assert_eq!(executor.status().effect_dispatch_queue.depth, 0);
-        assert!(executor.retained_effect_batch.is_none());
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+        assert!(executor.retained_effect_batch.is_some());
         assert!(!executor.status().fail_closed);
 
         let response = signed_certified_response(
@@ -11530,21 +12258,25 @@ mod tests {
         );
         assert!(executor.outstanding_requests.is_empty());
 
-        executor
-            .consume_effects(vec![certified_upgrade], &mut services)
-            .expect("reducer retransmission recreates the authority upgrade");
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("capacity release retries the already-admitted authority upgrade"),
+            EffectExecutorStep::Idle
+        );
         assert_eq!(executor.pending_work(), 1);
         assert_eq!(executor.outstanding_requests.len(), 1);
         assert_eq!(services.fetch_tasks.len(), 3);
         assert_eq!(services.fetch_tasks[2].id(), second_work_id);
         assert!(services.fetch_tasks[2].certified_request().is_some());
         assert_eq!(services.operation_calls.get("body-sign").copied(), Some(2));
-        assert!(executor.retained_effect_batch.is_none());
+        assert!(executor.retained_effect_batch.is_some());
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
         assert!(!executor.status().fail_closed);
     }
 
     #[test]
-    fn reconstructible_new_certified_fetch_acquires_ownership_after_retransmission() {
+    fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admission() {
         let mut fixture = ProductionTransportFixture::new();
         fixture.executor.config = EffectQueueConfig::new(2, 4, 1 << 20, 1);
         fixture.executor.outstanding_requests =
@@ -11625,10 +12357,13 @@ mod tests {
             certificate: Some(certificate_b),
         };
         let next_work_id_before_b = fixture.executor.next_work_id;
-        fixture
-            .executor
-            .consume_effects(vec![fetch_b.clone()], &mut services)
-            .expect("certified-request pressure leaves independent Fetch B reconstructible");
+        assert_eq!(
+            fixture
+                .executor
+                .consume_effects(vec![fetch_b], &mut services)
+                .expect("certified-request pressure retains independent Fetch B"),
+            0
+        );
 
         assert_eq!(fixture.executor.pending_work(), 1);
         assert_eq!(fixture.executor.next_work_id, next_work_id_before_b);
@@ -11653,8 +12388,8 @@ mod tests {
                 .contains_key(&(round_b, subject_b)),
             "B must not gain partial pipeline ownership"
         );
-        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 0);
-        assert!(fixture.executor.retained_effect_batch.is_none());
+        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
+        assert!(fixture.executor.retained_effect_batch.is_some());
         assert!(!fixture.executor.status().fail_closed);
 
         let mut response_a = wire::CertifiedBodyResponse {
@@ -11700,10 +12435,13 @@ mod tests {
         assert!(fixture.executor.outstanding_requests.is_empty());
         assert!(fixture.executor.certified_work.is_empty());
 
-        fixture
-            .executor
-            .consume_effects(vec![fetch_b], &mut services)
-            .expect("reducer retransmission recreates independent Fetch B");
+        assert_eq!(
+            fixture
+                .executor
+                .step(Instant::now(), &mut services)
+                .expect("released capacity drains the admitted independent Fetch B"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
         let task_b = services
             .fetch_tasks
             .last()
@@ -11943,9 +12681,9 @@ mod tests {
         assert_eq!(
             fixture
                 .executor
-                .consume_effects(vec![fetch_b.clone()], &mut services)
+                .consume_effects(vec![fetch_b], &mut services)
                 .expect("defer Fetch B at production certified-request capacity"),
-            1
+            0
         );
         assert_eq!(fixture.executor.next_work_id, next_work_id_before_b);
         assert_eq!(fixture.executor.pending_fetches, pending_fetches_before_b);
@@ -11981,8 +12719,8 @@ mod tests {
                 .contains_key(&(round_b, subject_b)),
             "deferred Fetch B must not gain partial pipeline ownership"
         );
-        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 0);
-        assert!(fixture.executor.retained_effect_batch.is_none());
+        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
+        assert!(fixture.executor.retained_effect_batch.is_some());
         assert!(!fixture.executor.status().fail_closed);
 
         let mut response_a = wire::CertifiedBodyResponse {
@@ -12060,17 +12798,20 @@ mod tests {
             fixture.executor.runtime.remaining_completion_capacity(),
             initial_queues.completion.capacity - initial_queues.progress.capacity - 1
         );
-        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 0);
+        assert_eq!(fixture.executor.status().effect_dispatch_queue.depth, 1);
         assert!(!fixture.executor.status().fail_closed);
 
-        fixture
-            .executor
-            .consume_effects(vec![fetch_b], &mut services)
-            .expect("retransmission admits Fetch B after request capacity is released");
+        assert_eq!(
+            fixture
+                .executor
+                .step(Instant::now(), &mut services)
+                .expect("released capacity drains the admitted Fetch B"),
+            EffectExecutorStep::Advanced { effects: 1 }
+        );
         let task_b = services
             .fetch_tasks
             .last()
-            .expect("retransmitted Fetch B reaches the production service");
+            .expect("retained Fetch B reaches the production service");
         let request_hash_b = HashOf::new(
             task_b
                 .certified_request()
@@ -14438,7 +15179,13 @@ mod tests {
         );
         executor.runtime.round_tag = Some(tag(3));
         executor
-            .begin_apply(tag(3), certificate.subject, certificate, &mut services)
+            .begin_apply(
+                tag(3),
+                certificate.subject,
+                certificate,
+                RuntimeEffectOwnership::fresh_for_test(tag(3), 3),
+                &mut services,
+            )
             .expect("start Apply through the production admission path");
         let task = services.apply_tasks.pop().expect("production Apply task");
         let work_id = task.id();
@@ -14806,12 +15553,11 @@ mod tests {
                     &mut services,
                 )
                 .expect("adopt deferred validation in current view");
-            assert_eq!(
-                executor.pending_validations[&work_id].consumer,
-                Some(ValidationConsumer::Reducer {
-                    tag: tag(entering_view)
-                })
-            );
+            assert!(matches!(
+                &executor.pending_validations[&work_id].consumer,
+                Some(ValidationConsumer::Reducer { tag: consumer, .. })
+                    if *consumer == tag(entering_view)
+            ));
             assert_eq!(
                 executor.deferred_merge_work.get(&work_id),
                 Some(&entry_hash)
@@ -14932,10 +15678,11 @@ mod tests {
                 &mut services,
             )
             .expect("current view adopts retained immutable validation");
-        assert_eq!(
-            executor.pending_validations[&work_id].consumer,
-            Some(ValidationConsumer::Reducer { tag: tag(1) })
-        );
+        assert!(matches!(
+            &executor.pending_validations[&work_id].consumer,
+            Some(ValidationConsumer::Reducer { tag: consumer, .. })
+                if *consumer == tag(1)
+        ));
         assert_eq!(services.validation_tasks.len(), 2);
         assert!(
             services
@@ -15220,10 +15967,10 @@ mod tests {
             )
             .expect("the current reducer consumer adopts the immutable queued store");
         assert_eq!(services.store_tasks.len(), 1);
-        assert_eq!(
-            executor.pending_stores[&original_task.id()].consumer,
-            Some(StoreConsumer::Reducer { tag: current_tag })
-        );
+        assert!(matches!(
+            &executor.pending_stores[&original_task.id()].consumer,
+            Some(StoreConsumer::Reducer { tag: consumer, .. }) if *consumer == current_tag
+        ));
 
         let completion = services.execute_store(original_task.id());
         assert_eq!(completion.tag(), original_task.tag());
@@ -15321,10 +16068,10 @@ mod tests {
                 &mut services,
             )
             .expect("attach current reducer consumer without duplicate I/O");
-        assert_eq!(
-            executor.pending_stores[&store_id].consumer,
-            Some(StoreConsumer::Reducer { tag: tag(1) })
-        );
+        assert!(matches!(
+            &executor.pending_stores[&store_id].consumer,
+            Some(StoreConsumer::Reducer { tag: consumer, .. }) if *consumer == tag(1)
+        ));
         assert_eq!(services.store_tasks.len(), 1);
 
         let late_completion = services.execute_store(store_id);
@@ -17891,7 +18638,7 @@ mod tests {
             .expect("decided reducer reattaches exact validation work");
         assert!(matches!(
             &executor.pending_validations[&validation_id].consumer,
-            Some(ValidationConsumer::Reducer { tag: consumer }) if *consumer == tag(0)
+            Some(ValidationConsumer::Reducer { tag: consumer, .. }) if *consumer == tag(0)
         ));
         assert_eq!(
             services.validation_tasks.last().map(BodyValidationTask::id),
@@ -18103,6 +18850,7 @@ mod tests {
                 EventTag::new(2, 3, Generation::new(7)),
                 fixture.manifest.subject,
                 commit.clone(),
+                RuntimeEffectOwnership::fresh_for_test(tag(3), 30),
                 &mut services,
             ),
             Err(EffectExecutorError::Contract(_))
@@ -18116,6 +18864,7 @@ mod tests {
                 tag(2),
                 fixture.manifest.subject,
                 commit.clone(),
+                RuntimeEffectOwnership::fresh_for_test(tag(2), 31),
                 &mut services,
             ),
             Err(EffectExecutorError::Contract(_))
@@ -18125,6 +18874,7 @@ mod tests {
                 tag(3),
                 fixture.manifest.subject,
                 commit.clone(),
+                RuntimeEffectOwnership::fresh_for_test(tag(3), 32),
                 &mut services,
             )
             .expect("a delayed decided CommitQC remains actionable");
@@ -18168,6 +18918,7 @@ mod tests {
                 tag(0),
                 fixture.manifest.subject,
                 foreign_commit,
+                RuntimeEffectOwnership::fresh_for_test(tag(0), 33),
                 &mut services,
             ),
             Err(EffectExecutorError::Contract(reason))
@@ -19358,10 +20109,22 @@ mod tests {
             certified_sources: sources.clone(),
             certificate: Some(prepare),
         };
-        for _ in 0..8 {
+        executor
+            .consume_effects(vec![effect.clone()], &mut services)
+            .expect("admit the exact certified fetch");
+        assert_eq!(
             executor
-                .consume_effects(vec![effect.clone()], &mut services)
-                .expect("retransmit exact certified fetch");
+                .consume_effects(vec![effect], &mut services)
+                .expect("coalesce one retransmission into the admitted lifecycle"),
+            0
+        );
+        for _ in 0..6 {
+            assert_eq!(
+                executor
+                    .step(Instant::now(), &mut services)
+                    .expect("retry the retained certified-fetch lifecycle"),
+                EffectExecutorStep::Idle
+            );
         }
         assert_eq!(executor.pending_fetches.len(), 1);
         assert_eq!(executor.outstanding_requests.len(), 1);
@@ -19376,6 +20139,8 @@ mod tests {
                 && task.certified_request() == Some(&first_request)
                 && task.sources() == sources.as_slice()
         }));
+        assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+        assert!(executor.retained_effect_batch.is_some());
     }
 
     #[test]
@@ -19491,10 +20256,6 @@ mod tests {
                 Some(consumer_tag(view + 1))
             );
             assert!(services.cancelled_fetches.is_empty());
-
-            executor
-                .consume_effects(vec![fetch(view + 1)], &mut services)
-                .expect("new reducer incarnation adopts the protected fetch");
             assert_eq!(executor.pending_fetches.len(), 1);
             assert_eq!(executor.pending_work(), 1);
         }
@@ -19512,19 +20273,6 @@ mod tests {
                 &mut services,
             )
             .expect("rebind the protected fetch across a same-view generation upgrade");
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: same_view_tag,
-                    round: high_prepare.round,
-                    subject: high_prepare.subject,
-                    manifest: None,
-                    certified_sources: sources,
-                    certificate: Some(high_prepare),
-                }],
-                &mut services,
-            )
-            .expect("the new same-view incarnation adopts the rebound acquisition");
 
         let task = executor.pending_fetches[&work_id].task.clone();
         assert_eq!(task.tag, same_view_tag);
@@ -19566,7 +20314,7 @@ mod tests {
                     round: prepare.round,
                     subject: prepare.subject,
                     manifest: Some(fixture.manifest.clone()),
-                    certified_sources: sources.clone(),
+                    certified_sources: sources,
                     certificate: Some(prepare.clone()),
                 }],
                 &mut services,
@@ -19594,19 +20342,6 @@ mod tests {
                 &mut services,
             )
             .expect("rebind the certified acquisition across TC installation");
-        executor
-            .consume_effects(
-                vec![AdapterEffect::FetchBody {
-                    tag: rebound_tag,
-                    round: prepare.round,
-                    subject: prepare.subject,
-                    manifest: Some(fixture.manifest.clone()),
-                    certified_sources: sources,
-                    certificate: Some(prepare),
-                }],
-                &mut services,
-            )
-            .expect("new reducer incarnation adopts the rebound acquisition");
 
         let rebound = executor.pending_fetches[&work_id].task.clone();
         assert!(rebound.rebinds_consumer_of(&original));
@@ -19686,9 +20421,6 @@ mod tests {
                 &mut services,
             )
             .expect("an omitted TC high cannot lower the effective local lock");
-        executor
-            .consume_effects(vec![fetch(2)], &mut services)
-            .expect("the new reducer incarnation adopts the same fetch");
 
         let mut lowered = timeout_at_view(&fixture, 2);
         lowered.groups[0].highest_prepare_qc = Some(fixture.qc(wire::GlobalPhase::Prepare));
@@ -19702,9 +20434,6 @@ mod tests {
                 &mut services,
             )
             .expect("a lower TC high cannot replace the effective local lock");
-        executor
-            .consume_effects(vec![fetch(3)], &mut services)
-            .expect("the effective lock adopts the same immutable work again");
 
         assert_eq!(executor.pending_fetches.len(), 1);
         assert_eq!(executor.pending_fetches[&work_id].task.tag, consumer_tag(3));
@@ -20365,6 +21094,7 @@ mod tests {
             tag: tag(0),
             manifest: fixture.manifest.clone(),
             canonical_wire: Arc::from(fixture.body.clone()),
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag(0), 91),
         };
         let durable = store
             .execute_store_task(&task)
@@ -21108,6 +21838,7 @@ mod tests {
             tag: tag(0),
             manifest: fixture.manifest.clone(),
             canonical_wire: Arc::from(fixture.body.clone()),
+            ownership: RuntimeEffectOwnership::fresh_for_test(tag(0), u128::from(id.get())),
         };
         executor.pending_store_bytes =
             u64::try_from(task.canonical_wire.len()).expect("body length");
@@ -21709,6 +22440,10 @@ mod tests {
                         manifest: Some(fixture.manifest.clone()),
                         sources: Vec::new(),
                         certified_request: None,
+                        ownership: RuntimeEffectOwnership::fresh_for_test(
+                            tag(0),
+                            u128::from(id.get()),
+                        ),
                     },
                     request_hash: None,
                 },

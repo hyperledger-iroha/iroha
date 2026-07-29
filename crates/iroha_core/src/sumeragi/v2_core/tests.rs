@@ -4147,7 +4147,7 @@ fn commit_qc_cannot_overtake_timeout_frontier() {
         ] if certificate == entered_certificate
             && certificate.round() == round
             && tag.view() == 1
-            && tag.generation() > original_tag.generation()
+            && tag.strictly_advances(original_tag)
     ));
     assert_eq!(reducer.current_tag().view(), 1);
     assert!(reducer.durable_state().decision().is_none());

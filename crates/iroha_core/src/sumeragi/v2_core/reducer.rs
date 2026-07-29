@@ -2364,7 +2364,7 @@ impl Reducer {
                 self.generation == after.generation && after.awaiting_signature.is_some()
             }
             Continuation::InstallTimeout { certificate, .. } => {
-                self.generation.next() == Some(after.generation)
+                self.generation_after_timeout_install(certificate) == Some(after.generation)
                     && after.durable.last_timeout() == Some(certificate)
                     && after.candidate.is_none()
                     && after.pending_prepare.is_empty()
@@ -2410,6 +2410,29 @@ impl Reducer {
                             if retained == certificate
                     )
             }
+        }
+    }
+
+    /// Compute the next process-local completion generation for one exact TC
+    /// install.
+    ///
+    /// A normal install changes the view, whose `EventTag` component already
+    /// fences every old callback, and therefore starts generation zero.  A
+    /// strict alternate certificate for the timeout round which installed the
+    /// current view leaves the view unchanged, so it must consume one checked
+    /// generation.  The check is performed before WAL application to retain
+    /// the atomic fail-stop overflow boundary for malformed/unreachable state.
+    fn generation_after_timeout_install(
+        &self,
+        certificate: &TimeoutCertificate,
+    ) -> Option<Generation> {
+        if self
+            .durable
+            .is_strict_same_round_timeout_upgrade(certificate)
+        {
+            self.generation.next()
+        } else {
+            Some(Generation::INITIAL)
         }
     }
 
@@ -4287,6 +4310,15 @@ impl Reducer {
                     .durable
                     .is_strict_same_round_timeout_upgrade(certificate)
         );
+        // Preflight the generation transition before applying the WAL entry
+        // or releasing its pending owner. Normal view advances reset to zero;
+        // only a same-view lock upgrade can reach the checked overflow path.
+        let next_generation = match pending.entry.record() {
+            WalRecord::InstallTimeout(certificate) => self
+                .generation_after_timeout_install(certificate)
+                .ok_or(ReducerError::GenerationOverflow)?,
+            _ => self.generation,
+        };
         let mut durable = self.durable.clone();
         durable.apply(&self.context, self.local_validator, &pending.entry)?;
         self.durable = durable;
@@ -4321,10 +4353,7 @@ impl Reducer {
                 if broadcast {
                     install_effects.push(Effect::Broadcast(message));
                 }
-                self.generation = self
-                    .generation
-                    .next()
-                    .ok_or(ReducerError::GenerationOverflow)?;
+                self.generation = next_generation;
                 self.candidate = None;
                 self.candidate_signed = None;
                 self.body_work.clear();
@@ -4839,8 +4868,12 @@ mod source_link_tests {
         )
     }
 
-    fn pending_timeout_install(highest_prepare: Option<QuorumCertificate>) -> (Reducer, Event) {
+    fn pending_timeout_install_at_generation(
+        generation: Generation,
+        highest_prepare: Option<QuorumCertificate>,
+    ) -> (Reducer, Event) {
         let mut before = reducer();
+        before.generation = generation;
         let certificate = timeout_certificate(&before.context, 0, highest_prepare);
         let outcome = before
             .step(Event::TimeoutCertificateReceived {
@@ -4857,6 +4890,112 @@ mod source_link_tests {
             id,
         };
         (before, event)
+    }
+
+    fn pending_timeout_install(highest_prepare: Option<QuorumCertificate>) -> (Reducer, Event) {
+        pending_timeout_install_at_generation(Generation::new(7), highest_prepare)
+    }
+
+    fn pending_same_round_timeout_upgrade_at_generation(
+        generation: Generation,
+    ) -> (Reducer, Event) {
+        let mut before = reducer();
+        let first = timeout_certificate(&before.context, 0, None);
+        let first_effect = before
+            .step(Event::TimeoutCertificateReceived {
+                tag: before.current_tag(),
+                certificate: first,
+            })
+            .expect("stage the initial view-advancing timeout install");
+        let first_id = match first_effect.effects() {
+            [Effect::Persist { entry, .. }] => entry.id(),
+            effects => panic!("expected one initial timeout persistence effect, got {effects:?}"),
+        };
+        before
+            .on_persisted(first_id)
+            .expect("acknowledge the initial timeout install");
+        before.generation = generation;
+
+        let selected = certificate(
+            &before.context,
+            0,
+            Phase::Prepare,
+            Subject::repeat(0xa7),
+            0xa7,
+        );
+        let alternate = timeout_certificate(&before.context, 0, Some(selected));
+        let outcome = before
+            .step(Event::TimeoutCertificateReceived {
+                tag: before.current_tag(),
+                certificate: alternate,
+            })
+            .expect("stage the strict same-round timeout upgrade");
+        let id = match outcome.effects() {
+            [Effect::Persist { entry, .. }] => entry.id(),
+            effects => panic!("expected one upgrade persistence effect, got {effects:?}"),
+        };
+        let event = Event::Persisted {
+            tag: before.current_tag(),
+            id,
+        };
+        (before, event)
+    }
+
+    #[test]
+    fn view_advancing_timeout_install_resets_an_exhausted_generation() {
+        let (mut pending, event) =
+            pending_timeout_install_at_generation(Generation::new(u64::MAX), None);
+
+        let outcome = pending
+            .step(event)
+            .expect("a view advance does not consume the same-view generation");
+
+        assert_eq!(outcome.disposition(), StepDisposition::Applied);
+        assert_eq!(pending.generation, Generation::INITIAL);
+        assert_eq!(pending.durable.current_view(), 1);
+        assert!(pending.pending_persistence.is_none());
+    }
+
+    #[test]
+    fn same_round_timeout_upgrade_accepts_the_last_generation() {
+        let (mut pending, event) = pending_same_round_timeout_upgrade_at_generation(
+            Generation::new(u64::MAX - 1),
+        );
+
+        let outcome = pending
+            .step(event)
+            .expect("the final representable same-view generation remains installable");
+
+        assert_eq!(outcome.disposition(), StepDisposition::Applied);
+        assert_eq!(pending.generation, Generation::new(u64::MAX));
+        assert_eq!(pending.durable.current_view(), 1);
+        assert!(pending.pending_persistence.is_none());
+    }
+
+    #[test]
+    fn same_round_timeout_generation_overflow_preserves_the_complete_state() {
+        let (mut pending, event) =
+            pending_same_round_timeout_upgrade_at_generation(Generation::new(u64::MAX));
+        let before = pending.clone();
+
+        let error = pending
+            .step(event.clone())
+            .expect_err("an exhausted generation must reject the install");
+
+        assert_eq!(error, ReducerError::GenerationOverflow);
+        assert_eq!(pending, before);
+
+        let Event::Persisted { id, .. } = event else {
+            panic!("timeout-install fixture must return a persistence acknowledgement")
+        };
+        let mut in_place = before.clone();
+
+        let error = in_place
+            .on_persisted(id)
+            .expect_err("the in-place callback must precheck generation exhaustion");
+
+        assert_eq!(error, ReducerError::GenerationOverflow);
+        assert_eq!(in_place, before);
     }
 
     fn composite_replay_reducer() -> Reducer {

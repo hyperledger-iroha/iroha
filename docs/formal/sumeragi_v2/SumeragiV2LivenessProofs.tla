@@ -6,9 +6,10 @@ One-height liveness vocabulary and well-founded service measures.
 
 This module contains no second consensus relation and no favourable network
 step.  Safety and recovery properties remain statements over the unbounded
-`AsyncSpecAt(initialContext)`.  Progress claims which can traverse a checked
-generation increment use `AsyncLiveSpecAt(initialContext)`, whose explicit
-finite-resource budget rules out a pending install at `MaxGeneration`.
+`AsyncSpecAt(initialContext)`.  `AsyncLiveSpecAt(initialContext)` is exactly
+that same transition and fairness specification; it does not assume away a
+pending install at `MaxGeneration`.  Checked generation exhaustion therefore
+remains explicit liveness debt until ownership is redesigned.
 The asynchronous proof module records the exact release obligations over the
 concrete FIFO, fair-ingress, IO-worker, retransmission, and absolute-timeout
 actions; the proof ledger records their current mechanization status.
@@ -1100,7 +1101,9 @@ VoteDeliveryEpochAction ==
             /\ ActiveLockedCommitSignRequestsAfterInstall(
                  request.node, request.tc) \subseteq signVotes'
             /\ generation'[request.node] =
-                 generation[request.node] + 1
+                 IF StrictSameRoundTcUpgrade(request.node, request.tc)
+                 THEN generation[request.node] + 1
+                 ELSE 0
   /\ \A request \in LockCommitWalSet:
        PersistLockCommit(request)
          => /\ \A received \in receivedVotes':

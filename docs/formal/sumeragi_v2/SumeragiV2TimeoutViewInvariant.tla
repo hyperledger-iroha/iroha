@@ -282,13 +282,12 @@ PROOF
 
 THEOREM ValidInstallSelectedRankDoesNotExceedTcView ==
   \A request \in pendingInstallTC:
-    (StrongInductiveInvariant /\ PersistInstallTC(request))
+    StrongInductiveInvariant
       => /\ TcHighRank(request.tc) \in Ranks
          /\ TcHighRank(request.tc) <= request.tc.view
 PROOF
   <1>1. ASSUME NEW request \in pendingInstallTC,
-                StrongInductiveInvariant,
-                PersistInstallTC(request)
+                StrongInductiveInvariant
          PROVE /\ TcHighRank(request.tc) \in Ranks
                /\ TcHighRank(request.tc) <= request.tc.view
     <2>1. /\ ModelConfiguration

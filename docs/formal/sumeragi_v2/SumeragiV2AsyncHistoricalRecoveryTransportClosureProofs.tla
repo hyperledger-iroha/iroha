@@ -15,8 +15,11 @@ The physical ownership predicates below use only:
 
   * the active-request registry;
   * a concrete packet in `asyncTransport`;
-  * a concrete per-source ingress occurrence;
-  * a concrete fresh-nonce Serve FIFO occurrence;
+  * a concrete per-source ingress occurrence with its immutable local
+    admission ordinal;
+  * the exact logical Serve lifecycle reservation and, when materialized, its
+    identity-bound FIFO occurrence;
+  * the retained terminal lifecycle tombstone and cached response outputs;
   * a concrete response packet/ingress occurrence; or
   * the exact current-consumer DeliverQC / FetchCertifiedBody owner.
 
@@ -123,7 +126,8 @@ BY GstAsyncStepIsMonotone,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
-       RunHistoricalServer,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance, RunHistoricalServer,
        ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
        ServiceIoWorkerWork,
        EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
@@ -137,7 +141,10 @@ BY GstAsyncStepIsMonotone,
        PreGstResponsiveReplay, DriveResponsiveReplayHead,
        FinishResponsiveReplay, RearmResponsiveRecovery,
        LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep,
        ExecuteCommand, ExecuteRegularCommand,
        AsyncAllVars
@@ -239,9 +246,12 @@ BY Isa
 (***************************************************************************
 Exact physical request/response owners.
 
-The Serve record itself is the occurrence identity, including its nonce.
-`AsyncIoServeNonceOwnership`, maintained by the strong type invariant,
-ensures that the appended in-range nonce is fresh in that server FIFO.
+Packet admission atomically allocates the route-local logical Serve identity,
+an immutable lifecycle ordinal, and an immutable ingress ordinal.  The FIFO
+nonce is only the physical occurrence tag after that reservation materializes;
+it is never the logical owner.  A drained identity is retained as a tombstone
+with its exact cached response, so retransmission coalesces into the same
+monotone lifecycle and cannot resurrect the old Serve stage.
 ***************************************************************************)
 
 HistoricalCommitRequestPacketOwned(target, server, request, packet) ==
@@ -249,17 +259,32 @@ HistoricalCommitRequestPacketOwned(target, server, request, packet) ==
   /\ packet \in asyncTransport
   /\ packet.item = request
 
+HistoricalCommitServeLifecycleIdentity(server, request) ==
+  AsyncServeLogicalRequestIdentity(server, request)
+
 HistoricalCommitRequestIngressOwned(target, server, request) ==
-  /\ HistoricalCommitRequestRegistered(target, server, request)
-  /\ request \in
-       SequenceSet(
-         IngressLane(server, IngressResourceSource(request)))
+  LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+  IN /\ HistoricalCommitRequestRegistered(target, server, request)
+     /\ request \in
+          SequenceSet(
+            IngressLane(server, IngressResourceSource(request)))
+     /\ AsyncServeIngressAdmissionOwned(server, identity)
+     /\ AsyncServeIngressAdmissionOrdinal(server, identity) \in Nat \ {0}
+
+HistoricalCommitServeAdmissionOwned(server, request) ==
+  LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+  IN /\ AsyncServeLiveReservationOwned(server, identity)
+     /\ AsyncServeAdmissionOrdinal(server, identity) \in Nat \ {0}
 
 HistoricalCommitServeOccurrenceOwned(server, request, job) ==
-  /\ job \in SequenceSet(asyncIoQueues[server])
-  /\ job.class = "Serve"
-  /\ job.candidate.item = request
-  /\ job.nonce \in 0..AsyncIoAuxCapacity
+  LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+  IN /\ HistoricalCommitServeAdmissionOwned(server, request)
+     /\ AsyncServeJobQueued(server, identity)
+     /\ job \in SequenceSet(asyncIoQueues[server])
+     /\ job.class = "Serve"
+     /\ job.candidate.item = request
+     /\ AsyncIoServeJobIdentity(server, job) = identity
+     /\ job.nonce \in 0..AsyncIoAuxCapacity
 
 HistoricalCommitServeJobOwned(target, server, request, job) ==
   /\ HistoricalCommitRequestRegistered(target, server, request)
@@ -276,6 +301,17 @@ HistoricalCommitResponseLineage(
   /\ response.envelope.recipient = target
   /\ response.envelope.request = request
   /\ response.envelope.qc = qc
+
+HistoricalCommitServeTombstoneOwned(target, server, request) ==
+  LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+  IN /\ HistoricalCommitRequestRegistered(target, server, request)
+     /\ HistoricalCommitArchiveRouteAvailable(target, server)
+     /\ AsyncServeLifecycleTombstone(server, identity)
+     /\ AsyncServeTombstoneOutputs(server, identity) # {}
+     /\ \A response \in AsyncServeTombstoneOutputs(server, identity):
+          \E qc:
+            HistoricalCommitResponseLineage(
+              target, server, request, qc, response)
 
 HistoricalCommitResponsePacketOwned(
     target, server, request, qc, response, packet) ==
@@ -352,10 +388,16 @@ THEOREM HistoricalCommitPacketAdmissionCreatesExactIngressOwner ==
 BY IsaT(240)
    DEF HistoricalCommitRequestPacketOwned,
        HistoricalCommitRequestIngressOwned,
+       HistoricalCommitServeLifecycleIdentity,
        HistoricalCommitRequestRegistered,
        HistoricalCommitRequestOccurrence,
        CommitCertificateRequestAuthorized,
        AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       AcceptOrReserveExactServeIngress,
+       ReserveExactServeCapacity, AdvanceExactServeCapacity,
+       CoalesceExactServeIngressCapacity,
+       AsyncServeIngressAdmissionOwned,
+       AsyncServeIngressAdmissionOrdinal,
        DropPolicyRejectedHiddenPacket,
        IngressPacketPolicyRejected,
        CertifiedResponsePacketPolicyRejected,
@@ -372,6 +414,7 @@ THEOREM HistoricalCommitIngressCreatesFreshServeOwner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalCommitArchiveRouteAvailable(target, server)
     /\ HistoricalCommitRequestIngressOwned(target, server, request)
+    /\ HistoricalCommitServeAdmissionOwned(server, request)
     /\ HistoricalSelectedIngressItemAt(
          server,
          FirstHistoricalDrainableIngressIndex(server)) = request
@@ -387,6 +430,8 @@ BY FreshAsyncIoServeNonceFacts,
        HistoricalCommitArchiveRouteAvailable,
        HistoricalCommitServeJobOwned,
        HistoricalCommitServeOccurrenceOwned,
+       HistoricalCommitServeAdmissionOwned,
+       HistoricalCommitServeLifecycleIdentity,
        DrainHistoricalIngressSelected,
        AsyncIoCertifiedServeJob,
        CommitCertificateRequestAuthorized,
@@ -396,6 +441,57 @@ BY FreshAsyncIoServeNonceFacts,
        AsyncTransportContentTypeInvariant,
        AsyncTransportHistoryTypeInvariant,
        AsyncActiveRequestsType
+
+THEOREM HistoricalCommitCachedIngressCreatesExactResponsePacket ==
+  \A target, server, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalCommitRequestIngressOwned(target, server, request)
+    /\ HistoricalCommitServeTombstoneOwned(target, server, request)
+    /\ HistoricalSelectedIngressItemAt(
+         server,
+         FirstHistoricalDrainableIngressIndex(server)) = request
+    /\ DrainHistoricalIngressSelected(server)
+    => \E qc, response, packet:
+         HistoricalCommitResponsePacketOwned(
+           target, server, request, qc, response, packet)'
+BY IsaT(300)
+   DEF HistoricalCommitRequestIngressOwned,
+       HistoricalCommitServeTombstoneOwned,
+       HistoricalCommitServeLifecycleIdentity,
+       HistoricalCommitResponsePacketOwned,
+       HistoricalCommitResponseLineage,
+       HistoricalCommitRequestRegistered,
+       HistoricalCommitRequestOccurrence,
+       AsyncServeCachedReplayItems,
+       AsyncServeTombstoneOutputs,
+       DrainHistoricalIngressSelected,
+       PublishEphemeralItems, PacketsForItems,
+       IngressResourceSource, IngressLane, SequenceSet
+
+THEOREM HistoricalCommitIngressCreatesLifecycleOutcome ==
+  \A target, server, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalCommitArchiveRouteAvailable(target, server)
+    /\ HistoricalCommitRequestIngressOwned(target, server, request)
+    /\ HistoricalSelectedIngressItemAt(
+         server,
+         FirstHistoricalDrainableIngressIndex(server)) = request
+    /\ DrainHistoricalIngressSelected(server)
+    => \/ \E job \in SequenceSet(asyncIoQueues'[server]):
+              HistoricalCommitServeJobOwned(
+                target, server, request, job)'
+       \/ \E qc, response, packet:
+              HistoricalCommitResponsePacketOwned(
+                target, server, request, qc, response, packet)'
+BY HistoricalCommitIngressCreatesFreshServeOwner,
+   HistoricalCommitCachedIngressCreatesExactResponsePacket, IsaT(240)
+   DEF HistoricalCommitRequestIngressOwned,
+       HistoricalCommitServeAdmissionOwned,
+       HistoricalCommitServeTombstoneOwned,
+       HistoricalCommitServeLifecycleIdentity,
+       AsyncServeLifecyclePartitionInvariant,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncServeLifecycleTypeInvariant
 
 THEOREM HistoricalCommitServeJobUsesOrdinaryArchiveIoOwner ==
   \A target, server, request, job:
@@ -408,6 +504,8 @@ THEOREM HistoricalCommitServeJobUsesOrdinaryArchiveIoOwner ==
 BY TypedCandidateIsInCarrier, IsaT(180)
    DEF HistoricalCommitServeJobOwned,
        HistoricalCommitServeOccurrenceOwned,
+       HistoricalCommitServeAdmissionOwned,
+       HistoricalCommitServeLifecycleIdentity,
        HistoricalCommitArchiveRouteAvailable,
        HistoricalCommitRequestRegistered,
        HistoricalCommitRequestOccurrence,
@@ -435,6 +533,8 @@ THEOREM HistoricalCommitServeHeadCreatesExactResponsePacket ==
 BY IsaT(300)
    DEF HistoricalCommitServeJobOwned,
        HistoricalCommitServeOccurrenceOwned,
+       HistoricalCommitServeAdmissionOwned,
+       HistoricalCommitServeLifecycleIdentity,
        HistoricalCommitArchiveRouteAvailable,
        HistoricalCommitResponsePacketOwned,
        HistoricalCommitResponseLineage,
@@ -453,6 +553,73 @@ BY IsaT(300)
        AsyncTransportContentTypeInvariant,
        AsyncTransportHistoryTypeInvariant,
        AsyncActiveRequestsType
+
+THEOREM HistoricalCommitAdmittedServeInstallsExactTombstone ==
+  \A target, server, request, job:
+    LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+    IN /\ AsyncStrongTypeInvariant
+       /\ HistoricalCommitServeJobOwned(
+            target, server, request, job)
+       /\ Head(asyncIoQueues[server]) = job
+       /\ ServiceIoWorkerWork(server)
+       => /\ AsyncServeLifecycleTombstone(server, identity)'
+          /\ AsyncServeTombstoneOutputs(server, identity)' # {}
+          /\ ~AsyncServeLiveReservationOwned(server, identity)'
+          /\ ~AsyncServeJobQueued(server, identity)'
+BY HistoricalCommitServeHeadCreatesExactResponsePacket, IsaT(240)
+   DEF HistoricalCommitServeJobOwned,
+       HistoricalCommitServeOccurrenceOwned,
+       HistoricalCommitServeAdmissionOwned,
+       HistoricalCommitServeLifecycleIdentity,
+       ServiceIoWorkerWork,
+       AsyncServeLifecycleTombstone,
+       AsyncServeTombstoneOutputs,
+       AsyncServeTombstoneRecords,
+       AsyncServeReservationRecord,
+       AsyncServeTombstonesWithoutFamily,
+       AsyncServeTombstone,
+       AsyncServeLiveReservationOwned,
+       AsyncServeJobQueued
+
+THEOREM HistoricalCommitServeOrdinalIsImmutableUntilTerminalExit ==
+  \A server, request:
+    LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncServeLifecycleOwned(server, identity)
+       /\ AsyncNext
+       /\ AsyncServeLifecycleOwned(server, identity)'
+       => AsyncServeAdmissionOrdinal(server, identity)'
+            = AsyncServeAdmissionOrdinal(server, identity)
+BY IsaT(300)
+   DEF HistoricalCommitServeLifecycleIdentity,
+       AsyncServeAdmissionOrdinal,
+       AsyncServeLifecycleOwned,
+       AsyncServeLiveReservationOwned,
+       AsyncServeLifecycleTombstone,
+       AsyncServeReservationRecord,
+       AsyncServeTombstoneRecord,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart
+
+THEOREM HistoricalCommitServeTombstoneCannotResurrectAtGst ==
+  \A server, request:
+    LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+    IN /\ AsyncStrongTypeInvariant
+       /\ gst
+       /\ AsyncServeLifecycleTombstone(server, identity)
+       /\ [AsyncNext]_AsyncAllVars
+       => /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
+                server, identity)'
+          /\ ~AsyncServeJobQueued(server, identity)'
+BY AsyncServeRetiredIdentityCannotRequeueAtGst, Isa
+   DEF HistoricalCommitServeLifecycleIdentity,
+       AsyncServeLogicalIdentityRetiredOrSuperseded,
+       AsyncServeLifecycleOwned,
+       AsyncServeLifecycleTombstone,
+       AsyncAllVars
 
 THEOREM HistoricalCommitResponsePacketAdmissionCreatesIngressOwner ==
   \A target, server, request, qc, response, packet:
@@ -593,8 +760,11 @@ THEOREM HistoricalCommitIngressOwnerPersistsOrHandsOff ==
        \/ \E job:
             HistoricalCommitServeJobOwned(
               target, server, request, job)'
+       \/ \E qc, response, packet:
+            HistoricalCommitResponsePacketOwned(
+              target, server, request, qc, response, packet)'
        \/ HistoricalCommitTransportGoal(target)'
-BY HistoricalCommitIngressCreatesFreshServeOwner,
+BY HistoricalCommitIngressCreatesLifecycleOutcome,
    HistoricalRecoveryTargetPersistsUnlessDecision,
    GstAsyncStepIsMonotone, IsaT(600)
    DEF HistoricalCommitRequestIngressOwned,
@@ -603,12 +773,21 @@ BY HistoricalCommitIngressCreatesFreshServeOwner,
        HistoricalCommitArchiveRouteAvailable,
        HistoricalCommitServeJobOwned,
        HistoricalCommitServeOccurrenceOwned,
+       HistoricalCommitServeAdmissionOwned,
+       HistoricalCommitServeTombstoneOwned,
+       HistoricalCommitServeLifecycleIdentity,
+       HistoricalCommitResponsePacketOwned,
        HistoricalCommitTransportGoal,
        HistoricalCommitDeliverQcOwner,
        HistoricalCommitResponseLineage,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RunHistoricalServer, DrainHistoricalIngressSelected,
        DrainFairIngressSelected,
        ResetNodeSchedulerForRestart,
@@ -632,6 +811,8 @@ BY HistoricalCommitServeHeadCreatesExactResponsePacket,
    GstAsyncStepIsMonotone, HeadTailProperties, IsaT(600)
    DEF HistoricalCommitServeJobOwned,
        HistoricalCommitServeOccurrenceOwned,
+       HistoricalCommitServeAdmissionOwned,
+       HistoricalCommitServeLifecycleIdentity,
        HistoricalCommitArchiveRouteAvailable,
        HistoricalCommitResponsePacketOwned,
        HistoricalCommitResponseLineage,
@@ -700,7 +881,11 @@ BY HistoricalCommitResponseIngressCreatesExactDeliverQcOwner,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
-       DrainFairIngressSelected,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, DrainFairIngressSelected,
        ResetNodeSchedulerForRestart,
        ExecuteApply, AsyncAllVars
 
@@ -733,12 +918,127 @@ HistoricalCommitRequestServeGoal(target, server, request) ==
   \/ \E job:
        HistoricalCommitServeJobOwned(
          target, server, request, job)
+  \/ \E qc, response, packet:
+       HistoricalCommitResponsePacketOwned(
+         target, server, request, qc, response, packet)
 
 HistoricalCommitResponsePacketGoal(target, server, request) ==
   \/ HistoricalCommitTransportGoal(target)
   \/ \E qc, response, packet:
        HistoricalCommitResponsePacketOwned(
          target, server, request, qc, response, packet)
+
+(***************************************************************************
+Exact Commit-request ingress lifecycle rank.
+
+This is the existing selector/lane/source/runner rank under a new outer
+lifecycle component.  The outer stage follows the immutable admission identity
+through its reserved future slot, queued Serve occurrence, and terminal cached
+response.  Its predecessor set is frozen at atomic packet admission.  Later
+causal, Control, Completion, priority, and Serve producers therefore cannot be
+counted as new predecessors, and a tombstone retry retains the same identity
+without recreating stage 2.
+***************************************************************************)
+
+HistoricalCommitRequestLifecycleResidual(target, server, request) ==
+  /\ HistoricalCommitArchiveRouteAvailable(target, server)
+  /\ HistoricalCommitRequestIngressOwned(target, server, request)
+  /\ ~HistoricalCommitRequestServeGoal(target, server, request)
+
+HistoricalCommitRequestLifecycleStage(target, server, request) ==
+  IF HistoricalCommitRequestServeGoal(target, server, request)
+  THEN 0
+  ELSE IF HistoricalCommitServeTombstoneOwned(target, server, request)
+       THEN 1
+       ELSE IF HistoricalCommitServeAdmissionOwned(server, request)
+            THEN 2
+            ELSE 3
+
+HistoricalCommitRequestFrozenPredecessorSet(server, request) ==
+  LET identity == HistoricalCommitServeLifecycleIdentity(server, request)
+  IN ({"Io"} \X AsyncServeFrozenPredecessorSet(server, identity))
+       \cup
+     ({"Ingress"} \X
+        AsyncServeIngressAdmissionPredecessorDebtSlots(server, identity))
+       \cup
+     AsyncServePreexistingIngressOwnerPredecessorDebtSet(server, identity)
+       \cup
+     AsyncServePreexistingIngressBarrierPredecessorDebtSet(server, identity)
+
+HistoricalCommitRequestFrozenPredecessorDebt(server, request) ==
+  Cardinality(
+    HistoricalCommitRequestFrozenPredecessorSet(server, request))
+
+HistoricalCommitRequestNestedIngressRank(target, server, request) ==
+  IF HistoricalCommitRequestLifecycleResidual(target, server, request)
+  THEN ExactDecisionRequestIngressRank(server, request)
+  ELSE ExactDecisionRequestIngressZeroRank
+
+HistoricalCommitRequestLifecycleRank(target, server, request) ==
+  <<HistoricalCommitRequestLifecycleStage(target, server, request),
+    <<HistoricalCommitRequestFrozenPredecessorDebt(server, request),
+      HistoricalCommitRequestNestedIngressRank(
+        target, server, request)>>>>
+
+HistoricalCommitRequestLifecycleRankCarrier ==
+  ExactDecisionRequestLifecycleIngressRankCarrier
+
+HistoricalCommitRequestLifecycleRankOrdering ==
+  ExactDecisionRequestLifecycleIngressRankOrdering
+
+THEOREM HistoricalCommitRequestLifecycleRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    HistoricalCommitRequestLifecycleRankOrdering,
+    HistoricalCommitRequestLifecycleRankCarrier)
+BY ExactDecisionRequestLifecycleIngressRankOrderingIsWellFounded
+   DEF HistoricalCommitRequestLifecycleRankOrdering,
+       HistoricalCommitRequestLifecycleRankCarrier
+
+THEOREM HistoricalCommitRequestLifecycleRankInCarrier ==
+  \A target, server, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalCommitRequestLifecycleResidual(
+         target, server, request)
+    => HistoricalCommitRequestLifecycleRank(target, server, request)
+         \in HistoricalCommitRequestLifecycleRankCarrier
+BY ExactDecisionRequestIngressPriorityDebtIsNatural,
+   ExactDecisionRequestIngressServeCapacityDebtIsNatural,
+   CandidateSequenceIndexIsPosition,
+   DrainableIngressTurnReachRankIsNatural,
+   FS_Union, FS_Product, FS_CardinalityType, IsaT(300)
+   DEF HistoricalCommitRequestLifecycleResidual,
+       HistoricalCommitRequestLifecycleRank,
+       HistoricalCommitRequestLifecycleStage,
+       HistoricalCommitRequestFrozenPredecessorDebt,
+       HistoricalCommitRequestFrozenPredecessorSet,
+       HistoricalCommitRequestNestedIngressRank,
+       HistoricalCommitRequestLifecycleRankCarrier,
+       HistoricalCommitRequestIngressOwned,
+       HistoricalCommitServeLifecycleIdentity,
+       ExactDecisionRequestLifecycleIngressRankCarrier,
+       ExactDecisionRequestLifecycleDebtCarrier,
+       ExactDecisionRequestIngressRank,
+       ExactDecisionRequestIngressRankCarrier,
+       ExactDecisionRequestIngressCapacityRank,
+       ExactDecisionRequestIngressReachSelectorRank,
+       ExactDecisionRequestIngressSelectorRank,
+       ExactDecisionRequestIngressLaneRank,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressTargetServeCapacityDebt,
+       ExactDecisionRequestIngressServeCapacityDebt,
+       ExactDecisionRequestIngressPriorityDebt,
+       ExactDecisionRequestIngressPriorityOwners,
+       ExactDecisionRequestIngressLanePosition,
+       ExactDecisionRequestIngressLaneIndices,
+       ExactDecisionRequestIngressSourcePosition,
+       IngressSourceServiceRank,
+       ExactDecisionRequestIngressReachRank,
+       ExactDecisionRequestIngressZeroRank,
+       ExactDecisionRequestIngressZeroCapacityRank,
+       ExactDecisionRequestIngressZeroReachSelectorRank,
+       ExactDecisionRequestIngressZeroSelectorRank,
+       ExactDecisionRequestIngressZeroLaneRank,
+       AsyncConfiguration
 
 HistoricalCommitRequestPacketEmissionKernelProperty(specification) ==
   specification
@@ -1104,19 +1404,37 @@ HistoricalDecisionRequestPacketOwned(
   /\ packet \in asyncTransport
   /\ packet.item = request
 
+HistoricalDecisionServeLifecycleIdentity(archive, request) ==
+  AsyncServeLogicalRequestIdentity(archive, request)
+
 HistoricalDecisionRequestIngressOwned(
     node, qc, archive, request) ==
-  /\ HistoricalDecisionBodyHoldingAlias(
-       node, qc, archive, request)
-  /\ request \in
-       SequenceSet(
-         IngressLane(archive, IngressResourceSource(request)))
+  LET identity ==
+        HistoricalDecisionServeLifecycleIdentity(archive, request)
+  IN /\ HistoricalDecisionBodyHoldingAlias(
+          node, qc, archive, request)
+     /\ request \in
+          SequenceSet(
+            IngressLane(archive, IngressResourceSource(request)))
+     /\ AsyncServeIngressAdmissionOwned(archive, identity)
+     /\ AsyncServeIngressAdmissionOrdinal(archive, identity) \in Nat \ {0}
+
+HistoricalDecisionServeAdmissionOwned(archive, request) ==
+  LET identity ==
+        HistoricalDecisionServeLifecycleIdentity(archive, request)
+  IN /\ AsyncServeLiveReservationOwned(archive, identity)
+     /\ AsyncServeAdmissionOrdinal(archive, identity) \in Nat \ {0}
 
 HistoricalDecisionServeOccurrenceOwned(archive, request, job) ==
-  /\ job \in SequenceSet(asyncIoQueues[archive])
-  /\ job.class = "Serve"
-  /\ job.candidate.item = request
-  /\ job.nonce \in 0..AsyncIoAuxCapacity
+  LET identity ==
+        HistoricalDecisionServeLifecycleIdentity(archive, request)
+  IN /\ HistoricalDecisionServeAdmissionOwned(archive, request)
+     /\ AsyncServeJobQueued(archive, identity)
+     /\ job \in SequenceSet(asyncIoQueues[archive])
+     /\ job.class = "Serve"
+     /\ job.candidate.item = request
+     /\ AsyncIoServeJobIdentity(archive, job) = identity
+     /\ job.nonce \in 0..AsyncIoAuxCapacity
 
 HistoricalDecisionServeJobOwned(
     node, qc, archive, request, job) ==
@@ -1132,6 +1450,17 @@ HistoricalDecisionAuthenticatedResponse(
   /\ response =
        CertifiedResponseItem(AsyncUntrustedSource, archive, request)
   /\ DecisionCertifiedResponseLineageExact(node, qc, response)
+
+HistoricalDecisionServeTombstoneOwned(
+    node, qc, archive, request) ==
+  LET identity ==
+        HistoricalDecisionServeLifecycleIdentity(archive, request)
+  IN /\ HistoricalDecisionBodyHoldingAlias(
+          node, qc, archive, request)
+     /\ AsyncServeLifecycleTombstone(archive, identity)
+     /\ AsyncServeTombstoneOutputs(archive, identity) # {}
+     /\ \A response \in AsyncServeTombstoneOutputs(archive, identity):
+          DecisionCertifiedResponseLineageExact(node, qc, response)
 
 HistoricalDecisionResponsePacketOwned(
     node, qc, archive, request, response, packet) ==
@@ -1192,10 +1521,16 @@ THEOREM HistoricalDecisionRequestPacketCreatesIngressOwner ==
 BY IsaT(240)
    DEF HistoricalDecisionRequestPacketOwned,
        HistoricalDecisionRequestIngressOwned,
+       HistoricalDecisionServeLifecycleIdentity,
        HistoricalDecisionBodyHoldingAlias,
        HistoricalExactDecisionActiveRequestOwner,
        HistoricalExactDecisionServiceSource,
        AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       AcceptOrReserveExactServeIngress,
+       ReserveExactServeCapacity, AdvanceExactServeCapacity,
+       CoalesceExactServeIngressCapacity,
+       AsyncServeIngressAdmissionOwned,
+       AsyncServeIngressAdmissionOrdinal,
        DropPolicyRejectedHiddenPacket,
        IngressPacketPolicyRejected,
        CertifiedResponsePacketPolicyRejected,
@@ -1207,6 +1542,7 @@ THEOREM NormalHistoricalDecisionRequestCreatesFreshServeOwner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalDecisionRequestIngressOwned(
          node, qc, archive, request)
+    /\ HistoricalDecisionServeAdmissionOwned(archive, request)
     /\ ~NodeHasApplication(archive)
     /\ SelectedIngressItemAt(
          archive, FirstDrainableIngressIndex(archive)) = request
@@ -1219,6 +1555,8 @@ BY FreshAsyncIoServeNonceFacts,
    DEF HistoricalDecisionRequestIngressOwned,
        HistoricalDecisionServeJobOwned,
        HistoricalDecisionServeOccurrenceOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeLifecycleIdentity,
        HistoricalDecisionBodyHoldingAlias,
        HistoricalExactDecisionActiveRequestOwner,
        HistoricalExactDecisionServiceSource,
@@ -1231,6 +1569,7 @@ THEOREM AppliedHistoricalDecisionRequestCreatesFreshServeOwner ==
     /\ AsyncStrongTypeInvariant
     /\ HistoricalDecisionRequestIngressOwned(
          node, qc, archive, request)
+    /\ HistoricalDecisionServeAdmissionOwned(archive, request)
     /\ NodeHasApplication(archive)
     /\ HistoricalSelectedIngressItemAt(
          archive,
@@ -1244,6 +1583,8 @@ BY FreshAsyncIoServeNonceFacts,
    DEF HistoricalDecisionRequestIngressOwned,
        HistoricalDecisionServeJobOwned,
        HistoricalDecisionServeOccurrenceOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeLifecycleIdentity,
        HistoricalDecisionBodyHoldingAlias,
        HistoricalExactDecisionActiveRequestOwner,
        HistoricalExactDecisionServiceSource,
@@ -1251,6 +1592,66 @@ BY FreshAsyncIoServeNonceFacts,
        AsyncIoCertifiedServeJob,
        CertifiedRequestAuthorized, CertifiedRequestAuthority,
        FreshAsyncIoServeNonce, SequenceSet
+
+HistoricalDecisionRequestIngressRunnerAction(archive, request) ==
+  \/ /\ ~NodeHasApplication(archive)
+     /\ DrainFairIngressSelected(archive)
+     /\ SelectedIngressItemAt(
+          archive, FirstDrainableIngressIndex(archive)) = request
+  \/ /\ NodeHasApplication(archive)
+     /\ DrainHistoricalIngressSelected(archive)
+     /\ HistoricalSelectedIngressItemAt(
+          archive,
+          FirstHistoricalDrainableIngressIndex(archive)) = request
+
+THEOREM CachedHistoricalDecisionRequestCreatesResponseOwner ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionRequestIngressOwned(
+         node, qc, archive, request)
+    /\ HistoricalDecisionServeTombstoneOwned(
+         node, qc, archive, request)
+    /\ HistoricalDecisionRequestIngressRunnerAction(archive, request)
+    => \E response, packet:
+         HistoricalDecisionResponsePacketOwned(
+           node, qc, archive, request, response, packet)'
+BY IsaT(300)
+   DEF HistoricalDecisionRequestIngressOwned,
+       HistoricalDecisionRequestIngressRunnerAction,
+       HistoricalDecisionServeTombstoneOwned,
+       HistoricalDecisionServeLifecycleIdentity,
+       HistoricalDecisionResponsePacketOwned,
+       HistoricalDecisionAuthenticatedResponse,
+       HistoricalDecisionBodyHoldingAlias,
+       AsyncServeCachedReplayItems,
+       AsyncServeTombstoneOutputs,
+       DrainFairIngressSelected, DrainHistoricalIngressSelected,
+       PublishEphemeralItems, PacketsForItems,
+       IngressResourceSource, IngressLane, SequenceSet
+
+THEOREM HistoricalDecisionRequestIngressCreatesLifecycleOutcome ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionRequestIngressOwned(
+         node, qc, archive, request)
+    /\ HistoricalDecisionRequestIngressRunnerAction(archive, request)
+    => \/ \E job \in SequenceSet(asyncIoQueues'[archive]):
+              HistoricalDecisionServeJobOwned(
+                node, qc, archive, request, job)'
+       \/ \E response, packet:
+              HistoricalDecisionResponsePacketOwned(
+                node, qc, archive, request, response, packet)'
+BY NormalHistoricalDecisionRequestCreatesFreshServeOwner,
+   AppliedHistoricalDecisionRequestCreatesFreshServeOwner,
+   CachedHistoricalDecisionRequestCreatesResponseOwner, IsaT(240)
+   DEF HistoricalDecisionRequestIngressRunnerAction,
+       HistoricalDecisionRequestIngressOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeTombstoneOwned,
+       HistoricalDecisionServeLifecycleIdentity,
+       AsyncServeLifecyclePartitionInvariant,
+       AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncServeLifecycleTypeInvariant
 
 THEOREM HistoricalDecisionServeJobUsesOrdinaryArchiveIoOwner ==
   \A node, qc, archive, request, job:
@@ -1263,6 +1664,8 @@ THEOREM HistoricalDecisionServeJobUsesOrdinaryArchiveIoOwner ==
 BY TypedCandidateIsInCarrier, IsaT(180)
    DEF HistoricalDecisionServeJobOwned,
        HistoricalDecisionServeOccurrenceOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeLifecycleIdentity,
        HistoricalDecisionBodyHoldingAlias,
        HistoricalExactDecisionActiveRequestOwner,
        HistoricalExactDecisionServiceSource,
@@ -1291,6 +1694,8 @@ BY SentCertifiedResponseAuthenticatesEveryRelayOccurrence,
    ExactCertifiedResponseMatchesDecisionRequestHash, IsaT(240)
    DEF HistoricalDecisionServeJobOwned,
        HistoricalDecisionServeOccurrenceOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeLifecycleIdentity,
        HistoricalDecisionAuthenticatedResponse,
        HistoricalDecisionResponsePacketOwned,
        HistoricalDecisionBodyHoldingAlias,
@@ -1299,6 +1704,77 @@ BY SentCertifiedResponseAuthenticatesEveryRelayOccurrence,
        ServiceIoWorkerWork, CertifiedServeCanRespond,
        CertifiedResponseItem, PublishEphemeralItems,
        PacketsForItems, DecisionCertifiedResponseLineageExact
+
+THEOREM HistoricalDecisionAdmittedServeInstallsExactTombstone ==
+  \A node, qc, archive, request, job:
+    LET identity ==
+          HistoricalDecisionServeLifecycleIdentity(archive, request)
+    IN /\ AsyncStrongTypeInvariant
+       /\ HistoricalDecisionServeJobOwned(
+            node, qc, archive, request, job)
+       /\ Head(asyncIoQueues[archive]) = job
+       /\ ServiceIoWorkerWork(archive)
+       => /\ AsyncServeLifecycleTombstone(archive, identity)'
+          /\ AsyncServeTombstoneOutputs(archive, identity)' # {}
+          /\ ~AsyncServeLiveReservationOwned(archive, identity)'
+          /\ ~AsyncServeJobQueued(archive, identity)'
+BY HistoricalDecisionServeHeadCreatesAuthenticatedResponsePacket,
+   IsaT(240)
+   DEF HistoricalDecisionServeJobOwned,
+       HistoricalDecisionServeOccurrenceOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeLifecycleIdentity,
+       ServiceIoWorkerWork,
+       AsyncServeLifecycleTombstone,
+       AsyncServeTombstoneOutputs,
+       AsyncServeTombstoneRecords,
+       AsyncServeReservationRecord,
+       AsyncServeTombstonesWithoutFamily,
+       AsyncServeTombstone,
+       AsyncServeLiveReservationOwned,
+       AsyncServeJobQueued
+
+THEOREM HistoricalDecisionServeOrdinalIsImmutableUntilTerminalExit ==
+  \A archive, request:
+    LET identity ==
+          HistoricalDecisionServeLifecycleIdentity(archive, request)
+    IN /\ AsyncStrongTypeInvariant
+       /\ AsyncServeLifecycleOwned(archive, identity)
+       /\ AsyncNext
+       /\ AsyncServeLifecycleOwned(archive, identity)'
+       => AsyncServeAdmissionOrdinal(archive, identity)'
+            = AsyncServeAdmissionOrdinal(archive, identity)
+BY IsaT(300)
+   DEF HistoricalDecisionServeLifecycleIdentity,
+       AsyncServeAdmissionOrdinal,
+       AsyncServeLifecycleOwned,
+       AsyncServeLiveReservationOwned,
+       AsyncServeLifecycleTombstone,
+       AsyncServeReservationRecord,
+       AsyncServeTombstoneRecord,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, AsyncNetworkStep, AsyncFaultStep,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart
+
+THEOREM HistoricalDecisionServeTombstoneCannotResurrectAtGst ==
+  \A archive, request:
+    LET identity ==
+          HistoricalDecisionServeLifecycleIdentity(archive, request)
+    IN /\ AsyncStrongTypeInvariant
+       /\ gst
+       /\ AsyncServeLifecycleTombstone(archive, identity)
+       /\ [AsyncNext]_AsyncAllVars
+       => /\ AsyncServeLogicalIdentityRetiredOrSuperseded(
+                archive, identity)'
+          /\ ~AsyncServeJobQueued(archive, identity)'
+BY AsyncServeRetiredIdentityCannotRequeueAtGst, Isa
+   DEF HistoricalDecisionServeLifecycleIdentity,
+       AsyncServeLogicalIdentityRetiredOrSuperseded,
+       AsyncServeLifecycleOwned,
+       AsyncServeLifecycleTombstone,
+       AsyncAllVars
 
 THEOREM FreshHistoricalDecisionResponseAcquiresExactIngressOwner ==
   \A node, qc, archive, request, response, packet:
@@ -1392,6 +1868,194 @@ BY ExactCertifiedResponseCandidateRetainsOuterItem, IsaT(300)
        IngressResourceSource, IngressLane, SequenceSet
 
 (***************************************************************************
+Historical certified-request occurrence retention.
+
+These are safety classifications only.  They retain the immutable request and
+archive identity across retry, admission, and FIFO motion; the only terminal
+alternative is the exact certified-response owner.  In particular, the
+Serve-job arm is tied to the lifecycle identity and a queued identity may
+depart only through the response-producing tombstone transition above.
+***************************************************************************)
+
+THEOREM HistoricalDecisionAliasPersistsOrGoals ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionBodyHoldingAlias(
+         node, qc, archive, request)
+    /\ ~HistoricalDecisionCertifiedResponseGoal(node, qc)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionBodyHoldingAlias(
+            node, qc, archive, request)'
+       \/ HistoricalDecisionCertifiedResponseGoal(node, qc)'
+BY AsyncBracketStepRetainsDurableBodies,
+   HistoricalDecisionTargetPersistsUntilApplication,
+   GstAsyncStepIsMonotone, IsaT(600)
+   DEF HistoricalDecisionBodyHoldingAlias,
+       HistoricalExactDecisionActiveRequestOwner,
+       HistoricalExactDecisionServiceSource,
+       HistoricalDecisionCertifiedResponseGoal,
+       DecisionCertifiedFetchOwnedExact,
+       DecisionCertifiedRequestActiveExact,
+       MatchingCertifiedRequests,
+       DrainFairIngressSelected,
+       ResetNodeSchedulerForRestart,
+       ExecuteApply,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       AsyncAllVars
+
+THEOREM HistoricalDecisionRequestPacketPersistsOrHandsOff ==
+  \A node, qc, archive, request, packet:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionRequestPacketOwned(
+         node, qc, archive, request, packet)
+    /\ ~HistoricalDecisionCertifiedResponseGoal(node, qc)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionRequestPacketOwned(
+            node, qc, archive, request, packet)'
+       \/ HistoricalDecisionRequestIngressOwned(
+            node, qc, archive, request)'
+       \/ HistoricalDecisionCertifiedResponseGoal(node, qc)'
+BY HistoricalDecisionRequestPacketCreatesIngressOwner,
+   HistoricalDecisionAliasPersistsOrGoals, IsaT(600)
+   DEF HistoricalDecisionRequestPacketOwned,
+       HistoricalDecisionRequestIngressOwned,
+       HistoricalDecisionServeLifecycleIdentity,
+       HistoricalDecisionCertifiedResponseGoal,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       AsyncNetworkStep, AdmitIngressPacket,
+       AsyncFaultStep, PreGstLosePacket,
+       DrainFairIngressSelected,
+       ResetNodeSchedulerForRestart,
+       ExecuteApply, AsyncAllVars
+
+THEOREM HistoricalDecisionRequestIngressPersistsOrHandsOff ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionRequestIngressOwned(
+         node, qc, archive, request)
+    /\ ~HistoricalDecisionCertifiedResponseGoal(node, qc)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionRequestIngressOwned(
+            node, qc, archive, request)'
+       \/ \E job:
+            HistoricalDecisionServeJobOwned(
+              node, qc, archive, request, job)'
+       \/ \E response, packet:
+            HistoricalDecisionResponsePacketOwned(
+              node, qc, archive, request, response, packet)'
+       \/ HistoricalDecisionCertifiedResponseGoal(node, qc)'
+BY HistoricalDecisionRequestIngressCreatesLifecycleOutcome,
+   HistoricalDecisionAliasPersistsOrGoals, IsaT(600)
+   DEF HistoricalDecisionRequestIngressOwned,
+       HistoricalDecisionServeJobOwned,
+       HistoricalDecisionServeOccurrenceOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeTombstoneOwned,
+       HistoricalDecisionServeLifecycleIdentity,
+       HistoricalDecisionResponsePacketOwned,
+       HistoricalDecisionCertifiedResponseGoal,
+       HistoricalDecisionRequestIngressRunnerAction,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RunHistoricalServer,
+       DrainFairIngressSelected, DrainHistoricalIngressSelected,
+       ResetNodeSchedulerForRestart,
+       ExecuteApply, AsyncAllVars
+
+THEOREM HistoricalDecisionServePersistsOrResponds ==
+  \A node, qc, archive, request, job:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionServeJobOwned(
+         node, qc, archive, request, job)
+    /\ ~HistoricalDecisionCertifiedResponseGoal(node, qc)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionServeJobOwned(
+            node, qc, archive, request, job)'
+       \/ \E response, packet:
+            HistoricalDecisionResponsePacketOwned(
+              node, qc, archive, request, response, packet)'
+       \/ HistoricalDecisionCertifiedResponseGoal(node, qc)'
+BY HistoricalDecisionServeHeadCreatesAuthenticatedResponsePacket,
+   HistoricalDecisionAliasPersistsOrGoals,
+   ServeOccurrenceIndexAfterNonTargetHead,
+   TailRemovesUniqueServeOccurrence,
+   HeadTailProperties, IsaT(600)
+   DEF HistoricalDecisionServeJobOwned,
+       HistoricalDecisionServeOccurrenceOwned,
+       HistoricalDecisionServeAdmissionOwned,
+       HistoricalDecisionServeLifecycleIdentity,
+       HistoricalDecisionResponsePacketOwned,
+       HistoricalDecisionCertifiedResponseGoal,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       DrainFairIngressSelected,
+       ResetNodeSchedulerForRestart,
+       ExecuteApply, AsyncAllVars
+
+THEOREM HistoricalDecisionResponsePacketPersistsOrClaims ==
+  \A node, qc, archive, request, response, packet:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionResponsePacketOwned(
+         node, qc, archive, request, response, packet)
+    /\ ~HistoricalDecisionCertifiedResponseGoal(node, qc)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionResponsePacketOwned(
+            node, qc, archive, request, response, packet)'
+       \/ HistoricalDecisionRouteNeutralClaimIngressOwned(
+            node, qc, response)'
+       \/ HistoricalDecisionCertifiedResponseGoal(node, qc)'
+BY FreshHistoricalDecisionResponseAcquiresExactIngressOwner,
+   CoalescedHistoricalDecisionResponseRetainsRouteNeutralOwner,
+   HistoricalDecisionAliasPersistsOrGoals, IsaT(600)
+   DEF HistoricalDecisionResponsePacketOwned,
+       HistoricalDecisionRouteNeutralClaimIngressOwned,
+       HistoricalDecisionCertifiedResponseGoal,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       AsyncNetworkStep, AdmitIngressPacket,
+       AsyncFaultStep, PreGstLosePacket,
+       DrainFairIngressSelected,
+       ResetNodeSchedulerForRestart,
+       ExecuteApply, AsyncAllVars
+
+THEOREM HistoricalDecisionClaimIngressPersistsOrFetches ==
+  \A node, qc, response:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionRouteNeutralClaimIngressOwned(
+         node, qc, response)
+    /\ ~HistoricalDecisionCertifiedResponseGoal(node, qc)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionRouteNeutralClaimIngressOwned(
+            node, qc, response)'
+       \/ HistoricalDecisionCertifiedResponseGoal(node, qc)'
+BY HistoricalDecisionRouteNeutralOwnerHasExactIngressOccurrence,
+   HistoricalDecisionResponseIngressCreatesCertifiedFetch,
+   HistoricalDecisionTargetPersistsUntilApplication,
+   GstAsyncStepIsMonotone, IsaT(600)
+   DEF HistoricalDecisionRouteNeutralClaimIngressOwned,
+       HistoricalDecisionClaimedResponseIngressOwned,
+       HistoricalDecisionCertifiedResponseGoal,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, DrainFairIngressSelected,
+       ResetNodeSchedulerForRestart,
+       ExecuteApply, AsyncAllVars
+
+(***************************************************************************
 Fairness-parametric certified-body reduction.
 
 As above, the operators name exact residual kernels but do not assert them.
@@ -1411,12 +2075,128 @@ HistoricalDecisionRequestServeGoal(node, qc, archive, request) ==
   \/ \E job:
        HistoricalDecisionServeJobOwned(
          node, qc, archive, request, job)
+  \/ \E response, packet:
+       HistoricalDecisionResponsePacketOwned(
+         node, qc, archive, request, response, packet)
 
 HistoricalDecisionResponsePacketGoal(node, qc, archive, request) ==
   \/ HistoricalDecisionCertifiedResponseGoal(node, qc)
   \/ \E response, packet:
        HistoricalDecisionResponsePacketOwned(
          node, qc, archive, request, response, packet)
+
+(***************************************************************************
+Exact historical Decision request lifecycle rank.
+
+The rank is endpoint-neutral: only the immutable requester/context/archive/
+view/subject/request identity selects the lifecycle.  Retried transport keeps
+that identity and ingress ordinal.  The same frozen predecessor set and
+selector/lane/source/runner components used by the current-voter Decision
+proof therefore apply to a historical requester without importing current-
+voter liveness.
+***************************************************************************)
+
+HistoricalDecisionRequestLifecycleResidual(node, qc, archive, request) ==
+  /\ HistoricalDecisionRequestIngressOwned(node, qc, archive, request)
+  /\ ~HistoricalDecisionRequestServeGoal(node, qc, archive, request)
+
+HistoricalDecisionRequestLifecycleStage(node, qc, archive, request) ==
+  IF HistoricalDecisionRequestServeGoal(node, qc, archive, request)
+  THEN 0
+  ELSE IF HistoricalDecisionServeTombstoneOwned(
+            node, qc, archive, request)
+       THEN 1
+       ELSE IF HistoricalDecisionServeAdmissionOwned(archive, request)
+            THEN 2
+            ELSE 3
+
+HistoricalDecisionRequestFrozenPredecessorSet(archive, request) ==
+  LET identity ==
+        HistoricalDecisionServeLifecycleIdentity(archive, request)
+  IN ({"Io"} \X AsyncServeFrozenPredecessorSet(archive, identity))
+       \cup
+     ({"Ingress"} \X
+        AsyncServeIngressAdmissionPredecessorDebtSlots(archive, identity))
+       \cup
+     AsyncServePreexistingIngressOwnerPredecessorDebtSet(archive, identity)
+       \cup
+     AsyncServePreexistingIngressBarrierPredecessorDebtSet(archive, identity)
+
+HistoricalDecisionRequestFrozenPredecessorDebt(archive, request) ==
+  Cardinality(
+    HistoricalDecisionRequestFrozenPredecessorSet(archive, request))
+
+HistoricalDecisionRequestNestedIngressRank(node, qc, archive, request) ==
+  IF HistoricalDecisionRequestLifecycleResidual(
+       node, qc, archive, request)
+  THEN ExactDecisionRequestIngressRank(archive, request)
+  ELSE ExactDecisionRequestIngressZeroRank
+
+HistoricalDecisionRequestLifecycleRank(node, qc, archive, request) ==
+  <<HistoricalDecisionRequestLifecycleStage(node, qc, archive, request),
+    <<HistoricalDecisionRequestFrozenPredecessorDebt(archive, request),
+      HistoricalDecisionRequestNestedIngressRank(
+        node, qc, archive, request)>>>>
+
+HistoricalDecisionRequestLifecycleRankCarrier ==
+  ExactDecisionRequestLifecycleIngressRankCarrier
+
+HistoricalDecisionRequestLifecycleRankOrdering ==
+  ExactDecisionRequestLifecycleIngressRankOrdering
+
+THEOREM HistoricalDecisionRequestLifecycleRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    HistoricalDecisionRequestLifecycleRankOrdering,
+    HistoricalDecisionRequestLifecycleRankCarrier)
+BY ExactDecisionRequestLifecycleIngressRankOrderingIsWellFounded
+   DEF HistoricalDecisionRequestLifecycleRankOrdering,
+       HistoricalDecisionRequestLifecycleRankCarrier
+
+THEOREM HistoricalDecisionRequestLifecycleRankInCarrier ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDecisionRequestLifecycleResidual(
+         node, qc, archive, request)
+    => HistoricalDecisionRequestLifecycleRank(node, qc, archive, request)
+         \in HistoricalDecisionRequestLifecycleRankCarrier
+BY ExactDecisionRequestIngressPriorityDebtIsNatural,
+   ExactDecisionRequestIngressServeCapacityDebtIsNatural,
+   CandidateSequenceIndexIsPosition,
+   DrainableIngressTurnReachRankIsNatural,
+   FS_Union, FS_Product, FS_CardinalityType, IsaT(300)
+   DEF HistoricalDecisionRequestLifecycleResidual,
+       HistoricalDecisionRequestLifecycleRank,
+       HistoricalDecisionRequestLifecycleStage,
+       HistoricalDecisionRequestFrozenPredecessorDebt,
+       HistoricalDecisionRequestFrozenPredecessorSet,
+       HistoricalDecisionRequestNestedIngressRank,
+       HistoricalDecisionRequestLifecycleRankCarrier,
+       HistoricalDecisionRequestIngressOwned,
+       HistoricalDecisionServeLifecycleIdentity,
+       ExactDecisionRequestLifecycleIngressRankCarrier,
+       ExactDecisionRequestLifecycleDebtCarrier,
+       ExactDecisionRequestIngressRank,
+       ExactDecisionRequestIngressRankCarrier,
+       ExactDecisionRequestIngressCapacityRank,
+       ExactDecisionRequestIngressReachSelectorRank,
+       ExactDecisionRequestIngressSelectorRank,
+       ExactDecisionRequestIngressLaneRank,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressTargetServeCapacityDebt,
+       ExactDecisionRequestIngressServeCapacityDebt,
+       ExactDecisionRequestIngressPriorityDebt,
+       ExactDecisionRequestIngressPriorityOwners,
+       ExactDecisionRequestIngressLanePosition,
+       ExactDecisionRequestIngressLaneIndices,
+       ExactDecisionRequestIngressSourcePosition,
+       IngressSourceServiceRank,
+       ExactDecisionRequestIngressReachRank,
+       ExactDecisionRequestIngressZeroRank,
+       ExactDecisionRequestIngressZeroCapacityRank,
+       ExactDecisionRequestIngressZeroReachSelectorRank,
+       ExactDecisionRequestIngressZeroSelectorRank,
+       ExactDecisionRequestIngressZeroLaneRank,
+       AsyncConfiguration
 
 HistoricalDecisionRequestPacketEmissionKernelProperty(specification) ==
   specification
@@ -1532,6 +2312,1000 @@ PROOF
              HistoricalDecisionCertifiedResponseGoal
     <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, PTL
          DEF HistoricalDecisionCertifiedBodyTransportLeaf
+  <1> QED BY <1>1
+
+(***************************************************************************
+Exact Commit-candidate tail handoffs.
+
+Candidate starvation alone proves only departure from the scheduler carriers.
+For DeliverQC, BeginDecision, and PersistDecision that departure must be tied
+to the concrete reducer effect.  The following safety leaves retain the exact
+context/view/subject/evidence/origin lineage across every non-consuming step;
+the consuming step either installs the next causal owner or writes the exact
+Decision.  A serviced/tombstoned identity cannot be counted as success by
+itself.
+***************************************************************************)
+
+HistoricalCommitDecisionExactCarrierOwned(candidate, qc, kind) ==
+  /\ candidate \in AsyncCandidateSet
+  /\ qc \in commitQCs
+  /\ candidate.kind = kind
+  /\ kind \in {"DeliverQC", "BeginDecision", "PersistDecision"}
+  /\ qc.context = context
+  /\ qc.phase = "Commit"
+  /\ candidate.consumerContext = context
+  /\ candidate.view = qc.view
+  /\ candidate.subject = qc.subject
+  /\ HistoricalProtectedCandidateOwned(candidate)
+  /\ \/ HistoricalCommitDecisionDirectEvidence(candidate, qc)
+     \/ HistoricalCommitDecisionResponseEvidence(candidate, qc)
+  /\ IF kind = "DeliverQC"
+     THEN candidate.item =
+            IF candidate.evidence.kind = "CommitQC"
+            THEN candidate.evidence
+            ELSE DiscoveredCommitQcItem(candidate.evidence)
+     ELSE candidate.item = NoAsyncItem
+
+HistoricalCommitDecisionExactLineageOwned(source, qc, kind) ==
+  \E candidate \in AsyncCandidateSet:
+    /\ HistoricalCommitDecisionExactCarrierOwned(candidate, qc, kind)
+    /\ candidate.node = source.node
+    /\ candidate.evidence = source.evidence
+    /\ candidate.causalOrigin = source.causalOrigin
+
+THEOREM HistoricalCommitDecisionOwnerHasExactCarrier ==
+  \A node, kind:
+    HistoricalCommitDecisionCandidateOwned(node, kind)
+      <=> \E candidate \in AsyncCandidateSet, qc \in commitQCs:
+            /\ candidate.node = node
+            /\ HistoricalCommitDecisionExactCarrierOwned(
+                 candidate, qc, kind)
+BY Isa
+   DEF HistoricalCommitDecisionCandidateOwned,
+       HistoricalCommitDecisionExactCarrierOwned
+
+THEOREM HistoricalCommitDeliveryOwnerPersistsOrBeginsDecision ==
+  \A candidate, qc:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalCommitDecisionExactCarrierOwned(
+         candidate, qc, "DeliverQC")
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalCommitDecisionExactCarrierOwned(
+            candidate, qc, "DeliverQC")'
+       \/ NodeHasDecision(candidate.node)'
+       \/ HistoricalCommitDecisionExactLineageOwned(
+            candidate, qc, "BeginDecision")'
+BY AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateIoCompletionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   IsaT(1200)
+   DEF HistoricalCommitDecisionExactCarrierOwned,
+       HistoricalCommitDecisionCandidateOwned,
+       HistoricalCommitDecisionExactLineageOwned,
+       HistoricalCommitDecisionDirectEvidence,
+       HistoricalCommitDecisionResponseEvidence,
+       HistoricalProtectedCandidateOwned,
+       ProtectedCandidateOwned,
+       ProtectedServiceCandidate,
+       CandidateConsumerCurrent,
+       CandidateScheduled,
+       CandidateScheduledAfter,
+       CommandDispatchable,
+       CommandSuccessors,
+       CausalCandidate,
+       CausalCandidateWithEvidence,
+       AppendCausalSuccessors,
+       FreshCommandSuccessors,
+       EnqueueCandidate,
+       ExecuteCommand, ExecuteRegularCommand,
+       BeginDecision, PersistDecision,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateReducerStageCoveredAfterIn,
+       AsyncCandidateDecisionStageCoveredAfter,
+       AsyncCandidateConsumerEpisodeObsoleteAfter,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationTransition,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork, RunHistoricalServer,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       AsyncNetworkStep, AsyncFaultStep,
+       AsyncAllVars
+
+THEOREM HistoricalBeginDecisionOwnerPersistsOrPersistsDecision ==
+  \A candidate, qc:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalCommitDecisionExactCarrierOwned(
+         candidate, qc, "BeginDecision")
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalCommitDecisionExactCarrierOwned(
+            candidate, qc, "BeginDecision")'
+       \/ NodeHasDecision(candidate.node)'
+       \/ HistoricalCommitDecisionExactLineageOwned(
+            candidate, qc, "PersistDecision")'
+BY AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateIoCompletionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   IsaT(1200)
+   DEF HistoricalCommitDecisionExactCarrierOwned,
+       HistoricalCommitDecisionCandidateOwned,
+       HistoricalCommitDecisionExactLineageOwned,
+       HistoricalCommitDecisionDirectEvidence,
+       HistoricalCommitDecisionResponseEvidence,
+       HistoricalProtectedCandidateOwned,
+       ProtectedCandidateOwned,
+       ProtectedServiceCandidate,
+       CandidateConsumerCurrent,
+       CandidateScheduled,
+       CandidateScheduledAfter,
+       CommandDispatchable,
+       CommandSuccessors,
+       CausalCandidate,
+       CausalCandidateWithEvidence,
+       AppendCausalSuccessors,
+       FreshCommandSuccessors,
+       EnqueueCandidate,
+       ExecuteCommand, ExecuteRegularCommand,
+       BeginDecision, PersistDecision,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateReducerStageCoveredAfterIn,
+       AsyncCandidateDecisionStageCoveredAfter,
+       AsyncCandidateConsumerEpisodeObsoleteAfter,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationTransition,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork, RunHistoricalServer,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       AsyncNetworkStep, AsyncFaultStep,
+       AsyncAllVars
+
+THEOREM HistoricalPersistDecisionOwnerPersistsOrWritesDecision ==
+  \A candidate, qc:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalCommitDecisionExactCarrierOwned(
+         candidate, qc, "PersistDecision")
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalCommitDecisionExactCarrierOwned(
+            candidate, qc, "PersistDecision")'
+       \/ NodeHasDecision(candidate.node)'
+BY AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateIoCompletionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   AsyncCandidateBusyDeferralTransfersSameOwner,
+   AsyncCandidateDeferredHandoffRetainsSameOwner,
+   IsaT(1200)
+   DEF HistoricalCommitDecisionExactCarrierOwned,
+       HistoricalCommitDecisionCandidateOwned,
+       HistoricalCommitDecisionDirectEvidence,
+       HistoricalCommitDecisionResponseEvidence,
+       HistoricalProtectedCandidateOwned,
+       ProtectedCandidateOwned,
+       ProtectedServiceCandidate,
+       CandidateConsumerCurrent,
+       CandidateScheduled,
+       CandidateScheduledAfter,
+       CommandDispatchable,
+       CommandSuccessors,
+       PersistDecisionRecoverySuccessor,
+       AppendCausalSuccessors,
+       FreshCommandSuccessors,
+       EnqueueCandidate,
+       ExecuteCommand, ExecuteRegularCommand,
+       PersistDecision,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateReducerStageCoveredAfterIn,
+       AsyncCandidateDecisionStageCoveredAfter,
+       AsyncCandidateConsumerEpisodeObsoleteAfter,
+       AsyncCandidateTerminalTombstoned,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationTransition,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork, RunHistoricalServer,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       AsyncNetworkStep, AsyncFaultStep,
+       AsyncAllVars
+
+HistoricalCommitDecisionTailTemporalSupportProperty(specification) ==
+  /\ (specification => []AsyncStrongTypeInvariant)
+  /\ (specification => []AsyncProgressOwnershipInvariant)
+  /\ (specification => []AsyncCandidateServiceTombstoneLifecycleInvariant)
+  /\ (specification => [][AsyncNext]_AsyncAllVars)
+  /\ (specification => [](gst => []gst))
+
+THEOREM HistoricalCommitDecisionExactCarrierTailClosesProgressLeaves ==
+  \A specification:
+    HistoricalCommitDecisionTailTemporalSupportProperty(specification)
+      => /\ HistoricalCommitDeliveryProgressLeaf(specification)
+         /\ HistoricalBeginDecisionProgressLeaf(specification)
+         /\ HistoricalPersistDecisionProgressLeaf(specification)
+PROOF
+  <1>1. ASSUME NEW specification,
+                HistoricalCommitDecisionTailTemporalSupportProperty(
+                  specification)
+         PROVE /\ HistoricalCommitDeliveryProgressLeaf(specification)
+               /\ HistoricalBeginDecisionProgressLeaf(specification)
+               /\ HistoricalPersistDecisionProgressLeaf(specification)
+    <2>1. CASE ~HistoricalProtectedCandidateStarvationProperty(
+                   specification)
+      BY <2>1
+         DEF HistoricalCommitDeliveryProgressLeaf,
+             HistoricalBeginDecisionProgressLeaf,
+             HistoricalPersistDecisionProgressLeaf
+    <2>2. CASE HistoricalProtectedCandidateStarvationProperty(
+                  specification)
+      <3>1. CASE ~specification
+        BY <3>1
+           DEF HistoricalCommitDeliveryProgressLeaf,
+               HistoricalBeginDecisionProgressLeaf,
+               HistoricalPersistDecisionProgressLeaf
+      <3>2. CASE specification
+        <4>1. []AsyncStrongTypeInvariant
+          BY <1>1, <3>2
+             DEF HistoricalCommitDecisionTailTemporalSupportProperty
+        <4>2. []AsyncProgressOwnershipInvariant
+          BY <1>1, <3>2
+             DEF HistoricalCommitDecisionTailTemporalSupportProperty
+        <4>3. []AsyncCandidateServiceTombstoneLifecycleInvariant
+          BY <1>1, <3>2
+             DEF HistoricalCommitDecisionTailTemporalSupportProperty
+        <4>4. [][AsyncNext]_AsyncAllVars
+          BY <1>1, <3>2
+             DEF HistoricalCommitDecisionTailTemporalSupportProperty
+        <4>5. [](gst => []gst)
+          BY <1>1, <3>2
+             DEF HistoricalCommitDecisionTailTemporalSupportProperty
+        <4>6. \A candidate \in AsyncCandidateSet, qc:
+                 (gst
+                   /\ HistoricalCommitDecisionExactCarrierOwned(
+                        candidate, qc, "DeliverQC"))
+                   ~> (NodeHasDecision(candidate.node)
+                        \/ HistoricalCommitDecisionExactLineageOwned(
+                             candidate, qc, "BeginDecision"))
+          <5>1. ASSUME NEW candidate \in AsyncCandidateSet, NEW qc
+                 PROVE
+                   (gst
+                     /\ HistoricalCommitDecisionExactCarrierOwned(
+                          candidate, qc, "DeliverQC"))
+                     ~> (NodeHasDecision(candidate.node)
+                          \/ HistoricalCommitDecisionExactLineageOwned(
+                               candidate, qc, "BeginDecision"))
+            <6>1. (gst /\ HistoricalProtectedCandidateOwned(candidate))
+                     ~> ~HistoricalProtectedCandidateOwned(candidate)
+              BY <2>2, <3>2, <5>1
+                 DEF HistoricalProtectedCandidateStarvationProperty,
+                     HistoricalProtectedServiceOwnershipExit
+            <6>2. [](gst
+                       /\ HistoricalCommitDecisionExactCarrierOwned(
+                            candidate, qc, "DeliverQC")
+                       /\ ~(NodeHasDecision(candidate.node)
+                              \/ HistoricalCommitDecisionExactLineageOwned(
+                                   candidate, qc, "BeginDecision"))
+                      => (gst
+                           /\ HistoricalCommitDecisionExactCarrierOwned(
+                                candidate, qc, "DeliverQC"))'
+                           \/ (NodeHasDecision(candidate.node)
+                                \/ HistoricalCommitDecisionExactLineageOwned(
+                                     candidate, qc, "BeginDecision"))')
+              BY <4>1, <4>2, <4>3, <4>4, <4>5,
+                 HistoricalCommitDeliveryOwnerPersistsOrBeginsDecision,
+                 PTL
+            <6> QED BY <6>1, <6>2, PTL
+                 DEF HistoricalCommitDecisionExactCarrierOwned
+          <5> QED BY <5>1
+        <4>7. \A candidate \in AsyncCandidateSet, qc:
+                 (gst
+                   /\ HistoricalCommitDecisionExactCarrierOwned(
+                        candidate, qc, "BeginDecision"))
+                   ~> (NodeHasDecision(candidate.node)
+                        \/ HistoricalCommitDecisionExactLineageOwned(
+                             candidate, qc, "PersistDecision"))
+          <5>1. ASSUME NEW candidate \in AsyncCandidateSet, NEW qc
+                 PROVE
+                   (gst
+                     /\ HistoricalCommitDecisionExactCarrierOwned(
+                          candidate, qc, "BeginDecision"))
+                     ~> (NodeHasDecision(candidate.node)
+                          \/ HistoricalCommitDecisionExactLineageOwned(
+                               candidate, qc, "PersistDecision"))
+            <6>1. (gst /\ HistoricalProtectedCandidateOwned(candidate))
+                     ~> ~HistoricalProtectedCandidateOwned(candidate)
+              BY <2>2, <3>2, <5>1
+                 DEF HistoricalProtectedCandidateStarvationProperty,
+                     HistoricalProtectedServiceOwnershipExit
+            <6>2. [](gst
+                       /\ HistoricalCommitDecisionExactCarrierOwned(
+                            candidate, qc, "BeginDecision")
+                       /\ ~(NodeHasDecision(candidate.node)
+                              \/ HistoricalCommitDecisionExactLineageOwned(
+                                   candidate, qc, "PersistDecision"))
+                      => (gst
+                           /\ HistoricalCommitDecisionExactCarrierOwned(
+                                candidate, qc, "BeginDecision"))'
+                           \/ (NodeHasDecision(candidate.node)
+                                \/ HistoricalCommitDecisionExactLineageOwned(
+                                     candidate, qc, "PersistDecision"))')
+              BY <4>1, <4>2, <4>3, <4>4, <4>5,
+                 HistoricalBeginDecisionOwnerPersistsOrPersistsDecision,
+                 PTL
+            <6> QED BY <6>1, <6>2, PTL
+                 DEF HistoricalCommitDecisionExactCarrierOwned
+          <5> QED BY <5>1
+        <4>8. \A candidate \in AsyncCandidateSet, qc:
+                 (gst
+                   /\ HistoricalCommitDecisionExactCarrierOwned(
+                        candidate, qc, "PersistDecision"))
+                   ~> NodeHasDecision(candidate.node)
+          <5>1. ASSUME NEW candidate \in AsyncCandidateSet, NEW qc
+                 PROVE
+                   (gst
+                     /\ HistoricalCommitDecisionExactCarrierOwned(
+                          candidate, qc, "PersistDecision"))
+                     ~> NodeHasDecision(candidate.node)
+            <6>1. (gst /\ HistoricalProtectedCandidateOwned(candidate))
+                     ~> ~HistoricalProtectedCandidateOwned(candidate)
+              BY <2>2, <3>2, <5>1
+                 DEF HistoricalProtectedCandidateStarvationProperty,
+                     HistoricalProtectedServiceOwnershipExit
+            <6>2. [](gst
+                       /\ HistoricalCommitDecisionExactCarrierOwned(
+                            candidate, qc, "PersistDecision")
+                       /\ ~NodeHasDecision(candidate.node)
+                      => (gst
+                           /\ HistoricalCommitDecisionExactCarrierOwned(
+                                candidate, qc, "PersistDecision"))'
+                           \/ NodeHasDecision(candidate.node)')
+              BY <4>1, <4>2, <4>3, <4>4, <4>5,
+                 HistoricalPersistDecisionOwnerPersistsOrWritesDecision,
+                 PTL
+            <6> QED BY <6>1, <6>2, PTL
+                 DEF HistoricalCommitDecisionExactCarrierOwned
+          <5> QED BY <5>1
+        <4>9. \A node \in Responsive:
+                 (gst
+                   /\ HistoricalCommitDecisionCandidateOwned(
+                        node, "DeliverQC"))
+                   ~> (NodeHasDecision(node)
+                        \/ HistoricalCommitDecisionCandidateOwned(
+                             node, "BeginDecision"))
+          BY <4>6, HistoricalCommitDecisionOwnerHasExactCarrier, PTL
+             DEF HistoricalCommitDecisionExactLineageOwned,
+                 HistoricalCommitDecisionExactCarrierOwned
+        <4>10. \A node \in Responsive:
+                  (gst
+                    /\ HistoricalCommitDecisionCandidateOwned(
+                         node, "BeginDecision"))
+                    ~> (NodeHasDecision(node)
+                         \/ HistoricalCommitDecisionCandidateOwned(
+                              node, "PersistDecision"))
+          BY <4>7, HistoricalCommitDecisionOwnerHasExactCarrier, PTL
+             DEF HistoricalCommitDecisionExactLineageOwned,
+                 HistoricalCommitDecisionExactCarrierOwned
+        <4>11. \A node \in Responsive:
+                  (gst
+                    /\ HistoricalCommitDecisionCandidateOwned(
+                         node, "PersistDecision"))
+                    ~> NodeHasDecision(node)
+          BY <4>8, HistoricalCommitDecisionOwnerHasExactCarrier, PTL
+        <4> QED BY <2>2, <3>2, <4>9, <4>10, <4>11
+             DEF HistoricalCommitDeliveryProgressLeaf,
+                 HistoricalBeginDecisionProgressLeaf,
+                 HistoricalPersistDecisionProgressLeaf
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+(***************************************************************************
+Exact historical Decision-body handoffs.
+
+The six body leaves cannot be obtained from candidate starvation alone:
+departure of an existential owner could otherwise be witnessed by an
+unrelated candidate at the same node.  Freeze the historical node, persisted
+Decision QC, route-neutral candidate evidence, and first-admission causal
+origin.  Every
+non-consuming transition retains that exact carrier; consuming the carrier
+either installs the exact next lineage owner, opens the exact certified-body
+request, or records the Application.  A tombstone is lifecycle evidence, not
+a successful handoff.
+***************************************************************************)
+
+HistoricalDecisionPipelineExactCarrierOwned(
+    node, qc, evidence, origin, kind, candidate) ==
+  /\ node \in Responsive
+  /\ HistoricalRecoveryTarget(node)
+  /\ \E decision \in decisions:
+       /\ HistoricalDecisionRecordMatches(node, decision)
+       /\ decision.qc = qc
+  /\ kind \in DecisionPipelineKinds
+  /\ candidate \in AsyncCandidateSet
+  /\ candidate.kind = kind
+  /\ AsyncRouteNeutralCandidateEvidence(candidate.evidence) = evidence
+  /\ candidate.causalOrigin = origin
+  /\ DecisionPipelineCandidate(node, qc, candidate)
+  /\ HistoricalProtectedCandidateOwned(candidate)
+
+HistoricalDecisionPipelineExactLineageOwned(
+    node, qc, evidence, origin, kind) ==
+  \E candidate \in AsyncCandidateSet:
+    HistoricalDecisionPipelineExactCarrierOwned(
+      node, qc, evidence, origin, kind, candidate)
+
+HistoricalDecisionPipelineExactStageOutcome(
+    node, qc, evidence, origin, kind) ==
+  \/ NodeHasApplication(node)
+  \/ CASE kind = "FetchBody" ->
+            \/ DecisionCertifiedRequestActive(node, qc)
+            \/ HistoricalDecisionPipelineExactLineageOwned(
+                 node, qc, evidence, origin, "ValidateBody")
+       [] kind = "RequestCertifiedBody" ->
+            DecisionCertifiedRequestActive(node, qc)
+       [] kind = "FetchCertifiedBody" ->
+            HistoricalDecisionPipelineExactLineageOwned(
+              node, qc, evidence, origin, "StoreBody")
+       [] kind = "StoreBody" ->
+            HistoricalDecisionPipelineExactLineageOwned(
+              node, qc, evidence, origin, "ValidateBody")
+       [] kind = "ValidateBody" ->
+            HistoricalDecisionPipelineExactLineageOwned(
+              node, qc, evidence, origin, "Apply")
+       [] kind = "Apply" -> NodeHasApplication(node)
+       [] OTHER -> FALSE
+
+THEOREM HistoricalDecisionPipelineOwnerHasExactCarrier ==
+  \A node \in Responsive, kind:
+    HistoricalDecisionPipelineKindOwned(node, kind)
+      <=> \E decision \in decisions,
+              candidate \in AsyncCandidateSet:
+            /\ HistoricalDecisionRecordMatches(node, decision)
+            /\ HistoricalDecisionPipelineExactCarrierOwned(
+                 node, decision.qc,
+                 AsyncRouteNeutralCandidateEvidence(candidate.evidence),
+                 candidate.causalOrigin, kind, candidate)
+BY Isa
+   DEF HistoricalDecisionPipelineKindOwned,
+       HistoricalDecisionPipelineExactCarrierOwned,
+       HistoricalDecisionRecordMatches,
+       HistoricalProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       DecisionPipelineKindOwned, DecisionPipelineCandidate
+
+(***************************************************************************
+One bracket step cannot detach a live exact body carrier from its frozen
+Decision lineage.  The proof expands all six production reducer actions and
+the exact causal-successor constructor.  The named corollaries below expose
+each action handoff separately for checker and mutation coverage.
+***************************************************************************)
+THEOREM HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff ==
+  \A node \in Responsive, qc, evidence, origin,
+     kind \in DecisionPipelineKinds,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, kind, candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin, kind, candidate)'
+       \/ HistoricalDecisionPipelineExactStageOutcome(
+            node, qc, evidence, origin, kind)'
+BY CompletionDeferralRetainsCandidate,
+   CoreBracketStepPreservesNodeApplication,
+   CommandSuccessorsRetainCausalOrigin,
+   IsaT(1200)
+   DEF HistoricalDecisionPipelineExactCarrierOwned,
+       HistoricalDecisionPipelineExactLineageOwned,
+       HistoricalDecisionPipelineExactStageOutcome,
+       HistoricalDecisionRecordMatches,
+       HistoricalProtectedCandidateOwned,
+       ProtectedCandidateOwned, ProtectedServiceCandidate,
+       DecisionPipelineKinds, DecisionPipelineKindOwned,
+       DecisionPipelineCandidate, CandidateConsumerCurrent,
+       CandidateScheduled, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates,
+       DecisionCertifiedRequestActive, DecisionRecoveryCertificate,
+       DecisionTimeoutFrontierInvariant,
+       DecisionFrontierUniquenessInvariant,
+       PostGstReplayQuarantineExcluded,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationTransition,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation,
+       AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       SerializedRunnerRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       AsyncNetworkStep, AdmitIngressPacket, AsyncFaultStep,
+       LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
+       ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand,
+       ExecuteDecisionFetch, ExecuteRequestCertifiedBody, ExecuteApply,
+       FetchCertifiedBody, StoreBody, ValidateDecidedBody, ApplyDecision,
+       PublishCertifiedRequests, CertifiedRequestOutbox,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       FreshCandidateSequence, CommandSuccessors,
+       CausalCandidate, AsyncCandidateFrom,
+       AsyncCandidateWithIdentityAndOrigin,
+       AsyncAllVars
+
+THEOREM HistoricalDecisionFetchBodyOwnerPersistsOrHandsOff ==
+  \A node \in Responsive, qc, evidence, origin,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, "FetchBody", candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin, "FetchBody", candidate)'
+       \/ NodeHasApplication(node)'
+       \/ DecisionCertifiedRequestActive(node, qc)'
+       \/ HistoricalDecisionPipelineExactLineageOwned(
+            node, qc, evidence, origin, "ValidateBody")'
+BY HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff
+   DEF HistoricalDecisionPipelineExactStageOutcome,
+       DecisionPipelineKinds
+
+THEOREM HistoricalDecisionRequestBodyOwnerPersistsOrRequests ==
+  \A node \in Responsive, qc, evidence, origin,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, "RequestCertifiedBody", candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin,
+            "RequestCertifiedBody", candidate)'
+       \/ NodeHasApplication(node)'
+       \/ DecisionCertifiedRequestActive(node, qc)'
+BY HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff
+   DEF HistoricalDecisionPipelineExactStageOutcome,
+       DecisionPipelineKinds
+
+THEOREM HistoricalDecisionFetchCertifiedOwnerPersistsOrStores ==
+  \A node \in Responsive, qc, evidence, origin,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, "FetchCertifiedBody", candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin,
+            "FetchCertifiedBody", candidate)'
+       \/ NodeHasApplication(node)'
+       \/ HistoricalDecisionPipelineExactLineageOwned(
+            node, qc, evidence, origin, "StoreBody")'
+BY HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff
+   DEF HistoricalDecisionPipelineExactStageOutcome,
+       DecisionPipelineKinds
+
+THEOREM HistoricalDecisionStoreBodyOwnerPersistsOrValidates ==
+  \A node \in Responsive, qc, evidence, origin,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, "StoreBody", candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin, "StoreBody", candidate)'
+       \/ NodeHasApplication(node)'
+       \/ HistoricalDecisionPipelineExactLineageOwned(
+            node, qc, evidence, origin, "ValidateBody")'
+BY HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff
+   DEF HistoricalDecisionPipelineExactStageOutcome,
+       DecisionPipelineKinds
+
+THEOREM HistoricalDecisionValidateBodyOwnerPersistsOrApplies ==
+  \A node \in Responsive, qc, evidence, origin,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, "ValidateBody", candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin, "ValidateBody", candidate)'
+       \/ NodeHasApplication(node)'
+       \/ HistoricalDecisionPipelineExactLineageOwned(
+            node, qc, evidence, origin, "Apply")'
+BY HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff
+   DEF HistoricalDecisionPipelineExactStageOutcome,
+       DecisionPipelineKinds
+
+THEOREM HistoricalDecisionApplyOwnerPersistsOrWritesApplication ==
+  \A node \in Responsive, qc, evidence, origin,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, "Apply", candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin, "Apply", candidate)'
+       \/ NodeHasApplication(node)'
+BY HistoricalDecisionPipelineExactCarrierPersistsOrHandsOff
+   DEF HistoricalDecisionPipelineExactStageOutcome,
+       DecisionPipelineKinds
+
+THEOREM HistoricalDecisionPipelinePerActionSafetyCoversEveryKind ==
+  \A node \in Responsive, qc, evidence, origin,
+     kind \in DecisionPipelineKinds,
+     candidate \in AsyncCandidateSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionTimeoutFrontierInvariant
+    /\ DecisionFrontierUniquenessInvariant
+    /\ PostGstReplayQuarantineExcluded
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ HistoricalDecisionPipelineExactCarrierOwned(
+         node, qc, evidence, origin, kind, candidate)
+    /\ [AsyncNext]_AsyncAllVars
+    => \/ HistoricalDecisionPipelineExactCarrierOwned(
+            node, qc, evidence, origin, kind, candidate)'
+       \/ HistoricalDecisionPipelineExactStageOutcome(
+            node, qc, evidence, origin, kind)'
+BY HistoricalDecisionFetchBodyOwnerPersistsOrHandsOff,
+   HistoricalDecisionRequestBodyOwnerPersistsOrRequests,
+   HistoricalDecisionFetchCertifiedOwnerPersistsOrStores,
+   HistoricalDecisionStoreBodyOwnerPersistsOrValidates,
+   HistoricalDecisionValidateBodyOwnerPersistsOrApplies,
+   HistoricalDecisionApplyOwnerPersistsOrWritesApplication,
+   Isa
+   DEF HistoricalDecisionPipelineExactStageOutcome,
+       DecisionPipelineKinds
+
+HistoricalDecisionPipelineTemporalSupportProperty(specification) ==
+  /\ (specification => []AsyncStrongTypeInvariant)
+  /\ (specification => []AsyncProgressOwnershipInvariant)
+  /\ (specification => []DecisionTimeoutFrontierInvariant)
+  /\ (specification => []DecisionFrontierUniquenessInvariant)
+  /\ (specification => []PostGstReplayQuarantineExcluded)
+  /\ (specification =>
+        []AsyncCandidateServiceTombstoneLifecycleInvariant)
+  /\ (specification => [][AsyncNext]_AsyncAllVars)
+  /\ (specification => [](gst => []gst))
+
+HistoricalDecisionPipelineExactCarrierHandoffProperty(specification) ==
+  specification
+    => \A node \in Responsive,
+          kind \in DecisionPipelineKinds,
+          candidate \in AsyncCandidateSet,
+          qc, evidence, origin:
+         (gst
+           /\ HistoricalDecisionPipelineExactCarrierOwned(
+                node, qc, evidence, origin, kind, candidate))
+           ~> HistoricalDecisionPipelineExactStageOutcome(
+                node, qc, evidence, origin, kind)
+
+THEOREM HistoricalDecisionPipelineExactCarrierReachesExactHandoff ==
+  \A specification:
+    /\ HistoricalDecisionPipelineTemporalSupportProperty(specification)
+    /\ HistoricalProtectedCandidateStarvationProperty(specification)
+    => HistoricalDecisionPipelineExactCarrierHandoffProperty(specification)
+PROOF
+  <1>1. ASSUME NEW specification,
+                HistoricalDecisionPipelineTemporalSupportProperty(
+                  specification),
+                HistoricalProtectedCandidateStarvationProperty(
+                  specification)
+         PROVE HistoricalDecisionPipelineExactCarrierHandoffProperty(
+                   specification)
+    <2>1. CASE ~specification
+      BY <2>1
+         DEF HistoricalDecisionPipelineExactCarrierHandoffProperty
+    <2>2. CASE specification
+      <3>1. []AsyncStrongTypeInvariant
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>2. []AsyncProgressOwnershipInvariant
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>3. []DecisionTimeoutFrontierInvariant
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>4. []DecisionFrontierUniquenessInvariant
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>5. []PostGstReplayQuarantineExcluded
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>6. []AsyncCandidateServiceTombstoneLifecycleInvariant
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>7. [][AsyncNext]_AsyncAllVars
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>8. [](gst => []gst)
+        BY <1>1, <2>2
+           DEF HistoricalDecisionPipelineTemporalSupportProperty
+      <3>9. \A node \in Responsive,
+                kind \in DecisionPipelineKinds,
+                candidate \in AsyncCandidateSet,
+                qc, evidence, origin:
+               (gst
+                 /\ HistoricalDecisionPipelineExactCarrierOwned(
+                      node, qc, evidence, origin, kind, candidate))
+                 ~> HistoricalDecisionPipelineExactStageOutcome(
+                      node, qc, evidence, origin, kind)
+        <4>1. ASSUME NEW node \in Responsive,
+                      NEW kind \in DecisionPipelineKinds,
+                      NEW candidate \in AsyncCandidateSet,
+                      NEW qc, NEW evidence, NEW origin
+               PROVE
+                 (gst
+                   /\ HistoricalDecisionPipelineExactCarrierOwned(
+                        node, qc, evidence, origin, kind, candidate))
+                   ~> HistoricalDecisionPipelineExactStageOutcome(
+                        node, qc, evidence, origin, kind)
+          <5>1. (gst /\ HistoricalProtectedCandidateOwned(candidate))
+                   ~> ~HistoricalProtectedCandidateOwned(candidate)
+            BY <1>1, <2>2, <4>1
+               DEF HistoricalProtectedCandidateStarvationProperty,
+                   HistoricalProtectedServiceOwnershipExit
+          <5>2. [](gst
+                     /\ HistoricalDecisionPipelineExactCarrierOwned(
+                          node, qc, evidence, origin, kind, candidate)
+                     /\ ~HistoricalDecisionPipelineExactStageOutcome(
+                          node, qc, evidence, origin, kind)
+                    => (gst
+                         /\ HistoricalDecisionPipelineExactCarrierOwned(
+                              node, qc, evidence, origin,
+                              kind, candidate))'
+                         \/ HistoricalDecisionPipelineExactStageOutcome(
+                              node, qc, evidence, origin, kind)')
+            BY <3>1, <3>2, <3>3, <3>4, <3>5, <3>6, <3>7, <3>8,
+               HistoricalDecisionPipelinePerActionSafetyCoversEveryKind,
+               PTL
+          <5> QED BY <5>1, <5>2, PTL
+               DEF HistoricalDecisionPipelineExactCarrierOwned
+        <4> QED BY <4>1
+      <3> QED BY <2>2, <3>9
+           DEF HistoricalDecisionPipelineExactCarrierHandoffProperty
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM HistoricalDecisionPipelineExactCarrierClosesBodyLeaves ==
+  \A specification:
+    HistoricalDecisionPipelineTemporalSupportProperty(specification)
+      => /\ HistoricalDecisionFetchProgressLeaf(specification)
+         /\ HistoricalDecisionRequestBodyProgressLeaf(specification)
+         /\ HistoricalDecisionFetchCertifiedProgressLeaf(specification)
+         /\ HistoricalDecisionStoreProgressLeaf(specification)
+         /\ HistoricalDecisionValidateProgressLeaf(specification)
+         /\ HistoricalDecisionApplyProgressLeaf(specification)
+PROOF
+  <1>1. ASSUME NEW specification,
+                HistoricalDecisionPipelineTemporalSupportProperty(
+                  specification)
+         PROVE /\ HistoricalDecisionFetchProgressLeaf(specification)
+               /\ HistoricalDecisionRequestBodyProgressLeaf(specification)
+               /\ HistoricalDecisionFetchCertifiedProgressLeaf(
+                    specification)
+               /\ HistoricalDecisionStoreProgressLeaf(specification)
+               /\ HistoricalDecisionValidateProgressLeaf(specification)
+               /\ HistoricalDecisionApplyProgressLeaf(specification)
+    <2>1. CASE ~HistoricalProtectedCandidateStarvationProperty(
+                   specification)
+      BY <2>1
+         DEF HistoricalDecisionFetchProgressLeaf,
+             HistoricalDecisionRequestBodyProgressLeaf,
+             HistoricalDecisionFetchCertifiedProgressLeaf,
+             HistoricalDecisionStoreProgressLeaf,
+             HistoricalDecisionValidateProgressLeaf,
+             HistoricalDecisionApplyProgressLeaf
+    <2>2. CASE HistoricalProtectedCandidateStarvationProperty(
+                  specification)
+      <3>1. HistoricalDecisionPipelineExactCarrierHandoffProperty(
+               specification)
+        BY <1>1, <2>2,
+           HistoricalDecisionPipelineExactCarrierReachesExactHandoff
+      <3>2. CASE ~specification
+        BY <3>2
+           DEF HistoricalDecisionFetchProgressLeaf,
+               HistoricalDecisionRequestBodyProgressLeaf,
+               HistoricalDecisionFetchCertifiedProgressLeaf,
+               HistoricalDecisionStoreProgressLeaf,
+               HistoricalDecisionValidateProgressLeaf,
+               HistoricalDecisionApplyProgressLeaf
+      <3>3. CASE specification
+        <4>1. \A node \in Responsive:
+                 (gst
+                   /\ HistoricalDecisionPipelineKindOwned(
+                        node, "FetchBody"))
+                   ~> (NodeHasApplication(node)
+                        \/ HistoricalDecisionPipelineKindOwned(
+                             node, "RequestCertifiedBody")
+                        \/ HistoricalDecisionCertifiedRequestActive(node)
+                        \/ HistoricalDecisionPipelineKindOwned(
+                             node, "ValidateBody"))
+          BY <3>1, <3>3,
+             HistoricalDecisionPipelineOwnerHasExactCarrier, PTL
+             DEF HistoricalDecisionPipelineExactCarrierHandoffProperty,
+                 HistoricalDecisionPipelineExactStageOutcome,
+                 HistoricalDecisionPipelineExactLineageOwned,
+                 HistoricalDecisionPipelineExactCarrierOwned,
+                 HistoricalDecisionPipelineKindOwned,
+                 HistoricalDecisionCertifiedRequestActive,
+                 DecisionPipelineKindOwned, DecisionPipelineKinds
+        <4>2. \A node \in Responsive:
+                 (gst
+                   /\ HistoricalDecisionPipelineKindOwned(
+                        node, "RequestCertifiedBody"))
+                   ~> (NodeHasApplication(node)
+                        \/ HistoricalDecisionCertifiedRequestActive(node))
+          BY <3>1, <3>3,
+             HistoricalDecisionPipelineOwnerHasExactCarrier, PTL
+             DEF HistoricalDecisionPipelineExactCarrierHandoffProperty,
+                 HistoricalDecisionPipelineExactStageOutcome,
+                 HistoricalDecisionPipelineExactLineageOwned,
+                 HistoricalDecisionPipelineExactCarrierOwned,
+                 HistoricalDecisionCertifiedRequestActive,
+                 DecisionPipelineKinds
+        <4>3. \A node \in Responsive:
+                 (gst
+                   /\ HistoricalDecisionPipelineKindOwned(
+                        node, "FetchCertifiedBody"))
+                   ~> (NodeHasApplication(node)
+                        \/ HistoricalDecisionPipelineKindOwned(
+                             node, "StoreBody"))
+          BY <3>1, <3>3,
+             HistoricalDecisionPipelineOwnerHasExactCarrier, PTL
+             DEF HistoricalDecisionPipelineExactCarrierHandoffProperty,
+                 HistoricalDecisionPipelineExactStageOutcome,
+                 HistoricalDecisionPipelineExactLineageOwned,
+                 HistoricalDecisionPipelineExactCarrierOwned,
+                 HistoricalDecisionPipelineKindOwned,
+                 DecisionPipelineKindOwned, DecisionPipelineKinds
+        <4>4. \A node \in Responsive:
+                 (gst
+                   /\ HistoricalDecisionPipelineKindOwned(
+                        node, "StoreBody"))
+                   ~> (NodeHasApplication(node)
+                        \/ HistoricalDecisionPipelineKindOwned(
+                             node, "ValidateBody"))
+          BY <3>1, <3>3,
+             HistoricalDecisionPipelineOwnerHasExactCarrier, PTL
+             DEF HistoricalDecisionPipelineExactCarrierHandoffProperty,
+                 HistoricalDecisionPipelineExactStageOutcome,
+                 HistoricalDecisionPipelineExactLineageOwned,
+                 HistoricalDecisionPipelineExactCarrierOwned,
+                 HistoricalDecisionPipelineKindOwned,
+                 DecisionPipelineKindOwned, DecisionPipelineKinds
+        <4>5. \A node \in Responsive:
+                 (gst
+                   /\ HistoricalDecisionPipelineKindOwned(
+                        node, "ValidateBody"))
+                   ~> (NodeHasApplication(node)
+                        \/ HistoricalDecisionPipelineKindOwned(
+                             node, "Apply"))
+          BY <3>1, <3>3,
+             HistoricalDecisionPipelineOwnerHasExactCarrier, PTL
+             DEF HistoricalDecisionPipelineExactCarrierHandoffProperty,
+                 HistoricalDecisionPipelineExactStageOutcome,
+                 HistoricalDecisionPipelineExactLineageOwned,
+                 HistoricalDecisionPipelineExactCarrierOwned,
+                 HistoricalDecisionPipelineKindOwned,
+                 DecisionPipelineKindOwned, DecisionPipelineKinds
+        <4>6. \A node \in Responsive:
+                 (gst
+                   /\ HistoricalDecisionPipelineKindOwned(node, "Apply"))
+                   ~> NodeHasApplication(node)
+          BY <3>1, <3>3,
+             HistoricalDecisionPipelineOwnerHasExactCarrier, PTL
+             DEF HistoricalDecisionPipelineExactCarrierHandoffProperty,
+                 HistoricalDecisionPipelineExactStageOutcome,
+                 HistoricalDecisionPipelineExactLineageOwned,
+                 HistoricalDecisionPipelineExactCarrierOwned,
+                 DecisionPipelineKinds
+        <4> QED BY <2>2, <3>3, <4>1, <4>2, <4>3, <4>4, <4>5, <4>6
+             DEF HistoricalDecisionFetchProgressLeaf,
+                 HistoricalDecisionRequestBodyProgressLeaf,
+                 HistoricalDecisionFetchCertifiedProgressLeaf,
+                 HistoricalDecisionStoreProgressLeaf,
+                 HistoricalDecisionValidateProgressLeaf,
+                 HistoricalDecisionApplyProgressLeaf
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
 
 (***************************************************************************

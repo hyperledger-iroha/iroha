@@ -481,9 +481,28 @@ Stage6NonCompletionCapacityProgress(candidate, position, rank) ==
 Stage6NonCompletionCapacityStrictResult(candidate, position, rank) ==
   Stage6NonCompletionCapacityProgress(candidate, position, rank)'
 
+Stage6NonCompletionCapacityServeEpisodeResidual(candidate, position, rank) ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ ProtectedStage6Pending(candidate, position)
+  /\ ~Stage6NonCompletionCapacityProgress(candidate, position, rank)
+  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+
+Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(specification) ==
+  specification
+    => \A candidate, position:
+         \A rank \in Stage4CapacityCarrier:
+           Stage6NonCompletionCapacityServeEpisodeResidual(
+             candidate, position, rank)
+             ~> Stage6NonCompletionCapacityProgress(
+                  candidate, position, rank)
+
 Stage6NonCompletionCapacityStepResult(candidate, position, rank) ==
   \/ Stage6NonCompletionCapacityStrictResult(candidate, position, rank)
   \/ Stage6NonCompletionCapacityBlockedAtRank(
+       candidate, position, rank)'
+  \/ Stage6NonCompletionCapacityServeEpisodeResidual(
        candidate, position, rank)'
 
 THEOREM Stage6NonCompletionCapacityBlockedCoreFacts ==
@@ -565,6 +584,49 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncLogicalCandidateOwnershipInvariant,
        AsyncOutstandingCarrierInvariant, AsyncAllVars
 
+THEOREM Stage6NonCompletionCapacityLocalPredecessorStrictlyProgresses ==
+  \A candidate, position:
+    \A rank \in Stage4CapacityCarrier:
+    /\ Stage6NonCompletionCapacityBlockedAtRank(
+         candidate, position, rank)
+    /\ SerializedLocalPrecedesServeIngressStep(candidate.node)
+    => Stage6NonCompletionCapacityStrictResult(
+         candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage6NonCompletionCapacityStrictResult,
+       Stage6NonCompletionCapacityProgress,
+       Stage6NonCompletionCapacityGoal,
+       Stage6NonCompletionCapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ProtectedStage6Pending,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCandidatePosition, LocalSourceDistance,
+       PreferredLocalSource, CausalCommandCapacityDebt,
+       CausalHeadCommandLimit, NonCompletionCausalAdmissionDebt,
+       CausalAdmissionDebtActive, ReadyRunAuxRank,
+       ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
+       ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance, LocalAdmissionCanAdvance,
+       ProducerCompletionCanAdvance, ProducerCompletionCanAdmit,
+       RecordBlockedCausalDebt, CandidateScheduled,
+       CandidateInFlight, CausalHeadCanAdvance, CanEnqueueClass,
+       AsyncQueueDepth, NodeQueueNonempty, CausalCandidates,
+       SequenceSet, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
 THEOREM Stage6NonCompletionCapacityIngressStrictlyProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
@@ -615,7 +677,7 @@ THEOREM Stage6NonCompletionCapacityFifoStrictlyProgresses ==
     /\ Stage6NonCompletionCapacityBlockedAtRank(
          candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ FifoRuntimeStep(candidate.node)
     => Stage6NonCompletionCapacityStrictResult(
          candidate, position, rank)
@@ -625,7 +687,7 @@ PROOF
                 Stage6NonCompletionCapacityBlockedAtRank(
                   candidate, position, rank),
                 [AsyncNext]_AsyncAllVars,
-                SerializedRuntimeStep(candidate.node),
+                SerializedRunnerRuntimeStep(candidate.node),
                 FifoRuntimeStep(candidate.node)
          PROVE Stage6NonCompletionCapacityStrictResult(
                  candidate, position, rank)
@@ -734,7 +796,7 @@ THEOREM Stage6NonCompletionCapacityNonFifoRuntimeStrictlyProgresses ==
     /\ Stage6NonCompletionCapacityBlockedAtRank(
          candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ ~FifoRuntimeStep(candidate.node)
     => Stage6NonCompletionCapacityStrictResult(
          candidate, position, rank)
@@ -762,7 +824,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyRunInnerOrdering, ReadyRunInnerCarrier,
        ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-       SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       RuntimeStep, DeferredDrainStep,
        DeferredTagStep, DirectTimeoutStep, DirectRetransmitStep,
        IdleRuntimeStep, RemoveNextDeferredCommand, DiscardCommand,
        AdvanceNextDeferredClass, DeferredQueueNonempty,
@@ -778,15 +842,62 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncLogicalCandidateOwnershipInvariant,
        AsyncOutstandingCarrierInvariant, AsyncAllVars
 
-THEOREM Stage6NonCompletionCapacitySameNodeRunStrictlyProgresses ==
+THEOREM Stage6NonCompletionCapacityTargetOnlyCreatesServeEpisodeOutcome ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage6NonCompletionCapacityBlockedAtRank(
          candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
     /\ PostGstRunNode(candidate.node)
-    => Stage6NonCompletionCapacityStrictResult(
+    /\ AsyncServeIngressTargetOnlyTurn(candidate.node)
+    => \/ Stage6NonCompletionCapacityStrictResult(
+            candidate, position, rank)
+       \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+            candidate, position, rank)'
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   Stage4CapacityRankInCarrier, IsaT(300)
+   DEF Stage6NonCompletionCapacityStrictResult,
+       Stage6NonCompletionCapacityProgress,
+       Stage6NonCompletionCapacityServeEpisodeResidual,
+       Stage6NonCompletionCapacityGoal,
+       Stage6NonCompletionCapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ProtectedStage6Pending,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCandidatePosition, LocalSourceDistance,
+       PreferredLocalSource, CausalCommandCapacityDebt,
+       CausalHeadCommandLimit, NonCompletionCausalAdmissionDebt,
+       CausalAdmissionDebtActive, ReadyRunAuxRank,
+       ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
+       ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       PostGstRunNode, RunNode,
+       AsyncServeIngressTargetOnlyTurn,
+       CandidateScheduled, CandidateInFlight, CausalHeadCanAdvance,
+       CanEnqueueClass, AsyncQueueDepth, CausalCandidates,
+       SequenceSet, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage6NonCompletionCapacitySameNodeRunProducesOutcome ==
+  \A candidate, position:
+    \A rank \in Stage4CapacityCarrier:
+    /\ Stage6NonCompletionCapacityBlockedAtRank(
          candidate, position, rank)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ PostGstRunNode(candidate.node)
+    => \/ Stage6NonCompletionCapacityStrictResult(
+            candidate, position, rank)
+       \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+            candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW candidate, NEW position,
                 NEW rank \in Stage4CapacityCarrier,
@@ -794,8 +905,10 @@ PROOF
                   candidate, position, rank),
                 [AsyncNext]_AsyncAllVars,
                 PostGstRunNode(candidate.node)
-         PROVE Stage6NonCompletionCapacityStrictResult(
-                 candidate, position, rank)
+         PROVE \/ Stage6NonCompletionCapacityStrictResult(
+                   candidate, position, rank)
+               \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+                    candidate, position, rank)'
     <2>1. RunNode(candidate.node)
       BY <1>1 DEF PostGstRunNode
     <2>2. CASE LocalAdmissionStep(candidate.node)
@@ -804,7 +917,7 @@ PROOF
     <2>3. CASE IngressDrainStep(candidate.node)
       BY <1>1, <2>3,
          Stage6NonCompletionCapacityIngressStrictlyProgresses
-    <2>4. CASE SerializedRuntimeStep(candidate.node)
+    <2>4. CASE SerializedRunnerRuntimeStep(candidate.node)
       <3>1. CASE FifoRuntimeStep(candidate.node)
         BY <1>1, <2>4, <3>1,
            Stage6NonCompletionCapacityFifoStrictlyProgresses
@@ -812,7 +925,15 @@ PROOF
         BY <1>1, <2>4, <3>2,
            Stage6NonCompletionCapacityNonFifoRuntimeStrictlyProgresses
       <3> QED BY <3>1, <3>2
-    <2> QED BY <2>1, <2>2, <2>3, <2>4 DEF RunNode
+    <2>5. CASE AsyncServeIngressTargetOnlyTurn(candidate.node)
+      BY <1>1, <2>5,
+         Stage6NonCompletionCapacityTargetOnlyCreatesServeEpisodeOutcome
+    <2>6. CASE SerializedLocalPrecedesServeIngressStep(candidate.node)
+      BY <1>1, <2>6,
+         Stage6NonCompletionCapacityLocalPredecessorStrictlyProgresses
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+         RunNodeWorkConcreteActionCaseSplit
+         DEF RunNode
   <1> QED BY <1>1
 
 THEOREM Stage6NonCompletionCapacityOtherStepPreservesOrProgresses ==
@@ -882,6 +1003,11 @@ PROOF
                ReadyDeferredCount, ReadyTimeoutDebt,
                ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
                RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+               SerializedLocalPrecedesServeIngressStep,
+               SelectedLocalAdmissionAdvance,
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               AsyncServeIngressTargetOnlyTurn,
                RunHistoricalServer, CandidateScheduled,
                CandidateInFlight, CausalHeadCanAdvance,
                CanEnqueueClass, AsyncQueueDepth, NodeQueueNonempty,
@@ -1092,14 +1218,18 @@ PROOF
 THEOREM FairStage6NonCompletionCapacityOneStep ==
   \A initialContext, candidate, position:
     \A rank \in Stage4CapacityCarrier:
-      AsyncSpecAt(initialContext)
-        => (Stage6NonCompletionCapacityBlockedAtRank(
-              candidate, position, rank)
-              ~> Stage6NonCompletionCapacityProgress(
-                   candidate, position, rank))
+      Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => (Stage6NonCompletionCapacityBlockedAtRank(
+                    candidate, position, rank)
+                    ~> Stage6NonCompletionCapacityProgress(
+                         candidate, position, rank)))
 PROOF
   <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
-                NEW rank \in Stage4CapacityCarrier
+                NEW rank \in Stage4CapacityCarrier,
+                Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage6NonCompletionCapacityBlockedAtRank(
                        candidate, position, rank)
@@ -1111,8 +1241,10 @@ PROOF
       BY AsyncSpecAlwaysUsesFixedResponsiveVoters
     <2>2. /\ Stage6NonCompletionCapacityBlockedAtRank(
                   candidate, position, rank)
-             /\ ~Stage6NonCompletionCapacityProgress(
-                  candidate, position, rank)
+             /\ ~(Stage6NonCompletionCapacityProgress(
+                    candidate, position, rank)
+                    \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+                         candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
       BY ProtectedOwnedCandidateEnablesFairRunNode
@@ -1122,12 +1254,16 @@ PROOF
              Stage6NonCompletionCapacityGoal
     <2>3. /\ Stage6NonCompletionCapacityBlockedAtRank(
                   candidate, position, rank)
-             /\ ~Stage6NonCompletionCapacityProgress(
-                  candidate, position, rank)
+             /\ ~(Stage6NonCompletionCapacityProgress(
+                    candidate, position, rank)
+                    \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+                         candidate, position, rank))
              /\ <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-            => Stage6NonCompletionCapacityProgress(
-                 candidate, position, rank)'
-      BY Stage6NonCompletionCapacitySameNodeRunStrictlyProgresses,
+            => \/ Stage6NonCompletionCapacityProgress(
+                    candidate, position, rank)'
+               \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+                    candidate, position, rank)'
+      BY Stage6NonCompletionCapacitySameNodeRunProducesOutcome,
          Isa
          DEF Stage6NonCompletionCapacityStrictResult,
              PostGstRunNode
@@ -1138,7 +1274,9 @@ PROOF
                  candidate, position, rank)'
                  \/ Stage6NonCompletionCapacityProgress(
                       candidate, position, rank)'
-      BY Stage6NonCompletionCapacitySameNodeRunStrictlyProgresses,
+                 \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+                      candidate, position, rank)'
+      BY Stage6NonCompletionCapacitySameNodeRunProducesOutcome,
          Stage6NonCompletionCapacityOtherStepPreservesOrProgresses,
          Isa
          DEF Stage6NonCompletionCapacityStepResult,
@@ -1147,8 +1285,28 @@ PROOF
       <3>1. AsyncSpecAt(initialContext)
                => WF_AsyncAllVars(PostGstRunNode(candidate.node))
         BY <2>5 DEF AsyncSpecAt, AsyncFairnessAt
-      <3> QED BY <2>2, <2>3, <2>4, <3>1, PTL
-           DEF AsyncSpecAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (Stage6NonCompletionCapacityBlockedAtRank(
+                     candidate, position, rank)
+                     ~> (Stage6NonCompletionCapacityProgress(
+                           candidate, position, rank)
+                          \/ Stage6NonCompletionCapacityServeEpisodeResidual(
+                               candidate, position, rank)))
+        BY <2>2, <2>3, <2>4, <3>1, PTL DEF AsyncSpecAt
+      <3>3. AsyncSpecAt(initialContext)
+               => (Stage6NonCompletionCapacityServeEpisodeResidual(
+                     candidate, position, rank)
+                     ~> Stage6NonCompletionCapacityProgress(
+                          candidate, position, rank))
+        BY <1>1
+           DEF Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty
+      <3>4. AsyncSpecAt(initialContext)
+               => (Stage6NonCompletionCapacityBlockedAtRank(
+                     candidate, position, rank)
+                     ~> Stage6NonCompletionCapacityProgress(
+                          candidate, position, rank))
+        BY <3>2, <3>3, PTL
+      <3> QED BY <3>4
     <2>6. CASE candidate.node \notin AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => []~Stage6NonCompletionCapacityBlockedAtRank(
@@ -1163,13 +1321,18 @@ PROOF
 
 THEOREM FairStage6NonCompletionCapacityOpens ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => \A rank \in Stage4CapacityCarrier:
-           Stage6NonCompletionCapacityBlockedAtRank(
-             candidate, position, rank)
-             ~> Stage6NonCompletionCapacityGoal(candidate, position)
+    Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => \A rank \in Stage4CapacityCarrier:
+                 Stage6NonCompletionCapacityBlockedAtRank(
+                   candidate, position, rank)
+                   ~> Stage6NonCompletionCapacityGoal(
+                        candidate, position))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => \A rank \in Stage4CapacityCarrier:
                       Stage6NonCompletionCapacityBlockedAtRank(
@@ -1401,11 +1564,15 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
-       LocalAdmissionStep, AdmitProducerCompletion,
+       LocalAdmissionStep, SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, AdmitProducerCompletion,
        AdmitCausalHead, RecordBlockedCausalDebt,
        UpdateLocalAdmissionMetadata, IngressDrainStep,
        DrainFairIngressSelected, IngressItemCanDrain,
-       PopSelectedIngress, SerializedRuntimeStep, RuntimeStep,
+       PopSelectedIngress, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
        CommitCertificateDiscoveryStepWork,
@@ -1853,11 +2020,15 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
-       LocalAdmissionStep, AdmitProducerCompletion,
+       LocalAdmissionStep, SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, AdmitProducerCompletion,
        AdmitCausalHead, RecordBlockedCausalDebt,
        UpdateLocalAdmissionMetadata, IngressDrainStep,
        DrainFairIngressSelected, IngressItemCanDrain,
-       PopSelectedIngress, SerializedRuntimeStep, RuntimeStep,
+       PopSelectedIngress, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        FifoRuntimeStep, DeferredDrainStep,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
@@ -1942,11 +2113,17 @@ PROOF
                  AsyncNonRunnerStep, RunNode,
                  RunHistoricalRecoveryNode, RunNodeWork,
                  RunHistoricalServer, OpenHistoricalRecovery,
-                 LocalAdmissionStep, AdmitProducerCompletion,
+                 LocalAdmissionStep,
+                 SerializedLocalPrecedesServeIngressStep,
+                 SelectedLocalAdmissionAdvance,
+                 SerializedRunnerRuntimeStep,
+                 AdmitProducerCompletion,
                  AdmitCausalHead, RecordBlockedCausalDebt,
                  UpdateLocalAdmissionMetadata, IngressDrainStep,
                  DrainFairIngressSelected, IngressItemCanDrain,
                  PopSelectedIngress, SerializedRuntimeStep,
+                 SerializedRuntimePrecedesServeIngressStep,
+                 AsyncServeIngressTargetOnlyTurn,
                  RuntimeStep, DirectCommitCertificateDiscoveryStep,
                  DirectHistoricalCommitCertificateDiscoveryStep,
                  CommitCertificateDiscoveryStepWork,
@@ -1977,14 +2154,19 @@ PROOF
 THEOREM FairStage6CompletionReadyWitnessOpens ==
   \A initialContext, candidate, position:
     \A readyCandidate \in AsyncCandidateSet, readyPosition \in Nat:
-      AsyncSpecAt(initialContext)
-        => (Stage6CompletionReadyWitnessBlocked(
-              candidate, position, readyCandidate, readyPosition)
-              ~> Stage6CompletionCapacityGoal(candidate, position))
+      Stage4RefinementFiniteServeEpisodeResidualProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => (Stage6CompletionReadyWitnessBlocked(
+                    candidate, position, readyCandidate, readyPosition)
+                    ~> Stage6CompletionCapacityGoal(
+                         candidate, position)))
 PROOF
   <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
                 NEW readyCandidate \in AsyncCandidateSet,
-                NEW readyPosition \in Nat
+                NEW readyPosition \in Nat,
+                Stage4RefinementFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage6CompletionReadyWitnessBlocked(
                        candidate, position,
@@ -2026,11 +2208,15 @@ PROOF
 
 THEOREM FairStage6CompletionReadyCapacityOpens ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => (Stage6CompletionReadyBlocked(candidate, position)
-            ~> Stage6CompletionCapacityGoal(candidate, position))
+    Stage4RefinementFiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => (Stage6CompletionReadyBlocked(candidate, position)
+                  ~> Stage6CompletionCapacityGoal(candidate, position)))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage4RefinementFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage6CompletionReadyBlocked(
                        candidate, position)
@@ -2057,13 +2243,17 @@ PROOF
 
 THEOREM FairStage6CompletionCapacityOpens ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => ((ProtectedStage6Pending(candidate, position)
-             /\ CompletionCausalAdmissionDebt(candidate.node)
-             /\ ~CausalHeadCanAdvance(candidate.node))
-            ~> Stage6CompletionCapacityGoal(candidate, position))
+    Stage4RefinementFiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => ((ProtectedStage6Pending(candidate, position)
+                   /\ CompletionCausalAdmissionDebt(candidate.node)
+                   /\ ~CausalHeadCanAdvance(candidate.node))
+                  ~> Stage6CompletionCapacityGoal(candidate, position)))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage4RefinementFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => ((ProtectedStage6Pending(candidate, position)
                         /\ CompletionCausalAdmissionDebt(candidate.node)
@@ -2145,21 +2335,41 @@ Stage6OwedReadyAuxProgress(candidate, position, rank) ==
        rank, ReadyRunAuxOrdering, ReadyRunAuxCarrier):
        Stage6OwedReadyBlockedAtAux(candidate, position, lower)
 
-THEOREM Stage6OwedReadySameNodeRunStrictlyProgresses ==
+Stage6OwedReadyRunnerEpisodeResidual(candidate, position, rank) ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ Stage6OwedCausalReady(candidate, position)
+  /\ ~Stage6OwedReadyAuxProgress(candidate, position, rank)
+  /\ asyncRunnerPhase[candidate.node] \in {"Local", "Ingress"}
+
+Stage6OwedReadyFiniteRunnerEpisodeResidualProperty(specification) ==
+  specification
+    => \A candidate, position:
+         \A rank \in ReadyRunAuxCarrier:
+           Stage6OwedReadyRunnerEpisodeResidual(
+             candidate, position, rank)
+             ~> Stage6OwedReadyAuxProgress(candidate, position, rank)
+
+THEOREM Stage6OwedReadySameNodeRunProducesOutcome ==
   \A candidate, position:
     \A rank \in ReadyRunAuxCarrier:
     /\ Stage6OwedReadyBlockedAtAux(candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
     /\ PostGstRunNode(candidate.node)
-    => Stage6OwedReadyAuxProgress(candidate, position, rank)'
+    => \/ Stage6OwedReadyAuxProgress(candidate, position, rank)'
+       \/ Stage6OwedReadyRunnerEpisodeResidual(
+            candidate, position, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
+   SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
    IngressDrainStrictlyDecreasesRuntimeReach,
    Stage6CausalAdmissionStrictlyProgresses,
+   RunNodeWorkConcreteActionCaseSplit,
    ReadyRunAuxRankInCarrier, HeadTailProperties,
    SequenceSetAfterAppend, Isa
    DEF Stage6OwedReadyAuxProgress,
+       Stage6OwedReadyRunnerEpisodeResidual,
        Stage6OwedReadyBlockedAtAux, Stage6OwedCausalReady,
        ProtectedStage6Pending, ProtectedOwnedAtServiceRank,
        ProtectedRankProgressExit, ProtectedServiceOwnershipExit,
@@ -2181,13 +2391,17 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CanEnqueueClass, CanEnqueueIoClass,
        AsyncQueueDepth, AsyncIoQueueDepth,
        AsyncOutstandingWorkCount,
-       PostGstRunNode, RunNode, LocalAdmissionStep,
-       LocalAdmissionCanAdvance, SelectedLocalSource,
+       PostGstRunNode, RunNode, RunNodeWork,
+       LocalAdmissionStep, SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance, LocalAdmissionCanAdvance,
+       SelectedLocalSource,
        LocalSourceCanAdmit, AdmitProducerCompletion,
        AdmitCausalHead, UpdateLocalAdmissionMetadata,
        RecordBlockedCausalDebt, IngressDrainStep,
        DrainFairIngressSelected, IngressItemCanDrain,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
        DirectRetransmitStep, IdleRuntimeStep,
        AppendCausalSuccessors, FreshCommandSuccessors,
@@ -2235,13 +2449,17 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
-       LocalAdmissionStep, LocalAdmissionCanAdvance,
+       LocalAdmissionStep, SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, LocalAdmissionCanAdvance,
        SelectedLocalSource, LocalSourceCanAdmit,
        AdmitProducerCompletion, AdmitCausalHead,
        UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
        IngressDrainStep, DrainFairIngressSelected,
        IngressItemCanDrain, PopSelectedIngress,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
        DirectRetransmitStep, IdleRuntimeStep,
        DirectCommitCertificateDiscoveryStep,
@@ -2266,14 +2484,18 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
 THEOREM FairStage6OwedReadyAuxOneStep ==
   \A initialContext, candidate, position:
     \A rank \in ReadyRunAuxCarrier:
-      AsyncSpecAt(initialContext)
-        => (Stage6OwedReadyBlockedAtAux(
-              candidate, position, rank)
-              ~> Stage6OwedReadyAuxProgress(
-                   candidate, position, rank))
+      Stage6OwedReadyFiniteRunnerEpisodeResidualProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => (Stage6OwedReadyBlockedAtAux(
+                    candidate, position, rank)
+                    ~> Stage6OwedReadyAuxProgress(
+                         candidate, position, rank)))
 PROOF
   <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
-                NEW rank \in ReadyRunAuxCarrier
+                NEW rank \in ReadyRunAuxCarrier,
+                Stage6OwedReadyFiniteRunnerEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage6OwedReadyBlockedAtAux(
                        candidate, position, rank)
@@ -2285,8 +2507,10 @@ PROOF
       BY AsyncSpecAlwaysUsesFixedResponsiveVoters
     <2>2. /\ Stage6OwedReadyBlockedAtAux(
                   candidate, position, rank)
-             /\ ~Stage6OwedReadyAuxProgress(
-                  candidate, position, rank)
+             /\ ~(Stage6OwedReadyAuxProgress(
+                    candidate, position, rank)
+                    \/ Stage6OwedReadyRunnerEpisodeResidual(
+                         candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
       BY ProtectedOwnedCandidateEnablesFairRunNode
@@ -2296,12 +2520,16 @@ PROOF
              Stage6OwedReadyAuxProgress
     <2>3. /\ Stage6OwedReadyBlockedAtAux(
                   candidate, position, rank)
-             /\ ~Stage6OwedReadyAuxProgress(
-                  candidate, position, rank)
+             /\ ~(Stage6OwedReadyAuxProgress(
+                    candidate, position, rank)
+                    \/ Stage6OwedReadyRunnerEpisodeResidual(
+                         candidate, position, rank))
              /\ <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-            => Stage6OwedReadyAuxProgress(
-                 candidate, position, rank)'
-      BY Stage6OwedReadySameNodeRunStrictlyProgresses, Isa
+            => \/ Stage6OwedReadyAuxProgress(
+                    candidate, position, rank)'
+               \/ Stage6OwedReadyRunnerEpisodeResidual(
+                    candidate, position, rank)'
+      BY Stage6OwedReadySameNodeRunProducesOutcome, Isa
          DEF PostGstRunNode
     <2>4. Stage6OwedReadyBlockedAtAux(
               candidate, position, rank)
@@ -2310,14 +2538,36 @@ PROOF
                  candidate, position, rank)'
                  \/ Stage6OwedReadyAuxProgress(
                       candidate, position, rank)'
-      BY Stage6OwedReadySameNodeRunStrictlyProgresses,
+                 \/ Stage6OwedReadyRunnerEpisodeResidual(
+                      candidate, position, rank)'
+      BY Stage6OwedReadySameNodeRunProducesOutcome,
          Stage6OwedReadyOtherStepPreservesOrProgresses, Isa
     <2>5. CASE candidate.node \in AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => WF_AsyncAllVars(PostGstRunNode(candidate.node))
         BY <2>5 DEF AsyncSpecAt, AsyncFairnessAt
-      <3> QED BY <2>2, <2>3, <2>4, <3>1, PTL
-           DEF AsyncSpecAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (Stage6OwedReadyBlockedAtAux(
+                     candidate, position, rank)
+                     ~> (Stage6OwedReadyAuxProgress(
+                           candidate, position, rank)
+                          \/ Stage6OwedReadyRunnerEpisodeResidual(
+                               candidate, position, rank)))
+        BY <2>2, <2>3, <2>4, <3>1, PTL DEF AsyncSpecAt
+      <3>3. AsyncSpecAt(initialContext)
+               => (Stage6OwedReadyRunnerEpisodeResidual(
+                     candidate, position, rank)
+                     ~> Stage6OwedReadyAuxProgress(
+                          candidate, position, rank))
+        BY <1>1
+           DEF Stage6OwedReadyFiniteRunnerEpisodeResidualProperty
+      <3>4. AsyncSpecAt(initialContext)
+               => (Stage6OwedReadyBlockedAtAux(
+                     candidate, position, rank)
+                     ~> Stage6OwedReadyAuxProgress(
+                          candidate, position, rank))
+        BY <3>2, <3>3, PTL
+      <3> QED BY <3>4
     <2>6. CASE candidate.node \notin AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => []~Stage6OwedReadyBlockedAtAux(
@@ -2333,11 +2583,16 @@ PROOF
 
 THEOREM FairStage6OwedCausalAdmission ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => (Stage6OwedCausalReady(candidate, position)
-            ~> ProtectedRankProgressExit(candidate, <<6, position>>))
+    Stage6OwedReadyFiniteRunnerEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => (Stage6OwedCausalReady(candidate, position)
+                  ~> ProtectedRankProgressExit(
+                       candidate, <<6, position>>)))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage6OwedReadyFiniteRunnerEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage6OwedCausalReady(candidate, position)
                        ~> ProtectedRankProgressExit(
@@ -2403,21 +2658,49 @@ Stage6PreAdmissionAuxProgress(candidate, position, rank) ==
        rank, ReadyRunAuxOrdering, ReadyRunAuxCarrier):
        Stage6PreAdmissionBlockedAtAux(candidate, position, lower)
 
-THEOREM Stage6PreAdmissionSameNodeRunStrictlyProgresses ==
+Stage6PreAdmissionRunnerEpisodeResidual(candidate, position, rank) ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ ProtectedStage6Pending(candidate, position)
+  /\ ~Stage6PreAdmissionAuxProgress(candidate, position, rank)
+  /\ asyncRunnerPhase[candidate.node] \in {"Local", "Ingress"}
+
+Stage6PreAdmissionFiniteRunnerEpisodeResidualProperty(specification) ==
+  specification
+    => \A candidate, position:
+         \A rank \in ReadyRunAuxCarrier:
+           Stage6PreAdmissionRunnerEpisodeResidual(
+             candidate, position, rank)
+             ~> Stage6PreAdmissionAuxProgress(
+                  candidate, position, rank)
+
+Stage6FiniteRunnerEpisodeClosureProperty(specification) ==
+  /\ Stage4RefinementFiniteServeEpisodeResidualProperty(specification)
+  /\ Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(
+       specification)
+  /\ Stage6OwedReadyFiniteRunnerEpisodeResidualProperty(specification)
+  /\ Stage6PreAdmissionFiniteRunnerEpisodeResidualProperty(specification)
+
+THEOREM Stage6PreAdmissionSameNodeRunProducesOutcome ==
   \A candidate, position:
     \A rank \in ReadyRunAuxCarrier:
     /\ Stage6PreAdmissionBlockedAtAux(candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
     /\ PostGstRunNode(candidate.node)
-    => Stage6PreAdmissionAuxProgress(candidate, position, rank)'
+    => \/ Stage6PreAdmissionAuxProgress(candidate, position, rank)'
+       \/ Stage6PreAdmissionRunnerEpisodeResidual(
+            candidate, position, rank)'
 BY AsyncBracketNextPreservesStrongTypeInvariant,
    AsyncBracketNextPreservesProgressOwnership,
    LocalAdmissionStrictlyDecreasesRuntimeReach,
+   SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
    IngressDrainStrictlyDecreasesRuntimeReach,
    Stage6CausalAdmissionStrictlyProgresses,
+   RunNodeWorkConcreteActionCaseSplit,
    ReadyRunAuxRankInCarrier, HeadTailProperties,
    SequenceSetAfterAppend, Isa
    DEF Stage6PreAdmissionAuxProgress,
+       Stage6PreAdmissionRunnerEpisodeResidual,
        Stage6PreAdmissionBlockedAtAux, Stage6PreAdmissionGoal,
        Stage6OwedCausalReady,
        Stage6NonCompletionCapacityBlocked,
@@ -2442,13 +2725,17 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CanEnqueueClass, CanEnqueueIoClass,
        AsyncQueueDepth, AsyncIoQueueDepth,
        AsyncOutstandingWorkCount,
-       PostGstRunNode, RunNode, LocalAdmissionStep,
-       LocalAdmissionCanAdvance, SelectedLocalSource,
+       PostGstRunNode, RunNode, RunNodeWork,
+       LocalAdmissionStep, SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance, LocalAdmissionCanAdvance,
+       SelectedLocalSource,
        LocalSourceCanAdmit, AdmitProducerCompletion,
        AdmitCausalHead, UpdateLocalAdmissionMetadata,
        RecordBlockedCausalDebt, IngressDrainStep,
        DrainFairIngressSelected, IngressItemCanDrain,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
        DirectRetransmitStep, IdleRuntimeStep,
        AppendCausalSuccessors, FreshCommandSuccessors,
@@ -2500,13 +2787,17 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
-       LocalAdmissionStep, LocalAdmissionCanAdvance,
+       LocalAdmissionStep, SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, LocalAdmissionCanAdvance,
        SelectedLocalSource, LocalSourceCanAdmit,
        AdmitProducerCompletion, AdmitCausalHead,
        UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
        IngressDrainStep, DrainFairIngressSelected,
        IngressItemCanDrain, PopSelectedIngress,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
        DirectRetransmitStep, IdleRuntimeStep,
        DirectCommitCertificateDiscoveryStep,
@@ -2531,14 +2822,18 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
 THEOREM FairStage6PreAdmissionAuxOneStep ==
   \A initialContext, candidate, position:
     \A rank \in ReadyRunAuxCarrier:
-      AsyncSpecAt(initialContext)
-        => (Stage6PreAdmissionBlockedAtAux(
-              candidate, position, rank)
-              ~> Stage6PreAdmissionAuxProgress(
-                   candidate, position, rank))
+      Stage6PreAdmissionFiniteRunnerEpisodeResidualProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => (Stage6PreAdmissionBlockedAtAux(
+                    candidate, position, rank)
+                    ~> Stage6PreAdmissionAuxProgress(
+                         candidate, position, rank)))
 PROOF
   <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
-                NEW rank \in ReadyRunAuxCarrier
+                NEW rank \in ReadyRunAuxCarrier,
+                Stage6PreAdmissionFiniteRunnerEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage6PreAdmissionBlockedAtAux(
                        candidate, position, rank)
@@ -2550,8 +2845,10 @@ PROOF
       BY AsyncSpecAlwaysUsesFixedResponsiveVoters
     <2>2. /\ Stage6PreAdmissionBlockedAtAux(
                   candidate, position, rank)
-             /\ ~Stage6PreAdmissionAuxProgress(
-                  candidate, position, rank)
+             /\ ~(Stage6PreAdmissionAuxProgress(
+                    candidate, position, rank)
+                    \/ Stage6PreAdmissionRunnerEpisodeResidual(
+                         candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
       BY ProtectedOwnedCandidateEnablesFairRunNode
@@ -2561,12 +2858,16 @@ PROOF
              Stage6PreAdmissionGoal
     <2>3. /\ Stage6PreAdmissionBlockedAtAux(
                   candidate, position, rank)
-             /\ ~Stage6PreAdmissionAuxProgress(
-                  candidate, position, rank)
+             /\ ~(Stage6PreAdmissionAuxProgress(
+                    candidate, position, rank)
+                    \/ Stage6PreAdmissionRunnerEpisodeResidual(
+                         candidate, position, rank))
              /\ <<PostGstRunNode(candidate.node)>>_AsyncAllVars
-            => Stage6PreAdmissionAuxProgress(
-                 candidate, position, rank)'
-      BY Stage6PreAdmissionSameNodeRunStrictlyProgresses, Isa
+            => \/ Stage6PreAdmissionAuxProgress(
+                    candidate, position, rank)'
+               \/ Stage6PreAdmissionRunnerEpisodeResidual(
+                    candidate, position, rank)'
+      BY Stage6PreAdmissionSameNodeRunProducesOutcome, Isa
          DEF PostGstRunNode
     <2>4. Stage6PreAdmissionBlockedAtAux(
               candidate, position, rank)
@@ -2575,14 +2876,36 @@ PROOF
                  candidate, position, rank)'
                  \/ Stage6PreAdmissionAuxProgress(
                       candidate, position, rank)'
-      BY Stage6PreAdmissionSameNodeRunStrictlyProgresses,
+                 \/ Stage6PreAdmissionRunnerEpisodeResidual(
+                      candidate, position, rank)'
+      BY Stage6PreAdmissionSameNodeRunProducesOutcome,
          Stage6PreAdmissionOtherStepPreservesOrProgresses, Isa
     <2>5. CASE candidate.node \in AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => WF_AsyncAllVars(PostGstRunNode(candidate.node))
         BY <2>5 DEF AsyncSpecAt, AsyncFairnessAt
-      <3> QED BY <2>2, <2>3, <2>4, <3>1, PTL
-           DEF AsyncSpecAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (Stage6PreAdmissionBlockedAtAux(
+                     candidate, position, rank)
+                     ~> (Stage6PreAdmissionAuxProgress(
+                           candidate, position, rank)
+                          \/ Stage6PreAdmissionRunnerEpisodeResidual(
+                               candidate, position, rank)))
+        BY <2>2, <2>3, <2>4, <3>1, PTL DEF AsyncSpecAt
+      <3>3. AsyncSpecAt(initialContext)
+               => (Stage6PreAdmissionRunnerEpisodeResidual(
+                     candidate, position, rank)
+                     ~> Stage6PreAdmissionAuxProgress(
+                          candidate, position, rank))
+        BY <1>1
+           DEF Stage6PreAdmissionFiniteRunnerEpisodeResidualProperty
+      <3>4. AsyncSpecAt(initialContext)
+               => (Stage6PreAdmissionBlockedAtAux(
+                     candidate, position, rank)
+                     ~> Stage6PreAdmissionAuxProgress(
+                          candidate, position, rank))
+        BY <3>2, <3>3, PTL
+      <3> QED BY <3>4
     <2>6. CASE candidate.node \notin AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => []~Stage6PreAdmissionBlockedAtAux(
@@ -2597,11 +2920,15 @@ PROOF
 
 THEOREM FairStage6PreAdmissionProgress ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => (ProtectedStage6Pending(candidate, position)
-            ~> Stage6PreAdmissionGoal(candidate, position))
+    Stage6PreAdmissionFiniteRunnerEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => (ProtectedStage6Pending(candidate, position)
+                  ~> Stage6PreAdmissionGoal(candidate, position)))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage6PreAdmissionFiniteRunnerEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (ProtectedStage6Pending(candidate, position)
                        ~> Stage6PreAdmissionGoal(
@@ -2641,11 +2968,16 @@ PROOF
 
 THEOREM FairStage6NonCompletionBlockedOpens ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => (Stage6NonCompletionCapacityBlocked(candidate, position)
-            ~> Stage6NonCompletionCapacityGoal(candidate, position))
+    Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => (Stage6NonCompletionCapacityBlocked(candidate, position)
+                  ~> Stage6NonCompletionCapacityGoal(
+                       candidate, position)))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage6NonCompletionCapacityFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage6NonCompletionCapacityBlocked(
                        candidate, position)
@@ -2675,9 +3007,14 @@ PROOF
 
 THEOREM ProtectedStage6RankProgressFromFairCausalAdmissionObligation ==
   \A initialContext:
-    ProtectedStage6RankProgressProperty(AsyncSpecAt(initialContext))
+    Stage6FiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ProtectedStage6RankProgressProperty(
+           AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                Stage6FiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ProtectedStage6RankProgressProperty(
                  AsyncSpecAt(initialContext))
     <2>1. ASSUME NEW candidate \in AsyncCandidateSet,
@@ -2707,11 +3044,13 @@ PROOF
                => (ProtectedStage6Pending(candidate, position)
                      ~> Stage6PreAdmissionGoal(candidate, position))
         BY FairStage6PreAdmissionProgress
+           DEF Stage6FiniteRunnerEpisodeClosureProperty
       <3>4. AsyncSpecAt(initialContext)
                => (Stage6OwedCausalReady(candidate, position)
                      ~> ProtectedRankProgressExit(
                           candidate, <<6, position>>))
         BY FairStage6OwedCausalAdmission
+           DEF Stage6FiniteRunnerEpisodeClosureProperty
       <3>5. AsyncSpecAt(initialContext)
                => (Stage6NonCompletionCapacityBlocked(
                      candidate, position)
@@ -2723,6 +3062,7 @@ PROOF
                        ~> Stage6NonCompletionCapacityGoal(
                             candidate, position))
           BY FairStage6NonCompletionBlockedOpens
+             DEF Stage6FiniteRunnerEpisodeClosureProperty
         <4> QED BY <4>1, <3>4, PTL
              DEF Stage6NonCompletionCapacityGoal
       <3>6. AsyncSpecAt(initialContext)
@@ -2736,7 +3076,8 @@ PROOF
                        ~> Stage6CompletionCapacityGoal(
                             candidate, position))
           BY FairStage6CompletionCapacityOpens
-             DEF Stage6CompletionCapacityBlocked
+             DEF Stage6CompletionCapacityBlocked,
+                 Stage6FiniteRunnerEpisodeClosureProperty
         <4> QED BY <4>1, <3>4, PTL
              DEF Stage6CompletionCapacityGoal
       <3>7. AsyncSpecAt(initialContext)
@@ -2753,7 +3094,10 @@ PROOF
 
 THEOREM FairProtectedStage6RankProgress ==
   \A initialContext:
-    ProtectedStage6RankProgressProperty(AsyncSpecAt(initialContext))
+    Stage6FiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ProtectedStage6RankProgressProperty(
+           AsyncSpecAt(initialContext))
 BY ProtectedStage6RankProgressFromFairCausalAdmissionObligation
 
 =============================================================================

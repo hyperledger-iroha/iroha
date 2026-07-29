@@ -9,11 +9,17 @@ type, authority, and execution state, and the serialized Busy readiness kernel
 require their own asynchronous preservation arguments.  Keeping these
 conjuncts in one invariant makes the final temporal proof an ordinary
 Init/Next induction rather than an implicit reachability claim.
+
+Replay tracks the exact ingress-admission owner read by `RunNodeWork`.
+Restart also clears the node's Serve reservations, but reservation emptiness
+is not an enabledness gate and is therefore not added as a stronger premise.
 ***************************************************************************)
 
 AsyncRecoveryExecutionInvariant ==
   asyncRecoveryPhase = "Replaying" =>
     /\ asyncOutstandingTags[asyncRecoveryNode] = {}
+    /\ AsyncServeIngressLifecycleOwnerIdentities(
+         asyncRecoveryNode) = {}
     /\ SequenceHasUniqueValues(asyncRecoveryReplayQueue)
     /\ SequenceSet(asyncRecoveryReplayQueue) \cap
          ResponsiveReplayScheduledCandidates(asyncRecoveryNode) = {}
@@ -972,9 +978,79 @@ THEOREM AsyncNextPreservesSerializedBusyKernelInvariant ==
 BY AsyncStepRefinementObligation,
    CoreNextPreservesAsyncSerializedBusyKernel
 
+(***************************************************************************
+The activation/deadline correspondence is relational scheduler safety, not a
+raw inner-action type fact.  Inner scheduler actions deliberately leave the
+appended activation field open; the complete `AsyncNext` relation closes it
+with `AsyncServiceActivationTransition`.  Keep this induction at that exact
+boundary so a raw action theorem cannot assume the correspondence it is meant
+to preserve.
+***************************************************************************)
+THEOREM AsyncInitEstablishesServiceActivationPairInvariant ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncServiceActivationPairInvariant
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncServiceActivationPairInvariant,
+       AsyncServiceActivationStateSet,
+       AsyncActiveServiceNodes
+
+THEOREM AsyncNextPreservesServiceActivationPairInvariant ==
+  /\ AsyncTypeInvariant
+  /\ AsyncNext
+  => AsyncServiceActivationPairInvariant'
+BY IsaT(1200)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration,
+       AsyncServiceActivationPairInvariant,
+       AsyncServiceActivationStateSet,
+       AsyncServiceActivationRestricted,
+       AsyncActiveServiceNodes,
+       AsyncNext, AsyncServiceActivationTransition,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation,
+       AsyncNonCrashStep, AsyncRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       RunHistoricalServer, HistoricalIdleStep,
+       AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
+       AsyncNonClockVars, OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       EnqueueIoLocalControl,
+       EnqueueHistoricalRecoveryIoLocalControl,
+       EnqueueIoLocalControlWork,
+       AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       AsyncFaultStep, PreGstLosePacket,
+       PreGstServeReceiverCloseRollback, PreGstCrash,
+       InjectByzantineNoise,
+       InjectUntrustedTransportCompletion,
+       InjectAuthenticatedJunk,
+       InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       RearmResponsiveRecovery,
+       PreGstResponsiveCrash, PreGstResponsiveRestart,
+       PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
+       AsyncNonCrashOuterFrame, AsyncNonRunnerOuterFrame,
+       AsyncRecoveryOuterFrame, AsyncSchedulerVars,
+       AsyncRecoveryControlVars, AsyncRecoveryVars,
+       AsyncIoVars, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, vars
+
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
   /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
   /\ ReceivedTimeoutVotePoolInvariant
@@ -1005,6 +1081,8 @@ PROOF
       BY <2>1 DEF StrongInductiveInvariant, Safety
     <2>3. AsyncSchedulerTypeInvariant
       BY <1>1, <2>2, AsyncInitEstablishesSchedulerType
+    <2>3c. AsyncServiceActivationPairInvariant
+      BY <1>1, AsyncInitEstablishesServiceActivationPairInvariant
     <2>3b. AsyncControlServiceStateTypeInvariant
       BY <1>1, Isa
          DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
@@ -1040,8 +1118,8 @@ PROOF
              AsyncGstRecoveryPhaseInvariant
     <2>7. AsyncSerializedBusyKernelInvariant
       BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
-    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>4, <2>5, <2>6,
-                <2>7
+    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3c, <2>4, <2>5,
+                <2>6, <2>7
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1121,6 +1199,8 @@ PROOF
          DEF AsyncAllVars, AsyncRecoveryVars,
              AsyncRecoveryTypeInvariant, AsyncRestartAuthorityInvariant,
              AsyncRecoveryExecutionInvariant,
+             AsyncServeIngressLifecycleOwnerIdentities,
+             AsyncServeIngressAdmissionIdentities,
              AsyncHistoricalLockRestartAuthorityTypeInvariant,
              HistoricalLockRestartAuthoritySourceRetentionInvariant
     <2>7. AsyncGstRecoveryPhaseInvariant'
@@ -1558,6 +1638,26 @@ PROOF
          DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant
   <1> QED BY <1>1
 
+THEOREM AsyncServiceActivationActionPreservesSchedulerType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ (AsyncEnterIndexedServiceActivation(node)
+          \/ AsyncActivateServiceNode(node))
+    => AsyncSchedulerTypeInvariant'
+BY FunctionalUpdatePreservesType, IsaT(600)
+   DEF AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
+       AsyncTransportTypeInvariant,
+       AsyncTransportClockTypeInvariant,
+       AsyncIngressTypeInvariant,
+       AsyncHistoricalRecoveryTypeInvariant,
+       AsyncConfiguration
+
 THEOREM AsyncNextPreservesSchedulerType ==
   /\ StrongInductiveInvariant
   /\ AsyncTypeInvariant
@@ -1588,18 +1688,34 @@ PROOF
            DEF RearmResponsiveRecovery, AsyncTypeInvariant
       <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5
            DEF AsyncNonCrashStep
-    <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
-      BY <1>1, <2>2, PreGstCrashPreservesSchedulerType
+    <2>2. CASE \E node \in ValidatorIds:
+                  AsyncEnterIndexedServiceActivation(node)
+      <3>1. PICK node \in ValidatorIds:
+               AsyncEnterIndexedServiceActivation(node)
+        BY <2>2
+      <3> QED BY <1>1, <3>1,
+           AsyncServiceActivationActionPreservesSchedulerType
+    <2>3. CASE \E node \in ValidatorIds:
+                  AsyncActivateServiceNode(node)
+      <3>1. PICK node \in ValidatorIds:
+               AsyncActivateServiceNode(node)
+        BY <2>3
+      <3> QED BY <1>1, <3>1,
+           AsyncServiceActivationActionPreservesSchedulerType
+    <2>4. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      BY <1>1, <2>4, PreGstCrashPreservesSchedulerType
          DEF AsyncTypeInvariant
-    <2>3. CASE \E node \in ValidatorIds: PreGstResponsiveCrash(node)
-      BY <1>1, <2>3, PreGstResponsiveCrashPreservesSchedulerType
+    <2>5. CASE \E node \in ValidatorIds: PreGstResponsiveCrash(node)
+      BY <1>1, <2>5, PreGstResponsiveCrashPreservesSchedulerType
          DEF AsyncTypeInvariant
-    <2>4. CASE PreGstResponsiveRestart
-      BY <1>1, <2>4, PreGstResponsiveRestartPreservesSchedulerType
+    <2>6. CASE PreGstResponsiveRestart
+      BY <1>1, <2>6, PreGstResponsiveRestartPreservesSchedulerType
          DEF AsyncTypeInvariant
-    <2>5. CASE PreGstResponsiveReplay
-      BY <1>1, <2>5, PreGstResponsiveReplayPreservesSchedulerType
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5 DEF AsyncNext
+    <2>7. CASE PreGstResponsiveReplay
+      BY <1>1, <2>7, PreGstResponsiveReplayPreservesSchedulerType
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+                  <2>7
+         DEF AsyncNext
   <1> QED BY <1>1
 
 THEOREM FinishResponsiveReplayPreservesRecoveryInvariants ==
@@ -1747,7 +1863,12 @@ BY RestartSignatureReplayCommandsAreSignatures,
    DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, LocalAdmissionStep, AdmitProducerCompletion,
        AdmitCausalHead, IngressDrainStep, DrainFairIngressSelected,
-       SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, DeferredDrainStep,
        FifoRuntimeStep, DeferredTagStep, DeferredTimeoutStep,
        DeferredRetransmitStep, DirectTimeoutStep,
        DirectRetransmitStep, IdleRuntimeStep,
@@ -1783,6 +1904,191 @@ BY RestartSignatureReplayCommandsAreSignatures,
        AsyncRecoveryTypeInvariant,
        AsyncRecoveryExecutionInvariant, AsyncRecoveryVars,
        SequenceSet, vars
+
+(***************************************************************************
+Replay entry removes every exact-Serve ingress admission owned by the
+recovering node.  The only transition which can add such an admission is
+`AdmitHiddenPacket`; replay quarantine excludes the recovering node from that
+action.  Drain and receiver-close transitions only transform or remove
+existing admission records.  The lemmas below make that transition audit
+explicit before the execution invariant consumes it.
+***************************************************************************)
+THEOREM ServeIngressAdmissionStutterPreservesOwnerIdentities ==
+  \A owner:
+    UNCHANGED asyncServeIngressAdmissions
+      => AsyncServeIngressLifecycleOwnerIdentities(owner)' =
+           AsyncServeIngressLifecycleOwnerIdentities(owner)
+BY Isa
+   DEF AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionIdentities
+
+THEOREM PopSelectedIngressDoesNotCreateServeIngressOwners ==
+  \A owner, node, index, laneIndex:
+    PopSelectedIngress(node, index, laneIndex)
+      => AsyncServeIngressLifecycleOwnerIdentities(owner)'
+           \subseteq AsyncServeIngressLifecycleOwnerIdentities(owner)
+BY IsaT(180)
+   DEF PopSelectedIngress,
+       AsyncServeIngressAdmissionsAfterIngressDrain,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionIdentities,
+       AsyncServeIngressAdmission
+
+THEOREM ServeReceiverCloseRollbackDoesNotCreateIngressOwners ==
+  \A owner, node, identity:
+    PreGstServeReceiverCloseRollback(node, identity)
+      => AsyncServeIngressLifecycleOwnerIdentities(owner)'
+           \subseteq AsyncServeIngressLifecycleOwnerIdentities(owner)
+BY IsaT(180)
+   DEF PreGstServeReceiverCloseRollback,
+       PreGstPendingServeReceiverCloseRollback,
+       PreGstMaterializedServeReceiverCloseRollback,
+       AsyncServeIngressAdmissionsWithout,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionIdentities,
+       AsyncServeIngressAdmissionVars
+
+THEOREM HiddenIngressAdmissionPreservesOtherNodeOwners ==
+  \A recipient, source, owner:
+    /\ recipient # owner
+    /\ AdmitHiddenPacket(recipient, source)
+    => AsyncServeIngressLifecycleOwnerIdentities(owner)' =
+         AsyncServeIngressLifecycleOwnerIdentities(owner)
+BY IsaT(240)
+   DEF AdmitHiddenPacket, AcceptOrReserveExactServeIngress,
+       ReserveExactServeCapacity, AdvanceExactServeCapacity,
+       CoalesceExactServeIngressCapacity,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionIdentities,
+       AsyncServeIngressAdmission,
+       AsyncIoVars, AsyncServeLifecycleVars,
+       AsyncServeIngressAdmissionVars
+
+THEOREM ReplayingNetworkStepPreservesEmptyRecoveryIngressOwners ==
+  /\ asyncRecoveryPhase = "Replaying"
+  /\ AsyncServeIngressLifecycleOwnerIdentities(asyncRecoveryNode) = {}
+  /\ AsyncNetworkStep
+  /\ UNCHANGED AsyncRecoveryControlVars
+  => AsyncServeIngressLifecycleOwnerIdentities(asyncRecoveryNode)' = {}
+BY HiddenIngressAdmissionPreservesOtherNodeOwners,
+   ServeIngressAdmissionStutterPreservesOwnerIdentities,
+   IsaT(180)
+   DEF AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       DropPolicyRejectedHiddenPacket,
+       ResponsiveReplayQuarantined,
+       AsyncIoVars, AsyncServeIngressAdmissionVars
+
+THEOREM FaultStepPreservesEmptyServeIngressOwners ==
+  \A owner:
+    /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
+    /\ AsyncFaultStep
+    => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
+BY ServeReceiverCloseRollbackDoesNotCreateIngressOwners,
+   ServeIngressAdmissionStutterPreservesOwnerIdentities,
+   IsaM("blast")
+   DEF AsyncFaultStep, PreGstLosePacket, PreGstCrash,
+       InjectByzantineNoise, InjectUntrustedTransportCompletion,
+       InjectAuthenticatedJunk, InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout, AsyncSchedulerVars,
+       AsyncIoVars, AsyncServeIngressAdmissionVars,
+       AsyncDeferredVars, AsyncLocalAdmissionVars,
+       LeaveCausalQueues
+
+THEOREM NonRunnerStepPreservesEmptyReplayingIngressOwners ==
+  /\ asyncRecoveryPhase = "Replaying"
+  /\ AsyncServeIngressLifecycleOwnerIdentities(asyncRecoveryNode) = {}
+  /\ AsyncNonRunnerStep
+  /\ UNCHANGED AsyncRecoveryControlVars
+  => AsyncServeIngressLifecycleOwnerIdentities(asyncRecoveryNode)' = {}
+BY ReplayingNetworkStepPreservesEmptyRecoveryIngressOwners,
+   FaultStepPreservesEmptyServeIngressOwners,
+   ServeIngressAdmissionStutterPreservesOwnerIdentities,
+   IsaM("blast")
+   DEF AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
+       AsyncNonClockVars, OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       ServiceIoWorkerWork,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       EnqueueIoLocalControlWork,
+       AsyncSchedulerVars,
+       AsyncSchedulerExceptHistoricalRecoveryTargets,
+       AsyncIoVars, AsyncServeIngressAdmissionVars,
+       AsyncRecoveryVars
+
+THEOREM RunNodeWorkPreservesEmptyServeIngressOwners ==
+  \A owner, node:
+    /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
+    /\ RunNodeWork(node)
+    => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
+BY PopSelectedIngressDoesNotCreateServeIngressOwners,
+   ServeIngressAdmissionStutterPreservesOwnerIdentities,
+   IsaT(300)
+   DEF RunNodeWork, LocalAdmissionStep,
+       AdmitProducerCompletion, AdmitCausalHead,
+       IngressDrainStep, DrainFairIngressSelected,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
+       AsyncIoVars, AsyncServeIngressAdmissionVars,
+       AsyncServeLifecycleVars, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, vars
+
+THEOREM HistoricalServerPreservesEmptyServeIngressOwners ==
+  \A owner, node:
+    /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
+    /\ RunHistoricalServer(node)
+    => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
+BY PopSelectedIngressDoesNotCreateServeIngressOwners,
+   ServeIngressAdmissionStutterPreservesOwnerIdentities,
+   IsaT(180)
+   DEF RunHistoricalServer, DrainHistoricalIngressSelected,
+       HistoricalIdleStep, AsyncIoVars,
+       AsyncServeIngressAdmissionVars
+
+THEOREM RunnerStepPreservesEmptyServeIngressOwners ==
+  \A owner:
+    /\ AsyncServeIngressLifecycleOwnerIdentities(owner) = {}
+    /\ AsyncRunnerStep
+    => AsyncServeIngressLifecycleOwnerIdentities(owner)' = {}
+BY RunNodeWorkPreservesEmptyServeIngressOwners,
+   HistoricalServerPreservesEmptyServeIngressOwners,
+   Isa
+   DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode
+
+THEOREM ReplayingOrdinaryStepPreservesEmptyServeIngressOwners ==
+  /\ AsyncRecoveryExecutionInvariant
+  /\ asyncRecoveryPhase = "Replaying"
+  /\ (AsyncRunnerStep \/ AsyncNonRunnerStep)
+  /\ UNCHANGED AsyncRecoveryControlVars
+  => AsyncServeIngressLifecycleOwnerIdentities(asyncRecoveryNode)' = {}
+BY RunnerStepPreservesEmptyServeIngressOwners,
+   NonRunnerStepPreservesEmptyReplayingIngressOwners,
+   Isa
+   DEF AsyncRecoveryExecutionInvariant, AsyncRecoveryControlVars
+
+THEOREM AsyncServiceActivationActionPreservesRecoveryInvariants ==
+  \A node \in ValidatorIds:
+    /\ AsyncRecoveryTypeInvariant
+    /\ AsyncRestartAuthorityInvariant
+    /\ (AsyncEnterIndexedServiceActivation(node)
+          \/ AsyncActivateServiceNode(node))
+    => /\ AsyncRecoveryTypeInvariant'
+       /\ AsyncRestartAuthorityInvariant'
+BY IsaT(300)
+   DEF AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation,
+       AsyncRecoveryTypeInvariant,
+       AsyncRestartAuthorityInvariant,
+       AsyncRecoveryVars
 
 THEOREM AsyncNextPreservesRecoveryInvariants ==
   /\ StrongInductiveInvariant
@@ -1893,7 +2199,23 @@ PROOF
              QueuedCandidates, DeferredCandidates, CausalCandidates,
              TrackedWorkCandidates, CandidateConsumerCurrent,
              AsyncQueueTyped, SequenceSet, vars
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5 DEF AsyncNext
+    <2>6. CASE \E node \in ValidatorIds:
+                  AsyncEnterIndexedServiceActivation(node)
+      <3>1. PICK node \in ValidatorIds:
+               AsyncEnterIndexedServiceActivation(node)
+        BY <2>6
+      <3> QED BY <1>1, <3>1,
+           AsyncServiceActivationActionPreservesRecoveryInvariants
+    <2>7. CASE \E node \in ValidatorIds:
+                  AsyncActivateServiceNode(node)
+      <3>1. PICK node \in ValidatorIds:
+               AsyncActivateServiceNode(node)
+        BY <2>7
+      <3> QED BY <1>1, <3>1,
+           AsyncServiceActivationActionPreservesRecoveryInvariants
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+                  <2>7
+         DEF AsyncNext
   <1> QED BY <1>1
 
 THEOREM ExecuteCommandLeavesOutstandingTags ==
@@ -1926,6 +2248,16 @@ THEOREM LocalAdmissionStepLeavesOutstandingTags ==
     LocalAdmissionStep(node) => UNCHANGED asyncOutstandingTags
 BY Isa
    DEF LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       LeaveCausalQueues, vars
+
+THEOREM SerializedLocalPredecessorLeavesOutstandingTags ==
+  \A node:
+    SerializedLocalPrecedesServeIngressStep(node)
+      => UNCHANGED asyncOutstandingTags
+BY Isa
+   DEF SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead,
        LeaveCausalQueues, vars
 
 THEOREM IngressDrainStepLeavesOutstandingTags ==
@@ -1965,6 +2297,7 @@ PROOF
     <2>3. CASE IngressDrainStep(node)
       BY <2>3, IngressDrainStepLeavesOutstandingTags
     <2>4. CASE SerializedRuntimeStep(node)
+                  \/ SerializedRuntimePrecedesServeIngressStep(node)
       <3>1. CASE DeferredDrainStep(node)
         BY <3>1, DeferredDrainStepLeavesOutstandingTags
       <3>2. CASE FifoRuntimeStep(node)
@@ -1982,8 +2315,15 @@ PROOF
       <3>6. CASE IdleRuntimeStep(node)
         BY <3>6, Isa DEF IdleRuntimeStep, vars
       <3> QED BY <2>4, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6
-           DEF SerializedRuntimeStep, RuntimeStep
-    <2> QED BY <1>1, <2>2, <2>3, <2>4 DEF RunNodeWork
+           DEF SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               RuntimeStep
+    <2>5. CASE AsyncServeIngressTargetOnlyTurn(node)
+      BY <2>5, Isa DEF AsyncServeIngressTargetOnlyTurn, vars
+    <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <2>6, SerializedLocalPredecessorLeavesOutstandingTags
+    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6
+         DEF RunNodeWork
   <1> QED BY <1>1
 
 THEOREM AsyncFaultStepLeavesOutstandingTags ==
@@ -2169,6 +2509,34 @@ BY HeadTailProperties, SequenceSetAfterAppend, SMTT(30), Isa
        AsyncRecoveryTypeInvariant, AsyncCommandQueueOwnership,
        AsyncCausalQueueOwnership, SequenceSet, vars
 
+THEOREM ReplayingSerializedLocalPredecessorDoesNotCreateRecoveryCandidate ==
+  \A node:
+    /\ AsyncTypeInvariant
+    /\ AsyncRecoveryTypeInvariant
+    /\ asyncRecoveryPhase = "Replaying"
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
+         \subseteq
+           ResponsiveReplayScheduledCandidates(asyncRecoveryNode)
+BY HeadTailProperties, SequenceSetAfterAppend, SMTT(30), Isa
+   DEF SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead,
+       UpdateLocalAdmissionMetadata,
+       SelectedCompletionSource, SelectedCompletionCandidate,
+       SelectedCompletionQueueNonempty, ProducerCompletionCanAdvance,
+       LocalAdmissionCanAdvance, SelectedLocalSource,
+       EnqueueCandidate, CausalHeadCanAdvance, CandidateInFlight,
+       HeadCausalCandidate, ResponsiveReplayScheduledCandidates,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, AsyncTypeInvariant,
+       AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+       AsyncRuntimeScalarTypeInvariant, AsyncCausalTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoWorkContentTypeInvariant,
+       AsyncRecoveryTypeInvariant, AsyncCommandQueueOwnership,
+       AsyncCausalQueueOwnership, SequenceSet, vars
+
 THEOREM ReplayingIngressDrainDoesNotCreateRecoveryCandidate ==
   \A node:
     /\ AsyncTypeInvariant
@@ -2207,11 +2575,14 @@ THEOREM ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness ==
     /\ AsyncRecoveryTypeInvariant
     /\ AsyncRecoveryExecutionInvariant
     /\ asyncRecoveryPhase = "Replaying"
-    /\ SerializedRuntimeStep(node)
+    /\ UNCHANGED AsyncRecoveryControlVars
+    /\ (SerializedRuntimeStep(node)
+          \/ SerializedRuntimePrecedesServeIngressStep(node))
     => SequenceSet(asyncRecoveryReplayQueue)' \cap
          ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
 BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
-   DEF SerializedRuntimeStep, RuntimeStep,
+   DEF SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep, RuntimeStep,
        DeferredDrainStep, FifoRuntimeStep,
        DeferredTagStep, DeferredTimeoutStep,
        DeferredRetransmitStep, DirectTimeoutStep,
@@ -2258,7 +2629,7 @@ BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
        RestartPrepareReplay, RestartLockedCommitReplay,
        RestartCandidate, AsyncCandidateAtConsumer,
        AsyncCandidateWithIdentity, CandidateConsumerCurrent,
-       SequenceSet, vars
+       SequenceSet, AsyncRecoveryControlVars, vars
 
 THEOREM ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness ==
   \A node:
@@ -2267,15 +2638,21 @@ THEOREM ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness ==
     /\ AsyncRecoveryTypeInvariant
     /\ AsyncRecoveryExecutionInvariant
     /\ asyncRecoveryPhase = "Replaying"
+    /\ UNCHANGED AsyncRecoveryControlVars
     /\ RunNodeWork(node)
     => SequenceSet(asyncRecoveryReplayQueue)' \cap
          ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
 BY ReplayingLocalAdmissionDoesNotCreateRecoveryCandidate,
+   ReplayingSerializedLocalPredecessorDoesNotCreateRecoveryCandidate,
    ReplayingIngressDrainDoesNotCreateRecoveryCandidate,
    ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness,
    Isa
-   DEF RunNodeWork, AsyncRecoveryExecutionInvariant,
-       AsyncRecoveryVars, vars
+   DEF RunNodeWork, SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
+       AsyncRecoveryExecutionInvariant,
+       AsyncRecoveryControlVars, AsyncRecoveryVars, vars
 
 THEOREM AsyncRunnerStepPreservesReplayCandidateFreshness ==
   /\ StrongInductiveInvariant
@@ -2311,7 +2688,7 @@ PROOF
       <3>3. SequenceSet(asyncRecoveryReplayQueue)' \cap
                ResponsiveReplayScheduledCandidates(
                  asyncRecoveryNode)' = {}
-        BY <1>1, <3>2,
+        BY <1>1, <2>1, <3>2,
            ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness
       <3> QED BY <3>3
     <2>3. CASE \E node \in asyncHistoricalRecoveryTargets:
@@ -2324,7 +2701,7 @@ PROOF
       <3>3. SequenceSet(asyncRecoveryReplayQueue)' \cap
                ResponsiveReplayScheduledCandidates(
                  asyncRecoveryNode)' = {}
-        BY <1>1, <3>2,
+        BY <1>1, <2>1, <3>2,
            ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness
       <3> QED BY <3>3
     <2>4. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
@@ -2346,7 +2723,8 @@ THEOREM ReplayingRecoveryNodeSerializedRuntimePreservesEmptyTags ==
     /\ AsyncRecoveryExecutionInvariant
     /\ asyncRecoveryPhase = "Replaying"
     /\ node = asyncRecoveryNode
-    /\ SerializedRuntimeStep(node)
+    /\ (SerializedRuntimeStep(node)
+          \/ SerializedRuntimePrecedesServeIngressStep(node))
     => asyncOutstandingTags'[node] = {}
 PROOF
   <1>1. ASSUME NEW node,
@@ -2354,6 +2732,7 @@ PROOF
                 asyncRecoveryPhase = "Replaying",
                 node = asyncRecoveryNode,
                 SerializedRuntimeStep(node)
+                  \/ SerializedRuntimePrecedesServeIngressStep(node)
          PROVE asyncOutstandingTags'[node] = {}
     <2>1. asyncOutstandingTags[node] = {}
       BY <1>1 DEF AsyncRecoveryExecutionInvariant
@@ -2376,7 +2755,8 @@ PROOF
     <2>7. CASE IdleRuntimeStep(node)
       BY <2>1, <2>7, Isa DEF IdleRuntimeStep, vars
     <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
-         DEF SerializedRuntimeStep, RuntimeStep
+         DEF SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep, RuntimeStep
   <1> QED BY <1>1
 
 THEOREM ReplayingRecoveryNodeRunNodeWorkPreservesEmptyTags ==
@@ -2395,14 +2775,27 @@ PROOF
          PROVE asyncOutstandingTags'[node] = {}
     <2>1. asyncOutstandingTags[node] = {}
       BY <1>1 DEF AsyncRecoveryExecutionInvariant
+    <2>1a. \/ LocalAdmissionStep(node)
+            \/ IngressDrainStep(node)
+            \/ SerializedRunnerRuntimeStep(node)
+            \/ SerializedLocalPrecedesServeIngressStep(node)
+            \/ AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, RunNodeWorkConcreteActionCaseSplit
     <2>2. CASE LocalAdmissionStep(node)
       BY <2>1, <2>2, LocalAdmissionStepLeavesOutstandingTags
     <2>3. CASE IngressDrainStep(node)
       BY <2>1, <2>3, IngressDrainStepLeavesOutstandingTags
-    <2>4. CASE SerializedRuntimeStep(node)
+    <2>4. CASE SerializedRunnerRuntimeStep(node)
       BY <1>1, <2>4,
          ReplayingRecoveryNodeSerializedRuntimePreservesEmptyTags
-    <2> QED BY <1>1, <2>2, <2>3, <2>4 DEF RunNodeWork
+         DEF SerializedRunnerRuntimeStep
+    <2>5. CASE AsyncServeIngressTargetOnlyTurn(node)
+      BY <2>1, <2>5, Isa
+         DEF AsyncServeIngressTargetOnlyTurn, vars
+    <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <2>1, <2>6,
+         SerializedLocalPredecessorLeavesOutstandingTags
+    <2> QED BY <2>1a, <2>2, <2>3, <2>4, <2>5, <2>6
   <1> QED BY <1>1
 
 THEOREM ReplayingRunNodeWorkPreservesRecoveryTags ==
@@ -2487,6 +2880,16 @@ THEOREM ResetNodeSchedulerForRestartSetsOutstandingTags ==
       => asyncOutstandingTags' =
            [asyncOutstandingTags EXCEPT ![node] = {}]
 BY DEF ResetNodeSchedulerForRestart
+
+THEOREM ResetNodeSchedulerForRestartClearsServeIngressOwners ==
+  \A node, replay:
+    ResetNodeSchedulerForRestart(node, replay)
+      => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+BY Isa
+   DEF ResetNodeSchedulerForRestart,
+       AsyncServeIngressAdmissionsWithoutNode,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncServeIngressAdmissionIdentities
 
 THEOREM UniqueReplayTailPreservesUniqueValues ==
   \A queue:
@@ -2573,6 +2976,7 @@ PROOF
            /\ Node \in ValidatorIds
            /\ AsyncQueueTyped(Queue)
            /\ SequenceHasUniqueValues(Queue)
+           /\ AsyncServeIngressLifecycleOwnerIdentities(Node) = {}
            /\ SequenceSet(Queue) \cap
                 ResponsiveReplayScheduledCandidates(Node) = {}
       BY <1>1
@@ -2626,7 +3030,12 @@ PROOF
     <2>8. asyncOutstandingTags'[asyncRecoveryNode'] = {}
       BY <1>1, <2>1, <2>3
          DEF AsyncRecoveryExecutionInvariant
-    <2> QED BY <2>3, <2>4, <2>7, <2>8
+    <2>9. AsyncServeIngressLifecycleOwnerIdentities(Node)' = {}
+      BY <1>1, <2>1,
+         ServeIngressAdmissionStutterPreservesOwnerIdentities, Isa
+         DEF DriveResponsiveReplayHead, AsyncIoVars,
+             AsyncServeIngressAdmissionVars
+    <2> QED BY <2>3, <2>4, <2>7, <2>8, <2>9
          DEF AsyncRecoveryExecutionInvariant
   <1> QED BY <1>1
 
@@ -2707,6 +3116,9 @@ PROOF
       BY <2>1, <2>2, <2>4, FunctionalReplaceUpdateAtKey
     <2>6. asyncRecoveryNode' = asyncRecoveryNode
       BY <1>1, Isa DEF PreGstResponsiveReplay
+    <2>6b. AsyncServeIngressLifecycleOwnerIdentities(
+              asyncRecoveryNode)' = {}
+      BY <2>3, ResetNodeSchedulerForRestartClearsServeIngressOwners
     <2>6a. SequenceHasUniqueValues(asyncRecoveryReplayQueue')
       <3> DEFINE Node == asyncRecoveryNode
       <3> DEFINE Signatures == RestartSignatureReplay(Node)
@@ -2773,7 +3185,7 @@ PROOF
       <3>4. Len(Signatures) = 0 \/ Len(Signatures) > 0
         BY <3>1, SMT DEF AsyncQueueTyped
       <3> QED BY <3>2, <3>3, <3>4
-    <2> QED BY <2>5, <2>6, <2>6a, <2>7
+    <2> QED BY <2>5, <2>6, <2>6a, <2>6b, <2>7
          DEF AsyncRecoveryExecutionInvariant
   <1> QED BY <1>1
 
@@ -2802,6 +3214,10 @@ PROOF
           <5>1. /\ asyncRecoveryPhase = "Replaying"
                  /\ asyncRecoveryNode' = asyncRecoveryNode
             BY <2>2, <4>1, Isa DEF AsyncRecoveryVars
+          <5>1a. AsyncServeIngressLifecycleOwnerIdentities(
+                    asyncRecoveryNode)' = {}
+            BY <1>1, <4>1, <5>1,
+               ReplayingOrdinaryStepPreservesEmptyServeIngressOwners
           <5>2. CASE AsyncRunnerStep
             <6>1. asyncOutstandingTags'[asyncRecoveryNode] = {}
               BY <1>1, <5>1, <5>2,
@@ -2816,7 +3232,7 @@ PROOF
                        asyncRecoveryNode)' = {}
               BY <1>1, <5>1, <5>2,
                  AsyncRunnerStepPreservesReplayCandidateFreshness
-            <6> QED BY <2>2, <5>1, <6>1, <6>2, <6>3
+            <6> QED BY <2>2, <5>1, <5>1a, <6>1, <6>2, <6>3
                  DEF AsyncRecoveryExecutionInvariant
           <5>3. CASE AsyncNonRunnerStep
             <6>1. UNCHANGED asyncOutstandingTags
@@ -2842,7 +3258,8 @@ PROOF
               BY <1>1, <4>1, <5>1, <6>5, Isa
                  DEF AsyncRecoveryExecutionInvariant,
                      AsyncRecoveryVars
-            <6> QED BY <2>2, <5>1, <6>1, <6>2, <6>3, <6>6
+            <6> QED BY <2>2, <5>1, <5>1a, <6>1, <6>2, <6>3,
+                        <6>6
                  DEF AsyncRecoveryExecutionInvariant
           <5> QED BY <4>1, <5>2, <5>3
         <4>2. CASE DriveResponsiveReplayHead
@@ -2854,21 +3271,42 @@ PROOF
           BY <2>2, <4>4, Isa DEF RearmResponsiveRecovery
         <4> QED BY <3>1, <4>1, <4>2, <4>3, <4>4
              DEF AsyncNonCrashStep
-      <3>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      <3>2. CASE \E node \in ValidatorIds:
+                    AsyncEnterIndexedServiceActivation(node)
+        BY <1>1, <2>2, <3>2, Isa
+           DEF AsyncEnterIndexedServiceActivation,
+               AsyncServiceActivationFrameVars,
+               AsyncSchedulerExceptServiceActivation,
+               AsyncRecoveryVars, AsyncRecoveryExecutionInvariant,
+               AsyncServeIngressLifecycleOwnerIdentities,
+               AsyncServeIngressAdmissionIdentities
+      <3>3. CASE \E node \in ValidatorIds:
+                    AsyncActivateServiceNode(node)
+        BY <1>1, <2>2, <3>3, Isa
+           DEF AsyncActivateServiceNode,
+               AsyncServiceActivationFrameVars,
+               AsyncSchedulerExceptServiceActivation,
+               AsyncRecoveryVars, AsyncRecoveryExecutionInvariant,
+               AsyncServeIngressLifecycleOwnerIdentities,
+               AsyncServeIngressAdmissionIdentities
+      <3>4. CASE \E node \in ValidatorIds: PreGstCrash(node)
         <4>1. PICK node \in ValidatorIds: PreGstCrash(node)
-          BY <3>2
+          BY <3>4
         <4> QED BY <1>1, <2>2, <4>1, Isa
              DEF PreGstCrash, AsyncSchedulerVars, AsyncRecoveryVars,
-                 AsyncRecoveryExecutionInvariant
-      <3>3. CASE \E node \in ValidatorIds:
+                 AsyncRecoveryExecutionInvariant,
+                 AsyncServeIngressLifecycleOwnerIdentities,
+                 AsyncServeIngressAdmissionIdentities
+      <3>5. CASE \E node \in ValidatorIds:
                     PreGstResponsiveCrash(node)
-        BY <2>2, <3>3, Isa DEF PreGstResponsiveCrash
-      <3>4. CASE PreGstResponsiveRestart
-        BY <2>2, <3>4, Isa DEF PreGstResponsiveRestart
-      <3>5. CASE PreGstResponsiveReplay
-        BY <1>1, <3>5,
+        BY <2>2, <3>5, Isa DEF PreGstResponsiveCrash
+      <3>6. CASE PreGstResponsiveRestart
+        BY <2>2, <3>6, Isa DEF PreGstResponsiveRestart
+      <3>7. CASE PreGstResponsiveReplay
+        BY <1>1, <3>7,
            PreGstResponsiveReplayEstablishesRecoveryExecutionInvariant
-      <3> QED BY <1>1, <2>2, <3>1, <3>2, <3>3, <3>4, <3>5
+      <3> QED BY <1>1, <2>2, <3>1, <3>2, <3>3, <3>4, <3>5,
+                  <3>6, <3>7
            DEF AsyncNext
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
@@ -2983,6 +3421,18 @@ THEOREM PreGstResponsiveReplayPreservesClaimIngressOwnership ==
 BY ResetNodeSchedulerPreservesClaimIngressOwnership, Isa
    DEF PreGstResponsiveReplay, RecoveryCoreReplay
 
+THEOREM AsyncServiceActivationActionPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ (AsyncEnterIndexedServiceActivation(node)
+          \/ AsyncActivateServiceNode(node))
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY CertifiedResponseClaimIngressOwnershipStutter, Isa
+   DEF AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode,
+       AsyncServiceActivationFrameVars,
+       AsyncSchedulerExceptServiceActivation
+
 THEOREM AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant ==
   /\ AsyncTypeInvariant
   /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
@@ -3024,16 +3474,40 @@ PROOF
     <2>5. CASE PreGstResponsiveReplay
       BY <2>5,
          PreGstResponsiveReplayPreservesClaimIngressOwnership
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2>6. CASE \E node \in ValidatorIds:
+                  AsyncEnterIndexedServiceActivation(node)
+      <3>1. PICK node \in ValidatorIds:
+               AsyncEnterIndexedServiceActivation(node)
+        BY <2>6
+      <3> QED BY <1>1, <3>1,
+           AsyncServiceActivationActionPreservesClaimIngressOwnership
+    <2>7. CASE \E node \in ValidatorIds:
+                  AsyncActivateServiceNode(node)
+      <3>1. PICK node \in ValidatorIds:
+               AsyncActivateServiceNode(node)
+        BY <2>7
+      <3> QED BY <1>1, <3>1,
+           AsyncServiceActivationActionPreservesClaimIngressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+                  <2>7
          DEF AsyncNext
   <1> QED BY <1>1
 
-THEOREM AsyncNextPreservesControlServiceStateTypeInvariant ==
+THEOREM AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType ==
   /\ AsyncTypeInvariant
   /\ AsyncControlServiceStateTypeInvariant
+  /\ AsyncSchedulerTypeInvariant'
   /\ AsyncNext
   => AsyncControlServiceStateTypeInvariant'
-BY FS_Subset, FS_Image, IsaT(600)
+BY AsyncCandidateServiceRecordProducersAreTrackedBoundaryKinds,
+   AsyncCandidateLifecycleDistinctNewRootsReceiveDistinctOwnership,
+   AsyncCandidateLifecycleHighWatermarkAdvancesByFullFreshSet,
+   AsyncServeIngressSharedHighWatermarkAdvancesByFreshTickets,
+   AsyncServeIngressReservationPrecedesSameStepCandidateAllocation,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   FunctionalUpdatePreservesType,
+   FS_Subset, FS_Image, FS_Union, FS_Interval,
+   FS_CardinalityType, IsaT(1800)
    DEF AsyncNext,
        AsyncControlServiceSlotTransition,
        AsyncControlServiceStateAfterReset,
@@ -3045,16 +3519,86 @@ BY FS_Subset, FS_Image, IsaT(600)
        AsyncCandidateServiceStateAfterReclamation,
        AsyncCandidateServiceStateAfterSuccessfulService,
        AsyncCandidateServiceStateAfterTerminalRetirement,
+       AsyncCandidateLifecycleStateAfterServiceSlotTransfer,
+       AsyncCandidateLifecycleStateAfterCarrierUpdate,
+       AsyncCandidateLifecycleCarrierUpdatedAdmissions,
+       AsyncCandidateLifecycleStateAfterCompaction,
+       AsyncCandidateLifecycleRetirementCoveredIn,
+       AsyncCandidateLifecyclePermanentlyObsoleteAfter,
+       AsyncCandidateLifecycleDormantReservationOwnedAfter,
+       AsyncCandidateLifecycleServiceRecordCoversIn,
+       AsyncCandidateLifecycleStateAfterServeIngressAdmission,
+       AsyncCandidateLifecycleStateAfterAdmission,
+       AsyncCandidateLifecycleStateAfterTimeoutOwnership,
        AsyncControlServiceResetNodesThisStep,
        AsyncControlServiceAdmissionsThisStep,
        AsyncControlServicesThisStep,
        AsyncCertifiedResponseClaimAdmissionsThisStep,
        AsyncCandidateServicesThisStep,
+       AsyncCandidateSemanticallyAppliedThisStep,
        AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidatePhysicallyDiscardedThisStep,
        AsyncCandidateTerminalRetirementsThisStep,
        AsyncCandidateTerminalDiscardsThisStep,
        AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateIgnoredWithoutApplicationThisStep,
+       AsyncCandidateIgnoredWithoutApplicationThisStepSet,
+       AsyncCandidateLifecycleDeparturesThisStep,
+       AsyncCandidateServiceReservationAvailableIn,
+       AsyncCandidateServiceSlotTransferNeededIn,
+       AsyncCandidateLifecycleFirstFreeServicedSlotForIn,
+       AsyncCandidateTerminalServiceReservationAvailableIn,
+       AsyncCandidateTerminalServiceReservationNeededIn,
+       AsyncCandidateServiceIdentityRecordedIn,
        AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateLifecycleReservationsAvailableIn,
+       AsyncCandidateLifecycleOrdinaryReservationsAvailableIn,
+       AsyncCandidateLifecycleClockReservationAvailableIn,
+       AsyncCandidateLifecycleNewAdmissions,
+       AsyncCandidateLifecycleAdmissionOrdinalFor,
+       AsyncCandidateLifecycleAdmissionSlotFor,
+       AsyncCandidateLifecycleFreeSlotPredecessorsFor,
+       AsyncCandidateLifecycleFreeOrdinarySlotsForNodeIn,
+       AsyncCandidateLifecycleFreeServicedSlotsForNodeIn,
+       AsyncCandidateLifecycleUsedOrdinarySlotsForNodeIn,
+       AsyncCandidateLifecycleUsedActiveSlotsForNodeIn,
+       AsyncCandidateLifecycleUsedServicedSlotsForNodeIn,
+       AsyncCandidateLifecycleOrdinaryOriginsForNodeIn,
+       AsyncOrdinaryNewCandidateLifecyclePredecessorsFor,
+       AsyncOrdinaryNewCandidateLifecycleOriginsForNodeIn,
+       AsyncNewCandidateLifecycleOriginsForNodeIn,
+       AsyncCandidateLifecycleOriginsRecordedForNodeIn,
+       AsyncCandidateLifecycleRecordsForNodeIn,
+       AsyncCandidateLifecycleRecordsForIn,
+       AsyncCandidateLifecycleRecordedIn,
+       AsyncCandidateLifecycleRecordForIn,
+       AsyncCandidateLifecycleClockRecordBucketIn,
+       AsyncCandidateLifecycleOrdinaryRecordBucketIn,
+       AsyncCandidateLifecycleClockOwnerCountIn,
+       AsyncUnmaterializedTimeoutLifecycleReservationIn,
+       AsyncFreshServeIngressAdmissionsForNodeThisStep,
+       AsyncFreshServeIngressAdmissionsAreSingularThisStep,
+       AsyncFreshServeIngressSchedulerReservationMatchesIn,
+       AsyncTimeoutLifecycleNewOriginsForNodeIn,
+       AsyncTimeoutLifecycleTransfersThisStep,
+       AsyncTimeoutLifecycleResetThisStep,
+       AsyncTimeoutLifecycleCanAcquireThisStep,
+       AsyncTimeoutLifecycleUsesRecordedOriginOrdinal,
+       AsyncTimeoutLifecycleOrdinalForStep,
+       AsyncTimeoutLifecycleConsumesFreshOrdinal,
+       AsyncCurrentTimeoutCausalOrigin,
+       AsyncEffectiveTimeoutLifecycleOrigin,
+       AsyncProposedTimeoutCausalOrigin,
+       AsyncProposedTimeoutCausalCommand,
+       TimeoutCausalCommand, AsyncTimeoutLifecycleOwned,
+       NoItemCandidate, AsyncNoItemCandidateCausalOriginAt,
+       AsyncCandidateWithIdentityAndOrigin,
+       AsyncCandidateCausalOrigin,
+       AsyncCandidateCausalOriginSet,
+       NoAsyncCandidateLifecycleOrigin,
+       AsyncOrderedScheduledCandidatesForNodeAfter,
+       AsyncOrderedScheduledOriginsForNodeAfter,
+       AsyncFirstScheduledOriginIndexAfter,
        AsyncControlServiceStateTypeInvariant,
        AsyncControlServiceRecordSet,
        AsyncControlServiceRecord,
@@ -3071,14 +3615,53 @@ BY FS_Subset, FS_Image, IsaT(600)
        AsyncCandidateServiceIdentity,
        AsyncCandidateServicePayload,
        AsyncCandidateServiceRecordsForIdentity,
-       AsyncCandidateServiceTombstoneRetainedAfterStep,
+       AsyncCandidateServiceRecordRetainedAfterStep,
        AsyncCandidateServiceEligibleAfterStep,
+       AsyncCandidateLifecyclePerNodeCapacityRespected,
+       AsyncCandidateLifecycleAdmissionSet,
+       AsyncCandidateLifecycleAdmission,
+       AsyncCandidateLifecycleSlots,
+       AsyncCandidateLifecycleOrdinarySlots,
+       AsyncCandidateLifecycleServicedSlots,
+       AsyncCandidateLifecycleActiveSlots,
+       AsyncCandidateLifecycleClockSlot,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncNextCandidateLifecycleOrdinal,
+       AsyncTimeoutLifecycleOrdinal,
+       AsyncTimeoutLifecycleOrigin,
        AsyncControlServiceSlotSet,
        AsyncControlServiceSlot,
        AsyncControlServiceProtocolOwner,
        AsyncControlServiceAdmissionStartsOrReplaces,
        AsyncControlServiceCurrentHeightItem,
        AsyncLeaderWireServiceIdentity
+
+(***************************************************************************
+The candidate-lifecycle transformer types newly scheduled origins in the
+post-state.  Its exact proof therefore consumes the primed scheduler type.
+That fact is not assumed by the exported preservation theorem: it is derived
+from the full unprimed strong invariant and the same `AsyncNext` step, then
+threaded into the transformer above.
+***************************************************************************)
+THEOREM AsyncNextPreservesControlServiceStateTypeInvariant ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncNext
+  => AsyncControlServiceStateTypeInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncNext
+         PROVE AsyncControlServiceStateTypeInvariant'
+    <2>1. /\ StrongInductiveInvariant
+           /\ AsyncTypeInvariant
+           /\ AsyncRecoveryTypeInvariant
+           /\ AsyncControlServiceStateTypeInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+         DEF AsyncStrongTypeInvariant
+    <2>2. AsyncSchedulerTypeInvariant'
+      BY <1>1, <2>1, AsyncNextPreservesSchedulerType
+    <2> QED BY <1>1, <2>1, <2>2,
+         AsyncNextPreservesControlServiceStateTypeFromPrimedSchedulerType
+  <1> QED BY <1>1
 
 THEOREM AsyncNextPreservesStrongTypeInvariant ==
   AsyncStrongTypeInvariant /\ AsyncNext
@@ -3108,11 +3691,16 @@ PROOF
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2h. AsyncControlServiceStateTypeInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2i. AsyncServiceActivationPairInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
     <2>3. StrongInductiveInvariant'
       BY <1>1, <2>1, AsyncNextPreservesStrongInductiveInvariant
     <2>4. AsyncSchedulerTypeInvariant'
       BY <1>1, <2>1, <2>2, <2>2a,
          AsyncNextPreservesSchedulerType
+    <2>4a. AsyncServiceActivationPairInvariant'
+      BY <1>1, <2>2,
+         AsyncNextPreservesServiceActivationPairInvariant
     <2>4b. AsyncControlServiceStateTypeInvariant'
       BY <1>1, <2>2, <2>2h,
          AsyncNextPreservesControlServiceStateTypeInvariant
@@ -3138,8 +3726,8 @@ PROOF
     <2>11. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
       BY <1>1, <2>2, <2>2g,
          AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant
-    <2> QED BY <2>3, <2>4, <2>4b, <2>5, <2>6, <2>7, <2>8,
-                <2>9, <2>10, <2>11
+    <2> QED BY <2>3, <2>4, <2>4a, <2>4b, <2>5, <2>6, <2>7,
+                <2>8, <2>9, <2>10, <2>11
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -4203,6 +4791,11 @@ BY HistoricalLockedFetchExecutionHandsOff,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        RunHistoricalServer, OpenHistoricalRecovery,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
@@ -4238,7 +4831,11 @@ BY HistoricalLockedPersistInstallEstablishesSemanticFetch,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        FifoRuntimeStep, DeferredDrainStep,
        AsyncAllVars
 

@@ -284,7 +284,8 @@ volatile vote pool cannot orphan the exact durable locked Commit intent.
 Authenticated vote history is immutable and distinct from the volatile receipt
 pool. An exact vote already present in that pool is suppressed. Persisting a TC
 clears only the installing node's pool and advances its reducer generation
-(until the finite model's generation bound). At that acknowledgement boundary,
+when the checked increment is available. Exhaustion is fail-stop liveness debt,
+not a temporal premise. At that acknowledgement boundary,
 the reducer compares the resulting lock with its durable Commit intents. An
 exact proposal-round/subject match may queue that old same-round intent for
 re-signing. A newly TC-promoted lock without an intent never signs merely from

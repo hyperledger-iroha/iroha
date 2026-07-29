@@ -82,6 +82,8 @@ THEOREM HistoricalDiscoveryPostGstUpAndRosterAreStable ==
           AsyncCurrentResponsiveVoters
 BY GstAsyncStepIsMonotone, Isa
    DEF AsyncNext, AsyncNonCrashStep,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode, AsyncServiceActivationFrameVars,
        PreGstCrash, PreGstResponsiveCrash,
        PreGstResponsiveRestart, PreGstResponsiveReplay,
        DriveResponsiveReplayHead, FinishResponsiveReplay,
@@ -168,8 +170,15 @@ BY HistoricalExecuteApplyTransfersTimedServiceOwner, Isa
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
        LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep,
        ExecuteCommand, ExecuteApply, OpenHistoricalRecovery,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode, AsyncServiceActivationFrameVars,
        PreGstCrash, PreGstResponsiveCrash,
        PreGstResponsiveRestart, PreGstResponsiveReplay,
        ResetNodeSchedulerForRestart, AsyncAllVars

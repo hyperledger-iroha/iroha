@@ -774,20 +774,40 @@ PROOF
 THEOREM SerializedRuntimeStepRefinesCoreBracketNext ==
   TypeInvariant =>
     \A node \in ValidatorIds:
-      SerializedRuntimeStep(node) => [Next]_vars
+      (SerializedRuntimeStep(node)
+        \/ SerializedRuntimePrecedesServeIngressStep(node))
+        => [Next]_vars
 PROOF
   <1>1. ASSUME TypeInvariant
          PROVE \A node \in ValidatorIds:
-                 SerializedRuntimeStep(node) => [Next]_vars
+                 (SerializedRuntimeStep(node)
+                   \/ SerializedRuntimePrecedesServeIngressStep(node))
+                   => [Next]_vars
     <2>1. ASSUME NEW node \in ValidatorIds,
                   SerializedRuntimeStep(node)
+                    \/ SerializedRuntimePrecedesServeIngressStep(node)
            PROVE [Next]_vars
-      <3>1. RuntimeStep(node)
-        BY <2>1 DEF SerializedRuntimeStep
-      <3> QED BY <1>1, <2>1, <3>1,
-                   RuntimeStepRefinesCoreBracketNext
+      <3>1. CASE SerializedRuntimeStep(node)
+        <4>1. RuntimeStep(node)
+          BY <3>1 DEF SerializedRuntimeStep
+        <4> QED BY <1>1, <2>1, <4>1,
+                     RuntimeStepRefinesCoreBracketNext
+      <3>2. CASE SerializedRuntimePrecedesServeIngressStep(node)
+        <4>1. RuntimeStep(node)
+          BY <3>2 DEF SerializedRuntimePrecedesServeIngressStep
+        <4> QED BY <1>1, <2>1, <4>1,
+                     RuntimeStepRefinesCoreBracketNext
+      <3> QED BY <2>1, <3>1, <3>2
     <2> QED BY <2>1
   <1> QED BY <1>1
+
+THEOREM SerializedLocalPredecessorRefinesCoreBracketNext ==
+  \A node:
+    SerializedLocalPrecedesServeIngressStep(node) => [Next]_vars
+BY CoreStutterRefinesBracketNext, Isa
+   DEF SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead
 
 THEOREM RunNodeWorkRefinesCoreBracketNext ==
   TypeInvariant =>
@@ -804,9 +824,17 @@ PROOF
       <3>2. CASE IngressDrainStep(node)
         BY <3>2, IngressDrainStepRefinesCoreBracketNext
       <3>3. CASE SerializedRuntimeStep(node)
+                    \/ SerializedRuntimePrecedesServeIngressStep(node)
         BY <1>1, <2>1, <3>3,
            SerializedRuntimeStepRefinesCoreBracketNext
-      <3> QED BY <2>1, <3>1, <3>2, <3>3 DEF RunNodeWork
+      <3>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+        <4>1. UNCHANGED vars
+          BY <3>4 DEF AsyncServeIngressTargetOnlyTurn
+        <4> QED BY <4>1, CoreStutterRefinesBracketNext
+      <3>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+        BY <3>5, SerializedLocalPredecessorRefinesCoreBracketNext
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5
+           DEF RunNodeWork
     <2> QED BY <2>1
   <1> QED BY <1>1
 
@@ -1140,15 +1168,29 @@ PROOF
             <6> QED BY <6>1, CoreStutterRefinesBracketNext
           <5> QED BY <5>1
         <4> QED BY <3>18, <4>1
+      <3>19. CASE \E node \in Responsive:
+                     AsyncActivateServiceNode(node)
+        <4>1. \A node:
+                 AsyncActivateServiceNode(node) => [Next]_vars
+          <5>1. ASSUME NEW node, AsyncActivateServiceNode(node)
+                 PROVE [Next]_vars
+            <6>1. UNCHANGED vars
+              BY <5>1, Isa
+                 DEF AsyncActivateServiceNode,
+                     AsyncServiceActivationFrameVars
+            <6> QED BY <6>1, CoreStutterRefinesBracketNext
+          <5> QED BY <5>1
+        <4> QED BY <3>19, <4>1
       <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                    <3>7, <3>8, <3>9, <3>10, <3>11, <3>12, <3>13,
-                   <3>14, <3>15, <3>16, <3>17, <3>18
+                   <3>14, <3>15, <3>16, <3>17, <3>18, <3>19
            DEF AsyncFairActionAt
     <2> QED BY <2>1
   <1> QED BY <1>1
 
 AsyncOuterStep ==
   \/ AsyncNonCrashStep
+  \/ (\E node \in ValidatorIds: AsyncActivateServiceNode(node))
   \/ (\E node \in ValidatorIds: PreGstCrash(node))
   \/ (\E node \in ValidatorIds: PreGstResponsiveCrash(node))
   \/ PreGstResponsiveRestart
@@ -1504,9 +1546,30 @@ PROOF
                /\ AsyncNonRunnerOuterFrame
           BY <3>18, <4>1
         <4> QED BY <4>2, NonRunnerCategorySuppliesOuterFrame
+      <3>19. CASE \E node \in Responsive:
+                     AsyncActivateServiceNode(node)
+        <4>1. \A node \in Responsive:
+                 AsyncActivateServiceNode(node)
+                   => AsyncOuterFrameSatisfied
+          <5>1. ASSUME NEW node \in Responsive,
+                      AsyncActivateServiceNode(node)
+                 PROVE AsyncOuterFrameSatisfied
+            <6>1. node \in ValidatorIds
+              BY <1>1, <5>1, Isa
+                 DEF TypeInvariant, ModelConfiguration,
+                     QuorumConfiguration
+            <6>2. AsyncOuterStep
+              BY <5>1, <6>1 DEF AsyncOuterStep
+            <6>3. UNCHANGED <<height, context>>
+              BY <5>1, Isa
+                 DEF AsyncActivateServiceNode,
+                     AsyncServiceActivationFrameVars, vars
+            <6> QED BY <6>2, <6>3 DEF AsyncOuterFrameSatisfied
+          <5> QED BY <5>1
+        <4> QED BY <3>19, <4>1
       <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
                    <3>7, <3>8, <3>9, <3>10, <3>11, <3>12, <3>13,
-                   <3>14, <3>15, <3>16, <3>17, <3>18
+                   <3>14, <3>15, <3>16, <3>17, <3>18, <3>19
            DEF AsyncFairActionAt
     <2> QED BY <2>1
   <1> QED BY <1>1

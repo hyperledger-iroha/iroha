@@ -6,9 +6,10 @@ Crash/recovery obligations for the production reducer/WAL boundary.
 
 The core model treats each Persist* action as acknowledgement of one complete,
 fsynced frame.  Requests in pending* are unacknowledged and are erased by a
-crash.  Durable intent, lock, high-QC, TC, and decision state is unchanged.
-Restart increments the generation before any volatile completion can be used;
-Resume* may re-sign only an already acknowledged current-view intent.
+crash. Durable intent, lock, high-QC, TC, and decision state is unchanged.
+Restart denotes a complete process replacement: all old callback senders and
+queues are gone before generation zero is installed. Resume* may re-sign only
+an already acknowledged current-view intent.
 
 The byte-level frame checksum, hash chain, Norito decode, and OS fsync contract
 are outside TLA+.  The predicates below state the logical complete-prefix
@@ -64,9 +65,9 @@ PendingWritesAreUnacknowledged ==
          /\ ~\E request \in pendingInstallTC': request.node = node
          /\ ~\E request \in pendingDecision': request.node = node
 
-StaleGenerationRejected ==
+RestartStartsFreshProcessGeneration ==
   \A node \in ValidatorIds:
-    Restart(node) => generation'[node] > generation[node]
+    Restart(node) => generation'[node] = 0
 
 Frame(sequence, payload, complete, previousHash, frameHash) ==
   [sequence |-> sequence, payload |-> payload, complete |-> complete,

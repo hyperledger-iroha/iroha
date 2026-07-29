@@ -103,10 +103,14 @@ ExactLeaderRankedCandidateExitProperty(specification) ==
 
 THEOREM AsyncLiveExactLeaderRankedCandidatesExit ==
   \A initialContext:
-    ExactLeaderRankedCandidateExitProperty(
-      AsyncLiveSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ExactLeaderRankedCandidateExitProperty(
+           AsyncLiveSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ExactLeaderRankedCandidateExitProperty(
                  AsyncLiveSpecAt(initialContext))
     <2>1. StarvationFreedomProperty(
@@ -320,11 +324,12 @@ THEOREM ExecutePersistInstallCreatesExactPacemakerMilestone ==
     /\ TypeInvariant
     /\ CandidateConsumerCurrent(candidate)
     /\ ExecutePersistInstall(candidate)
-      => /\ nodeView'[candidate.node] > candidate.consumerView
-         /\ generation'[candidate.node] >
-              candidate.consumerGeneration
+      => \/ nodeView'[candidate.node] > candidate.consumerView
+         \/ /\ nodeView'[candidate.node] = candidate.consumerView
+            /\ generation'[candidate.node] >
+                 candidate.consumerGeneration
 BY ExecutePersistInstallAdvancesCertifiedView,
-   InstallAdvancesDeliveryGeneration, Isa
+   InstallAdvancesDeliveryTag, Isa
    DEF ExecutePersistInstall, CandidateConsumerCurrent,
        TimeoutViewGoal
 
@@ -597,9 +602,10 @@ ExactLeaderOwnerExitStep(candidate, rank) ==
   /\ AsyncNext
   /\ ~ResponsiveProtectedCandidateOwned(candidate)'
 
-THEOREM CurrentConsumerRetirementAdvancesPacemakerCoordinate ==
+THEOREM PostGstCurrentConsumerRetirementAdvancesPacemakerCoordinate ==
   \A candidate \in AsyncCandidateSet:
     /\ AsyncStrongTypeInvariant
+    /\ gst
     /\ AsyncNext
     /\ CandidateConsumerCurrent(candidate)
     /\ ~CandidateConsumerCurrent(candidate)'
@@ -607,9 +613,12 @@ THEOREM CurrentConsumerRetirementAdvancesPacemakerCoordinate ==
        \/ generation'[candidate.node] >
             candidate.consumerGeneration
 BY AsyncNextAdvancesNodeViews,
-   CoreBracketNextDoesNotDecreaseGeneration, Isa
+   InstallAdvancesDeliveryTag, IsaT(180)
    DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
-       Safety, CandidateConsumerCurrent, AsyncNext, vars
+       Safety, CandidateConsumerCurrent, AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep, RunNode, RunNodeWork,
+       SerializedRuntimeStep, FifoRuntimeStep, ExecuteCommand,
+       ExecutePersistInstall, PersistInstallTC, vars
 
 THEOREM RankedLeaderOwnerExitIsExecutionDiscardPacemakerOrTerminal ==
   \A candidate, rank:
@@ -619,7 +628,7 @@ THEOREM RankedLeaderOwnerExitIsExecutionDiscardPacemakerOrTerminal ==
        \/ PacemakerRetiredLeaderOwner(candidate)
        \/ SelectedSuccessfulLeaderExecution(candidate)
        \/ SameConsumerLeaderDiscard(candidate)
-BY CurrentConsumerRetirementAdvancesPacemakerCoordinate, Isa
+BY PostGstCurrentConsumerRetirementAdvancesPacemakerCoordinate, Isa
    DEF ExactLeaderOwnerExitStep, TerminalLeaderExit,
        PacemakerRetiredLeaderOwner,
        SelectedSuccessfulLeaderExecution,
@@ -2612,6 +2621,32 @@ BY AsyncCandidateCausalAdmissionTransfersSameOwner,
        CausalCandidates, TrackedWorkCandidates, SequenceSet,
        AsyncNext, AsyncControlServiceSlotTransition
 
+THEOREM AsyncSelectedLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance ==
+  \A node \in ValidatorIds:
+    /\ ExactLeaderSchedulerOriginInductionContext
+    /\ AsyncNext
+    /\ SelectedLocalAdmissionAdvance(node)
+    => ExactLeaderSchedulerOriginProvenanceInvariant'
+BY AsyncCandidateCausalAdmissionTransfersSameOwner,
+   AsyncCandidateProducerCompletionTransfersSameOwner,
+   IsaT(600)
+   DEF ExactLeaderSchedulerOriginInductionContext,
+       ExactLeaderSchedulerOriginProvenanceInvariant,
+       SelectedLocalAdmissionAdvance, LocalAdmissionCanAdvance,
+       SelectedLocalSource, PreferredLocalSource,
+       AdmitCausalHead, CausalHeadCanAdvance, CandidateInFlight,
+       AdmitProducerCompletion, ProducerCompletionCanAdvance,
+       SelectedCompletionCandidate, EnqueueCandidate,
+       UpdateLocalAdmissionMetadata,
+       DispatchableSameIdentityLeaderOwner,
+       ExactLeaderEvidenceAt, ExactLeaderDiscardProvenanceAt,
+       ExactLeaderSchedulerParked,
+       ExactLeaderCandidateRank, CommandExecutionReady,
+       CommandDispatchable, CandidateScheduled,
+       CandidateScheduledIn, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, SequenceSet,
+       AsyncNext, AsyncControlServiceSlotTransition
+
 THEOREM AsyncIngressDrainPreservesExactLeaderSchedulerOriginProvenance ==
   \A node \in ValidatorIds:
     /\ ExactLeaderSchedulerOriginInductionContext
@@ -2861,9 +2896,11 @@ PROOF
       BY <1>1, <2>2,
          AsyncIngressDrainPreservesExactLeaderSchedulerOriginProvenance
     <2>3. CASE SerializedRuntimeStep(node)
+                  \/ SerializedRuntimePrecedesServeIngressStep(node)
       BY <1>1, <2>3,
          AsyncRuntimePreservesExactLeaderSchedulerOriginProvenance
-         DEF SerializedRuntimeStep
+         DEF SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep
     <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
       BY <1>1, <2>4,
          ExactLeaderSchedulerReadinessFramePreservesInvariant, Isa
@@ -2871,7 +2908,13 @@ PROOF
              ExactLeaderSchedulerOriginReadinessInvariant,
              ExactLeaderSchedulerReadinessFrame,
              AsyncServeIngressTargetOnlyTurn
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4 DEF RunNodeWork
+    <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+      <3>1. SelectedLocalAdmissionAdvance(node)
+        BY <2>5 DEF SerializedLocalPrecedesServeIngressStep
+      <3> QED BY <1>1, <3>1,
+           AsyncSelectedLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+         DEF RunNodeWork
   <1> QED BY <1>1
 
 THEOREM AsyncHistoricalRunnerPreservesExactLeaderSchedulerOriginProvenance ==
@@ -3215,12 +3258,16 @@ ExactLeaderCandidateSemanticHandoffProperty(specification) ==
 
 THEOREM ExactDiscardSafetyClosesAdmittedCandidateHandoffs ==
   \A initialContext:
-    ExactLeaderExitSafetyKernelProperty(
-      AsyncLiveSpecAt(initialContext))
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
+    /\ ExactLeaderExitSafetyKernelProperty(
+         AsyncLiveSpecAt(initialContext))
       => ExactLeaderCandidateSemanticHandoffProperty(
            AsyncLiveSpecAt(initialContext))
 PROOF
   <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext)),
                 ExactLeaderExitSafetyKernelProperty(
                   AsyncLiveSpecAt(initialContext))
          PROVE ExactLeaderCandidateSemanticHandoffProperty(
@@ -4335,8 +4382,10 @@ BY CertifiedResponsePhysicalDebtConvergence
 
 THEOREM ExactResidualKernelSuppliesCandidateSemanticHandoffs ==
   \A initialContext:
-    AdequateLeaderExactResidualKernelProperty(
-      AsyncLiveSpecAt(initialContext))
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
+    /\ AdequateLeaderExactResidualKernelProperty(
+         AsyncLiveSpecAt(initialContext))
       => ExactLeaderCandidateSemanticHandoffProperty(
            AsyncLiveSpecAt(initialContext))
 BY SchedulerOriginReadinessReducesToExactLeaderExitSafety,
@@ -4980,6 +5029,25 @@ AdequateLeaderTargetSemanticRankOrdering ==
   LexPairOrdering(
     OpToRel(<, Nat), OpToRel(<, Nat), 1..4, 0..9)
 
+AdequateLeaderTimeoutLifecycleKinds ==
+  AsyncTimeoutLifecycleKinds
+
+AdequateLeaderOlderOrEqualTimeoutLifecycleOwned(
+    node, leaderContext, leaderView) ==
+  AsyncOlderOrEqualTimeoutLifecycleOwned(
+    node, leaderContext, leaderView)
+
+AdequateLeaderFreshNodeServiceWindow(
+    node, leaderContext, leaderView) ==
+  AsyncFreshNodeServiceWindow(node, leaderContext, leaderView)
+
+AdequateLeaderFreshTargetLeaderServiceWindow(
+    target, leaderContext, leader, leaderView) ==
+  /\ AdequateLeaderFreshNodeServiceWindow(
+       target, leaderContext, leaderView)
+  /\ AdequateLeaderFreshNodeServiceWindow(
+       leader, leaderContext, leaderView)
+
 AdequateLeaderFrozenTargetCorridor(
     target, leaderContext, leader, leaderView) ==
   /\ gst
@@ -4993,6 +5061,8 @@ AdequateLeaderFrozenTargetCorridor(
   /\ nodeView[target] = leaderView
   /\ Leader(leaderContext, leaderView) = leader
   /\ AsyncViewTimeout(leaderView) > AsyncWorstCaseServiceBudget
+  /\ AdequateLeaderFreshTargetLeaderServiceWindow(
+       target, leaderContext, leader, leaderView)
   /\ ~NodeHasDecision(target)
 
 AdequateLeaderTargetCandidateRole(candidate, target, leader) ==
@@ -5144,6 +5214,8 @@ AdequateLeaderTargetCandidateIdentity(
        leaderView, subject)
   /\ AdequateLeaderCandidatePayloadWithinFrozenView(
        candidate, leaderView)
+  /\ AdequateLeaderFrozenCandidateRootConstructed(
+       candidate, target, leaderContext, leader, leaderView)
   /\ AdequateLeaderTargetCandidateRole(candidate, target, leader)
 
 AdequateLeaderFrozenTargetCandidateIdentity(
@@ -5155,6 +5227,8 @@ AdequateLeaderFrozenTargetCandidateIdentity(
        leaderView, subject)
   /\ AdequateLeaderCandidatePayloadWithinFrozenView(
        candidate, leaderView)
+  /\ AdequateLeaderFrozenCandidateRootConstructed(
+       candidate, target, leaderContext, leader, leaderView)
   /\ AdequateLeaderFrozenTargetCandidateRole(
        candidate, target, leader)
 
@@ -5474,6 +5548,7 @@ AdequateLeaderFrozenCandidateEvidencePayload(evidence, leaderView) ==
 AdequateLeaderFrozenCandidatePayload(candidate, leaderView) ==
   [class |-> candidate.class,
    workKind |-> candidate.kind,
+   causalOrigin |-> candidate.causalOrigin,
    item |->
      AdequateLeaderFrozenCandidateItemPayload(
        candidate.item, leaderView),
@@ -5493,6 +5568,7 @@ AdequateLeaderRouteNeutralCandidateEvidence(evidence) ==
 AdequateLeaderImmutableCandidatePayload(candidate) ==
   [class |-> candidate.class,
    workKind |-> candidate.kind,
+   causalOrigin |-> candidate.causalOrigin,
    item |-> AdequateLeaderRouteNeutralCandidateItem(candidate.item),
    evidence |->
      AdequateLeaderRouteNeutralCandidateEvidence(candidate.evidence),
@@ -5652,6 +5728,197 @@ AdequateLeaderFrozenEvidenceCarrier(leaderView) ==
     \cup AdequateLeaderFrozenTcRecordCarrier(leaderView)
     \cup AdequateLeaderFrozenBodyRecordCarrier(leaderView)
 
+AdequateLeaderFrozenLifecycleNodes(target, leader) ==
+  {target, leader}
+
+AdequateLeaderFrozenLifecycleDeliveryItems(
+    target, leaderContext, leader, leaderView) ==
+  {item \in AdequateLeaderFrozenNetworkItemCarrier(leaderView):
+     /\ item.envelope.recipient
+          \in AdequateLeaderFrozenLifecycleNodes(target, leader)
+     /\ DeliveryHeight(item) = leaderContext.height
+     /\ DeliveryView(item) \in 0..leaderView}
+
+AdequateLeaderFrozenDeliveryCausalOriginCarrier(
+    target, leaderContext, leader, leaderView) ==
+  {AsyncDeliveryCandidateCausalOriginAt(item, leaderContext):
+     item \in AdequateLeaderFrozenLifecycleDeliveryItems(
+                target, leaderContext, leader, leaderView)}
+
+AdequateLeaderFrozenCertifiedResponseCausalOriginCarrier(
+    target, leaderContext, leader, leaderView) ==
+  {AsyncCertifiedResponseCandidateCausalOriginAt(item, leaderContext):
+     item \in
+       {response \in
+          AdequateLeaderFrozenLifecycleDeliveryItems(
+            target, leaderContext, leader, leaderView):
+          response.kind = "CertifiedResponse"}}
+
+AdequateLeaderFrozenCommitResponseCausalOriginCarrier(
+    target, leaderContext, leader, leaderView) ==
+  {AsyncCommitCertificateResponseCandidateCausalOriginAt(
+     item, leaderContext):
+     item \in
+       {response \in
+          AdequateLeaderFrozenLifecycleDeliveryItems(
+            target, leaderContext, leader, leaderView):
+          response.kind = "CommitCertificateResponse"}}
+
+AdequateLeaderFrozenRestartQcCarrier(leaderContext, leaderView) ==
+  {qc \in AdequateLeaderFrozenQcRecordCarrier(leaderView):
+     qc.context = leaderContext}
+
+AdequateLeaderFrozenRestartProposalCarrier(
+    leaderContext, leaderView) ==
+  {proposal \in AdequateLeaderFrozenProposalRecordCarrier(leaderView):
+     proposal.context = leaderContext}
+
+AdequateLeaderFrozenRestartVoteCarrier(leaderContext, leaderView) ==
+  {vote \in AdequateLeaderFrozenVoteRecordCarrier(leaderView):
+     vote.context = leaderContext}
+
+AdequateLeaderFrozenRestartTimeoutVoteCarrier(
+    leaderContext, leaderView) ==
+  {vote \in AdequateLeaderFrozenTimeoutVoteRecordCarrier(leaderView):
+     vote.context = leaderContext}
+
+AdequateLeaderFrozenRestartCausalOriginCarrier(
+    target, leaderContext, leader, leaderView) ==
+  {AsyncRestartCandidateCausalOriginAt(
+     "Completion", "FetchBody", node, leaderContext,
+     qc.view, qc.subject, qc):
+     node \in AdequateLeaderFrozenLifecycleNodes(target, leader),
+     qc \in AdequateLeaderFrozenRestartQcCarrier(
+              leaderContext, leaderView)}
+  \cup
+  {AsyncRestartCandidateCausalOriginAt(
+     "Completion", "SignProposal", node, leaderContext,
+     proposal.view, proposal.subject, proposal):
+     node \in AdequateLeaderFrozenLifecycleNodes(target, leader),
+     proposal \in AdequateLeaderFrozenRestartProposalCarrier(
+                    leaderContext, leaderView)}
+  \cup
+  {AsyncRestartCandidateCausalOriginAt(
+     "Completion", "SignVote", node, leaderContext,
+     vote.view, vote.subject, vote):
+     node \in AdequateLeaderFrozenLifecycleNodes(target, leader),
+     vote \in AdequateLeaderFrozenRestartVoteCarrier(
+                leaderContext, leaderView)}
+  \cup
+  {AsyncRestartCandidateCausalOriginAt(
+     "Completion", "SignTimeout", node, leaderContext,
+     vote.view, vote.highSubject, vote):
+     node \in AdequateLeaderFrozenLifecycleNodes(target, leader),
+     vote \in AdequateLeaderFrozenRestartTimeoutVoteCarrier(
+                leaderContext, leaderView)}
+
+AdequateLeaderFrozenHistoricalRetransmitCausalOriginCarrier(
+    target, leaderContext, leader, leaderView) ==
+  {AsyncHistoricalLockedRetransmitCandidateCausalOriginAt(
+     node, leaderContext, qc):
+     node \in AdequateLeaderFrozenLifecycleNodes(target, leader),
+     qc \in AdequateLeaderFrozenRestartQcCarrier(
+              leaderContext, leaderView)}
+
+AdequateLeaderFrozenAssemblyCausalOriginCarrier(
+    target, leaderContext, leader, leaderView) ==
+  {AsyncNoItemCandidateCausalOriginAt(
+     "Normal", "AssembleBody", node, leaderContext,
+     roundView, ownerSubject):
+     node \in AdequateLeaderFrozenLifecycleNodes(target, leader),
+     roundView \in 0..leaderView,
+     ownerSubject \in Subjects}
+
+AdequateLeaderFrozenTimeoutCausalOriginCarrier(
+    target, leaderContext, leader, leaderView) ==
+  {AsyncNoItemCandidateCausalOriginAt(
+     "Completion", "BeginTimeout", node, leaderContext,
+     roundView, ownerSubject):
+     node \in AdequateLeaderFrozenLifecycleNodes(target, leader),
+     roundView \in 0..leaderView,
+     ownerSubject \in SubjectOrNone}
+
+\* This predicate is the proof-bearing constructor boundary.  It names the
+\* seven concrete root families separately rather than accepting membership
+\* in an arbitrary product of causal-origin fields.  The aggregate carrier
+\* below is only their finite identity union.
+AdequateLeaderFrozenCandidateRootConstructed(
+    candidate, target, leaderContext, leader, leaderView) ==
+  \/ candidate.causalOrigin
+       \in AdequateLeaderFrozenDeliveryCausalOriginCarrier(
+            target, leaderContext, leader, leaderView)
+  \/ candidate.causalOrigin
+       \in AdequateLeaderFrozenCertifiedResponseCausalOriginCarrier(
+            target, leaderContext, leader, leaderView)
+  \/ candidate.causalOrigin
+       \in AdequateLeaderFrozenCommitResponseCausalOriginCarrier(
+            target, leaderContext, leader, leaderView)
+  \/ candidate.causalOrigin
+       \in AdequateLeaderFrozenRestartCausalOriginCarrier(
+            target, leaderContext, leader, leaderView)
+  \/ candidate.causalOrigin
+       \in AdequateLeaderFrozenHistoricalRetransmitCausalOriginCarrier(
+            target, leaderContext, leader, leaderView)
+  \/ candidate.causalOrigin
+       \in AdequateLeaderFrozenAssemblyCausalOriginCarrier(
+            target, leaderContext, leader, leaderView)
+  \/ candidate.causalOrigin
+       \in AdequateLeaderFrozenTimeoutCausalOriginCarrier(
+            target, leaderContext, leader, leaderView)
+
+\* A fixed adequate-leader episode can mint a causal root only through one
+\* of the concrete scheduler constructors above.  Causal successors retain
+\* that root verbatim.  This replaces the former arbitrary Cartesian product
+\* of class, phase, item, and evidence fields: malformed combinations which
+\* no transition can construct no longer inflate (or silently justify) the
+\* owner budget.  BeginTimeout stays explicit and disjoint so the lifecycle
+\* capacity proof can charge it to the dedicated clock slot.
+AdequateLeaderFrozenCandidateCausalOriginCarrier(
+    target, leaderContext, leader, leaderView, subject) ==
+  IF /\ target \in ValidatorIds
+     /\ leaderContext \in ContextRecords
+     /\ leader \in ValidatorIds
+     /\ leaderView \in Nat
+     /\ subject \in Subjects
+  THEN
+    AdequateLeaderFrozenDeliveryCausalOriginCarrier(
+      target, leaderContext, leader, leaderView)
+      \cup
+    AdequateLeaderFrozenCertifiedResponseCausalOriginCarrier(
+      target, leaderContext, leader, leaderView)
+      \cup
+    AdequateLeaderFrozenCommitResponseCausalOriginCarrier(
+      target, leaderContext, leader, leaderView)
+      \cup
+    AdequateLeaderFrozenRestartCausalOriginCarrier(
+      target, leaderContext, leader, leaderView)
+      \cup
+    AdequateLeaderFrozenHistoricalRetransmitCausalOriginCarrier(
+      target, leaderContext, leader, leaderView)
+      \cup
+    AdequateLeaderFrozenAssemblyCausalOriginCarrier(
+      target, leaderContext, leader, leaderView)
+      \cup
+    AdequateLeaderFrozenTimeoutCausalOriginCarrier(
+      target, leaderContext, leader, leaderView)
+  ELSE {}
+
+THEOREM AdequateLeaderFrozenCandidateRootConstructionCoversOrigin ==
+  \A candidate, target, leaderContext, leader, leaderView, subject:
+    /\ target \in ValidatorIds
+    /\ leaderContext \in ContextRecords
+    /\ leader \in ValidatorIds
+    /\ leaderView \in Nat
+    /\ subject \in Subjects
+    /\ AdequateLeaderFrozenCandidateRootConstructed(
+         candidate, target, leaderContext, leader, leaderView)
+    => candidate.causalOrigin
+         \in AdequateLeaderFrozenCandidateCausalOriginCarrier(
+              target, leaderContext, leader, leaderView, subject)
+BY Isa
+   DEF AdequateLeaderFrozenCandidateRootConstructed,
+       AdequateLeaderFrozenCandidateCausalOriginCarrier
+
 AdequateLeaderFrozenCandidateItemPayloadCarrier(leaderView) ==
   {AdequateLeaderFrozenCandidateItemPayload(item, leaderView):
      item \in
@@ -5671,6 +5938,9 @@ AdequateLeaderFrozenCandidatePayloadCarrier(
      /\ subject \in Subjects
   THEN [class: AsyncCommandClasses,
         workKind: AsyncWorkKinds,
+        causalOrigin:
+          AdequateLeaderFrozenCandidateCausalOriginCarrier(
+            target, leaderContext, leader, leaderView, subject),
         item: AdequateLeaderFrozenCandidateItemPayloadCarrier(leaderView),
         evidence:
           AdequateLeaderFrozenCandidateEvidencePayloadCarrier(leaderView),
@@ -5694,10 +5964,26 @@ THEOREM AdequateLeaderFrozenTargetCandidatePayloadIsInStaticCarrier ==
     => AdequateLeaderFrozenCandidatePayload(candidate, leaderView)
          \in AdequateLeaderFrozenCandidatePayloadCarrier(
               target, leaderContext, leader, leaderView, subject)
-BY AsyncNetworkItemCarrierMemberIsTyped, IsaT(600)
+BY AdequateLeaderFrozenCandidateRootConstructionCoversOrigin,
+   AsyncNetworkItemCarrierMemberIsTyped, IsaT(600)
    DEF AdequateLeaderFrozenCandidatePayloadCarrier,
        AdequateLeaderFrozenCandidateItemPayloadCarrier,
        AdequateLeaderFrozenCandidateEvidencePayloadCarrier,
+       AdequateLeaderFrozenCandidateCausalOriginCarrier,
+       AdequateLeaderFrozenCandidateRootConstructed,
+       AdequateLeaderFrozenLifecycleNodes,
+       AdequateLeaderFrozenLifecycleDeliveryItems,
+       AdequateLeaderFrozenDeliveryCausalOriginCarrier,
+       AdequateLeaderFrozenCertifiedResponseCausalOriginCarrier,
+       AdequateLeaderFrozenCommitResponseCausalOriginCarrier,
+       AdequateLeaderFrozenRestartQcCarrier,
+       AdequateLeaderFrozenRestartProposalCarrier,
+       AdequateLeaderFrozenRestartVoteCarrier,
+       AdequateLeaderFrozenRestartTimeoutVoteCarrier,
+       AdequateLeaderFrozenRestartCausalOriginCarrier,
+       AdequateLeaderFrozenHistoricalRetransmitCausalOriginCarrier,
+       AdequateLeaderFrozenAssemblyCausalOriginCarrier,
+       AdequateLeaderFrozenTimeoutCausalOriginCarrier,
        AdequateLeaderFrozenEvidenceCarrier,
        AdequateLeaderFrozenNetworkItemCarrier,
        AdequateLeaderFrozenQcRecordCarrier,
@@ -5715,6 +6001,7 @@ BY AsyncNetworkItemCarrierMemberIsTyped, IsaT(600)
        AdequateLeaderCandidatePayloadWithinFrozenView,
        AdequateLeaderCandidateItemWithinFrozenView,
        AdequateLeaderCandidateEvidenceWithinFrozenView,
+       AsyncCandidateCausalOrigin,
        AsyncCandidateSet, AsyncNetworkItems, AsyncEvidenceSet
 
 AdequateLeaderFrozenCandidateOwnerIdentityFromPayload(
@@ -5786,6 +6073,7 @@ BY AdequateLeaderFrozenCandidateOwnerIdentitySeparatesPayload,
        AdequateLeaderFrozenCandidatePayload,
        AdequateLeaderFrozenCandidateItemPayload,
        AdequateLeaderFrozenCandidateEvidencePayload,
+       AsyncCandidateCausalOrigin,
        AdequateLeaderFrozenViewCoordinate,
        AdequateLeaderFrozenQcPayload,
        AdequateLeaderFrozenPrepareQcPayload,
@@ -6053,6 +6341,17 @@ AdequateLeaderFrozenOwnerUniverse(
   AdequateLeaderFrozenWireOwnerUniverse(
     target, leaderContext, leader, leaderView, subject)
 
+\* Subject rotation is bounded by exact immutable owners, not by treating a
+\* change of subject as protocol progress.  The frozen target/context/leader/
+\* view coordinates remain fixed while the union ranges over the finite model
+\* subject carrier; each member still retains its own subject and phase.
+AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+    target, leaderContext, leader, leaderView) ==
+  UNION {
+    AdequateLeaderFrozenOwnerUniverse(
+      target, leaderContext, leader, leaderView, subject):
+    subject \in Subjects}
+
 AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
     target, leaderContext, leader, leaderView, subject) ==
   UNION {
@@ -6097,6 +6396,20 @@ BY Isa
        AdequateLeaderFrozenCandidatePayloadCarrier,
        AdequateLeaderFrozenCandidateItemPayloadCarrier,
        AdequateLeaderFrozenCandidateEvidencePayloadCarrier,
+       AdequateLeaderFrozenCandidateCausalOriginCarrier,
+       AdequateLeaderFrozenLifecycleNodes,
+       AdequateLeaderFrozenLifecycleDeliveryItems,
+       AdequateLeaderFrozenDeliveryCausalOriginCarrier,
+       AdequateLeaderFrozenCertifiedResponseCausalOriginCarrier,
+       AdequateLeaderFrozenCommitResponseCausalOriginCarrier,
+       AdequateLeaderFrozenRestartQcCarrier,
+       AdequateLeaderFrozenRestartProposalCarrier,
+       AdequateLeaderFrozenRestartVoteCarrier,
+       AdequateLeaderFrozenRestartTimeoutVoteCarrier,
+       AdequateLeaderFrozenRestartCausalOriginCarrier,
+       AdequateLeaderFrozenHistoricalRetransmitCausalOriginCarrier,
+       AdequateLeaderFrozenAssemblyCausalOriginCarrier,
+       AdequateLeaderFrozenTimeoutCausalOriginCarrier,
        AdequateLeaderFrozenEvidenceCarrier,
        AdequateLeaderFrozenNetworkItemCarrier,
        AdequateLeaderFrozenQcRecordCarrier,
@@ -6111,8 +6424,18 @@ BY Isa
        AdequateLeaderFrozenCommitRequestItemCarrier,
        AdequateLeaderFrozenCandidateItemPayload,
        AdequateLeaderFrozenCandidateEvidencePayload,
+       AsyncCandidateCausalOrigin,
        AdequateLeaderFrozenWireOwnerIdentityFromCoordinates,
        AdequateLeaderFrozenWirePayloadCarrier
+
+THEOREM AdequateLeaderFrozenSubjectSwitchOwnerUniverseIsPrimeInvariant ==
+  \A target, leaderContext, leader, leaderView:
+    AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+      target, leaderContext, leader, leaderView)'
+      = AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+          target, leaderContext, leader, leaderView)
+BY AdequateLeaderFrozenOwnerUniverseIsPrimeInvariant, Isa
+   DEF AdequateLeaderFrozenSubjectSwitchOwnerUniverse
 
 THEOREM AdequateLeaderFrozenCandidatePayloadCarrierIsFinite ==
   \A target, leaderContext, leader, leaderView, subject:
@@ -6128,6 +6451,20 @@ BY FS_Interval, FS_Image, FS_Union, FS_Subset, FS_Product, IsaT(600)
    DEF AdequateLeaderFrozenCandidatePayloadCarrier,
        AdequateLeaderFrozenCandidateItemPayloadCarrier,
        AdequateLeaderFrozenCandidateEvidencePayloadCarrier,
+       AdequateLeaderFrozenCandidateCausalOriginCarrier,
+       AdequateLeaderFrozenLifecycleNodes,
+       AdequateLeaderFrozenLifecycleDeliveryItems,
+       AdequateLeaderFrozenDeliveryCausalOriginCarrier,
+       AdequateLeaderFrozenCertifiedResponseCausalOriginCarrier,
+       AdequateLeaderFrozenCommitResponseCausalOriginCarrier,
+       AdequateLeaderFrozenRestartQcCarrier,
+       AdequateLeaderFrozenRestartProposalCarrier,
+       AdequateLeaderFrozenRestartVoteCarrier,
+       AdequateLeaderFrozenRestartTimeoutVoteCarrier,
+       AdequateLeaderFrozenRestartCausalOriginCarrier,
+       AdequateLeaderFrozenHistoricalRetransmitCausalOriginCarrier,
+       AdequateLeaderFrozenAssemblyCausalOriginCarrier,
+       AdequateLeaderFrozenTimeoutCausalOriginCarrier,
        AdequateLeaderFrozenEvidenceCarrier,
        AdequateLeaderFrozenNetworkItemCarrier,
        AdequateLeaderFrozenQcRecordCarrier,
@@ -6183,6 +6520,20 @@ BY AdequateLeaderFrozenCandidatePayloadCarrierIsFinite,
        AdequateLeaderFrozenCandidateOwnerUniverse,
        AdequateLeaderFrozenWireOwnerUniverse,
        AdequateLeaderFrozenWirePayloadCarrier
+
+THEOREM AdequateLeaderFrozenSubjectSwitchOwnerUniverseIsFinite ==
+  \A target, leaderContext, leader, leaderView:
+    /\ target \in ValidatorIds
+    /\ leaderContext \in ContextRecords
+    /\ leader \in ValidatorIds
+    /\ leaderView \in Nat
+    => IsFiniteSet(
+         AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+           target, leaderContext, leader, leaderView))
+BY AdequateLeaderFrozenOwnerUniverseIsFinite,
+   FS_Union, Isa
+   DEF AdequateLeaderFrozenSubjectSwitchOwnerUniverse,
+       Subjects
 
 THEOREM AdequateLeaderLiveOwnersStayInsideFrozenUniverse ==
   \A target, leaderContext, leader, leaderView, subject:
@@ -6570,6 +6921,214 @@ AdequateLeaderTargetProtocolSubjectSource(
   /\ subject \in Subjects
   /\ subject = AsyncProposalSubject(leader)
 
+\* A control occurrence which names another subject is scheduler drain, not
+\* evidence that the fixed target protocol advanced.  Bind the endpoint to
+\* the exact reconstructed delivery candidate and its frozen semantic phase;
+\* an unrelated control slot cannot retire this occurrence.
+AdequateLeaderTargetOffSubjectControlOccurrenceIdentity(
+    item, target, leaderContext, leader, leaderView,
+    subject, occurrenceRank) ==
+  /\ occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier
+  /\ item \in AsyncNetworkItems
+  /\ item.kind \in AsyncControlKinds
+  /\ AdequateLeaderTargetWireIdentity(
+       item, target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderFrozenTargetCandidateIdentity(
+       DeliveryCandidate(item), occurrenceRank[1],
+       target, leaderContext, leader, leaderView, subject)
+  /\ ~AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderTargetSameOrLowerControlRetry(item, retry) ==
+  /\ retry \in AsyncNetworkItems
+  /\ retry.kind \in AsyncControlKinds
+  /\ AsyncControlServiceSlot(
+       retry.envelope.recipient, retry.source, retry.kind)
+       = AsyncControlServiceSlot(
+           item.envelope.recipient, item.source, item.kind)
+  /\ AsyncControlServiceCurrentHeightItem(retry)
+  /\ AsyncControlServiceRecordForItem(retry).context = context
+  /\ AsyncControlServiceRecordForItem(retry).height = height
+  /\ AsyncControlItemView(retry)
+       <= AsyncControlServiceRecordForItem(retry).view
+
+AdequateLeaderTargetSameOrLowerControlRetriesAdmissionBlocked(item) ==
+  \A retry \in AsyncNetworkItems:
+    AdequateLeaderTargetSameOrLowerControlRetry(item, retry)
+      => /\ AsyncControlServiceAdmissionCoalesced(retry)
+         /\ ~AsyncControlServiceAdmissionStartsOrReplaces(retry)
+         /\ ~CanAdmitIngressItem(retry)
+
+THEOREM AdequateLeaderCurrentControlOwnerBlocksSameOrLowerRetries ==
+  \A item \in AsyncNetworkItems:
+    /\ item.kind \in AsyncControlKinds
+    /\ AsyncControlServiceOccurrenceIsCurrentOwner(item)
+    => AdequateLeaderTargetSameOrLowerControlRetriesAdmissionBlocked(item)
+BY AsyncControlServiceSameOrLowerViewCannotReplace, Isa
+   DEF AdequateLeaderTargetSameOrLowerControlRetriesAdmissionBlocked,
+       AdequateLeaderTargetSameOrLowerControlRetry,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       CanAdmitIngressItem
+
+(***************************************************************************
+Finite subject-switch drain.
+
+`retired` records exact frozen owner identities discharged by their own
+owner-indexed service episode.  The natural number below is only the measure
+of that named set difference.  Thus neither a subject change, disappearance
+of an anonymous owner, nor an unrelated retained slot is called progress.
+***************************************************************************)
+AdequateLeaderTargetSubjectSwitchRetiredOwnerSet(
+    target, leaderContext, leader, leaderView, retired) ==
+  /\ IsFiniteSet(retired)
+  /\ retired \subseteq
+       AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+         target, leaderContext, leader, leaderView)
+
+AdequateLeaderTargetSubjectSwitchRemainingBudget(
+    target, leaderContext, leader, leaderView, retired) ==
+  Cardinality(
+    AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+      target, leaderContext, leader, leaderView)
+      \ retired)
+
+THEOREM AdequateLeaderTargetSubjectSwitchBudgetIsFinite ==
+  \A target, leaderContext, leader, leaderView, retired:
+    /\ target \in ValidatorIds
+    /\ leaderContext \in ContextRecords
+    /\ leader \in ValidatorIds
+    /\ leaderView \in Nat
+    /\ AdequateLeaderTargetSubjectSwitchRetiredOwnerSet(
+         target, leaderContext, leader, leaderView, retired)
+    => /\ AdequateLeaderTargetSubjectSwitchRemainingBudget(
+             target, leaderContext, leader, leaderView, retired) \in Nat
+       /\ AdequateLeaderTargetSubjectSwitchRemainingBudget(
+             target, leaderContext, leader, leaderView, retired)
+            <= Cardinality(
+                 AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+                   target, leaderContext, leader, leaderView))
+BY AdequateLeaderFrozenSubjectSwitchOwnerUniverseIsFinite,
+   FS_Subset, FS_CardinalityType, Isa
+   DEF AdequateLeaderTargetSubjectSwitchRetiredOwnerSet,
+       AdequateLeaderTargetSubjectSwitchRemainingBudget
+
+\* Physical retransmission may place another packet on the network after the
+\* exact reducer candidate drains.  The safety fact required by the outer
+\* episode is only
+\* that the old reducer candidate cannot return: either the exact unconsumed
+\* slot remains the current coalescing owner, or the slot has advanced and the
+\* old identity is durably serviced/advanced.  This memory deliberately says
+\* nothing about simultaneous absence of every same/lower physical packet;
+\* Byzantine senders may rotate the finite packet variants forever, but each
+\* variant still fails the retained slot's admission gate.
+AdequateLeaderTargetOffSubjectControlCandidateOwnerIdentity(
+    item, target, leaderContext, leader, leaderView,
+    subject, occurrenceRank) ==
+  AdequateLeaderFrozenCandidateOwnerIdentity(
+    DeliveryCandidate(item), occurrenceRank[1],
+    target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderTargetOffSubjectControlRetirementMemory(
+    item, target, leaderContext, leader, leaderView,
+    subject, occurrenceRank) ==
+  /\ occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier
+  /\ AdequateLeaderFrozenTargetWireIdentity(
+       item, target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderTargetOffSubjectControlCandidateOwnerIdentity(
+       item, target, leaderContext, leader, leaderView,
+       subject, occurrenceRank)
+       \notin
+         AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
+           target, leaderContext, leader, leaderView, subject)
+  /\ \/ AsyncControlServiceOccurrenceIsCurrentOwner(item)
+     \/ AsyncControlServiceIdentityServicedOrAdvanced(item)
+
+AdequateLeaderTargetOffSubjectControlRetirementClosed(
+    item, target, leaderContext, leader, leaderView,
+    subject, occurrenceRank) ==
+  AdequateLeaderTargetOffSubjectControlRetirementMemory(
+    item, target, leaderContext, leader, leaderView,
+    subject, occurrenceRank)
+
+AdequateLeaderTargetOffSubjectControlClosedOwnerIdentitySet(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank) ==
+  LET closedItems ==
+        {item \in AsyncNetworkItems:
+           /\ AdequateLeaderTargetOffSubjectControlOccurrenceIdentity(
+                item, target, leaderContext, leader, leaderView,
+                subject, occurrenceRank)
+           /\ AdequateLeaderTargetOffSubjectControlRetirementClosed(
+                item, target, leaderContext,
+                leader, leaderView, subject, occurrenceRank)}
+  IN {AdequateLeaderFrozenWireOwnerIdentity(
+        item, target, leaderContext, leader, leaderView, subject):
+        item \in closedItems}
+       \cup
+     {AdequateLeaderTargetOffSubjectControlCandidateOwnerIdentity(
+        item, target, leaderContext, leader, leaderView,
+        subject, occurrenceRank):
+        item \in closedItems}
+
+THEOREM AdequateLeaderOffSubjectControlRetirementMemoryIsStepInvariant ==
+  \A item, target, leaderContext, leader, leaderView,
+     subject, occurrenceRank:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
+    /\ AdequateLeaderTargetOffSubjectControlRetirementMemory(
+         item, target, leaderContext, leader, leaderView,
+         subject, occurrenceRank)
+    /\ [AsyncNext]_AsyncAllVars
+    => AdequateLeaderTargetOffSubjectControlRetirementClosed(
+         item, target, leaderContext, leader, leaderView,
+         subject, occurrenceRank)'
+BY AsyncControlServiceSameOrLowerViewCannotReplace,
+   AsyncControlServiceServicedIdentityCannotResurrect,
+   AsyncControlServiceTombstoneCannotReactivate,
+   AsyncRetiredControlServiceAdmissionDropsWithoutCandidate,
+   IsaT(900)
+   DEF AdequateLeaderTargetOffSubjectControlRetirementMemory,
+       AdequateLeaderTargetOffSubjectControlRetirementClosed,
+       AdequateLeaderTargetOffSubjectControlCandidateOwnerIdentity,
+       AdequateLeaderTargetLiveCandidateOwnerIdentitySet,
+       AdequateLeaderTargetRankOwnerIdentitySet,
+       AdequateLeaderTargetRankOwnerSet,
+       AdequateLeaderTargetSameOrLowerControlRetriesAdmissionBlocked,
+       AdequateLeaderTargetSameOrLowerControlRetry,
+       AsyncControlServiceOccurrenceIsCurrentOwner,
+       AsyncControlServiceIdentityServicedOrAdvanced,
+       AsyncControlServiceOccurrenceTombstoned,
+       AsyncControlServiceSlotTransition,
+       AsyncControlServiceAdmissionStartsOrReplaces,
+       AsyncControlServiceAdmissionCoalesced,
+       AsyncControlServiceStrictlyNewerItem,
+       CandidateAdmissionCoalesced, FreshCandidateSequence,
+       IngressPacketPolicyRejected, CanAdmitIngressItem,
+       AsyncNext, AsyncAllVars
+
+AdequateLeaderTargetOffSubjectControlNoReentryProperty(specification) ==
+  specification
+    => [](\A item \in AsyncNetworkItems,
+             target \in ValidatorIds,
+             leaderContext \in ContextRecords,
+             leader \in ValidatorIds,
+             leaderView \in Views,
+             subject \in Subjects,
+             occurrenceRank \in
+               AdequateLeaderTargetOccurrenceRankCarrier:
+            /\ gst
+            /\ AdequateLeaderTargetOffSubjectControlOccurrenceIdentity(
+                 item, target, leaderContext, leader, leaderView,
+                 subject, occurrenceRank)
+            /\ AdequateLeaderTargetOffSubjectControlRetirementMemory(
+                 item, target, leaderContext,
+                 leader, leaderView, subject, occurrenceRank)
+              => []AdequateLeaderTargetOffSubjectControlRetirementClosed(
+                    item, target, leaderContext,
+                    leader, leaderView, subject, occurrenceRank))
+
 \* This last arm is the exact fixed-corridor producer debt: no ranked owner,
 \* rebroadcast owner, due packet, ingress owner, or certified-response
 \* capacity owner currently carries the frozen target/leader/view/subject.
@@ -6723,6 +7282,24 @@ AdequateLeaderTargetStrictOccurrenceDescentGoal(
          target, leaderContext, leader,
          leaderView, subject, lowerOccurrenceRank)
 
+\* The well-founded Decision induction may recurse only from a lower frontier
+\* which is still the leader's current deterministic protocol subject.  An
+\* off-subject lower count is scheduler drain and is handled by the outer
+\* subject-switch budget instead.
+AdequateLeaderTargetProductiveStrictOccurrenceDescentGoal(
+    target, leaderContext, leader, leaderView, subject, occurrenceRank) ==
+  \/ NodeHasDecision(target)
+  \/ /\ AdequateLeaderTargetProtocolSubjectSource(
+          target, leaderContext, leader, leaderView, subject)
+     /\ \E lowerOccurrenceRank \in
+          SetLessThan(
+            occurrenceRank,
+            AdequateLeaderTargetOccurrenceRankOrdering,
+            AdequateLeaderTargetOccurrenceRankCarrier):
+          AdequateLeaderTargetOccurrenceRankFrontier(
+            target, leaderContext, leader,
+            leaderView, subject, lowerOccurrenceRank)
+
 AdequateLeaderTargetDecisionOrStrictlyLowerOccurrenceAction(
     target, leaderContext, leader, leaderView, subject, occurrenceRank) ==
   /\ AdequateLeaderTargetOccurrenceRankFrontier(
@@ -6852,17 +7429,21 @@ Candidate lifecycle closure.
 `AsyncCandidateServiceIdentity` is the transition-level durable key.  It
 retains the candidate's frozen context/height, semantic view, derived leader,
 subject, work kind, local owner, and the same route-neutral immutable
-`{class, workKind, item, evidence, body, manifest, commitment}` payload used
-by `AdequateLeaderFrozenCandidateOwnerIdentity`.  Consumer view/generation are
-deliberately absent, so same-height restart is the same logical occurrence.
+`{class, workKind, causalOrigin, item, evidence, body, manifest, commitment}`
+payload used by `AdequateLeaderFrozenCandidateOwnerIdentity`.  Consumer
+view/generation are deliberately absent, so same-height restart is the same
+logical occurrence.
 
-Successful FIFO or Busy-deferred service installs the marker atomically before
-the final scheduler owner disappears.  Causal, I/O-ready, producer-ready, and
-Busy handoff steps retain the exact owner and do not mark; every fresh causal,
-replay, retransmit, ingress, and direct-enqueue producer coalesces against an
-installed marker.  The bridge below proves both the frozen finite table bound
-and the temporal A -> B -> A no-resurrection property from that source
-transition, rather than assuming either fact in the episode composition.
+Successful FIFO or Busy-deferred service retains a transient marker through
+the complete same-generation/view episode.  A same-origin successor or a
+different causal origin's monotone Core fact cannot replace that identity:
+doing so admits the A -> B -> A replenishment lasso.  A proofless ignored
+occurrence gets no marker: the exact BodyAvailable fetch case is covered by
+the monotone preflight retirement, while every other such occurrence remains
+an explicit finite frozen-identity episode.  Only an eligible internal no-item
+discard retains a restart-stable terminal tombstone.  Both bounded record
+classes reuse the immutable lifecycle-slot and finite work-kind carrier proved
+in the source model.
 ***************************************************************************)
 AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
     target, leaderContext, leader, leaderView,
@@ -6873,6 +7454,64 @@ AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
   /\ identity \in
        AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
          target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderTargetCandidateOwnerIdentityWitness(
+    target, leaderContext, leader, leaderView,
+    subject, identity, candidate, rank) ==
+  /\ candidate \in AsyncCandidateSet
+  /\ rank \in AdequateLeaderTargetSemanticRankCarrier
+  /\ AdequateLeaderFrozenTargetCandidateIdentity(
+       candidate, rank, target, leaderContext,
+       leader, leaderView, subject)
+  /\ identity =
+       AdequateLeaderFrozenCandidateOwnerIdentity(
+         candidate, rank, target, leaderContext,
+         leader, leaderView, subject)
+
+\* Successful service and terminal discard are deliberately separate action
+\* predicates.  The former installs process-generation serviced memory; the
+\* latter installs restart-stable serviced memory.  Binding the retired frozen
+\* identity to the concrete candidate in the action prevents a singleton
+\* service elsewhere in the same step from being used as evidence for this
+\* identity.
+AdequateLeaderTargetCandidateSuccessfulServiceRetirementAction(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, identity) ==
+  /\ AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank, identity)
+  /\ \E candidate \in AsyncCandidateSet,
+        rank \in AdequateLeaderTargetSemanticRankCarrier:
+       /\ AdequateLeaderTargetCandidateOwnerIdentityWitness(
+            target, leaderContext, leader, leaderView,
+            subject, identity, candidate, rank)
+       /\ AsyncCandidateServicesThisStep = {candidate}
+       /\ AsyncCandidateServiceEligibleAfterStep(candidate)
+       /\ AsyncControlServiceSlotTransition
+
+AdequateLeaderTargetCandidateTerminalDiscardRetirementAction(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, identity) ==
+  /\ AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank, identity)
+  /\ \E candidate \in AsyncCandidateSet,
+        rank \in AdequateLeaderTargetSemanticRankCarrier:
+       /\ AdequateLeaderTargetCandidateOwnerIdentityWitness(
+            target, leaderContext, leader, leaderView,
+            subject, identity, candidate, rank)
+       /\ AsyncCandidateTerminallyDiscardedThisStep(candidate)
+       /\ AsyncCandidateTerminalRetirementEligibleAfterStep(candidate)
+
+AdequateLeaderTargetCandidateServicedRetirementAction(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, identity) ==
+  \/ AdequateLeaderTargetCandidateSuccessfulServiceRetirementAction(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank, identity)
+  \/ AdequateLeaderTargetCandidateTerminalDiscardRetirementAction(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank, identity)
 
 AdequateLeaderFrozenNetworkCandidateServiceIdentityFromPayload(
     payload, owner, leaderContext, leader, leaderView, subject, workKind) ==
@@ -7076,7 +7715,6 @@ AsyncCandidateIdentityBudgetBridgeProperty(specification) ==
                        \notin AsyncScheduledCandidateAdmissionIdentities'))
   /\ (specification
         => [](\A identity \in AsyncCandidateAdmissionIdentitySet:
-               /\ identity.service.phase = "DeliverChunk"
                /\ AsyncCandidateAdmissionIdentityTerminallyCovered(identity)
                /\ identity
                     \notin AsyncScheduledCandidateAdmissionIdentities
@@ -7087,15 +7725,22 @@ AsyncCandidateIdentityBudgetBridgeProperty(specification) ==
                   /\ identity
                        \notin AsyncScheduledCandidateAdmissionIdentities'))
   /\ (specification
-        => [](\A identity \in AsyncCandidateAdmissionIdentitySet:
-               /\ identity.service.phase = "DeliverChunk"
-               /\ identity \in AsyncScheduledCandidateAdmissionIdentities
+        => [](\A candidate \in AsyncCandidateSet:
+               /\ AsyncLogicalCandidateOwnershipInvariant
+               /\ AsyncProgressOwnershipInvariant
+               /\ AsyncCandidateServiceLifecycleInvariant
                /\ gst
-               /\ [AsyncNext]_AsyncAllVars
-               /\ identity
-                    \notin AsyncScheduledCandidateAdmissionIdentities'
-               => AsyncCandidateAdmissionIdentityLifecycleCovered(
-                    identity)'))
+               /\ AsyncNext
+               /\ CandidateScheduled(candidate)
+               /\ ~CandidateScheduledAfter(candidate)
+               => \/ AsyncCandidateIgnoredWithoutApplicationThisStep(
+                        candidate)
+                  \/ AsyncCandidateServiceTombstoned(candidate)'
+                  \/ AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter(
+                        candidate)
+                  \/ AsyncCandidateMonotoneSemanticCoverageAfterIn(
+                        asyncControlServiceState', candidate)
+                  \/ AsyncCandidateTerminalTombstoned(candidate)'))
 
 (***************************************************************************
 Terminal retirement is restart-stable only for phases whose durable local
@@ -7128,6 +7773,10 @@ BY Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncRuntimeInit, AsyncIoInit, AsyncDeferredInit,
        AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateLifecycleStageIdentityInvariant,
+       AsyncCandidateScheduledLifecycleStageIdentityInvariant,
+       AsyncCandidateRecordedLifecycleStageIdentityInvariant,
        AsyncControlServiceStateTypeInvariant,
        AsyncCandidateServiceTombstones,
        AsyncCandidateServiceRecordsFor,
@@ -7160,6 +7809,10 @@ BY AsyncNextPreservesControlServiceStateTypeInvariant,
    AsyncCandidateSameHeightRestartPreservesServicedIdentity,
    IsaT(600)
    DEF AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateLifecycleStageIdentityInvariant,
+       AsyncCandidateScheduledLifecycleStageIdentityInvariant,
+       AsyncCandidateRecordedLifecycleStageIdentityInvariant,
        AsyncStrongTypeInvariant,
        AsyncProgressOwnershipInvariant,
        AsyncNext, AsyncNonCrashStep,
@@ -7210,6 +7863,23 @@ PROOF
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, PTL
          DEF AsyncSpecAt
   <1> QED BY <1>1
+
+THEOREM AsyncLiveProvidesAdequateLeaderTargetOffSubjectControlNoReentry ==
+  \A initialContext:
+    AdequateLeaderTargetOffSubjectControlNoReentryProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncLiveSpecProjectsAsyncSpec,
+   AdequateLeaderOffSubjectControlRetirementMemoryIsStepInvariant,
+   GstAsyncStepIsMonotone,
+   PTL
+   DEF AdequateLeaderTargetOffSubjectControlNoReentryProperty,
+       AdequateLeaderTargetOffSubjectControlOccurrenceIdentity,
+       AdequateLeaderTargetOffSubjectControlRetirementClosed,
+       AdequateLeaderTargetOffSubjectControlRetirementMemory,
+       AsyncAllVars
 
 (***************************************************************************
 An authenticated exact occurrence which is later discarded cannot disappear
@@ -7391,6 +8061,114 @@ AdequateLeaderTargetServicedCandidateOwnerIdentitySet(
        leader, leaderView, subject),
      AsyncCandidateServiceTombstoned(candidate)}
 
+(***************************************************************************
+BodyAvailable preflight retirement.
+
+The serviced-candidate table is not the only durable reason an internal body
+callback cannot return.  Once the reducer's exact body has left Missing, the
+production preflight consumes no new admission ordinal; the Async model now
+matches that boundary in FreshCandidateSequence.  The set below records the
+same immutable frozen owner identity only after its service identity has left
+all scheduler carriers.  It therefore closes the historical
+FetchBody -> FetchCertifiedBody -> FetchBody lasso without pretending that
+the response itself serviced the old FetchBody occurrence.
+***************************************************************************)
+AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet(
+    target, leaderContext, leader, leaderView, subject) ==
+  {AdequateLeaderFrozenCandidateOwnerIdentity(
+     candidate, rank, target, leaderContext,
+     leader, leaderView, subject):
+     candidate \in AsyncCandidateSet,
+     rank \in AdequateLeaderTargetSemanticRankCarrier,
+     AdequateLeaderFrozenTargetCandidateIdentity(
+       candidate, rank, target, leaderContext,
+       leader, leaderView, subject),
+     AsyncCandidateInternalBodyAvailableStageRetired(candidate),
+     AsyncCandidateServiceIdentity(candidate)
+       \notin AsyncScheduledCandidateServiceIdentities}
+
+THEOREM AdequateLeaderInternalBodyAvailableRetiredOwnersAreNotLive ==
+  \A target, leaderContext, leader, leaderView, subject:
+    AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet(
+      target, leaderContext, leader, leaderView, subject)
+      \cap
+    AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
+      target, leaderContext, leader, leaderView, subject)
+      = {}
+BY AdequateLeaderOwnerIdentityDeterminesNetworkServiceIdentity,
+   IsaT(600)
+   DEF AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet,
+       AdequateLeaderTargetLiveCandidateOwnerIdentitySet,
+       AdequateLeaderTargetRankOwnerIdentitySet,
+       AdequateLeaderTargetRankOwnerSet,
+       AdequateLeaderTargetCandidateIdentity,
+       AdequateLeaderFrozenTargetCandidateIdentity,
+       AsyncScheduledCandidateServiceIdentities,
+       CandidateScheduled, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates
+
+THEOREM AdequateLeaderInternalBodyAvailableRetiredOwnerSetIsMonotoneAtGst ==
+  \A target, leaderContext, leader, leaderView, subject:
+    /\ gst
+    /\ [AsyncNext]_AsyncAllVars
+    => AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet(
+         target, leaderContext, leader, leaderView, subject)
+         \subseteq
+       AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet(
+         target, leaderContext, leader, leaderView, subject)'
+BY AsyncCandidateInternalBodyAvailableServiceIdentityCannotReactivateAtGst,
+   AdequateLeaderFrozenOwnerUniverseIsPrimeInvariant,
+   IsaT(600)
+   DEF AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet,
+       AdequateLeaderFrozenOwnerUniverse,
+       AdequateLeaderFrozenCandidateOwnerUniverse,
+       AdequateLeaderFrozenTargetCandidateIdentity,
+       ExactLeaderFrozenSemanticIdentity,
+       AdequateLeaderFrozenTargetCandidateRole,
+       AsyncAllVars
+
+AdequateLeaderTargetInternalBodyAvailableNoReentryProperty(specification) ==
+  specification
+    => [](\A target \in ValidatorIds,
+             leaderContext \in ContextRecords,
+             leader \in ValidatorIds,
+             leaderView \in Views,
+             subject \in Subjects,
+             owner \in
+               AdequateLeaderFrozenCandidateOwnerUniverse(
+                 target, leaderContext, leader, leaderView, subject):
+            /\ gst
+            /\ owner \in
+                 AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet(
+                   target, leaderContext, leader, leaderView, subject)
+              => [](/\ owner \in
+                           AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet(
+                             target, leaderContext, leader,
+                             leaderView, subject)
+                     /\ owner \notin
+                           AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
+                             target, leaderContext, leader,
+                             leaderView, subject)))
+
+THEOREM AsyncSpecProvidesAdequateLeaderTargetInternalBodyAvailableNoReentry ==
+  \A initialContext:
+    AdequateLeaderTargetInternalBodyAvailableNoReentryProperty(
+      AsyncSpecAt(initialContext))
+BY AdequateLeaderInternalBodyAvailableRetiredOwnersAreNotLive,
+   AdequateLeaderInternalBodyAvailableRetiredOwnerSetIsMonotoneAtGst,
+   GstAsyncStepIsMonotone,
+   PTL
+   DEF AdequateLeaderTargetInternalBodyAvailableNoReentryProperty,
+       AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderTargetInternalBodyAvailableNoReentry ==
+  \A initialContext:
+    AdequateLeaderTargetInternalBodyAvailableNoReentryProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncSpecProvidesAdequateLeaderTargetInternalBodyAvailableNoReentry,
+   AsyncLiveSpecProjectsAsyncSpec, PTL
+   DEF AdequateLeaderTargetInternalBodyAvailableNoReentryProperty
+
 THEOREM AdequateLeaderLiveAndServicedCandidateIdentitiesAreDisjoint ==
   \A target, leaderContext, leader, leaderView, subject:
     AsyncCandidateServiceTombstoneLifecycleInvariant
@@ -7415,6 +8193,31 @@ BY AdequateLeaderOwnerIdentityDeterminesNetworkServiceIdentity,
        CandidateScheduled, QueuedCandidates, DeferredCandidates,
        CausalCandidates, TrackedWorkCandidates
 
+THEOREM AdequateLeaderServicedCandidateIdentityHasServiceWitness ==
+  \A target, leaderContext, leader, leaderView, subject, identity:
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ identity \in
+         AdequateLeaderTargetServicedCandidateOwnerIdentitySet(
+           target, leaderContext, leader, leaderView, subject)
+    => \E candidate \in AsyncCandidateSet,
+          rank \in AdequateLeaderTargetSemanticRankCarrier:
+         /\ AdequateLeaderFrozenTargetCandidateIdentity(
+              candidate, rank, target, leaderContext,
+              leader, leaderView, subject)
+         /\ identity =
+              AdequateLeaderFrozenCandidateOwnerIdentity(
+                candidate, rank, target, leaderContext,
+                leader, leaderView, subject)
+         /\ AsyncCandidateServiceTombstoned(candidate)
+BY IsaT(300)
+   DEF AdequateLeaderTargetServicedCandidateOwnerIdentitySet,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncControlServiceStateTypeInvariant,
+       AsyncCandidateServiceOwnerPartitionInvariantIn,
+       AsyncCandidateServiceTombstoned,
+       AsyncCandidateServiceCoalesced
+
 AdequateLeaderServicedCandidateMemory(
     target, leaderContext, leader, leaderView, subject, identity) ==
   \/ identity \in
@@ -7426,40 +8229,53 @@ AdequateLeaderServicedCandidateMemory(
   \/ NodeHasDecision(target)
   \/ NodeHasDecision(leader)
 
-THEOREM AdequateLeaderCandidateRetirementInstallsServicedMemory ==
+THEOREM AdequateLeaderCandidateSuccessfulServiceRetirementInstallsServicedMemory ==
+  \A target, leaderContext, leader, leaderView,
+     subject, occurrenceRank, identity:
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AdequateLeaderTargetCandidateSuccessfulServiceRetirementAction(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank, identity)
+    => \E candidate \in AsyncCandidateSet,
+          rank \in AdequateLeaderTargetSemanticRankCarrier:
+         /\ AdequateLeaderTargetCandidateOwnerIdentityWitness(
+              target, leaderContext, leader, leaderView,
+              subject, identity, candidate, rank)
+         /\ AsyncCandidateServiceTombstoned(candidate)'
+         /\ ~CandidateScheduled(candidate)'
+         /\ AdequateLeaderServicedCandidateMemory(
+              target, leaderContext, leader, leaderView,
+              subject, identity)'
+BY AsyncCandidateSuccessfulServiceInstallsTransientMarker,
+   AsyncCandidateSuccessfulServiceInstallsTombstone,
+   AdequateLeaderOwnerIdentityDeterminesNetworkServiceIdentity,
+   IsaT(300)
+   DEF AdequateLeaderTargetCandidateSuccessfulServiceRetirementAction,
+       AdequateLeaderServicedCandidateMemory,
+       AdequateLeaderTargetServicedCandidateOwnerIdentitySet
+
+THEOREM AdequateLeaderCandidateTerminalRetirementInstallsServicedMemory ==
   \A target, leaderContext, leader, leaderView,
      subject, occurrenceRank, identity:
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceTombstoneLifecycleInvariant
-    /\ AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
+    /\ AdequateLeaderTargetCandidateTerminalDiscardRetirementAction(
          target, leaderContext, leader, leaderView,
          subject, occurrenceRank, identity)
     => AdequateLeaderServicedCandidateMemory(
          target, leaderContext, leader, leaderView, subject, identity)'
-BY AsyncCandidateServicesThisStepIsSingleton,
-   AsyncCandidateSuccessfulServiceInstallsTombstone,
-   AdequateLeaderNetworkCandidateServicePayloadMatchesImmutable,
-   AdequateLeaderOwnerIdentityDeterminesNetworkServiceIdentity,
-   IsaT(600)
-   DEF AdequateLeaderTargetCandidateOwnerIdentityRetirementAction,
+BY AsyncCandidateDiscardInstallsTerminalTombstone, IsaT(600)
+   DEF AdequateLeaderTargetCandidateTerminalDiscardRetirementAction,
+       AdequateLeaderTargetCandidateOwnerIdentityRetirementAction,
        AdequateLeaderTargetOwnerIdentityRetirementAction,
-       AdequateLeaderTargetLiveCandidateOwnerIdentitySet,
-       AdequateLeaderTargetRankOwnerIdentitySet,
-       AdequateLeaderTargetRankOwnerSet,
-       AdequateLeaderTargetCandidateIdentity,
-       AdequateLeaderFrozenTargetCandidateIdentity,
+       AdequateLeaderTargetCandidateOwnerIdentityWitness,
        AdequateLeaderTargetServicedCandidateOwnerIdentitySet,
        AdequateLeaderServicedCandidateMemory,
-       AsyncCandidateServicesThisStep,
-       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
        AsyncCandidateServiceTombstoned,
-       AsyncCandidateServiceRecordsFor,
-       AsyncCandidateServiceRecordsForIdentity,
-       AsyncNext, AsyncNonCrashStep,
-       AsyncRunnerStep, RunNodeWork,
-       SerializedRuntimeStep, RuntimeStep,
-       FifoRuntimeStep, DeferredDrainStep
+       AsyncCandidateServiceCoalesced
 
 AdequateLeaderServicedCandidateClosure(
     target, leaderContext, leader, leaderView,
@@ -7471,13 +8287,26 @@ AdequateLeaderServicedCandidateClosure(
        AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
          target, leaderContext, leader, leaderView, subject)
 
-THEOREM AdequateLeaderCandidateRetirementStartsClosedMemory ==
+THEOREM AdequateLeaderCandidateRetirementEstablishesClosure ==
   \A target, leaderContext, leader, leaderView,
      subject, occurrenceRank, identity:
-    /\ AsyncStrongTypeInvariant
-    /\ AsyncProgressOwnershipInvariant
+    AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
+      target, leaderContext, leader, leaderView,
+      subject, occurrenceRank, identity)
+      => AdequateLeaderServicedCandidateClosure(
+           target, leaderContext, leader, leaderView,
+           subject, occurrenceRank, identity)'
+BY Isa
+   DEF AdequateLeaderServicedCandidateClosure,
+       AdequateLeaderTargetCandidateOwnerIdentityRetirementAction,
+       AdequateLeaderTargetOwnerIdentityRetirementAction,
+       AdequateLeaderTargetLiveOwnerIdentitySet
+
+THEOREM AdequateLeaderCandidateSuccessfulServiceRetirementStartsClosedMemory ==
+  \A target, leaderContext, leader, leaderView,
+     subject, occurrenceRank, identity:
     /\ AsyncCandidateServiceTombstoneLifecycleInvariant
-    /\ AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
+    /\ AdequateLeaderTargetCandidateSuccessfulServiceRetirementAction(
          target, leaderContext, leader, leaderView,
          subject, occurrenceRank, identity)
     => /\ AdequateLeaderServicedCandidateMemory(
@@ -7485,10 +8314,27 @@ THEOREM AdequateLeaderCandidateRetirementStartsClosedMemory ==
        /\ AdequateLeaderServicedCandidateClosure(
             target, leaderContext, leader, leaderView,
             subject, occurrenceRank, identity)'
-BY AdequateLeaderCandidateRetirementInstallsServicedMemory, Isa
-   DEF AdequateLeaderServicedCandidateClosure,
-       AdequateLeaderTargetCandidateOwnerIdentityRetirementAction,
-       AdequateLeaderTargetOwnerIdentityRetirementAction
+BY AdequateLeaderCandidateSuccessfulServiceRetirementInstallsServicedMemory,
+   AdequateLeaderCandidateRetirementEstablishesClosure, Isa
+   DEF AdequateLeaderTargetCandidateSuccessfulServiceRetirementAction
+
+THEOREM AdequateLeaderCandidateTerminalRetirementStartsClosedMemory ==
+  \A target, leaderContext, leader, leaderView,
+     subject, occurrenceRank, identity:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AdequateLeaderTargetCandidateTerminalDiscardRetirementAction(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank, identity)
+    => /\ AdequateLeaderServicedCandidateMemory(
+             target, leaderContext, leader, leaderView, subject, identity)'
+       /\ AdequateLeaderServicedCandidateClosure(
+            target, leaderContext, leader, leaderView,
+            subject, occurrenceRank, identity)'
+BY AdequateLeaderCandidateTerminalRetirementInstallsServicedMemory,
+   AdequateLeaderCandidateRetirementEstablishesClosure, Isa
+   DEF AdequateLeaderTargetCandidateTerminalDiscardRetirementAction
 
 THEOREM AdequateLeaderServicedCandidateMemoryAndClosureAreStepInvariant ==
   \A target, leaderContext, leader, leaderView,
@@ -7496,6 +8342,7 @@ THEOREM AdequateLeaderServicedCandidateMemoryAndClosureAreStepInvariant ==
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ gst
     /\ AdequateLeaderServicedCandidateMemory(
          target, leaderContext, leader, leaderView, subject, identity)
     /\ AdequateLeaderServicedCandidateClosure(
@@ -7507,7 +8354,11 @@ THEOREM AdequateLeaderServicedCandidateMemoryAndClosureAreStepInvariant ==
        /\ AdequateLeaderServicedCandidateClosure(
             target, leaderContext, leader, leaderView,
             subject, occurrenceRank, identity)'
-BY AsyncCandidateServicedIdentityCannotReactivate,
+BY AsyncNextPreservesCandidateServiceTombstoneLifecycle,
+   AsyncCandidateServicedMarkerPersistsWithoutExit,
+   AsyncCandidateTerminalTombstonePersistsWithoutExit,
+   AsyncCandidateSameGenerationSuccessfulServiceIdentityPersistsUntilStrictExit,
+   AdequateLeaderServicedCandidateIdentityHasServiceWitness,
    AdequateLeaderLiveAndServicedCandidateIdentitiesAreDisjoint,
    AdequateLeaderOwnerIdentityDeterminesNetworkServiceIdentity,
    IsaT(600)
@@ -7520,11 +8371,16 @@ BY AsyncCandidateServicedIdentityCannotReactivate,
        AdequateLeaderFrozenTargetCandidateIdentity,
        AdequateLeaderFrozenTargetCorridor,
        AdequateLeaderTargetCandidateRole,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncCandidateTerminalTombstoneActive,
+       AsyncCandidateTerminalTombstoneExitThisStep,
        AsyncCandidateServiceActiveTombstone,
        AsyncCandidateServiceExitThisStep,
        AsyncCandidateServiceTombstoned,
        AsyncCandidateServiceRecordsFor,
-       AsyncCandidateServiceRecordsForIdentity
+       AsyncCandidateServiceRecordsForIdentity,
+       AsyncNext
 
 AdequateLeaderTargetCandidateIdentityTombstoneProperty(specification) ==
   /\ AdequateLeaderCandidateFrozenIdentityBudgetBridgeProperty(
@@ -7541,7 +8397,7 @@ AdequateLeaderTargetCandidateIdentityTombstoneProperty(specification) ==
                        AdequateLeaderFrozenCandidateOwnerUniverse(
                          target, leaderContext,
                          leader, leaderView, subject):
-                      AdequateLeaderTargetCandidateOwnerIdentityRetirementAction(
+                      AdequateLeaderTargetCandidateServicedRetirementAction(
                         target, leaderContext, leader, leaderView,
                         subject, occurrenceRank, identity)
                         => /\ AdequateLeaderServicedCandidateMemory(
@@ -7554,6 +8410,7 @@ AdequateLeaderTargetCandidateIdentityTombstoneProperty(specification) ==
                           AdequateLeaderFrozenCandidateOwnerUniverse(
                             target, leaderContext,
                             leader, leaderView, subject):
+                         /\ gst
                          /\ AdequateLeaderServicedCandidateMemory(
                               target, leaderContext, leader, leaderView,
                               subject, identity)
@@ -7567,6 +8424,102 @@ AdequateLeaderTargetCandidateIdentityTombstoneProperty(specification) ==
                                      target, leaderContext, leader, leaderView,
                                      subject, occurrenceRank, identity))))
 
+(***************************************************************************
+Successful semantic service now retains its immutable process-generation
+identity.  This property is intentionally limited to that concrete action:
+the exact internal BodyAvailable fetch retirement uses the separate monotone
+preflight property above, while any other proofless ignored occurrence remains
+an honest separately bounded producer-episode residual.  Terminal internal
+drains use the durable property below.
+***************************************************************************)
+AdequateLeaderTargetCandidateSuccessfulServiceMemoryProperty(
+    specification) ==
+  specification
+    => \A target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          occurrenceRank \in
+            AdequateLeaderTargetOccurrenceRankCarrier:
+         [](\A identity \in
+                  AdequateLeaderFrozenCandidateOwnerUniverse(
+                    target, leaderContext,
+                    leader, leaderView, subject):
+              AdequateLeaderTargetCandidateSuccessfulServiceRetirementAction(
+                target, leaderContext, leader, leaderView,
+                subject, occurrenceRank, identity)
+              => AdequateLeaderServicedCandidateMemory(
+                   target, leaderContext, leader, leaderView,
+                   subject, identity)')
+
+AdequateLeaderTargetCandidateTerminalTombstoneProperty(specification) ==
+  /\ AdequateLeaderCandidateFrozenIdentityBudgetBridgeProperty(
+       specification)
+  /\ (specification
+        => \A target \in ValidatorIds,
+              leaderContext \in ContextRecords,
+              leader \in ValidatorIds,
+              leaderView \in Views,
+              subject \in Subjects,
+              occurrenceRank \in
+                AdequateLeaderTargetOccurrenceRankCarrier:
+             /\ [](\A identity \in
+                       AdequateLeaderFrozenCandidateOwnerUniverse(
+                         target, leaderContext,
+                         leader, leaderView, subject):
+                      AdequateLeaderTargetCandidateTerminalDiscardRetirementAction(
+                        target, leaderContext, leader, leaderView,
+                        subject, occurrenceRank, identity)
+                        => /\ AdequateLeaderServicedCandidateMemory(
+                                target, leaderContext, leader, leaderView,
+                                subject, identity)'
+                           /\ AdequateLeaderServicedCandidateClosure(
+                                target, leaderContext, leader, leaderView,
+                                subject, occurrenceRank, identity)')
+                /\ [](\A identity \in
+                          AdequateLeaderFrozenCandidateOwnerUniverse(
+                            target, leaderContext,
+                            leader, leaderView, subject):
+                         /\ gst
+                         /\ AdequateLeaderServicedCandidateMemory(
+                              target, leaderContext, leader, leaderView,
+                              subject, identity)
+                         /\ AdequateLeaderServicedCandidateClosure(
+                              target, leaderContext, leader, leaderView,
+                              subject, occurrenceRank, identity)
+                         => [](AdequateLeaderServicedCandidateMemory(
+                                  target, leaderContext, leader, leaderView,
+                                  subject, identity)
+                                /\ AdequateLeaderServicedCandidateClosure(
+                                     target, leaderContext, leader, leaderView,
+                                     subject, occurrenceRank, identity))))
+
+THEOREM AsyncSpecProvidesAdequateLeaderTargetCandidateTerminalTombstones ==
+  \A initialContext:
+    AdequateLeaderTargetCandidateTerminalTombstoneProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecProvidesAdequateLeaderCandidateFrozenIdentityBudgetBridge,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderCandidateTerminalRetirementStartsClosedMemory,
+   AdequateLeaderCandidateRetirementEstablishesClosure,
+   AdequateLeaderServicedCandidateMemoryAndClosureAreStepInvariant,
+   Isa, PTL
+   DEF AdequateLeaderTargetCandidateTerminalTombstoneProperty,
+       AsyncAllVars
+
+THEOREM AsyncSpecProvidesAdequateLeaderTargetCandidateSuccessfulServiceMemory ==
+  \A initialContext:
+    AdequateLeaderTargetCandidateSuccessfulServiceMemoryProperty(
+      AsyncSpecAt(initialContext))
+BY AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderCandidateSuccessfulServiceRetirementInstallsServicedMemory,
+   Isa, PTL
+   DEF AdequateLeaderTargetCandidateSuccessfulServiceMemoryProperty,
+       AsyncAllVars
+
 THEOREM AsyncSpecProvidesAdequateLeaderTargetCandidateIdentityTombstones ==
   \A initialContext:
     AdequateLeaderTargetCandidateIdentityTombstoneProperty(
@@ -7575,10 +8528,12 @@ BY AsyncSpecProvidesAdequateLeaderCandidateFrozenIdentityBudgetBridge,
    AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
    AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
-   AdequateLeaderCandidateRetirementStartsClosedMemory,
+   AdequateLeaderCandidateSuccessfulServiceRetirementStartsClosedMemory,
+   AdequateLeaderCandidateTerminalRetirementStartsClosedMemory,
    AdequateLeaderServicedCandidateMemoryAndClosureAreStepInvariant,
    Isa, PTL
    DEF AdequateLeaderTargetCandidateIdentityTombstoneProperty,
+       AdequateLeaderTargetCandidateServicedRetirementAction,
        AsyncAllVars
 
 THEOREM AdequateLeaderTargetNonDescentActionIntroducesOwnerIdentity ==
@@ -7755,9 +8710,12 @@ BY AdequateLeaderFrozenOwnerUniverseIsFinite,
 \* This is the exact one-step occurrence mapping.  It does not call either
 \* non-descent action progress: relative to the owners frozen before the step,
 \* the post-state merely exposes a new finite-universe identity.  The separate
-\* temporal episode must consume that identity.  The candidate transition
-\* above now supplies the finite route-neutral marker table and prevents a
-\* serviced A identity from returning after an equal-rank B replacement.
+\* temporal episode must consume that identity.  Terminal discards have the
+\* finite route-neutral tombstone table proved above.  Exact BodyAvailable
+\* fetch retirement has the monotone preflight bridge above; successful
+\* service has transient memory.  Any remaining proofless ignored retirement
+\* is still an explicit residual and cannot be used to exclude a later A after
+\* an equal-rank B replacement.
 THEOREM AdequateLeaderTargetNonDescentActionExposesFreshEpisodeIdentity ==
   \A target, leaderContext, leader, leaderView, subject,
      sourceOccurrenceRank, known:
@@ -7829,6 +8787,89 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    PTL
    DEF AdequateLeaderTargetNonDescentFreshIdentityProperty
 
+(***************************************************************************
+Owner-indexed off-subject retirement.
+
+The earlier subject-switch seam selected an arbitrary closed control item
+after occurrence service.  A retained old slot could therefore satisfy the
+existential again after its identity had already entered `retired`, while a
+different live candidate remained unretired.  The episode below instead
+freezes one exact rank owner.  Service must close that same immutable identity
+before it can consume one unit of the subject-switch budget.
+
+Candidate service markers cover successful tracked service and eligible
+terminal retirement.  A control Delivery candidate which is intentionally
+discarded without application is covered by the retained exact/current slot
+or its strictly-newer replacement.  An internal BodyAvailable callback whose
+exact body has already left Missing is covered by the reducer-stage preflight
+retirement above.  No other disappearance is accepted as a closed owner.
+***************************************************************************)
+AdequateLeaderTargetOccurrenceOwnerIdentitySet(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank) ==
+  IF occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier
+  THEN AdequateLeaderTargetRankOwnerIdentitySet(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank[1])
+  ELSE {}
+
+AdequateLeaderTargetOccurrenceOwnerSelected(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, owner) ==
+  /\ AdequateLeaderTargetOccurrenceRankFrontier(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank)
+  /\ owner \in
+       AdequateLeaderTargetOccurrenceOwnerIdentitySet(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank)
+
+AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, owner) ==
+  /\ owner \in
+       AdequateLeaderFrozenCandidateOwnerUniverse(
+         target, leaderContext, leader, leaderView, subject)
+  /\ owner \notin
+       AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
+         target, leaderContext, leader, leaderView, subject)
+  /\ \/ owner \in
+          AdequateLeaderTargetServicedCandidateOwnerIdentitySet(
+            target, leaderContext, leader, leaderView, subject)
+     \/ owner \in
+          AdequateLeaderTargetInternalBodyAvailableRetiredOwnerIdentitySet(
+            target, leaderContext, leader, leaderView, subject)
+     \/ owner \in
+          AdequateLeaderTargetOffSubjectControlClosedOwnerIdentitySet(
+            target, leaderContext, leader, leaderView,
+            subject, occurrenceRank)
+
+THEOREM AdequateLeaderSelectedOccurrenceOwnerIsFrozenAndLive ==
+  \A target, leaderContext, leader, leaderView,
+     subject, occurrenceRank, owner:
+    /\ AsyncStrongTypeInvariant
+    /\ AdequateLeaderFrozenTargetCorridor(
+         target, leaderContext, leader, leaderView)
+    /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank, owner)
+    => /\ owner \in
+            AdequateLeaderFrozenCandidateOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject)
+       /\ owner \in
+            AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
+              target, leaderContext, leader, leaderView, subject)
+BY AdequateLeaderLiveOwnersStayInsideFrozenUniverse, IsaT(300)
+   DEF AdequateLeaderTargetOccurrenceOwnerSelected,
+       AdequateLeaderTargetOccurrenceOwnerIdentitySet,
+       AdequateLeaderTargetOccurrenceRankFrontier,
+       AdequateLeaderTargetRankOwnerIdentitySet,
+       AdequateLeaderTargetLiveOwnerIdentitySet,
+       AdequateLeaderTargetLiveCandidateOwnerIdentitySet,
+       AdequateLeaderFrozenOwnerUniverse,
+       AdequateLeaderFrozenCandidateOwnerUniverse,
+       AdequateLeaderFrozenWireOwnerUniverse
+
 AdequateLeaderTargetOpenFrontier(
     target, leaderContext, leader, leaderView, subject) ==
   \/ AdequateLeaderTargetProducerTransportResidual(
@@ -7836,6 +8877,197 @@ AdequateLeaderTargetOpenFrontier(
   \/ \E occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier:
        AdequateLeaderTargetOccurrenceRankFrontier(
          target, leaderContext, leader, leaderView, subject, occurrenceRank)
+
+AdequateLeaderTargetProductiveSubjectOpenFrontier(
+    target, leaderContext, leader, leaderView, subject) ==
+  /\ AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+  /\ AdequateLeaderTargetOpenFrontier(
+       target, leaderContext, leader, leaderView, subject)
+
+\* Re-entry is intentionally outside the retired occurrence.  Only the
+\* leader's current deterministic proposal subject may open the next semantic
+\* corridor.  It may equal the formerly foreign subject if the leader's
+\* monotone lock/high-certificate selection has legitimately switched to it;
+\* the separate closed-retirement witness prevents that from resurrecting the
+\* drained occurrence.  Corridor exit is exposed separately for the rotating-
+\* leader/view kernel; it is not relabelled as fixed-view Decision progress.
+AdequateLeaderTargetProductiveSubjectReentryGoal(
+    target, leaderContext, leader, leaderView, retiredSubject) ==
+  /\ retiredSubject \in Subjects
+  /\ \/ NodeHasDecision(target)
+     \/ ~AdequateLeaderFrozenTargetCorridor(
+          target, leaderContext, leader, leaderView)
+     \/ \E nextSubject \in Subjects:
+          AdequateLeaderTargetProductiveSubjectOpenFrontier(
+            target, leaderContext, leader, leaderView, nextSubject)
+
+AdequateLeaderTargetSubjectSwitchEpisodeAtBudget(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, owner, retired, budget) ==
+  /\ AdequateLeaderTargetSubjectSwitchRetiredOwnerSet(
+       target, leaderContext, leader, leaderView, retired)
+  /\ budget =
+       AdequateLeaderTargetSubjectSwitchRemainingBudget(
+         target, leaderContext, leader, leaderView, retired)
+  /\ AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  /\ subject \in Subjects
+  /\ subject # AsyncProposalSubject(leader)
+  /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank, owner)
+  /\ owner \in
+       AdequateLeaderTargetLiveCandidateOwnerIdentitySet(
+         target, leaderContext, leader, leaderView, subject)
+  /\ owner \in
+       AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+         target, leaderContext, leader, leaderView)
+       \ retired
+  /\ ~AdequateLeaderTargetStrictOccurrenceDescentGoal(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank)
+
+AdequateLeaderTargetOffSubjectRetirementAndReentryGoal(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, owner, retired) ==
+  \/ NodeHasDecision(target)
+  \/ ~AdequateLeaderFrozenTargetCorridor(
+       target, leaderContext, leader, leaderView)
+  \/ /\ owner \notin retired
+     /\ AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
+          target, leaderContext, leader, leaderView,
+          subject, occurrenceRank, owner)
+     /\ AdequateLeaderTargetProductiveSubjectReentryGoal(
+          target, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderTargetSubjectSwitchDiscoveredOwnerSet(owner, retired) ==
+  {owner} \ retired
+
+AdequateLeaderTargetSubjectSwitchEpisodeAdvanceGoal(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, owner, retired, budget) ==
+  \E discovered,
+     retired2 \in
+       SUBSET AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+         target, leaderContext, leader, leaderView),
+     budget2 \in Nat,
+     nextSubject \in Subjects,
+     nextOccurrenceRank \in
+       AdequateLeaderTargetOccurrenceRankCarrier,
+     nextOwner \in
+       AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+         target, leaderContext, leader, leaderView):
+    /\ discovered =
+         AdequateLeaderTargetSubjectSwitchDiscoveredOwnerSet(
+           owner, retired)
+    /\ discovered # {}
+    /\ AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank, owner)
+    /\ retired2 = retired \cup discovered
+    /\ budget2 =
+         AdequateLeaderTargetSubjectSwitchRemainingBudget(
+           target, leaderContext, leader, leaderView, retired2)
+    /\ budget2 < budget
+    /\ AdequateLeaderTargetSubjectSwitchEpisodeAtBudget(
+         target, leaderContext, leader, leaderView,
+         nextSubject, nextOccurrenceRank,
+         nextOwner, retired2, budget2)
+
+AdequateLeaderTargetSubjectSwitchBudgetDescentGoal(
+    target, leaderContext, leader, leaderView,
+    subject, occurrenceRank, owner, retired, budget) ==
+  \/ AdequateLeaderTargetOffSubjectRetirementAndReentryGoal(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank, owner, retired)
+  \/ AdequateLeaderTargetSubjectSwitchEpisodeAdvanceGoal(
+       target, leaderContext, leader, leaderView,
+       subject, occurrenceRank, owner, retired, budget)
+
+THEOREM AdequateLeaderFrozenCorridorHasProductiveSubjectReentry ==
+  \A target, leaderContext, leader, leaderView, retiredSubject:
+    /\ AsyncStrongTypeInvariant
+    /\ retiredSubject \in Subjects
+    /\ AdequateLeaderFrozenTargetCorridor(
+         target, leaderContext, leader, leaderView)
+    => AdequateLeaderTargetProductiveSubjectReentryGoal(
+         target, leaderContext, leader, leaderView, retiredSubject)
+BY IsaT(600)
+   DEF AdequateLeaderTargetProductiveSubjectReentryGoal,
+       AdequateLeaderTargetProductiveSubjectOpenFrontier,
+       AdequateLeaderTargetOpenFrontier,
+       AdequateLeaderTargetProtocolSubjectSource,
+       AdequateLeaderTargetProducerTransportResidual,
+       AdequateLeaderTargetProducerResidual,
+       AdequateLeaderTargetCommitQcRebroadcastResidual,
+       AdequateLeaderTargetDueTransportResidual,
+       AdequateLeaderTargetRunnerAdmissionResidual,
+       AdequateLeaderTargetCertifiedResponseCapacityResidual,
+       AdequateLeaderTargetRankFrontier,
+       AsyncStrongTypeInvariant
+
+THEOREM AdequateLeaderSubjectSwitchNamedOwnerStrictlyConsumesBudget ==
+  \A target, leaderContext, leader, leaderView,
+     subject, occurrenceRank, owner, retired, budget:
+    /\ AsyncStrongTypeInvariant
+    /\ AdequateLeaderTargetSubjectSwitchEpisodeAtBudget(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank, owner, retired, budget)
+    /\ AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank, owner)
+    => /\ AdequateLeaderTargetSubjectSwitchDiscoveredOwnerSet(
+             owner, retired) = {owner}
+       /\ Cardinality(
+            AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+              target, leaderContext, leader, leaderView)
+              \ (retired \cup {owner}))
+            < budget
+BY AdequateLeaderFrozenSubjectSwitchOwnerUniverseIsFinite,
+   AdequateLeaderSelectedOccurrenceOwnerIsFrozenAndLive,
+   FS_Union, FS_Subset, FS_CardinalityType, IsaT(300)
+   DEF AdequateLeaderTargetSubjectSwitchEpisodeAtBudget,
+       AdequateLeaderTargetSubjectSwitchDiscoveredOwnerSet,
+       AdequateLeaderTargetSubjectSwitchRetiredOwnerSet,
+       AdequateLeaderTargetSubjectSwitchRemainingBudget,
+       AdequateLeaderFrozenSubjectSwitchOwnerUniverse,
+       AdequateLeaderFrozenOwnerUniverse
+
+THEOREM AdequateLeaderSubjectSwitchEpisodeStartsNamedOwnerService ==
+  \A target, leaderContext, leader, leaderView,
+     subject, occurrenceRank, owner, retired, budget:
+    /\ AsyncStrongTypeInvariant
+    /\ AdequateLeaderTargetSubjectSwitchEpisodeAtBudget(
+         target, leaderContext, leader, leaderView,
+         subject, occurrenceRank, owner, retired, budget)
+    => \E known \in
+         SUBSET AdequateLeaderFrozenOwnerUniverse(
+           target, leaderContext, leader, leaderView, subject),
+         serviceBudget \in Nat:
+         /\ known =
+              AdequateLeaderTargetLiveOwnerIdentitySet(
+                target, leaderContext, leader, leaderView, subject)
+         /\ AdequateLeaderTargetNonDescentEpisodeAtBudget(
+              target, leaderContext, leader, leaderView,
+              subject, occurrenceRank, known, serviceBudget)
+         /\ AdequateLeaderTargetSameOrHigherOccurrenceFrontier(
+              target, leaderContext, leader, leaderView,
+              subject, occurrenceRank)
+         /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+              target, leaderContext, leader, leaderView,
+              subject, occurrenceRank, owner)
+BY AdequateLeaderTargetCurrentOwnersInitializeKnownEpisode,
+   AdequateLeaderTargetNonDescentEpisodeBudgetIsFiniteAndCoalesced,
+   IsaT(300)
+   DEF AdequateLeaderTargetSubjectSwitchEpisodeAtBudget,
+       AdequateLeaderTargetNonDescentEpisodeAtBudget,
+       AdequateLeaderTargetNonDescentEpisodeFrontier,
+       AdequateLeaderTargetOccurrenceEpisodeActive,
+       AdequateLeaderTargetSameOrHigherOccurrenceFrontier,
+       AdequateLeaderTargetEpisodeStartsWithCurrentOwners,
+       AdequateLeaderTargetEpisodeKnownOwnerSet,
+       AdequateLeaderTargetNonDescentEpisodeBudget
 
 AdequateLeaderViewReachCompositionProperty(specification) ==
   specification
@@ -7852,7 +9084,7 @@ AdequateLeaderTargetCorridorEntryProperty(specification) ==
                       leader \in ValidatorIds,
                       leaderView \in Views,
                       subject \in Subjects:
-                     AdequateLeaderTargetOpenFrontier(
+                     AdequateLeaderTargetProductiveSubjectOpenFrontier(
                        target, leaderContext, leader, leaderView, subject))
 
 AdequateLeaderTargetProducerTransportClosureProperty(specification) ==
@@ -7862,20 +9094,99 @@ AdequateLeaderTargetProducerTransportClosureProperty(specification) ==
           leader \in ValidatorIds,
           leaderView \in Views,
           subject \in Subjects:
-         AdequateLeaderTargetProducerTransportResidual(
-           target, leaderContext, leader, leaderView, subject)
+         /\ AdequateLeaderTargetProtocolSubjectSource(
+              target, leaderContext, leader, leaderView, subject)
+         /\ AdequateLeaderTargetProducerTransportResidual(
+              target, leaderContext, leader, leaderView, subject)
            ~> (NodeHasDecision(target)
-                \/ \E occurrenceRank \in
-                       AdequateLeaderTargetOccurrenceRankCarrier:
-                     AdequateLeaderTargetOccurrenceRankFrontier(
-                       target, leaderContext, leader,
-                       leaderView, subject, occurrenceRank))
+                \/ \E nextSubject \in Subjects,
+                      occurrenceRank \in
+                        AdequateLeaderTargetOccurrenceRankCarrier:
+                     /\ AdequateLeaderTargetProtocolSubjectSource(
+                          target, leaderContext, leader,
+                          leaderView, nextSubject)
+                     /\ AdequateLeaderTargetOccurrenceRankFrontier(
+                          target, leaderContext, leader,
+                          leaderView, nextSubject, occurrenceRank))
+
+\* The target-subject arm is the only arm allowed to enter the producer
+\* corridor.  Strict occurrence descent is independent of the selector: an
+\* exact lower owner produced while a formerly selected subject is being
+\* drained is still a real decrease of the frozen occurrence rank.  A
+\* foreign subject which does not expose such a decrease may merely drain to
+\* its exact unconsumed coalescing slot.  That closed state is consumed by the
+\* separate finite subject-switch episode; it is not a protocol-progress
+\* goal.
+AdequateLeaderTargetProductiveOccurrenceServiceGoal(
+    target, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank, known) ==
+  /\ AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+  /\ \/ AdequateLeaderTargetNonDescentEpisodeResidual(
+          target, leaderContext, leader,
+          leaderView, subject, sourceOccurrenceRank, known)
+     \/ /\ AdequateLeaderTargetProducerTransportResidualAtOccurrence(
+               target, leaderContext, leader,
+               leaderView, subject, sourceOccurrenceRank)
+        /\ AdequateLeaderTargetLiveOwnerIdentitySet(
+             target, leaderContext, leader, leaderView, subject)
+             \subseteq known
+
+AdequateLeaderTargetOffSubjectOccurrenceDrainGoal(
+    target, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank, owner) ==
+  /\ ~AdequateLeaderTargetProtocolSubjectSource(
+       target, leaderContext, leader, leaderView, subject)
+  /\ \/ NodeHasDecision(target)
+     \/ ~AdequateLeaderFrozenTargetCorridor(
+          target, leaderContext, leader, leaderView)
+     \/ AdequateLeaderTargetOccurrenceOwnerRetirementClosed(
+          target, leaderContext, leader, leaderView,
+          subject, sourceOccurrenceRank, owner)
+
+AdequateLeaderTargetUniversalOccurrenceServiceGoal(
+    target, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank, known, owner) ==
+  \/ AdequateLeaderTargetStrictOccurrenceDescentGoal(
+       target, leaderContext, leader,
+       leaderView, subject, sourceOccurrenceRank)
+  \/ AdequateLeaderTargetProductiveOccurrenceServiceGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, known)
+  \/ AdequateLeaderTargetOffSubjectOccurrenceDrainGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+
+AdequateLeaderTargetOccurrenceRankOwnerServiceExitGoal(
+    target, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank, owner) ==
+  \/ AdequateLeaderTargetStrictOccurrenceDescentGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank)
+  \/ AdequateLeaderTargetOffSubjectOccurrenceDrainGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank, owner)
+
+AdequateLeaderTargetOccurrenceRankServiceExitGoal(
+    target, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank) ==
+  \/ AdequateLeaderTargetStrictOccurrenceDescentGoal(
+       target, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank)
+  \/ \E owner \in
+       AdequateLeaderFrozenCandidateOwnerUniverse(
+         target, leaderContext, leader, leaderView, subject):
+       AdequateLeaderTargetOffSubjectOccurrenceDrainGoal(
+         target, leaderContext, leader, leaderView,
+         subject, sourceOccurrenceRank, owner)
 
 \* Once service of a ranked owner opens producer/transport work, the source
-\* occurrence remains frozen.  The corridor may expose a genuinely new owner
-\* relative to the source owner set, but its only terminal rank is strict
-\* descent.  In particular it cannot return an arbitrary same/higher
-\* occurrence and call that transport progress.
+\* occurrence remains frozen.  While that subject remains the deterministic
+\* proposal subject, the corridor may expose a genuinely new owner relative
+\* to the source owner set, but its only terminal rank is strict descent.  If
+\* the selector changes first, the old occurrence may terminate only at the
+\* separate off-subject same-owner retirement exit; re-entry is handled by the outer
+\* subject-switch episode and is not transport progress.
 AdequateLeaderTargetProducerTransportOccurrenceClosureProperty(
     specification) ==
   specification
@@ -7893,10 +9204,12 @@ AdequateLeaderTargetProducerTransportOccurrenceClosureProperty(
          /\ AdequateLeaderTargetNonDescentEpisodeAtBudget(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget)
+         /\ AdequateLeaderTargetProtocolSubjectSource(
+              target, leaderContext, leader, leaderView, subject)
          /\ AdequateLeaderTargetProducerTransportResidualAtOccurrence(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank)
-           ~> (AdequateLeaderTargetStrictOccurrenceDescentGoal(
+           ~> (AdequateLeaderTargetOccurrenceRankServiceExitGoal(
                  target, leaderContext, leader, leaderView,
                  subject, sourceOccurrenceRank)
                 \/ AdequateLeaderTargetNonDescentEpisodeResidual(
@@ -7904,10 +9217,11 @@ AdequateLeaderTargetProducerTransportOccurrenceClosureProperty(
                      subject, sourceOccurrenceRank, known))
 
 \* One physical service episode freezes exactly the owners present at the
-\* source occurrence.  It then reaches Decision/strict descent, exposes a new
-\* finite-universe identity, or enters the rank-indexed producer corridor.
-\* Equal-count replacement and count-increasing replenishment are discovery
-\* only and never satisfy the progress goal.
+\* source occurrence and names the exact owner which fairness must discharge.
+\* Equal-count replacement and count-increasing replenishment remain discovery
+\* only.  Universal quantification over `owner` prevents an authenticated
+\* foreign-subject candidate from being replaced by an unrelated closed
+\* endpoint; its distinct terminal closes that same immutable identity.
 AdequateLeaderTargetOccurrenceRankServiceProperty(specification) ==
   specification
     => \A target \in ValidatorIds,
@@ -7920,25 +9234,119 @@ AdequateLeaderTargetOccurrenceRankServiceProperty(specification) ==
           known \in
             SUBSET AdequateLeaderFrozenOwnerUniverse(
               target, leaderContext, leader, leaderView, subject),
-          budget \in Nat:
+          budget \in Nat,
+          owner \in
+            AdequateLeaderFrozenCandidateOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject):
          /\ AdequateLeaderTargetNonDescentEpisodeAtBudget(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank, known, budget)
          /\ AdequateLeaderTargetSameOrHigherOccurrenceFrontier(
               target, leaderContext, leader, leaderView,
               subject, sourceOccurrenceRank)
-           ~> (AdequateLeaderTargetStrictOccurrenceDescentGoal(
-                 target, leaderContext, leader,
-                 leaderView, subject, sourceOccurrenceRank)
-                \/ AdequateLeaderTargetNonDescentEpisodeResidual(
-                     target, leaderContext, leader,
-                     leaderView, subject, sourceOccurrenceRank, known)
-                \/ /\ AdequateLeaderTargetProducerTransportResidualAtOccurrence(
-                          target, leaderContext, leader,
-                          leaderView, subject, sourceOccurrenceRank)
-                   /\ AdequateLeaderTargetLiveOwnerIdentitySet(
-                        target, leaderContext, leader, leaderView, subject)
-                        \subseteq known)
+         /\ AdequateLeaderTargetOccurrenceOwnerSelected(
+              target, leaderContext, leader, leaderView,
+              subject, sourceOccurrenceRank, owner)
+           ~> AdequateLeaderTargetUniversalOccurrenceServiceGoal(
+                target, leaderContext, leader, leaderView,
+                subject, sourceOccurrenceRank, known, owner)
+
+\* The only temporal premise left in this subkernel is owner-indexed occurrence
+\* service.  Both control-slot and internal BodyAvailable no-candidate-re-entry
+\* safety properties are derived above.  An episode can consume budget only
+\* after the selected owner itself is closed; neither an unrelated closed item
+\* nor simultaneous packet emptiness can witness the step.
+AdequateLeaderTargetSubjectSwitchBudgetDescentProperty(specification) ==
+  /\ AdequateLeaderTargetOccurrenceRankServiceProperty(specification)
+  /\ AdequateLeaderTargetOffSubjectControlNoReentryProperty(specification)
+  /\ AdequateLeaderTargetInternalBodyAvailableNoReentryProperty(
+       specification)
+  /\ (specification
+       => \A target \in ValidatorIds,
+             leaderContext \in ContextRecords,
+             leader \in ValidatorIds,
+             leaderView \in Views,
+             subject \in Subjects,
+             occurrenceRank \in
+               AdequateLeaderTargetOccurrenceRankCarrier,
+             retired \in
+               SUBSET AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+                 target, leaderContext, leader, leaderView),
+             owner \in
+               AdequateLeaderFrozenCandidateOwnerUniverse(
+                 target, leaderContext, leader, leaderView, subject),
+             budget \in Nat:
+            AdequateLeaderTargetSubjectSwitchEpisodeAtBudget(
+              target, leaderContext, leader, leaderView,
+              subject, occurrenceRank, owner, retired, budget)
+              ~> AdequateLeaderTargetSubjectSwitchBudgetDescentGoal(
+                   target, leaderContext, leader, leaderView,
+                   subject, occurrenceRank, owner, retired, budget))
+
+AdequateLeaderTargetSubjectSwitchClosureProperty(specification) ==
+  specification
+    => \A target \in ValidatorIds,
+          leaderContext \in ContextRecords,
+          leader \in ValidatorIds,
+          leaderView \in Views,
+          subject \in Subjects,
+          occurrenceRank \in
+            AdequateLeaderTargetOccurrenceRankCarrier,
+          retired \in
+            SUBSET AdequateLeaderFrozenSubjectSwitchOwnerUniverse(
+              target, leaderContext, leader, leaderView),
+          owner \in
+            AdequateLeaderFrozenCandidateOwnerUniverse(
+              target, leaderContext, leader, leaderView, subject),
+          budget \in Nat:
+         AdequateLeaderTargetSubjectSwitchEpisodeAtBudget(
+           target, leaderContext, leader, leaderView,
+           subject, occurrenceRank, owner, retired, budget)
+           ~> AdequateLeaderTargetOffSubjectRetirementAndReentryGoal(
+                target, leaderContext, leader, leaderView,
+                subject, occurrenceRank, owner, retired)
+
+THEOREM AdequateLeaderOwnerIndexedServiceProvidesSubjectSwitchBudgetDescent ==
+  \A initialContext:
+    AdequateLeaderTargetOccurrenceRankServiceProperty(
+      AsyncLiveSpecAt(initialContext))
+      => AdequateLeaderTargetSubjectSwitchBudgetDescentProperty(
+           AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesAdequateLeaderTargetOffSubjectControlNoReentry,
+   AsyncLiveProvidesAdequateLeaderTargetInternalBodyAvailableNoReentry,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncLiveSpecProjectsAsyncSpec,
+   AdequateLeaderSubjectSwitchEpisodeStartsNamedOwnerService,
+   AdequateLeaderFrozenCorridorHasProductiveSubjectReentry,
+   PTL
+   DEF AdequateLeaderTargetOccurrenceRankServiceProperty,
+       AdequateLeaderTargetUniversalOccurrenceServiceGoal,
+       AdequateLeaderTargetProductiveOccurrenceServiceGoal,
+       AdequateLeaderTargetOffSubjectOccurrenceDrainGoal,
+       AdequateLeaderTargetSubjectSwitchBudgetDescentProperty,
+       AdequateLeaderTargetSubjectSwitchBudgetDescentGoal,
+       AdequateLeaderTargetOffSubjectRetirementAndReentryGoal,
+       AdequateLeaderTargetSubjectSwitchEpisodeAtBudget
+
+THEOREM AdequateLeaderSubjectSwitchBudgetDescentClosesNamedOwnerEpisode ==
+  \A initialContext:
+    AdequateLeaderTargetSubjectSwitchBudgetDescentProperty(
+      AsyncLiveSpecAt(initialContext))
+      => AdequateLeaderTargetSubjectSwitchClosureProperty(
+           AsyncLiveSpecAt(initialContext))
+BY AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncLiveSpecProjectsAsyncSpec,
+   AdequateLeaderSubjectSwitchEpisodeStartsNamedOwnerService,
+   AdequateLeaderFrozenCorridorHasProductiveSubjectReentry,
+   PTL
+   DEF AdequateLeaderTargetSubjectSwitchBudgetDescentProperty,
+       AdequateLeaderTargetOccurrenceRankServiceProperty,
+       AdequateLeaderTargetUniversalOccurrenceServiceGoal,
+       AdequateLeaderTargetProductiveOccurrenceServiceGoal,
+       AdequateLeaderTargetOffSubjectOccurrenceDrainGoal,
+       AdequateLeaderTargetSubjectSwitchClosureProperty,
+       AdequateLeaderTargetOffSubjectRetirementAndReentryGoal,
+       AdequateLeaderTargetSubjectSwitchEpisodeAtBudget
 
 (***************************************************************************
 Finite non-descent composition.
@@ -7946,17 +9354,20 @@ Finite non-descent composition.
 The indexed bridge below is the temporal conclusion of occurrence service and
 the rank-indexed producer corridor.  It does not call replenishment progress.
 Starting from one episode frontier at `Cardinality(U \ known)`, service reaches
-the strict occurrence goal or a state which exposes `discovered`; the target
-explicitly carries `known2 = known \cup discovered` and a strictly smaller
-complement budget.  The subsequent projection forgets only the identity set,
-keeps the smaller natural-number budget, and applies finite Nat induction.
+the strict occurrence goal, the separately handled off-subject drain exit, or
+a state which exposes `discovered`; the target explicitly carries
+`known2 = known \cup discovered` and a strictly smaller complement budget.
+The subsequent projection forgets only the identity set, keeps the smaller
+natural-number budget, and applies finite Nat induction.
 
-Wire identities already have exact consumed-or-strictly-advanced retirement.
-Candidate identities now have a bounded route-neutral durable marker and a
-proved A -> B -> A no-resurrection bridge.  The indexed composition below
-combines those safety facts with the concrete occurrence-service/producer
-corridor: a discovered identity advances only the frozen known set and its
-finite complement budget; replenishment itself is never a progress goal.
+Target-subject wire identities already have exact consumed-or-strictly-
+advanced retirement.  Candidate identities now have bounded transient and
+terminal memory plus the exact internal BodyAvailable preflight bridge needed
+to exclude the observed A -> B -> A resurrection.  The indexed composition
+below combines those safety facts with the concrete occurrence-service/
+producer corridor: a discovered identity advances only the frozen known set
+and its finite complement budget; replenishment itself is never a progress
+goal.
 ***************************************************************************)
 AdequateLeaderTargetNonDescentKnownAdvanceProperty(specification) ==
   specification
@@ -7971,10 +9382,12 @@ AdequateLeaderTargetNonDescentKnownAdvanceProperty(specification) ==
             SUBSET AdequateLeaderFrozenOwnerUniverse(
               target, leaderContext, leader, leaderView, subject),
           budget \in Nat:
-         AdequateLeaderTargetNonDescentEpisodeAtBudget(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, known, budget)
-           ~> (AdequateLeaderTargetStrictOccurrenceDescentGoal(
+         /\ AdequateLeaderTargetProtocolSubjectSource(
+              target, leaderContext, leader, leaderView, subject)
+         /\ AdequateLeaderTargetNonDescentEpisodeAtBudget(
+              target, leaderContext, leader, leaderView,
+              subject, sourceOccurrenceRank, known, budget)
+           ~> (AdequateLeaderTargetOccurrenceRankServiceExitGoal(
                  target, leaderContext, leader, leaderView,
                  subject, sourceOccurrenceRank)
                 \/ AdequateLeaderTargetNonDescentKnownAdvanceGoal(
@@ -8028,6 +9441,10 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    PTL
    DEF AdequateLeaderTargetOccurrenceRankServiceProperty,
        AdequateLeaderTargetProducerTransportOccurrenceClosureProperty,
+       AdequateLeaderTargetUniversalOccurrenceServiceGoal,
+       AdequateLeaderTargetProductiveOccurrenceServiceGoal,
+       AdequateLeaderTargetOffSubjectOccurrenceDrainGoal,
+       AdequateLeaderTargetOccurrenceRankServiceExitGoal,
        AdequateLeaderTargetNonDescentKnownAdvanceProperty,
        AdequateLeaderTargetNonDescentEpisodeAtBudget,
        AdequateLeaderTargetNonDescentEpisodeFrontier,
@@ -8045,10 +9462,10 @@ AdequateLeaderTargetNonDescentEpisodeBudgetFrontier(
       target, leaderContext, leader, leaderView,
       subject, sourceOccurrenceRank, known, budget)
 
-AdequateLeaderTargetStrictEpisodeBudgetDescentGoal(
+AdequateLeaderTargetServiceExitOrBudgetDescentGoal(
     target, leaderContext, leader, leaderView,
     subject, sourceOccurrenceRank, budget) ==
-  \/ AdequateLeaderTargetStrictOccurrenceDescentGoal(
+  \/ AdequateLeaderTargetOccurrenceRankServiceExitGoal(
        target, leaderContext, leader, leaderView,
        subject, sourceOccurrenceRank)
   \/ \E lowerBudget \in
@@ -8068,10 +9485,12 @@ AdequateLeaderTargetNonDescentEpisodeBudgetDescentProperty(
           sourceOccurrenceRank \in
             AdequateLeaderTargetOccurrenceRankCarrier,
           budget \in Nat:
-         AdequateLeaderTargetNonDescentEpisodeBudgetFrontier(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, budget)
-           ~> AdequateLeaderTargetStrictEpisodeBudgetDescentGoal(
+         /\ AdequateLeaderTargetProtocolSubjectSource(
+              target, leaderContext, leader, leaderView, subject)
+         /\ AdequateLeaderTargetNonDescentEpisodeBudgetFrontier(
+              target, leaderContext, leader, leaderView,
+              subject, sourceOccurrenceRank, budget)
+           ~> AdequateLeaderTargetServiceExitOrBudgetDescentGoal(
                 target, leaderContext, leader, leaderView,
                 subject, sourceOccurrenceRank, budget)
 
@@ -8085,10 +9504,12 @@ AdequateLeaderTargetNonDescentEpisodeClosureProperty(specification) ==
           sourceOccurrenceRank \in
             AdequateLeaderTargetOccurrenceRankCarrier,
           budget \in Nat:
-         AdequateLeaderTargetNonDescentEpisodeBudgetFrontier(
-           target, leaderContext, leader, leaderView,
-           subject, sourceOccurrenceRank, budget)
-           ~> AdequateLeaderTargetStrictOccurrenceDescentGoal(
+         /\ AdequateLeaderTargetProtocolSubjectSource(
+              target, leaderContext, leader, leaderView, subject)
+         /\ AdequateLeaderTargetNonDescentEpisodeBudgetFrontier(
+              target, leaderContext, leader, leaderView,
+              subject, sourceOccurrenceRank, budget)
+           ~> AdequateLeaderTargetOccurrenceRankServiceExitGoal(
                 target, leaderContext, leader, leaderView,
                 subject, sourceOccurrenceRank)
 
@@ -8135,7 +9556,7 @@ BY AdequateLeaderTargetCurrentOwnersInitializeKnownEpisode,
        AdequateLeaderTargetSameOrHigherOccurrenceFrontier,
        AdequateLeaderTargetEpisodeStartsWithCurrentOwners
 
-THEOREM AdequateLeaderKnownAdvanceProjectsToStrictBudgetDescent ==
+THEOREM AdequateLeaderKnownAdvanceProjectsToServiceExitBudgetDescent ==
   \A initialContext:
     AdequateLeaderTargetNonDescentKnownAdvanceProperty(
       AsyncLiveSpecAt(initialContext))
@@ -8146,7 +9567,7 @@ BY PTL
        AdequateLeaderTargetNonDescentKnownAdvanceGoal,
        AdequateLeaderTargetNonDescentEpisodeBudgetDescentProperty,
        AdequateLeaderTargetNonDescentEpisodeBudgetFrontier,
-       AdequateLeaderTargetStrictEpisodeBudgetDescentGoal,
+       AdequateLeaderTargetServiceExitOrBudgetDescentGoal,
        SetLessThan, OpToRel
 
 THEOREM AdequateLeaderFiniteBudgetDescentClosesNonDescentEpisode ==
@@ -8158,9 +9579,9 @@ THEOREM AdequateLeaderFiniteBudgetDescentClosesNonDescentEpisode ==
 BY NatLessThanWellFounded, WellFoundedLeadsTo
    DEF AdequateLeaderTargetNonDescentEpisodeBudgetDescentProperty,
        AdequateLeaderTargetNonDescentEpisodeClosureProperty,
-       AdequateLeaderTargetStrictEpisodeBudgetDescentGoal
+       AdequateLeaderTargetServiceExitOrBudgetDescentGoal
 
-AdequateLeaderTargetRankDescentProperty(specification) ==
+AdequateLeaderTargetRankServiceExitProperty(specification) ==
   specification
     => \A target \in ValidatorIds,
           leaderContext \in ContextRecords,
@@ -8168,38 +9589,72 @@ AdequateLeaderTargetRankDescentProperty(specification) ==
           leaderView \in Views,
           subject \in Subjects,
           occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier:
-         AdequateLeaderTargetOccurrenceRankFrontier(
-           target, leaderContext, leader,
-           leaderView, subject, occurrenceRank)
-           ~> AdequateLeaderTargetStrictOccurrenceDescentGoal(
+         /\ AdequateLeaderTargetProtocolSubjectSource(
+              target, leaderContext, leader, leaderView, subject)
+         /\ AdequateLeaderTargetOccurrenceRankFrontier(
+              target, leaderContext, leader,
+              leaderView, subject, occurrenceRank)
+           ~> AdequateLeaderTargetOccurrenceRankServiceExitGoal(
                 target, leaderContext, leader,
                 leaderView, subject, occurrenceRank)
 
-THEOREM AdequateLeaderComposedRankDescentClosesOccurrenceRank ==
+\* Exact remaining composition seam.  The first three conjuncts expose the
+\* concrete dependencies: occurrence service, closed-owner no-re-entry, and
+\* finite named-owner subject switching.  The final clause may claim a lower
+\* occurrence only after the same subject is again the corridor-owned
+\* `AsyncProposalSubject(leader)`; otherwise the subject-switch episode must
+\* continue or Decision must be reached.  This property is deliberately not
+\* asserted from cardinality alone.
+AdequateLeaderTargetProductiveRankDescentProperty(specification) ==
+  /\ AdequateLeaderTargetRankServiceExitProperty(specification)
+  /\ AdequateLeaderTargetSubjectSwitchBudgetDescentProperty(specification)
+  /\ AdequateLeaderTargetSubjectSwitchClosureProperty(specification)
+  /\ (specification
+       => \A target \in ValidatorIds,
+             leaderContext \in ContextRecords,
+             leader \in ValidatorIds,
+             leaderView \in Views,
+             subject \in Subjects,
+             occurrenceRank \in
+               AdequateLeaderTargetOccurrenceRankCarrier:
+            /\ AdequateLeaderTargetProtocolSubjectSource(
+                 target, leaderContext, leader, leaderView, subject)
+            /\ AdequateLeaderTargetOccurrenceRankFrontier(
+                 target, leaderContext, leader,
+                 leaderView, subject, occurrenceRank)
+              ~> AdequateLeaderTargetProductiveStrictOccurrenceDescentGoal(
+                   target, leaderContext, leader,
+                   leaderView, subject, occurrenceRank))
+
+THEOREM AdequateLeaderComposedRankDescentClosesOccurrenceService ==
   \A initialContext:
     AdequateLeaderTargetComposedRankDescentProperty(
       AsyncLiveSpecAt(initialContext))
-      => AdequateLeaderTargetRankDescentProperty(
+      => AdequateLeaderTargetRankServiceExitProperty(
            AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncLiveSpecProjectsAsyncSpec,
    AdequateLeaderTargetOccurrenceFrontierStartsFiniteEpisode,
-   AdequateLeaderKnownAdvanceProjectsToStrictBudgetDescent,
+   AdequateLeaderKnownAdvanceProjectsToServiceExitBudgetDescent,
    AdequateLeaderFiniteBudgetDescentClosesNonDescentEpisode,
    PTL
    DEF AdequateLeaderTargetComposedRankDescentProperty,
        AdequateLeaderTargetOccurrenceRankServiceProperty,
        AdequateLeaderTargetProducerTransportOccurrenceClosureProperty,
+       AdequateLeaderTargetUniversalOccurrenceServiceGoal,
+       AdequateLeaderTargetProductiveOccurrenceServiceGoal,
+       AdequateLeaderTargetOffSubjectOccurrenceDrainGoal,
        AdequateLeaderTargetNonDescentKnownAdvanceProperty,
        AdequateLeaderTargetNonDescentEpisodeClosureProperty,
        AdequateLeaderTargetNonDescentEpisodeBudgetFrontier,
        AdequateLeaderTargetNonDescentEpisodeAtBudget,
-       AdequateLeaderTargetRankDescentProperty
+       AdequateLeaderTargetRankServiceExitProperty
 
 AdequateLeaderTargetSemanticCompositionProperty(specification) ==
   /\ AdequateLeaderTargetCorridorEntryProperty(specification)
   /\ AdequateLeaderTargetProducerTransportClosureProperty(specification)
   /\ AdequateLeaderTargetComposedRankDescentProperty(specification)
+  /\ AdequateLeaderTargetProductiveRankDescentProperty(specification)
 
 AdequateLeaderSemanticCompositionProperty(specification) ==
   /\ AdequateLeaderViewReachCompositionProperty(specification)
@@ -8231,7 +9686,7 @@ BY AdequateLeaderTargetSemanticRankOrderingWellFounded,
 
 THEOREM AdequateLeaderTargetRanksReachIndexedDecision ==
   \A initialContext:
-    AdequateLeaderTargetRankDescentProperty(
+    AdequateLeaderTargetProductiveRankDescentProperty(
       AsyncLiveSpecAt(initialContext))
       => (AsyncLiveSpecAt(initialContext)
             => \A target \in ValidatorIds,
@@ -8241,14 +9696,17 @@ THEOREM AdequateLeaderTargetRanksReachIndexedDecision ==
                   subject \in Subjects,
                   occurrenceRank \in
                     AdequateLeaderTargetOccurrenceRankCarrier:
-                 AdequateLeaderTargetOccurrenceRankFrontier(
-                   target, leaderContext, leader,
-                   leaderView, subject, occurrenceRank)
+                 /\ AdequateLeaderTargetProtocolSubjectSource(
+                      target, leaderContext, leader,
+                      leaderView, subject)
+                 /\ AdequateLeaderTargetOccurrenceRankFrontier(
+                      target, leaderContext, leader,
+                      leaderView, subject, occurrenceRank)
                    ~> NodeHasDecision(target))
 BY AdequateLeaderTargetOccurrenceRankOrderingWellFounded,
    WellFoundedLeadsTo
-   DEF AdequateLeaderTargetRankDescentProperty,
-       AdequateLeaderTargetStrictOccurrenceDescentGoal
+   DEF AdequateLeaderTargetProductiveRankDescentProperty,
+       AdequateLeaderTargetProductiveStrictOccurrenceDescentGoal
 
 THEOREM AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence ==
   \A initialContext:
@@ -8256,12 +9714,12 @@ THEOREM AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence ==
       AsyncLiveSpecAt(initialContext))
       => AdequateLeaderTargetDecisionConvergenceProperty(
            AsyncLiveSpecAt(initialContext))
-BY AdequateLeaderComposedRankDescentClosesOccurrenceRank,
-   AdequateLeaderTargetRanksReachIndexedDecision, PTL
+BY AdequateLeaderTargetRanksReachIndexedDecision, PTL
    DEF AdequateLeaderTargetSemanticCompositionProperty,
        AdequateLeaderTargetCorridorEntryProperty,
        AdequateLeaderTargetProducerTransportClosureProperty,
        AdequateLeaderTargetOpenFrontier,
+       AdequateLeaderTargetProductiveSubjectOpenFrontier,
        AdequateLeaderTargetDecisionConvergenceProperty
 
 THEOREM ExactAdequateLeaderSubkernelsReduceToServiceKernel ==

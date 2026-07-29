@@ -18,6 +18,13 @@ responsive signer slots not yet recorded at the target.  Neither rank can be
 reset by a duplicate delivery or by unrelated traffic.
 ***************************************************************************)
 
+THEOREM RestartSignatureReplayIsNeverTombstoneSuppressed ==
+  \A node:
+    \A candidate \in SequenceSet(RestartSignatureReplay(node)):
+      ~AsyncCandidateRestartReplayTombstoned(candidate)
+BY RestartSignatureReplayCommandsAreSignatures,
+   AsyncRestartScopedCandidateIsNeverReplayTombstoned
+
 TimeoutVoteSemanticIdentity(node, roundView, vote) ==
   /\ vote \in TimeoutVoteRecordSet
   /\ vote.context = context
@@ -318,6 +325,7 @@ RetainedViewCertificateAuthority(source, minimumView) ==
   /\ \E tc \in TcRecordSet:
        /\ TimeoutCertificateSemanticIdentity(tc, minimumView)
        /\ nodeView[source] = tc.view + 1
+       /\ tc = lastInstalledTc[source]
        /\ TcOutbox(source, tc) \subseteq asyncRetainedControl
 
 TimeoutReplayRecoveryAuthority(node) ==
@@ -1020,7 +1028,12 @@ BY RuntimeStepPreservesTimeoutViewOwnershipKernel,
    TimeoutViewOwnershipKernelProjectionFrame,
    IsaT(600)
    DEF RunNodeWork, LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, AdmitProducerCompletion,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
+       AdmitProducerCompletion,
        AdmitCausalHead, UpdateLocalAdmissionMetadata,
        RecordBlockedCausalDebt, DrainFairIngressSelected,
        LeaveCausalQueues,
@@ -1481,24 +1494,43 @@ PROOF
     <2>1. CASE AsyncNonCrashStep
       BY <1>1, <2>1,
          AsyncNonCrashStepPreservesTimeoutViewOwnershipKernel
-    <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+    <2>2. CASE \E node \in ValidatorIds:
+                  AsyncEnterIndexedServiceActivation(node)
+                    \/ AsyncActivateServiceNode(node)
+      <3>1. PICK node \in ValidatorIds:
+               AsyncEnterIndexedServiceActivation(node)
+                 \/ AsyncActivateServiceNode(node)
+        BY <2>2
+      <3>2. UNCHANGED TimeoutViewOwnershipKernelProjection
+        BY <3>1, Isa
+           DEF AsyncEnterIndexedServiceActivation,
+               AsyncActivateServiceNode,
+               AsyncServiceActivationFrameVars,
+               AsyncSchedulerExceptServiceActivation,
+               TimeoutViewOwnershipKernelProjection,
+               TimeoutOwnershipRetainedItems,
+               TimeoutOwnershipRetainedItemsIn,
+               AsyncRecoveryControlVars, vars
+      <3> QED BY <1>1, <3>2,
+           TimeoutViewOwnershipKernelProjectionFrame
+    <2>3. CASE \E node \in ValidatorIds: PreGstCrash(node)
       <3>1. ASSUME NEW node \in ValidatorIds, PreGstCrash(node)
              PROVE TimeoutViewOwnershipKernelInvariant'
         <4>1. UNCHANGED AsyncRecoveryControlVars
           BY <3>1 DEF PreGstCrash, AsyncSchedulerVars
         <4> QED BY <1>1, <3>1, <4>1,
              PreGstNonresponsiveCrashPreservesTimeoutViewOwnershipKernel
-      <3> QED BY <2>2, <3>1
-    <2>3. CASE \E node \in ValidatorIds: PreGstResponsiveCrash(node)
-      BY <1>1, <2>3,
-         PreGstResponsiveCrashPreservesTimeoutViewOwnershipKernel
-    <2>4. CASE PreGstResponsiveRestart
+      <3> QED BY <2>3, <3>1
+    <2>4. CASE \E node \in ValidatorIds: PreGstResponsiveCrash(node)
       BY <1>1, <2>4,
-         PreGstResponsiveRestartPreservesTimeoutViewOwnershipKernel
-    <2>5. CASE PreGstResponsiveReplay
+         PreGstResponsiveCrashPreservesTimeoutViewOwnershipKernel
+    <2>5. CASE PreGstResponsiveRestart
       BY <1>1, <2>5,
+         PreGstResponsiveRestartPreservesTimeoutViewOwnershipKernel
+    <2>6. CASE PreGstResponsiveReplay
+      BY <1>1, <2>6,
          PreGstResponsiveReplayPreservesTimeoutViewOwnershipKernel
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
          DEF AsyncNext
   <1> QED BY <1>1
 

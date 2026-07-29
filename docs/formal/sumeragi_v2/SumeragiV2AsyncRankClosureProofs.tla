@@ -20,30 +20,37 @@ PROOF
   <1>1. ASSUME NEW initialContext
          PROVE ProtectedServiceRanksProgressProperty(
                  AsyncSpecAt(initialContext))
-    <2>1. ProtectedStage3RankProgressProperty(
+    <2>1. ProtectedServiceFiniteRunnerEpisodeClosureProperty(
              AsyncSpecAt(initialContext))
-      BY ProtectedStage3RankProgressFromFairSchedulerObligation
-    <2>2. ProtectedStage4RankProgressProperty(
+      BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure
+    <2>2. ProtectedStage3RankProgressProperty(
              AsyncSpecAt(initialContext))
-      BY ProtectedStage4RankProgressFromFairScheduler
-    <2>3. ProtectedStage5RankProgressProperty(
+      BY <2>1, ProtectedStage3RankProgressFromFairSchedulerObligation
+         DEF ProtectedServiceFiniteRunnerEpisodeClosureProperty
+    <2>3. ProtectedStage4RankProgressProperty(
+             AsyncSpecAt(initialContext))
+      BY <2>1, ProtectedStage4RankProgressFromFairScheduler
+         DEF ProtectedServiceFiniteRunnerEpisodeClosureProperty,
+             Stage6FiniteRunnerEpisodeClosureProperty
+    <2>4. ProtectedStage5RankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedStage5RankProgressFromFairFifo
-    <2>4. ProtectedStage6RankProgressProperty(
+    <2>5. ProtectedStage6RankProgressProperty(
              AsyncSpecAt(initialContext))
-      BY ProtectedStage6RankProgressFromFairCausalAdmissionObligation
-    <2>5. ProtectedPostDeferredRankProgressProperty(
+      BY <2>1, ProtectedStage6RankProgressFromFairCausalAdmissionObligation
+         DEF ProtectedServiceFiniteRunnerEpisodeClosureProperty
+    <2>6. ProtectedPostDeferredRankProgressProperty(
              AsyncSpecAt(initialContext))
-      BY <2>1, <2>2, <2>3, <2>4,
+      BY <2>2, <2>3, <2>4, <2>5,
          ProtectedPostDeferredRanksComposeFromLeavesObligation
-    <2>6. ProtectedStage2RankProgressProperty(
+    <2>7. ProtectedStage2RankProgressProperty(
              AsyncSpecAt(initialContext))
-      BY <2>5, ProtectedStage2RankProgressWithExactHandoffObligation,
+      BY <2>6, ProtectedStage2RankProgressWithExactHandoffObligation,
          PTL
-    <2>7. ProtectedServeRankProgressProperty(
+    <2>8. ProtectedServeRankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedServeRankProgressFromFairFifo
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>6, <2>7,
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>7, <2>8,
          ProtectedServiceRanksProgressLeafCompositionObligation
   <1> QED BY <1>1
 
@@ -54,15 +61,16 @@ PROOF
   <1>1. ASSUME NEW initialContext
          PROVE StarvationFreedomProperty(
                  AsyncLiveSpecAt(initialContext))
-    <2>1. AsyncSpecAt(initialContext)
-      BY <1>1, AsyncLiveSpecProjectsAsyncSpec
-    <2>2. ProtectedServiceRanksProgressProperty(
+    <2>1. ProtectedServiceRanksProgressProperty(
              AsyncSpecAt(initialContext))
       BY AsyncRankClosureProtectedServiceRankProgressObligation
-    <2>3. StarvationFreedomProperty(AsyncSpecAt(initialContext))
-      BY <2>1, <2>2,
-         ProtectedServiceRankProgressImpliesStarvation
-    <2> QED BY <2>3, PTL DEF StarvationFreedomProperty
+    <2>2. AsyncLiveSpecAt(initialContext)
+             => AsyncSpecAt(initialContext)
+      BY AsyncLiveSpecProjectsAsyncSpec
+    <2> QED BY <2>1, <2>2,
+         ProtectedServiceRankProgressImpliesStarvation, PTL
+         DEF StarvationFreedomProperty,
+             ProtectedServeStarvationProperty
   <1> QED BY <1>1
 
 =============================================================================

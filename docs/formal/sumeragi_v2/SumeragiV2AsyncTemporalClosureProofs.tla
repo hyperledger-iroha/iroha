@@ -116,7 +116,10 @@ DirectTimeoutViewClosureResidualObligation ==
       AsyncLiveSpecAt(initialContext))
 
 THEOREM AsyncTemporalClosureTimeoutViewProgressReduction ==
-  DirectTimeoutViewClosureResidualObligation
+  /\ (\A initialContext:
+        ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+          AsyncSpecAt(initialContext)))
+  /\ DirectTimeoutViewClosureResidualObligation
     => AsyncTemporalClosureTimeoutViewProgressObligation
 BY DirectTimeoutViewDecompositionClosesTimeoutViewProgress
    DEF DirectTimeoutViewClosureResidualObligation,
@@ -124,8 +127,10 @@ BY DirectTimeoutViewDecompositionClosesTimeoutViewProgress
 
 LockedBodyDirectClosureResidualProperty(specification) ==
   /\ TimeoutViewProgressProperty(specification)
-  /\ RetainedLockTimeoutFedSourceExposureLeaderTurnProperty(specification)
-  /\ RetainedLockLeaderTurnProducerOriginProperty(specification)
+  /\ RetainedLockSourceAuthorityExposureProperty(specification)
+  /\ RetainedLockPrepareAuthorityTransportProperty(specification)
+  /\ RetainedLockTargetLeaderFreshActivationProperty(specification)
+  /\ RetainedLockLeaderProducerOriginProperty(specification)
   /\ RetainedLockRankHandoffProperty(specification)
 
 THEOREM AsyncTemporalClosureLockedBodyReproposalProgressReduction ==
@@ -150,21 +155,30 @@ BY ExactDecisionRequestClockOwnerConvergence,
 
 THEOREM ExactDecisionStageServiceObligation ==
   \A initialContext:
-    ExactDecisionStageServiceProperty(AsyncSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ExactDecisionStageServiceProperty(AsyncSpecAt(initialContext))
 BY ExactDecisionOffSchedulerResidualConvergenceObligation,
    ExactDecisionOffSchedulerResidualConvergenceDischargesStageService
 
 THEOREM AsyncTemporalClosureApplicationCompletionProgressObligation ==
   \A initialContext:
-    ApplicationCompletionProgressProperty(AsyncSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ApplicationCompletionProgressProperty(
+           AsyncSpecAt(initialContext))
 BY ExactDecisionStageServiceObligation,
    ApplicationCompletionProgressReduction
 
 THEOREM AsyncTemporalClosureApplicationLivenessObligation ==
   \A initialContext:
-    ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ApplicationLivenessProperty(AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ApplicationLivenessProperty(AsyncSpecAt(initialContext))
     <2>1. ApplicationCompletionProgressProperty(
              AsyncSpecAt(initialContext))
@@ -179,9 +193,13 @@ PROOF
 
 THEOREM AsyncTemporalClosureOneHeightCompletionObligation ==
   \A initialContext:
-    OneHeightCompletionLiveness(initialContext)
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => OneHeightCompletionLiveness(initialContext)
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE OneHeightCompletionLiveness(initialContext)
     <2>1. RotatingLeaderProgressProperty(
              AsyncLiveSpecAt(initialContext))
