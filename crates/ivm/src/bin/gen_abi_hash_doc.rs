@@ -3,7 +3,14 @@
 //!   cargo run -p ivm --bin gen_abi_hash_doc -- --write
 //!   cargo run -p ivm --bin gen_abi_hash_doc -- --check
 
-use std::{fs, path::PathBuf};
+use std::path::{Path, PathBuf};
+
+mod support;
+
+use support::{
+    EXPECTED_DOC_LOCALES, GeneratedOutput, GenerationMode, exact_localized_markdown_paths,
+    parse_generation_mode, sync_generated_outputs,
+};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED ABI HASHES -->";
 const END: &str = "<!-- END GENERATED ABI HASHES -->";
@@ -32,42 +39,111 @@ fn gas_schedule_golden_path() -> PathBuf {
     workspace_root().join("crates/ivm/tests/gas_schedule_hash.rs")
 }
 
-fn header_paths() -> Vec<PathBuf> {
+fn header_paths() -> Result<Vec<PathBuf>, String> {
     let source_dir = source_dir();
-    let mut paths = fs::read_dir(&source_dir)
-        .unwrap_or_else(|error| panic!("read {}: {error}", source_dir.display()))
-        .map(|entry| entry.expect("read docs/source entry").path())
-        .filter(|path| {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return false;
-            };
-            name == "ivm_header.md" || (name.starts_with("ivm_header.") && name.ends_with(".md"))
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    assert!(!paths.is_empty(), "no docs/source/ivm_header*.md files");
-    paths
+    exact_localized_markdown_paths(&source_dir, "ivm_header", true, EXPECTED_DOC_LOCALES)
 }
 
-fn runtime_sample_paths() -> Vec<PathBuf> {
+fn runtime_sample_paths() -> Result<Vec<PathBuf>, String> {
     let sample_dir = source_dir().join("samples");
-    let mut paths = fs::read_dir(&sample_dir)
-        .unwrap_or_else(|error| panic!("read {}: {error}", sample_dir.display()))
-        .map(|entry| entry.expect("read docs/source/samples entry").path())
-        .filter(|path| {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return false;
-            };
-            name == "runtime_abi_hash.md"
-                || (name.starts_with("runtime_abi_hash.") && name.ends_with(".md"))
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    assert!(
-        !paths.is_empty(),
-        "no docs/source/samples/runtime_abi_hash*.md files"
-    );
-    paths
+    exact_localized_markdown_paths(&sample_dir, "runtime_abi_hash", true, EXPECTED_DOC_LOCALES)
+}
+
+fn render_generated_hash_section(text: &str, expected: &str) -> Result<String, String> {
+    let begin_matches = text.match_indices(BEGIN).collect::<Vec<_>>();
+    if begin_matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one ABI-hash begin marker `{BEGIN}`, found {}",
+            begin_matches.len()
+        ));
+    }
+    let end_matches = text.match_indices(END).collect::<Vec<_>>();
+    if end_matches.len() != 1 {
+        return Err(format!(
+            "expected exactly one ABI-hash end marker `{END}`, found {}",
+            end_matches.len()
+        ));
+    }
+    let begin = begin_matches[0].0;
+    let end_start = end_matches[0].0;
+    if end_start <= begin {
+        return Err(format!(
+            "ABI-hash end marker `{END}` precedes begin marker `{BEGIN}`"
+        ));
+    }
+    let end = end_start + END.len();
+    let mut rendered = text.to_owned();
+    rendered.replace_range(begin..end, expected);
+    Ok(rendered)
+}
+
+fn mode_or_exit() -> GenerationMode {
+    match parse_generation_mode(std::env::args().skip(1)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn prepare_outputs(
+    header_paths: &[PathBuf],
+    runtime_sample_paths: &[PathBuf],
+    abi_hash_golden_path: &Path,
+    gas_schedule_golden_path: &Path,
+    expected_hash_section: &str,
+    runtime_hash: &str,
+    gas_hash: &str,
+) -> Result<Vec<GeneratedOutput>, String> {
+    let mut outputs = Vec::with_capacity(header_paths.len() + runtime_sample_paths.len() + 2);
+    for path in header_paths {
+        outputs.push(GeneratedOutput::render(path, |text| {
+            render_generated_hash_section(text, expected_hash_section)
+        })?);
+    }
+    for path in runtime_sample_paths {
+        outputs.push(GeneratedOutput::render(path, |text| {
+            render_runtime_sample(text, runtime_hash).map_err(str::to_owned)
+        })?);
+    }
+    outputs.push(GeneratedOutput::render(abi_hash_golden_path, |text| {
+        render_abi_hash_golden(text, runtime_hash).map_err(str::to_owned)
+    })?);
+    outputs.push(GeneratedOutput::render(gas_schedule_golden_path, |text| {
+        render_gas_schedule_golden(text, gas_hash).map_err(str::to_owned)
+    })?);
+    Ok(outputs)
+}
+
+fn main() {
+    let mode = mode_or_exit();
+
+    let table = ivm::syscalls::render_abi_hashes_markdown_table();
+    let expected = format!("{BEGIN}\n{table}{END}");
+
+    let header_paths =
+        header_paths().unwrap_or_else(|error| panic!("discover IVM header documents: {error}"));
+    let runtime_hash = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
+    let runtime_sample_paths = runtime_sample_paths()
+        .unwrap_or_else(|error| panic!("discover runtime ABI hash samples: {error}"));
+    let gas_hash = hex::encode(ivm::gas::schedule_hash().as_ref());
+    let outputs = prepare_outputs(
+        &header_paths,
+        &runtime_sample_paths,
+        &abi_hash_golden_path(),
+        &gas_schedule_golden_path(),
+        &expected,
+        &runtime_hash,
+        &gas_hash,
+    )
+    .unwrap_or_else(|error| panic!("render ABI/gas hash outputs: {error}"));
+    let regenerate_command = "cargo run --locked -p ivm --bin gen_abi_hash_doc -- --write";
+    let updated = sync_generated_outputs(&outputs, mode, regenerate_command)
+        .unwrap_or_else(|error| panic!("{error}"));
+    for path in updated {
+        eprintln!("updated: {}", path.display());
+    }
 }
 
 fn render_runtime_sample(text: &str, hash: &str) -> Result<String, &'static str> {
@@ -104,112 +180,39 @@ fn render_single_hash(text: &str, prefix: &str, hash: &str) -> Result<String, &'
     Ok(rendered)
 }
 
-fn main() {
-    let mut write = false;
-    let mut check = false;
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--write" => write = true,
-            "--check" => check = true,
-            _ => {}
-        }
-    }
-
-    if !write && !check {
-        eprintln!("usage: --write or --check");
-        return;
-    }
-
-    let table = ivm::syscalls::render_abi_hashes_markdown_table();
-    let expected = format!("{BEGIN}\n{table}{END}");
-
-    for path in header_paths() {
-        let mut text = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let beg = text
-            .find(BEGIN)
-            .unwrap_or_else(|| panic!("begin marker not found in {}", path.display()));
-        let end = text
-            .find(END)
-            .unwrap_or_else(|| panic!("end marker not found in {}", path.display()));
-        let section_end = end + END.len();
-
-        if check {
-            assert_eq!(
-                &text[beg..section_end],
-                expected,
-                "{} ABI hashes out of date; run: cargo run -p ivm --bin gen_abi_hash_doc -- --write",
-                path.display()
-            );
-        } else if write && text[beg..section_end] != expected {
-            text.replace_range(beg..section_end, &expected);
-            fs::write(&path, text)
-                .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-            eprintln!("updated: {}", path.display());
-        }
-    }
-
-    let runtime_hash = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-    for path in runtime_sample_paths() {
-        let text = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let rendered = render_runtime_sample(&text, &runtime_hash)
-            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-        if check {
-            assert_eq!(
-                text,
-                rendered,
-                "{} runtime ABI hash out of date; run: cargo run -p ivm --bin gen_abi_hash_doc -- --write",
-                path.display()
-            );
-        } else if write && text != rendered {
-            fs::write(&path, rendered)
-                .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-            eprintln!("updated: {}", path.display());
-        }
-    }
-
-    let path = abi_hash_golden_path();
-    let text = fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let rendered = render_abi_hash_golden(&text, &runtime_hash)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    if check {
-        assert_eq!(
-            text,
-            rendered,
-            "{} ABI v1 golden out of date; run: cargo run -p ivm --bin gen_abi_hash_doc -- --write",
-            path.display()
-        );
-    } else if write && text != rendered {
-        fs::write(&path, rendered)
-            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-        eprintln!("updated: {}", path.display());
-    }
-
-    let gas_hash = hex::encode(ivm::gas::schedule_hash().as_ref());
-    let path = gas_schedule_golden_path();
-    let text = fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let rendered = render_gas_schedule_golden(&text, &gas_hash)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    if check {
-        assert_eq!(
-            text,
-            rendered,
-            "{} gas schedule golden out of date; run: cargo run -p ivm --bin gen_abi_hash_doc -- --write",
-            path.display()
-        );
-    } else if write && text != rendered {
-        fs::write(&path, rendered)
-            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-        eprintln!("updated: {}", path.display());
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{render_abi_hash_golden, render_gas_schedule_golden, render_runtime_sample};
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::{
+        BEGIN, END, prepare_outputs, render_abi_hash_golden, render_gas_schedule_golden,
+        render_generated_hash_section, render_runtime_sample,
+    };
+
+    static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn generated_hash_section_requires_exact_ordered_markers() {
+        let expected = format!("{BEGIN}\ncanonical\n{END}");
+        let stale = format!("prefix\n{BEGIN}\nstale\n{END}\nsuffix\n");
+        assert_eq!(
+            render_generated_hash_section(&stale, &expected)
+                .expect("replace exact generated section"),
+            format!("prefix\n{expected}\nsuffix\n")
+        );
+        assert!(render_generated_hash_section("no markers", &expected).is_err());
+        assert!(
+            render_generated_hash_section(
+                &format!("{BEGIN}\none\n{END}\n{BEGIN}\ntwo\n{END}"),
+                &expected
+            )
+            .is_err()
+        );
+        assert!(render_generated_hash_section(&format!("{END}\n{BEGIN}"), &expected).is_err());
+    }
 
     #[test]
     fn runtime_sample_replaces_exactly_one_canonical_hash() {
@@ -245,5 +248,54 @@ mod tests {
         assert_eq!(rendered, format!("let expected = hex!(\"{new}\");\n"));
         assert!(render_gas_schedule_golden("let other = hex!(\"00\");\n", new).is_err());
         assert!(render_gas_schedule_golden(&format!("{old}{old}"), new).is_err());
+    }
+
+    #[test]
+    fn late_golden_failure_does_not_publish_earlier_outputs() {
+        let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "ivm-abi-hash-late-failure-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("create test directory");
+        let header = root.join("header.md");
+        let runtime = root.join("runtime.json");
+        let abi_golden = root.join("abi.rs");
+        let gas_golden = root.join("gas.rs");
+        let old_hash = "1".repeat(64);
+        let new_hash = "2".repeat(64);
+        fs::write(&header, format!("{BEGIN}\nstale\n{END}\n")).expect("write header fixture");
+        fs::write(
+            &runtime,
+            format!("{{\n  \"abi_hash_hex\": \"{old_hash}\"\n}}\n"),
+        )
+        .expect("write runtime fixture");
+        fs::write(
+            &abi_golden,
+            format!("const ABI_V1_HASH_GOLDEN: &str = \"{old_hash}\";\n"),
+        )
+        .expect("write ABI golden fixture");
+        fs::write(&gas_golden, "missing gas hash field\n").expect("write malformed late golden");
+        let header_before = fs::read(&header).expect("snapshot header fixture");
+        let expected = format!("{BEGIN}\ncurrent\n{END}");
+
+        assert!(
+            prepare_outputs(
+                &[header.clone()],
+                &[runtime],
+                &abi_golden,
+                &gas_golden,
+                &expected,
+                &new_hash,
+                &new_hash,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(&header).expect("read header after late failure"),
+            header_before
+        );
+
+        fs::remove_dir_all(root).expect("remove test directory");
     }
 }

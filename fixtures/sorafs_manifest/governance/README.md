@@ -3,7 +3,7 @@ Deterministic governance DAG fixtures wrapping a PoR proof.
 Generated via:
 
 ```
-cargo run -p sorafs_manifest --bin generate_por_fixtures
+cargo run -p sorafs_manifest --bin generate_por_fixtures -- --write
 ```
 
 - `node_v1.to` — canonical Norito encoding.

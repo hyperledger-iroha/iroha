@@ -2,7 +2,7 @@
 lang: kk
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ lands, провер синтетикалық жолмен кілт/баланс 
      - `from_balance_before >= amount` (ортақ RNS декомпозициясы бар ауқым гаджеті).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Барлық үш теңдеу бір жол тобын тұтынатындай етіп реттелетін қақпаға салынған.2. **Посейдон міндеттеме блогы**
+   - Барлық үш теңдеу бір жол тобын тұтынатындай етіп реттелетін қақпаға салынған.
+
+2. **Посейдон міндеттеме блогы**
    - `poseidon_preimage_digest` басқа гаджеттерде бұрыннан қолданылған ортақ Poseidon іздеу кестесін пайдаланып қайта есептейді. Посейдон раундтары транзакцияда жоқ.
 
 3. **Merkle Path Block**
@@ -96,7 +98,9 @@ lands, провер синтетикалық жолмен кілт/баланс 
 5. **Пакеттік цикл**
    - Бағдарламалар `transfer_asset` құрастырушылар циклінің алдында `transfer_v1_batch_begin()` және одан кейін `transfer_v1_batch_end()` шақырады. Аумақ белсенді болған кезде хост әрбір тасымалдауды буферлейді және оларды бір `TransferAssetBatch` ретінде қайта ойнатады, Poseidon/SMT мәтінмәнін әр пакетте бір рет қайта пайдаланады. Әрбір қосымша дельта тек арифметикалық және екі жапырақ тексеруін қосады. Транскрипт декодері қазір көп дельталық топтамаларды қабылдайды және оларды `TransferGadgetInput::deltas` ретінде көрсетеді, осылайша жоспарлаушы Norito қайта оқымай-ақ куәгерлерді бүктей алады. Norito пайдалы жүктемесі бар келісім-шарттар (мысалы, CLI/SDK) хостқа бір жүйеде толық кодталған топтаманы беретін `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` телефонына қоңырау шалу арқылы ауқымды толығымен өткізіп жіберуі мүмкін.
 
-# Хост пен провердің өзгерістері| Қабат | Өзгерістер |
+# Хост пен провердің өзгерістері
+
+| Қабат | Өзгерістер |
 |-------|---------|
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) қосыңыз, осылайша бағдарламалар аралық ISI0NI04, плюс `transfer_v1` жүйе қоңырауларын жақшаға ала алады. (`0x2B`) алдын ала кодталған партиялар үшін. |
 | `ivm::host` & сынақтар | Негізгі/әдепкі хосттар `transfer_v1` ауқымы белсенді болғанда пакеттік қосымша ретінде қарастырады, беті `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` және жалған WSV хосты жазбаларды орындамас бұрын буферлейді, осылайша регрессия сынақтары детерминирленген теңгерімді бекіте алады. жаңартулар.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```Шығарылған JSON `iroha_cli audit witness` қазір әдепкі бойынша шығаратын FASTPQ топтамасының артефактілерін көрсетеді (оларды басу үшін `--no-fastpq-batches` өтіңіз), сондықтан `scripts/fastpq/check_row_usage.py` және CI қақпасы синтетикалық іске қосуларды алдыңғы өзгерістерді жоспарлау кезінде өзгерте алады.
+```
+
+Шығарылған JSON `iroha_cli audit witness` қазір әдепкі бойынша шығаратын FASTPQ топтамасының артефактілерін көрсетеді (оларды басу үшін `--no-fastpq-batches` өтіңіз), сондықтан `scripts/fastpq/check_row_usage.py` және CI қақпасы синтетикалық іске қосуларды алдыңғы өзгерістерді жоспарлау кезінде өзгерте алады.
 
 # Шығарылым жоспары
 

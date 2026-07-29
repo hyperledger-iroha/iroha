@@ -90,7 +90,7 @@ impl LaneQueueReservationJournalLimits {
                 "lane reservation journal compaction threshold exceeds its file limit",
             ));
         }
-        let bootstrap_payload = norito::to_bytes(&bootstrap_frame()).map_err(|error| {
+        let bootstrap_payload = norito::encode_canonical(&bootstrap_frame()).map_err(|error| {
             invalid_input(format!(
                 "lane reservation journal bootstrap cannot be encoded: {error}"
             ))
@@ -2469,7 +2469,7 @@ fn encode_frame_with_limit(
     frame: &LaneQueueReservationJournalFrameV5,
     max_frame_payload_bytes: u64,
 ) -> io::Result<Vec<u8>> {
-    let payload = norito::to_bytes(frame).map_err(io::Error::other)?;
+    let payload = norito::encode_canonical(frame).map_err(io::Error::other)?;
     if payload.is_empty() {
         return Err(invalid_data(
             "lane reservation journal frame payload must not be empty",
@@ -2862,7 +2862,19 @@ fn decode_frame(
             "lane reservation journal payload exceeds the configured frame limit",
         ));
     }
-    norito::core::from_bytes_view(payload).map_err(|error| {
+    let advertised_flags = payload
+        .get(norito::core::Header::SIZE - 1)
+        .copied()
+        .unwrap_or_else(norito::core::default_encode_flags);
+    let preflight = {
+        let _payload_context = norito::core::PayloadCtxGuard::enter(payload);
+        // Preflight the archive under its advertised layout so ambient caller
+        // state cannot cause a false mismatch. The canonical decoder below
+        // independently requires the one fixed durable layout.
+        let _advertised_flags = norito::core::DecodeFlagsGuard::enter(advertised_flags);
+        norito::core::from_bytes_view(payload).map(|_| ())
+    };
+    preflight.map_err(|error| {
         invalid_data(format!(
             "lane reservation journal payload is not a canonical uncompressed archive: {error}"
         ))
@@ -2884,20 +2896,19 @@ fn decode_frame(
         aggregate_allocation_budget,
         128,
     );
-    let frame = norito::decode_from_bytes_with_limits::<LaneQueueReservationJournalFrameV5>(
+    let frame = norito::decode_canonical_with_limits::<LaneQueueReservationJournalFrameV5>(
         payload,
         decode_limits,
     )
     .map_err(|error| {
-        invalid_data(format!(
-            "lane reservation journal payload cannot be decoded: {error}"
-        ))
+        if matches!(&error, norito::Error::NonCanonicalEncoding) {
+            invalid_data("lane reservation journal payload is not canonically encoded")
+        } else {
+            invalid_data(format!(
+                "lane reservation journal payload cannot be decoded: {error}"
+            ))
+        }
     })?;
-    if norito::to_bytes(&frame).map_err(io::Error::other)? != payload {
-        return Err(invalid_data(
-            "lane reservation journal payload is not canonically encoded",
-        ));
-    }
     Ok(frame)
 }
 
@@ -3530,6 +3541,82 @@ mod tests {
         }
     }
 
+    #[test]
+    fn durable_frames_ignore_ambient_layout_and_survive_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("canonical-ambient-restart.norito");
+        let expected = record(17, 3);
+        let operation = LaneQueueReservationJournalFrameV5::PutBatch(vec![expected.clone()]);
+        let canonical_payload =
+            norito::encode_canonical(&operation).expect("encode canonical operation payload");
+        let mut expected_file = encode_frame(&bootstrap_frame()).expect("encode bootstrap");
+        expected_file.extend_from_slice(&encode_frame(&operation).expect("encode operation"));
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let ambient_payload =
+                norito::to_bytes(&operation).expect("encode alternate-layout ambient operation");
+            assert_ne!(ambient_payload, canonical_payload);
+
+            let (mut journal, replay) = LaneQueueReservationJournal::open(&path, u64::MAX)
+                .expect("open under alternate ambient layout");
+            assert!(replay.records().is_empty());
+            journal
+                .put_batch(vec![expected.clone()])
+                .expect("persist under alternate ambient layout");
+            drop(journal);
+
+            assert_eq!(
+                norito::to_bytes(&operation).expect("encode ambient operation after journal calls"),
+                ambient_payload,
+                "canonical journal helpers must restore the caller's ambient layout"
+            );
+        }
+
+        assert_eq!(
+            fs::read(&path).expect("read canonical journal bytes"),
+            expected_file,
+            "bootstrap, payload, checksum, and commit bytes must be ambient-invariant"
+        );
+        let (_journal, replay) =
+            LaneQueueReservationJournal::open(&path, u64::MAX).expect("reopen canonical journal");
+        assert_eq!(replay.records(), &[expected]);
+    }
+
+    #[test]
+    fn frame_decoder_rejects_an_advertised_alternate_layout() {
+        let frame = LaneQueueReservationJournalFrameV5::PutBatch(vec![record(18, 3)]);
+        let canonical = norito::encode_canonical(&frame).expect("encode canonical frame payload");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&frame).expect("encode alternate-layout frame payload")
+        };
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            norito::decode_from_bytes::<LaneQueueReservationJournalFrameV5>(&alternate)
+                .expect("ordinary Norito accepts the advertised alternate layout"),
+            frame
+        );
+
+        let limits = LaneQueueReservationJournalLimits::new(
+            u64::MAX,
+            u64::from(u32::MAX),
+            u64::MAX,
+            usize::MAX,
+        );
+        let error = decode_frame(&alternate, limits)
+            .expect_err("durable frame decoding must reject alternate layouts");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            "lane reservation journal payload is not canonically encoded"
+        );
+    }
+
     fn encode_v3_fixture_frame(frame: &LaneQueueReservationJournalFrameV3Fixture) -> Vec<u8> {
         let payload = norito::to_bytes(frame).expect("encode V3 reservation frame fixture");
         let len = u32::try_from(payload.len()).expect("bounded V3 fixture length");
@@ -3588,13 +3675,14 @@ mod tests {
         let path = dir.path().join("bounded-frame.norito");
         let bootstrap = encode_frame(&bootstrap_frame()).expect("encode bootstrap");
         let operation = LaneQueueReservationJournalFrameV5::PutBatch(vec![record(1, 1)]);
-        let operation_payload = norito::to_bytes(&operation).expect("encode operation payload");
+        let operation_payload =
+            norito::encode_canonical(&operation).expect("encode canonical operation payload");
         let operation_frame = encode_frame(&operation).expect("encode operation frame");
         let configured_payload_limit =
             u64::try_from(operation_payload.len() - 1).expect("payload length fits u64");
         let bootstrap_payload_len = u64::try_from(
-            norito::to_bytes(&bootstrap_frame())
-                .expect("bootstrap payload")
+            norito::encode_canonical(&bootstrap_frame())
+                .expect("canonical bootstrap payload")
                 .len(),
         )
         .expect("bootstrap payload fits u64");
@@ -3659,10 +3747,10 @@ mod tests {
         fs::write(&path, &bytes).expect("write exact journal");
         let file_len = u64::try_from(bytes.len()).expect("journal length fits u64");
         let max_payload = [
-            norito::to_bytes(&bootstrap_frame()).expect("encode bootstrap payload"),
-            norito::to_bytes(&first).expect("encode first payload"),
-            norito::to_bytes(&second).expect("encode second payload"),
-            norito::to_bytes(&shrink).expect("encode shrink payload"),
+            norito::encode_canonical(&bootstrap_frame()).expect("encode bootstrap payload"),
+            norito::encode_canonical(&first).expect("encode first payload"),
+            norito::encode_canonical(&second).expect("encode second payload"),
+            norito::encode_canonical(&shrink).expect("encode shrink payload"),
         ]
         .into_iter()
         .map(|payload| u64::try_from(payload.len()).expect("payload length fits u64"))

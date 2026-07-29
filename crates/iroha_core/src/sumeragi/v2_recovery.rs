@@ -3509,6 +3509,37 @@ mod tests {
     }
 
     #[test]
+    fn startup_plan_rejects_a_missing_canonical_file_on_an_empty_chain() {
+        for name in [
+            "blocks.data",
+            "blocks.index",
+            "blocks.hashes",
+            "blocks.count.norito",
+        ] {
+            let kura = Kura::blank_kura_for_testing();
+            let path = primary_lane_blocks_dir(kura.as_ref()).join(name);
+            std::fs::remove_file(&path).expect("remove canonical journal file");
+
+            assert!(matches!(
+                plan_v2_startup_replay(kura.as_ref()),
+                Err(V2StartupReplayError::Kura(crate::kura::Error::IO(error, failed_path)))
+                    if error.kind() == std::io::ErrorKind::NotFound && failed_path == path
+            ));
+            assert_eq!(
+                kura.v2_startup_finality_inventory_len_for_test(),
+                0,
+                "failed planning must clear startup-only inventory after removing {name}"
+            );
+            assert!(
+                kura.begin_v2_startup_finality_verification()
+                    .expect("inspect failed startup inventory")
+                    .is_none(),
+                "failed planning must leave no reusable startup session after removing {name}"
+            );
+        }
+    }
+
+    #[test]
     fn startup_plan_rejects_an_incomplete_interior_height() {
         let (verified, keys) = verified_context();
         let context = verified.context().clone();

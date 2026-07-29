@@ -90,6 +90,62 @@ pub const V1_SOURCE_TYPE_NAMES: &[&str] = &[
     "NftView",
     "QueryPage",
 ];
+/// Compiler-owned non-keyword names forbidden for source declarations.
+pub const V1_DECLARATION_RESERVED_EXTRA_NAMES: &[&str] = &[
+    "AxtDescriptor",
+    "AssetHandle",
+    "ProofBlob",
+    "SoracloudRequest",
+    "SoracloudResponse",
+    "state_map_get",
+    "__kotodama_list_len",
+    "__kotodama_list_get",
+    "__kotodama_list_try_set",
+    "__kotodama_list_try_push",
+    "__kotodama_list_pop",
+    "__kotodama_list_contains",
+    "__kotodama_list_take",
+    "__kotodama_list_enumerate",
+    "__kotodama_decimal_div_round",
+    "__kotodama_quantity_div_round",
+    "__kotodama_quantity_ratio_round",
+    "__kotodama_decimal_to_int_trunc",
+    "__kotodama_decimal_to_int_round",
+    "is_some",
+    "is_none",
+    "is_ok",
+    "is_err",
+    "unwrap_or",
+    "unwrap_err_or",
+];
+/// Exact canonical scalar types permitted as durable StateMap keys.
+pub const V1_STATE_MAP_KEY_TYPE_NAMES: &[&str] = &[
+    "int",
+    "decimal",
+    "quantity",
+    "bool",
+    "string",
+    "bytes",
+    "DataSpaceId",
+    "AccountId",
+    "AssetDefinitionId",
+    "AssetId",
+    "NftId",
+    "DomainId",
+    "Name",
+];
+/// Canonical bounded StateMap scan provenance in manifest order.
+pub const V1_DYNAMIC_ACCESS_BOUND_KINDS: &[&str] = &["range", "take"];
+/// Maximum keys advertised by one bounded dynamic-access hint.
+pub const V1_DYNAMIC_ACCESS_MAX_KEYS: u32 = 64;
+/// Canonical prefix for a direct durable StateMap hint base.
+pub const V1_DYNAMIC_ACCESS_BASE_PREFIX: &str = "state:";
+/// Canonical validation policy for the StateMap base identifier.
+pub const V1_DYNAMIC_ACCESS_BASE_IDENTIFIER_POLICY: &str = "state_declaration_identifier";
+/// Dynamic hints may refer only to a directly declared top-level StateMap.
+pub const V1_DYNAMIC_ACCESS_REQUIRES_DECLARED_STATE_MAP: bool = true;
+/// Dynamic hints are advisory and never scheduler-authoritative in V1.
+pub const V1_DYNAMIC_ACCESS_SCHEDULER_AUTHORITATIVE: bool = false;
 /// Retired pre-release numeric type spellings that remain reserved in V1.
 ///
 /// Keeping these names unavailable to source-unit identities and declared
@@ -217,23 +273,11 @@ fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
     None
 }
 
-fn is_canonical_type_spelling(name: &str) -> bool {
-    V1_SOURCE_TYPE_NAMES.contains(&name)
-        || matches!(
-            name,
-            "AxtDescriptor"
-                | "AssetHandle"
-                | "ProofBlob"
-                | "SoracloudRequest"
-                | "SoracloudResponse"
-        )
-}
-
 /// Return whether a source declaration collides with compiler-owned names.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
-        || compiler_intrinsic_kind(name).is_some()
-        || is_canonical_type_spelling(name)
+        || V1_SOURCE_TYPE_NAMES.contains(&name)
+        || V1_DECLARATION_RESERVED_EXTRA_NAMES.contains(&name)
         || (is_function && name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
@@ -1337,6 +1381,31 @@ impl SemanticContext {
             | ResolvedValueTarget::ExternalConst => None,
         };
         Ok(Some((target, ty)))
+    }
+
+    fn list_receiver_is_mutable(
+        &self,
+        expression: &Expr,
+        name: &str,
+        vars: &HashMap<String, Type>,
+    ) -> Result<bool, SemanticError> {
+        use crate::resolved::ResolvedValueTarget;
+
+        let Some((target, _)) = self.validate_value_target(expression, name, vars)? else {
+            return Ok(self.current_mutable_bindings.borrow().contains(name));
+        };
+        let ResolvedValueTarget::Binding(binding) = target else {
+            return Ok(false);
+        };
+        let arena = self.resolved_arena.borrow();
+        let binding = arena
+            .as_ref()
+            .and_then(|arena| arena.binding(binding))
+            .ok_or_else(|| SemanticError {
+                code: "E_INTERNAL_RESOLUTION",
+                message: "List mutator receiver references an unknown lexical binding".into(),
+            })?;
+        Ok(binding.mutable)
     }
 
     fn validate_call_target(
@@ -4684,6 +4753,7 @@ fn reorder_call_arguments(
     }
     let mut ordered = Vec::with_capacity(args.len());
     let mut ordered_slots = HashMap::with_capacity(parameter_names.len());
+    let mut first_omitted_optional = None;
     if implicit_receiver {
         ordered.push(args[0].clone());
     }
@@ -4700,6 +4770,16 @@ fn reorder_call_arguments(
             });
         }
         if let Some(position) = positions.first() {
+            if let Some(omitted) = first_omitted_optional
+                && !required.get(index).copied().unwrap_or(true)
+            {
+                return Err(SemanticError {
+                    code: "E_NAMED_ARGUMENT_HOLE",
+                    message: format!(
+                        "optional named argument `{parameter_name}` cannot be supplied while earlier optional parameter `{omitted}` is omitted"
+                    ),
+                });
+            }
             ordered_slots.insert(parameter_name.as_str(), ordered.len());
             ordered.push(user_args[*position].clone());
         } else if required.get(index).copied().unwrap_or(true) {
@@ -4709,6 +4789,8 @@ fn reorder_call_arguments(
                     "call `{call_name}` is missing required argument `{parameter_name}`"
                 ),
             });
+        } else if first_omitted_optional.is_none() {
+            first_omitted_optional = Some(parameter_name.as_str());
         }
     }
     let mut evaluation_order = Vec::with_capacity(ordered.len());
@@ -5226,12 +5308,9 @@ fn is_supported_public_argument_type(ty: &Type) -> bool {
 }
 
 pub(crate) fn is_supported_durable_key_type(ty: &Type) -> bool {
-    match resolve_struct_type(ty) {
-        ty if is_numeric_type(&ty) => true,
-        Type::Bool | Type::String | Type::Bytes => true,
-        other if is_pointer_type(&other) => true,
-        _ => false,
-    }
+    let resolved = resolve_struct_type(ty);
+    let canonical_name = type_name(&resolved);
+    V1_STATE_MAP_KEY_TYPE_NAMES.contains(&canonical_name.as_str())
 }
 
 fn is_in_memory_map_word_type(ty: &Type) -> bool {
@@ -5640,7 +5719,7 @@ fn analyze_function(
     let body = body_result?;
     // Enforce declared return coverage and shape
     if let Some(t) = &expected_ret {
-        if *t != Type::Unit && !block_returns_all_paths(&func.body) {
+        if *t != Type::Unit && body.tail.is_none() && !typed_block_diverges(&body) {
             return Err(SemanticError {
                 code: "E_MISSING_RETURN",
                 message: "not all paths return a value".into(),
@@ -6083,34 +6162,43 @@ fn analyze_block(
     expected_tail: Option<&Type>,
     loop_depth: usize,
 ) -> Result<TypedBlock, SemanticError> {
-    let _ = loop_depth;
-    let mut statements = Vec::new();
-    for stmt in &block.statements {
-        let mut v = analyze_statement(
-            context,
-            stmt,
-            vars,
-            mutable_bindings,
-            expected_ret,
-            loop_depth,
-        )?;
-        statements.append(&mut v);
-    }
-    let tail = if let Some(expression) = &block.tail {
-        let mut typed = analyze_expr_expected(context, expression, vars, expected_tail)?;
-        if let Some(expected) = expected_tail
-            && let Err(mut error) = ensure_assignable_and_coerce(expected, &mut typed)
-        {
-            context.capture_expression_diagnostic(expression, None);
-            error.code = "E_TAIL_TYPE_MISMATCH";
-            error.message = format!("block tail type mismatch: {}", error.message);
-            return Err(error);
+    let previous_mutable_bindings = context
+        .current_mutable_bindings
+        .replace(mutable_bindings.clone());
+    let result = (|| {
+        let _ = loop_depth;
+        let mut statements = Vec::new();
+        for stmt in &block.statements {
+            let mut v = analyze_statement(
+                context,
+                stmt,
+                vars,
+                mutable_bindings,
+                expected_ret,
+                loop_depth,
+            )?;
+            statements.append(&mut v);
         }
-        Some(Box::new(typed))
-    } else {
-        None
-    };
-    Ok(TypedBlock { statements, tail })
+        let tail = if let Some(expression) = &block.tail {
+            let mut typed = analyze_expr_expected(context, expression, vars, expected_tail)?;
+            if let Some(expected) = expected_tail
+                && let Err(mut error) = ensure_assignable_and_coerce(expected, &mut typed)
+            {
+                context.capture_expression_diagnostic(expression, None);
+                error.code = "E_TAIL_TYPE_MISMATCH";
+                error.message = format!("block tail type mismatch: {}", error.message);
+                return Err(error);
+            }
+            Some(Box::new(typed))
+        } else {
+            None
+        };
+        Ok(TypedBlock { statements, tail })
+    })();
+    context
+        .current_mutable_bindings
+        .replace(previous_mutable_bindings);
+    result
 }
 
 fn validate_v1_bounded_for_shape(
@@ -6942,7 +7030,13 @@ fn analyze_statement_inner(
             // Accept canonical bounded forms: `.take(end)` and `.range(start, end)`.
             // Desugar to a typed for-each with the base map expression and rely on
             // IR lowering to enforce the exact compiler-proven literal bound.
-            if let Expr::Call { name, args, .. } = map.kind() {
+            if let Expr::Call {
+                name,
+                args,
+                implicit_receiver: true,
+                ..
+            } = map.kind()
+            {
                 if name == "take" && args.len() == 2 {
                     // Analyze base map expression and infer key/value types
                     let base_map = analyze_expr(context, &args[0], &mut vars.clone())?;
@@ -7004,6 +7098,7 @@ fn analyze_statement_inner(
                             body: body_t,
                             start: 0,
                             bound: Some(bound),
+                            bound_kind: StateMapIterationBoundKind::Take,
                         }]);
                     }
                     return Err(SemanticError {
@@ -7042,9 +7137,7 @@ fn analyze_statement_inner(
                         Expr::Source { .. } | Expr::Resolved { .. } => {
                             unreachable!("kind() strips provenance wrappers")
                         }
-                        Expr::IntLiteral(n) if !n.is_negative() => {
-                            n.try_to_u64().and_then(|value| usize::try_from(value).ok())
-                        }
+                        Expr::IntLiteral(n) if !n.is_negative() => n.try_to_u64(),
                         _ => None,
                     };
                     // Interpret second numeric as end; compute n = end - start
@@ -7052,9 +7145,7 @@ fn analyze_statement_inner(
                         Expr::Source { .. } | Expr::Resolved { .. } => {
                             unreachable!("kind() strips provenance wrappers")
                         }
-                        Expr::IntLiteral(n) if !n.is_negative() => {
-                            n.try_to_u64().and_then(|value| usize::try_from(value).ok())
-                        }
+                        Expr::IntLiteral(n) if !n.is_negative() => n.try_to_u64(),
                         _ => None,
                     };
                     if let (Some(start), Some(end)) = (start, end) {
@@ -7065,7 +7156,10 @@ fn analyze_statement_inner(
                             });
                         }
                         let span = end - start;
-                        enforce_static_iteration_limit("StateMap.range(start, end)", span as u128)?;
+                        enforce_static_iteration_limit(
+                            "StateMap.range(start, end)",
+                            u128::from(span),
+                        )?;
                         if !map_expr_is_state(context, &args[0]) && (start != 0 || span > 1) {
                             return Err(SemanticError {
                                 code: "E_MAP_BOUNDS",
@@ -7073,7 +7167,8 @@ fn analyze_statement_inner(
                                     .into(),
                             });
                         }
-                        let static_bound = Some(span);
+                        let static_bound =
+                            Some(usize::try_from(span).expect("V1 iteration span is at most 64"));
                         if let Expr::Ident(map_name) = args[0].kind()
                             && block_mutates_map(&body_t, map_name)
                         {
@@ -7086,6 +7181,7 @@ fn analyze_statement_inner(
                             body: body_t,
                             start,
                             bound: static_bound,
+                            bound_kind: StateMapIterationBoundKind::Range,
                         }]);
                     }
                     return Err(SemanticError {
@@ -10335,7 +10431,7 @@ fn typed_block_value_type(block: &TypedBlock) -> Type {
 /// to synthesize a placeholder value merely to agree with a sibling branch.
 /// Keeping divergence as a control-flow property instead of a public V1 type
 /// also prevents it from leaking into entrypoint schemas or the pointer ABI.
-fn typed_block_diverges(block: &TypedBlock) -> bool {
+pub(crate) fn typed_block_diverges(block: &TypedBlock) -> bool {
     block.statements.iter().any(typed_statement_diverges)
         || block.tail.as_deref().is_some_and(typed_expression_diverges)
 }
@@ -10395,7 +10491,7 @@ fn analyze_expression_block(
     expected: Option<&Type>,
 ) -> Result<TypedBlock, SemanticError> {
     let return_type = enclosing_return_type(context);
-    let mut mutable_bindings = HashSet::new();
+    let mut mutable_bindings = context.current_mutable_bindings.borrow().clone();
     analyze_block(
         context,
         block,
@@ -10942,11 +11038,12 @@ fn analyze_list_method_call(
                 ),
             }));
         };
-        if !context
-            .current_mutable_bindings
-            .borrow()
-            .contains(receiver_name)
-        {
+        let receiver_is_mutable =
+            match context.list_receiver_is_mutable(&args[0], receiver_name, vars) {
+                Ok(receiver_is_mutable) => receiver_is_mutable,
+                Err(error) => return Some(Err(error)),
+            };
+        if !receiver_is_mutable {
             return Some(Err(SemanticError {
                 code: "E_LIST_MUTABLE_RECEIVER",
                 message: format!(
@@ -13666,38 +13763,6 @@ fn normalize_namespaced(name: &str) -> String {
     String::from(name)
 }
 
-// Return coverage and shape analysis on the AST (conservative)
-fn block_returns_all_paths(block: &super::ast::Block) -> bool {
-    if block.tail.is_some() {
-        return true;
-    }
-    let mut always = false;
-    for stmt in &block.statements {
-        if stmt_returns_all_paths(stmt) {
-            always = true;
-            break;
-        }
-    }
-    always
-}
-
-fn stmt_returns_all_paths(stmt: &super::ast::Statement) -> bool {
-    use super::ast::Statement as S;
-    match stmt.kind() {
-        S::Return(_) => true,
-        S::If {
-            then_branch,
-            else_branch,
-            ..
-        } => else_branch
-            .as_ref()
-            .map(|else_b| block_returns_all_paths(then_branch) && block_returns_all_paths(else_b))
-            .unwrap_or(false),
-        S::While { .. } | S::For { .. } => false,
-        _ => false,
-    }
-}
-
 fn block_has_return_value(block: &super::ast::Block) -> bool {
     block.statements.iter().any(stmt_has_return_value)
 }
@@ -13763,6 +13828,26 @@ pub struct TypedBlock {
     pub tail: Option<Box<TypedExpr>>,
 }
 
+/// Source operation that supplied a compiler-proven StateMap iteration bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateMapIterationBoundKind {
+    /// Half-open `.range(start, end)` with a literal span.
+    Range,
+    /// Prefix `.take(count)` with a literal count.
+    Take,
+}
+
+impl StateMapIterationBoundKind {
+    /// Canonical manifest spelling retained from the source operation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Range => "range",
+            Self::Take => "take",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedStatement {
     Let {
@@ -13803,9 +13888,11 @@ pub enum TypedStatement {
         map: TypedExpr,
         body: TypedBlock,
         /// Start offset (in buckets) for iteration; 0 when not specified.
-        start: usize,
+        start: u64,
         /// Optional upper bound on iterations (e.g., from `.take(n)`).
         bound: Option<usize>,
+        /// Exact source operation that supplied the static bound.
+        bound_kind: StateMapIterationBoundKind,
     },
     /// Map set operation: `map[key] = value`.
     MapSet {
@@ -16306,6 +16393,45 @@ mod tests {
     }
 
     #[test]
+    fn list_mutability_does_not_leak_between_sibling_lexical_bindings() {
+        for (index, body) in [
+            "if flag { var List<int, 2> values = [1]; } else { let List<int, 2> values = [1]; values.try_push(2); }",
+            "if flag { let List<int, 2> values = [1]; values.try_push(2); } else { var List<int, 2> values = [1]; }",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let text = format!("seiyaku Lists {{ view fn main(bool flag) {{ {body} }} }}");
+
+            let raw = parse(&text).expect("parse raw sibling List bindings");
+            let raw_error =
+                analyze(&raw).expect_err("raw-AST fallback must preserve lexical mutability");
+            assert_eq!(raw_error.code, "E_LIST_MUTABLE_RECEIVER", "{body}");
+
+            let source = crate::source::SourceFile::new(
+                crate::source::SourceId(42 + index as u32),
+                format!("list-sibling-{index}.ko"),
+                text,
+            );
+            let (spanned, _) =
+                crate::parser::parse_source_spanned(&source, crate::source::FrontendBudget::v1())
+                    .expect("parse sourced sibling List bindings");
+            let resolved =
+                crate::resolved::resolve(spanned, &source).expect("resolve sibling bindings");
+            let resolved_error = SemanticContext::new()
+                .analyze_resolved(&resolved)
+                .expect_err("BindingId mutability must reject the immutable sibling");
+            assert!(
+                resolved_error
+                    .failures
+                    .iter()
+                    .any(|failure| failure.error.code == "E_LIST_MUTABLE_RECEIVER"),
+                "{body}: {resolved_error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn list_take_accepts_zero_and_rejects_limits_above_source_capacity() {
         let zero = function_tail(
             "fn zero() -> List<int, 1> { let List<int, 4> values = [1, 2]; values.take(0) }",
@@ -16836,6 +16962,72 @@ mod tests {
             parse("fn target(int left, int right) {} fn main() { target(right: 2, left: 1); }")
                 .expect("parse repeated-type named call");
         analyze(&named).expect("named repeated-type call should type-check");
+    }
+
+    #[test]
+    fn named_argument_plans_reject_optional_holes_without_compacting_abi_slots() {
+        let parameters = vec![
+            "required".to_owned(),
+            "first_optional".to_owned(),
+            "second_optional".to_owned(),
+        ];
+        let required = [true, false, false];
+        let args = vec![
+            Expr::IntLiteral(BigInt::one()),
+            Expr::IntLiteral(BigInt::from(3_u32)),
+        ];
+        let names = vec!["required".to_owned(), "second_optional".to_owned()];
+        let error = reorder_call_arguments(
+            "internal_optional_fixture",
+            &args,
+            Some(&names),
+            false,
+            &parameters,
+            &required,
+            None,
+        )
+        .expect_err("a later optional argument cannot occupy an earlier omitted ABI slot");
+        assert_eq!(error.code, "E_NAMED_ARGUMENT_HOLE");
+        assert!(error.message.contains("first_optional"));
+        assert!(error.message.contains("second_optional"));
+
+        let trailing_names = vec!["required".to_owned()];
+        let trailing = reorder_call_arguments(
+            "internal_optional_fixture",
+            &args[..1],
+            Some(&trailing_names),
+            false,
+            &parameters,
+            &required,
+            None,
+        )
+        .expect("omitting only a trailing optional suffix remains canonical");
+        assert_eq!(trailing.ordered.len(), 1);
+        assert_eq!(trailing.evaluation_order, [0]);
+
+        let interior_optional_parameters = vec![
+            "required".to_owned(),
+            "optional_payload".to_owned(),
+            "required_trailer".to_owned(),
+        ];
+        let interior_required = [true, false, true];
+        let interior_args = vec![
+            Expr::IntLiteral(BigInt::one()),
+            Expr::IntLiteral(BigInt::from(2_u32)),
+        ];
+        let interior_names = vec!["required".to_owned(), "required_trailer".to_owned()];
+        let interior = reorder_call_arguments(
+            "compacted_optional_fixture",
+            &interior_args,
+            Some(&interior_names),
+            false,
+            &interior_optional_parameters,
+            &interior_required,
+            None,
+        )
+        .expect("a required trailer unambiguously follows an omitted optional payload");
+        assert_eq!(interior.ordered.len(), 2);
+        assert_eq!(interior.evaluation_order, [0, 1]);
     }
 
     #[test]
@@ -17893,6 +18085,49 @@ mod tests {
             "unexpected error: {}",
             err.message
         );
+    }
+
+    #[test]
+    fn durable_state_map_key_domain_matches_generated_policy() {
+        let supported = [
+            Type::Int,
+            Type::Decimal,
+            Type::Quantity,
+            Type::Bool,
+            Type::String,
+            Type::Bytes,
+            Type::DataSpaceId,
+            Type::AccountId,
+            Type::AssetDefinitionId,
+            Type::AssetId,
+            Type::NftId,
+            Type::DomainId,
+            Type::Name,
+        ];
+        let expected_names = V1_STATE_MAP_KEY_TYPE_NAMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            supported.iter().map(type_name).collect::<Vec<_>>(),
+            expected_names
+        );
+        assert!(supported.iter().all(is_supported_durable_key_type));
+
+        for unsupported in [
+            Type::Json,
+            Type::AxtDescriptor,
+            Type::AssetHandle,
+            Type::ProofBlob,
+            Type::SoracloudRequest,
+            Type::SoracloudResponse,
+        ] {
+            assert!(
+                !is_supported_durable_key_type(&unsupported),
+                "{} must not enter the durable key ABI",
+                type_name(&unsupported)
+            );
+        }
     }
 
     #[test]
@@ -20168,11 +20403,38 @@ seiyaku UnshieldAmount {{
                 fn choose(bool flag) -> int {
                     if flag { 7 } else { return 9; }
                 }
+
+                fn choose_if_let(Option<int> input) -> int {
+                    if let Option::some(value) = input { value } else { return 0; }
+                }
+
+                fn choose_match(Option<int> input) -> int {
+                    match input {
+                        Option::some(value) => value,
+                        Option::none => { return 0; },
+                    }
+                }
             }
             "#,
         )
         .expect("parse divergent expression arms");
         analyze(&program).expect("a returning arm must not synthesize a unit placeholder value");
+    }
+
+    #[test]
+    fn discarded_branch_tail_does_not_count_as_function_return_coverage() {
+        let program = parse(
+            r#"
+            fn incomplete(bool flag) -> int {
+                if flag { 7 } else { return 9; }
+                let still_falls_through = 1;
+            }
+            "#,
+        )
+        .expect("parse non-final mixed control flow");
+        let error = analyze(&program)
+            .expect_err("a discarded branch value cannot satisfy a declared return type");
+        assert_eq!(error.code, "E_MISSING_RETURN");
     }
 
     #[test]

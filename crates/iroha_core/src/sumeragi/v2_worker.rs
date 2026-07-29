@@ -15203,6 +15203,17 @@ pub(super) mod tests {
         (sender, receiver, admission)
     }
 
+    fn assert_durable_body_receipt_matches(
+        receipt: &DurableBodyReceipt,
+        context: &wire::HeightContext,
+        manifest: &wire::PayloadManifest,
+    ) {
+        assert_eq!(receipt.context_id(), context.id());
+        assert_eq!(receipt.round(), manifest.round);
+        assert_eq!(receipt.subject(), manifest.subject);
+        assert_eq!(receipt.manifest_hash(), HashOf::new(manifest));
+    }
+
     fn persistent_test_io_command_channel(
         capacity: usize,
         root: &Path,
@@ -27348,9 +27359,10 @@ pub(super) mod tests {
         let serve_root = TempDir::new().expect("durable Serve state root");
         let mut body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        body_store
+        let durable_receipt = body_store
             .store(payload.manifest().clone(), canonical_wire)
             .expect("persist exact body before serving");
+        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
 
         let first_lifecycle = {
             let (command_tx, command_rx, _admission) =
@@ -27653,9 +27665,10 @@ pub(super) mod tests {
         let serve_root = TempDir::new().expect("durable Serve state root");
         let mut body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        body_store
+        let durable_receipt = body_store
             .store(payload.manifest().clone(), canonical_wire)
             .expect("persist exact body before serving");
+        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
 
         let lifecycle_id = {
             let (command_tx, command_rx, admission) =
@@ -27741,7 +27754,7 @@ pub(super) mod tests {
 
     #[test]
     fn durable_serve_seal_survives_post_before_physical_ack() {
-        let (mut service, keys) = fixture();
+        let (service, keys) = fixture();
         let context = service.context.clone();
         let (canonical_wire, payload, proposal) = proposal_body_and_payload(&context, &keys);
         let request = authenticated_serve_request(
@@ -27768,9 +27781,10 @@ pub(super) mod tests {
         let serve_root = TempDir::new().expect("durable Serve state root");
         let mut body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        body_store
+        let durable_receipt = body_store
             .store(payload.manifest().clone(), canonical_wire)
             .expect("persist exact body before serving");
+        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
 
         let lifecycle_id = {
             let (command_tx, command_rx, admission) =
@@ -28033,9 +28047,10 @@ pub(super) mod tests {
         let serve_root = TempDir::new().expect("durable Serve state root");
         let mut body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        body_store
+        let durable_receipt = body_store
             .store(payload.manifest().clone(), canonical_wire)
             .expect("persist lower exact body");
+        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
 
         let lower_id = {
             let (command_tx, command_rx, _admission) =
@@ -28166,9 +28181,10 @@ pub(super) mod tests {
         let serve_root = TempDir::new().expect("durable Serve state root");
         let mut body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        body_store
+        let durable_receipt = body_store
             .store(payload.manifest().clone(), canonical_wire)
             .expect("persist lower exact body");
+        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
 
         let (lower_id, higher_id) = {
             let (command_tx, command_rx, _admission) =
@@ -28353,9 +28369,10 @@ pub(super) mod tests {
         let serve_root = TempDir::new().expect("owner-swap durable Serve root");
         let mut body_store =
             V2BodyStore::open(body_root.path(), context.clone()).expect("open durable body store");
-        body_store
+        let durable_receipt = body_store
             .store(payload.manifest().clone(), canonical_wire)
             .expect("persist owner-swap terminal body");
+        assert_durable_body_receipt_matches(&durable_receipt, &context, payload.manifest());
         let family_capacity = certified_serve_family_capacity(context.roster.len(), 4, 4)
             .expect("owner-swap fixture family capacity");
         let (store, _) =

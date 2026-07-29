@@ -4,12 +4,15 @@
 //! helpers, syscall numbering, and related error types used by both the VM and
 //! the Kotodama compiler.
 
+pub mod access_hints;
 pub mod axt;
+pub mod codec;
 pub mod core_query;
 pub mod dev_env;
 pub mod encoding;
 pub mod entrypoint;
 pub mod error;
+pub mod host_payload;
 pub mod instruction;
 pub mod json;
 pub mod list;

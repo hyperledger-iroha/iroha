@@ -40,7 +40,9 @@ These guidelines apply to the `crates/ivm` directory and supplement `../AGENTS.m
 ## Testing tips
 - Unit-test opcodes, syscalls, decoder helpers, and Kotodama passes individually; include negative cases.
 - Add roundtrip tests for Kotodama compiler outputs and Norito-encoded program headers.
-- Use `tests/abi_hash_versions.rs` to lock down ABI digests—regenerate with `cargo test -p ivm abi_hash_versions -- --nocapture` when intentionally changing the surface.
+- Use `tests/abi_hash_versions.rs` to lock down ABI digests. Regenerate intentionally
+  changed digests with `cargo run -p ivm --bin gen_abi_hash_doc -- --write`, then
+  verify them with `cargo test -p ivm abi_hash_versions -- --nocapture`.
 - Benchmark hot paths before and after SIMD/Metal/CUDA tweaks to confirm regressions.
 
 ## Determinism and cross-hardware parity

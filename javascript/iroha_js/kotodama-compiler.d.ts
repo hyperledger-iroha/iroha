@@ -163,10 +163,27 @@ export interface KotodamaCompiledBudgetEntry {
   column: number | null;
 }
 
+export type KotodamaCompiledStateMapKeyTypeName =
+  | "int"
+  | "decimal"
+  | "quantity"
+  | "bool"
+  | "string"
+  | "bytes"
+  | "DataSpaceId"
+  | "AccountId"
+  | "AssetDefinitionId"
+  | "AssetId"
+  | "NftId"
+  | "DomainId"
+  | "Name";
+
+export type KotodamaCompiledDynamicAccessBoundKind = "range" | "take";
+
 export interface KotodamaCompiledDynamicAccessHint {
   base_key: string;
-  key_type: string;
-  bound_kind: string;
+  key_type: KotodamaCompiledStateMapKeyTypeName;
+  bound_kind: KotodamaCompiledDynamicAccessBoundKind;
   max_keys: number;
 }
 

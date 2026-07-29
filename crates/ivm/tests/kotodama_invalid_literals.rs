@@ -52,8 +52,8 @@ fn invalid_json_literal_reports_error() {
 
     let err = english_compiler().compile_source(src).unwrap_err();
     assert!(
-        err.contains("invalid JSON literal"),
-        "expected invalid JSON error, got: {err}"
+        err.contains("error[E_JSON_LITERAL_INVALID]"),
+        "expected stable invalid JSON diagnostic code, got: {err}"
     );
 }
 

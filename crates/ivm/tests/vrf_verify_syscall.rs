@@ -7,6 +7,11 @@ use common::assemble_syscalls;
 use group::{Curve, Group, prime::PrimeCurveAffine};
 use ivm::vrf::VrfVerifyRequest;
 
+fn vrf_vm_gas(payload_len: usize) -> u64 {
+    ivm::gas::vrf_verify_gas(1, u64::try_from(payload_len).unwrap_or(u64::MAX))
+        .saturating_add(1_024)
+}
+
 fn hash_to_g1(msg: &[u8]) -> G1Affine {
     const DST: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
     G1Projective::hash_to_curve(msg, DST, &[]).to_affine()
@@ -32,7 +37,7 @@ fn run_vrf_verify(req: VrfVerifyRequest) -> (u64, u64) {
     let body = norito::to_bytes(&req).expect("encode vrf request");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_vm_gas(body.len()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 
@@ -85,7 +90,7 @@ fn syscall_vrf_verify_normal_returns_expected_output() {
     let body = norito::to_bytes(&req).expect("encode vrf request");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_vm_gas(body.len()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     let p_env = Memory::INPUT_START;
     vm.set_register(10, p_env);
@@ -140,7 +145,7 @@ fn syscall_vrf_verify_chain_mismatch_rejected() {
     let body = norito::to_bytes(&req).expect("encode req");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_vm_gas(body.len()));
     vm.set_host(ivm::host::DefaultHost::new().with_chain_id(b"chain-B".to_vec()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
@@ -188,7 +193,7 @@ fn syscall_vrf_verify_rejects_wrong_proof_length() {
     let body = norito::to_bytes(&req).expect("encode");
     let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
 
-    let mut vm = IVM::new(10_000);
+    let mut vm = IVM::new(vrf_vm_gas(body.len()));
     vm.memory.preload_input(0, &tlv_env).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
 

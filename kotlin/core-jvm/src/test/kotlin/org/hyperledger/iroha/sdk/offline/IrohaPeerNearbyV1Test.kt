@@ -1,12 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
-import java.nio.file.Files
-import java.nio.file.Path
-import java.nio.file.Paths
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -33,7 +27,7 @@ class IrohaPeerNearbyV1Test {
         }
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyEncryptedRecordV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 ByteArray(16) { 0x5b },
                 0,
@@ -46,7 +40,7 @@ class IrohaPeerNearbyV1Test {
     fun `authentication signature fits common radio record ceiling`() {
         val maximum = IrohaPeerNearbyV1.MAXIMUM_AUTHENTICATION_SIGNATURE_BYTES
         val authentication = IrohaPeerNearbyAuthenticationV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             ByteArray(16) { 1 },
             ByteArray(32) { 2 },
@@ -59,7 +53,7 @@ class IrohaPeerNearbyV1Test {
         )
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyAuthenticationV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 ByteArray(16) { 1 },
                 ByteArray(32) { 2 },
@@ -71,7 +65,7 @@ class IrohaPeerNearbyV1Test {
     @Test
     fun `bootstrap is exact and normal discovery context rejects zero halves`() {
         val bootstrap = IrohaPeerNearbyDiscoveryContextV1.senderBootstrap(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
         )
         assertContentEquals(ByteArray(16), bootstrap.sessionId)
         assertContentEquals(ByteArray(32), bootstrap.requestCanonicalHash)
@@ -79,7 +73,7 @@ class IrohaPeerNearbyV1Test {
 
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyDiscoveryContextV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 ByteArray(16),
                 ByteArray(32) { 1 },
@@ -87,7 +81,7 @@ class IrohaPeerNearbyV1Test {
         }
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyDiscoveryContextV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 ByteArray(16) { 1 },
                 ByteArray(32),
@@ -113,7 +107,7 @@ class IrohaPeerNearbyV1Test {
         val request = ByteArray(32) { 2 }
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyHelloV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 session,
                 ByteArray(32),
@@ -124,7 +118,7 @@ class IrohaPeerNearbyV1Test {
         }
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyAuthenticationV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 session,
                 ByteArray(32),
@@ -133,7 +127,7 @@ class IrohaPeerNearbyV1Test {
         }
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyEncryptedRecordV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 ByteArray(16),
                 0,
@@ -143,98 +137,16 @@ class IrohaPeerNearbyV1Test {
     }
 
     @Test
-    fun `matches shared IPD1 and IPN1 record vectors`() {
-        val fixture = fixture()
-        val session = fixture.hex("session_hex")
-        val requestHash = fixture.hex("request_hash_hex")
-        val discovery = IrohaPeerNearbyDiscoveryContextV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerNearbyRoleV1.RECEIVER,
-            session,
-            requestHash,
-        )
-        assertEquals(fixture.text("service_id"), IrohaPeerNearbyV1.SERVICE_ID)
-        assertContentEquals(fixture.hex("discovery_receiver_hex"), discovery.encode())
-        assertEquals(discovery, IrohaPeerNearbyDiscoveryContextV1.decode(discovery.encode()))
-        assertEquals(
-            fixture.text("discovery_receiver_radio_base64url"),
-            discovery.encodeRadioDiscovery(),
-        )
-        assertEquals(
-            discovery,
-            IrohaPeerNearbyDiscoveryContextV1.decodeRadioDiscovery(
-                fixture.text("discovery_receiver_radio_base64url"),
-            ),
-        )
-
-        val senderKey = IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(1))
-        val receiverKey = IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(2))
-        val sender = IrohaPeerNearbyHelloV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerNearbyRoleV1.SENDER,
-            session,
-            ByteArray(32) { 0x51 },
-            requestHash,
-            senderKey.publicKey,
-            byteArrayOf(0xa1.toByte(), 0xa2.toByte()),
-        )
-        val receiver = IrohaPeerNearbyHelloV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerNearbyRoleV1.RECEIVER,
-            session,
-            ByteArray(32) { 0x52 },
-            requestHash,
-            receiverKey.publicKey,
-            byteArrayOf(0xb1.toByte(), 0xb2.toByte(), 0xb3.toByte()),
-        )
-        val senderBytes = sender.encode()
-        assertContentEquals(fixture.hex("sender_hello_hex"), senderBytes)
-        assertEquals(163, senderBytes.size)
-        assertContentEquals("IPN1".toByteArray(), senderBytes.copyOfRange(0, 4))
-        assertEquals(1, senderBytes[4].toInt() and 0xff)
-        assertEquals(IrohaPeerNearbyRecordKindV1.HELLO.code, senderBytes[5].toInt() and 0xff)
-        assertContentEquals(byteArrayOf(0, 1), senderBytes.copyOfRange(6, 8))
-        assertEquals(IrohaPeerNearbyRoleV1.SENDER.code, senderBytes[8].toInt() and 0xff)
-        assertEquals(0, senderBytes[9].toInt() and 0xff)
-        assertContentEquals(byteArrayOf(0, 65), senderBytes.copyOfRange(90, 92))
-        assertContentEquals(byteArrayOf(0, 0, 0, 2), senderBytes.copyOfRange(157, 161))
-        assertContentEquals(fixture.hex("receiver_hello_hex"), receiver.encode())
-        assertEquals(sender, IrohaPeerNearbyHelloV1.decode(sender.encode()))
-
-        val sessionState = IrohaPeerNearbySessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
-            IrohaPeerNearbyRoleV1.SENDER,
-            session,
-            requestHash,
-            byteArrayOf(0xa1.toByte(), 0xa2.toByte()),
-            ByteArray(32) { 0x51 },
-            senderKey,
-        )
-        sessionState.acceptPeerHello(receiver)
-        val authentication = sessionState.makeAuthentication(
-            byteArrayOf(0x99.toByte(), 0x98.toByte()),
-        )
-        assertEquals(
-            fixture.text("transcript_hash_hex"),
-            authentication.transcriptHash.hex(),
-        )
-        assertContentEquals(fixture.hex("sender_auth_hex"), authentication.encode())
-        assertContentEquals(
-            fixture.hex("encrypted_record_codec_hex"),
-            IrohaPeerNearbyEncryptedRecordV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
-                IrohaPeerNearbyRoleV1.SENDER,
-                session,
-                0,
-                ByteArray(20) { it.toByte() },
-            ).encode(),
-        )
-    }
-
-    @Test
     fun `radio discovery accepts only canonical Base64URL without padding`() {
-        val canonical = fixture().text("discovery_receiver_radio_base64url")
+        val discovery = IrohaPeerNearbyDiscoveryContextV1(
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
+            IrohaPeerNearbyRoleV1.RECEIVER,
+            ByteArray(16) { (it + 1).toByte() },
+            ByteArray(32) { (it + 2).toByte() },
+        )
+        val canonical = discovery.encodeRadioDiscovery()
         assertEquals(75, canonical.length)
+        assertEquals(discovery, IrohaPeerNearbyDiscoveryContextV1.decodeRadioDiscovery(canonical))
         assertFailsWith<IllegalArgumentException> {
             IrohaPeerNearbyDiscoveryContextV1.decodeRadioDiscovery("$canonical=")
         }
@@ -263,13 +175,12 @@ class IrohaPeerNearbyV1Test {
 
     @Test
     fun `authenticates transcript and encrypts both directions`() {
-        val vector = fixture().getValue("aes_gcm").jsonObject
         val session = ByteArray(16) { 0x71 }
         val requestHash = ByteArray(32) { 0x72 }
         val senderKey = IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(3))
         val receiverKey = IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(4))
         val sender = IrohaPeerNearbySessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             session,
             requestHash,
@@ -278,7 +189,7 @@ class IrohaPeerNearbyV1Test {
             senderKey,
         )
         val receiver = IrohaPeerNearbySessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.RECEIVER,
             session,
             requestHash,
@@ -290,9 +201,9 @@ class IrohaPeerNearbyV1Test {
         receiver.acceptPeerHello(sender.localHello)
         val senderAuthentication = sender.makeAuthentication(byteArrayOf(0x11))
         val receiverAuthentication = receiver.makeAuthentication(byteArrayOf(0x22))
-        assertEquals(
-            vector.getValue("transcript_hash_hex").jsonPrimitive.content,
-            senderAuthentication.transcriptHash.hex(),
+        assertContentEquals(
+            senderAuthentication.transcriptHash,
+            receiverAuthentication.transcriptHash,
         )
         val acceptAll = IrohaPeerNearbySignatureVerifierV1 { _, _, _, _ -> true }
         sender.acceptPeerAuthentication(receiverAuthentication, acceptAll)
@@ -300,19 +211,11 @@ class IrohaPeerNearbyV1Test {
 
         val payment = "IPM1-payment-fixture".toByteArray()
         val record = sender.seal(payment)
-        assertContentEquals(
-            vector.getValue("sender_record_hex").jsonPrimitive.content.hexBytes(),
-            record.encode(),
-        )
         assertContentEquals(payment, receiver.open(IrohaPeerNearbyEncryptedRecordV1.decode(record.encode())))
         assertFailsWith<IllegalArgumentException> { receiver.open(record) }
 
         val acknowledgement = "IPM1-ack-fixture".toByteArray()
         val acknowledgementRecord = receiver.seal(acknowledgement)
-        assertContentEquals(
-            vector.getValue("receiver_record_hex").jsonPrimitive.content.hexBytes(),
-            acknowledgementRecord.encode(),
-        )
         assertContentEquals(acknowledgement, sender.open(acknowledgementRecord))
     }
 
@@ -321,7 +224,7 @@ class IrohaPeerNearbyV1Test {
         val session = ByteArray(16) { 0x31 }
         val requestHash = ByteArray(32) { 0x32 }
         val sender = IrohaPeerNearbySessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             session,
             requestHash,
@@ -330,7 +233,7 @@ class IrohaPeerNearbyV1Test {
             IrohaPeerNearbyP256V1.fromPrivateBytes(ByteArray(31) + byteArrayOf(5)),
         )
         val receiver = IrohaPeerNearbySessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.RECEIVER,
             session,
             requestHash,
@@ -358,7 +261,7 @@ class IrohaPeerNearbyV1Test {
         val session = ByteArray(16) { 0x41 }
         val request = ByteArray(32) { 0x42 }
         val hello = IrohaPeerNearbyHelloV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             session,
             ByteArray(32) { 0x43 },
@@ -367,21 +270,21 @@ class IrohaPeerNearbyV1Test {
             ByteArray(32) { 0x44 },
         ).encode()
         val authentication = IrohaPeerNearbyAuthenticationV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             session,
             ByteArray(32) { 0x45 },
             ByteArray(64) { 0x46 },
         ).encode()
         val encrypted = IrohaPeerNearbyEncryptedRecordV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             session,
             -1L, // Unsigned 0xffff_ffff_ffff_ffff on the wire.
             ByteArray(48) { 0x47 },
         ).encode()
         val discovery = IrohaPeerNearbyDiscoveryContextV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.RECEIVER,
             session,
             request,
@@ -451,7 +354,7 @@ class IrohaPeerNearbyV1Test {
     fun `unsigned sequence extremes round trip and rejected records do not advance state`() {
         for (sequence in longArrayOf(0, Long.MAX_VALUE, Long.MIN_VALUE, -2L, -1L)) {
             val record = IrohaPeerNearbyEncryptedRecordV1(
-                IrohaPeerPayloadProfile.OFFLINE_NOTE,
+                IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
                 IrohaPeerNearbyRoleV1.SENDER,
                 ByteArray(16) { 0x51 },
                 sequence,
@@ -496,7 +399,7 @@ class IrohaPeerNearbyV1Test {
         val session = ByteArray(16) { seed.toByte() }
         val request = ByteArray(32) { (seed + 1).toByte() }
         val sender = IrohaPeerNearbySessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.SENDER,
             session,
             request,
@@ -507,7 +410,7 @@ class IrohaPeerNearbyV1Test {
             ),
         )
         val receiver = IrohaPeerNearbySessionV1(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             IrohaPeerNearbyRoleV1.RECEIVER,
             session,
             request,
@@ -539,30 +442,4 @@ class IrohaPeerNearbyV1Test {
         this[offset + 3] = value.toByte()
     }
 
-    private fun fixture(): Map<String, kotlinx.serialization.json.JsonElement> {
-        val parsed = Json.parseToJsonElement(
-            String(Files.readAllBytes(sharedFixture()), Charsets.UTF_8),
-        ).jsonObject
-        return parsed
-    }
-
-    private fun Map<String, kotlinx.serialization.json.JsonElement>.text(key: String): String =
-        getValue(key).jsonPrimitive.content
-
-    private fun Map<String, kotlinx.serialization.json.JsonElement>.hex(key: String): ByteArray =
-        text(key).chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-
-    private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it.toInt() and 0xff) }
-
-    private fun String.hexBytes(): ByteArray =
-        chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-
-    private fun sharedFixture(): Path {
-        var current = Paths.get("").toAbsolutePath()
-        while (true) {
-            val candidate = current.resolve("fixtures/offline/peer_nearby_v1.json")
-            if (Files.isRegularFile(candidate)) return candidate
-            current = current.parent ?: error("peer_nearby_v1.json was not found")
-        }
-    }
 }

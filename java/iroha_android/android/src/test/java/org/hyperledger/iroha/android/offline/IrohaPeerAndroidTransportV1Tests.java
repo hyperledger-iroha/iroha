@@ -10,6 +10,9 @@ import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.hyperledger.iroha.norito.CRC64;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.SchemaHash;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerIsoDepLimitsV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcApduResponseV1;
 import org.hyperledger.iroha.sdk.offline.IrohaPeerNfcCommandV1;
@@ -53,7 +56,7 @@ public final class IrohaPeerAndroidTransportV1Tests {
     // Deliberately tighter caller policy; this is not the canonical 24,660-byte ceiling.
     final IrohaPeerNfcLimitsV1 limits = new IrohaPeerNfcLimitsV1(84 + 12_288, 240, 240);
     final IrohaPeerNfcProfilePolicyV1 policy =
-        IrohaPeerNfcV1.profilePolicy(IrohaPeerPayloadProfile.OFFLINE_NOTE);
+        IrohaPeerNfcV1.profilePolicy(IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND);
     final IrohaPeerNfcReceiverSessionV1 receiver =
         IrohaPeerNfcV1.receiver(session, request.encode(), null, policy, limits);
     admit(
@@ -123,7 +126,7 @@ public final class IrohaPeerAndroidTransportV1Tests {
     // Deliberately tighter caller policy; this is not the canonical 24,660-byte ceiling.
     final IrohaPeerNfcLimitsV1 limits = new IrohaPeerNfcLimitsV1(84 + 12_288, 240, 240);
     final IrohaPeerNfcProfilePolicyV1 policy = IrohaPeerNfcV1.profilePolicy(
-        IrohaPeerPayloadProfile.OFFLINE_NOTE);
+        IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND);
     final IrohaPeerNfcReceiverSessionV1 receiver =
         IrohaPeerNfcV1.receiver(session, request.encode(), null, policy, limits);
     admit(
@@ -159,12 +162,32 @@ public final class IrohaPeerAndroidTransportV1Tests {
 
   private static IrohaPeerWireMessageV1 message(
       final IrohaPeerPayloadKind kind, final int repeated, final int count) {
+    final byte[] body = repeat(count, repeated);
+    final String schema;
+    if (kind == IrohaPeerPayloadKind.RECEIVE_REQUEST) {
+      schema = "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2";
+    } else if (kind == IrohaPeerPayloadKind.PAYMENT) {
+      schema = "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4";
+    } else {
+      schema = "iroha_data_model::offline::model::KagemushaReceiverAcknowledgementV2";
+    }
+    final int padding = kind == IrohaPeerPayloadKind.ACKNOWLEDGEMENT ? 0 : 8;
+    final NoritoHeader header =
+        new NoritoHeader(
+            SchemaHash.hash16(schema),
+            body.length,
+            CRC64.compute(body),
+            NoritoHeader.COMPACT_LEN,
+            NoritoHeader.COMPRESSION_NONE);
+    final byte[] archive = new byte[NoritoHeader.HEADER_LENGTH + padding + body.length];
+    System.arraycopy(header.encode(), 0, archive, 0, NoritoHeader.HEADER_LENGTH);
+    System.arraycopy(body, 0, archive, NoritoHeader.HEADER_LENGTH + padding, body.length);
     return new IrohaPeerWireMessageV1(
         new IrohaPeerCanonicalPayload(
-            IrohaPeerPayloadProfile.OFFLINE_NOTE,
+            IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND,
             kind,
-            1,
-            repeat(count, repeated)));
+            0x0102,
+            archive));
   }
 
   private static void admit(

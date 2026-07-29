@@ -1053,7 +1053,7 @@ fn validate_autonomous_lane_payloads(
         .collect::<BTreeSet<_>>();
     let expected_chain_id_hash = Hash::new(context.chain_id.as_str().as_bytes());
     let aggregate_bytes = envelopes.iter().try_fold(0usize, |aggregate, envelope| {
-        let envelope_bytes = norito::to_bytes(envelope)
+        let envelope_bytes = norito::encode_canonical(envelope)
             .map_err(|error| CandidateError::AutonomousLanePayloadInvalid(error.to_string()))?;
         aggregate.checked_add(envelope_bytes.len()).ok_or(
             CandidateError::AutonomousLanePayloadAggregateBytesExceeded {
@@ -1905,10 +1905,29 @@ mod tests {
             .canonical_payload
             .resize(MAX_MERGE_EXECUTION_BATCH_BYTES / 4, 0);
         let aggregate = vec![large; 4];
-        assert!(matches!(
-            validate_autonomous_lane_payloads(&context, &[], &aggregate),
-            Err(CandidateError::AutonomousLanePayloadAggregateBytesExceeded { .. })
-        ));
+        let baseline_bytes = match validate_autonomous_lane_payloads(&context, &[], &aggregate) {
+            Err(CandidateError::AutonomousLanePayloadAggregateBytesExceeded { bytes, max }) => {
+                assert_eq!(max, MAX_MERGE_EXECUTION_BATCH_BYTES);
+                bytes
+            }
+            other => panic!("expected aggregate byte rejection, got {other:?}"),
+        };
+        let alternate_bytes = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            match validate_autonomous_lane_payloads(&context, &[], &aggregate) {
+                Err(CandidateError::AutonomousLanePayloadAggregateBytesExceeded { bytes, max }) => {
+                    assert_eq!(max, MAX_MERGE_EXECUTION_BATCH_BYTES);
+                    bytes
+                }
+                other => panic!("expected ambient aggregate byte rejection, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            alternate_bytes, baseline_bytes,
+            "candidate admission must account exact canonical envelope bytes"
+        );
     }
 
     #[test]

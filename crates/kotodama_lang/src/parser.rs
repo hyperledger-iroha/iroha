@@ -179,7 +179,12 @@ fn expected_syntax_kind(kind: &TokenKind) -> Option<SyntaxKind> {
 fn map_iteration_has_explicit_bound(expr: &Expr) -> bool {
     matches!(
         expr.kind(),
-        Expr::Call { name, args, .. }
+        Expr::Call {
+            name,
+            args,
+            implicit_receiver: true,
+            ..
+        }
             if (name == "take" && args.len() == 2)
                 || (name == "range" && args.len() == 3)
     )
@@ -2182,7 +2187,9 @@ impl<'a> CstAstLowerer<'a> {
                 ..
             }
         );
-        if self.peek(TokenKind::RBrace) && !missing_else && block_expression_has_value(&expression)
+        if self.peek(TokenKind::RBrace)
+            && !missing_else
+            && block_expression_flow(&expression) != BlockExpressionFlow::Unit
         {
             return Ok(ParsedBlockElement::Tail(expression));
         }
@@ -2258,7 +2265,7 @@ impl<'a> CstAstLowerer<'a> {
             self.bump();
             if self.peek(TokenKind::If) {
                 let nested = self.parse_if_expression()?;
-                if block_expression_has_value(&nested) {
+                if block_expression_flow(&nested) != BlockExpressionFlow::Unit {
                     Some(Block {
                         statements: Vec::new(),
                         tail: Some(Box::new(nested)),
@@ -4117,7 +4124,7 @@ impl<'a> CstAstLowerer<'a> {
         }
         let mut depth = 0_usize;
         for (offset, token) in self.tokens[self.pos..].iter().enumerate() {
-            match token.kind {
+            match &token.kind {
                 TokenKind::LParen => depth += 1,
                 TokenKind::RParen => {
                     depth = depth.saturating_sub(1);
@@ -4139,11 +4146,55 @@ impl<'a> CstAstLowerer<'a> {
     }
 
     fn question_starts_ternary(&self) -> bool {
-        self.peek(TokenKind::Question)
-            && self
+        if !self.peek(TokenKind::Question)
+            || !self
                 .tokens
                 .get(self.pos.saturating_add(1))
                 .is_some_and(|token| Self::token_starts_expression(&token.kind))
+        {
+            return false;
+        }
+
+        // `value?[index]` is postfix propagation followed by indexing, while
+        // `flag ? [value] : [fallback]` is a conditional whose first branch is
+        // a list literal. Look for the conditional's top-level `:` instead of
+        // deciding from `[` alone. Colons inside calls, structs, JSON, lists,
+        // or parenthesized expressions cannot terminate the true branch.
+        let mut paren_depth = 0_usize;
+        let mut bracket_depth = 0_usize;
+        let mut brace_depth = 0_usize;
+        for token in self.tokens.iter().skip(self.pos.saturating_add(1)) {
+            let at_top_level = paren_depth == 0 && bracket_depth == 0 && brace_depth == 0;
+            match token.kind {
+                TokenKind::Colon if at_top_level => return true,
+                TokenKind::LParen => paren_depth = paren_depth.saturating_add(1),
+                TokenKind::LBracket => bracket_depth = bracket_depth.saturating_add(1),
+                TokenKind::LBrace => brace_depth = brace_depth.saturating_add(1),
+                TokenKind::RParen => {
+                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                        return false;
+                    }
+                    paren_depth = paren_depth.saturating_sub(1);
+                }
+                TokenKind::RBracket => {
+                    if bracket_depth == 0 && paren_depth == 0 && brace_depth == 0 {
+                        return false;
+                    }
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                }
+                TokenKind::RBrace => {
+                    if brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                        return false;
+                    }
+                    brace_depth = brace_depth.saturating_sub(1);
+                }
+                TokenKind::Semicolon | TokenKind::Comma | TokenKind::EOF if at_top_level => {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     fn token_starts_expression(kind: &TokenKind) -> bool {
@@ -4158,6 +4209,7 @@ impl<'a> CstAstLowerer<'a> {
                 | TokenKind::Ident(_)
                 | TokenKind::State
                 | TokenKind::LParen
+                | TokenKind::LBracket
                 | TokenKind::If
                 | TokenKind::Match
                 | TokenKind::Minus
@@ -4312,7 +4364,88 @@ impl<'a> CstAstLowerer<'a> {
     }
 }
 
-fn block_expression_has_value(expression: &Expr) -> bool {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BlockExpressionFlow {
+    Unit,
+    Value,
+    Diverges,
+}
+
+fn combine_expression_branch_flows(
+    branches: impl IntoIterator<Item = BlockExpressionFlow>,
+) -> BlockExpressionFlow {
+    let mut saw_branch = false;
+    let mut saw_value = false;
+    for branch in branches {
+        saw_branch = true;
+        match branch {
+            BlockExpressionFlow::Unit => return BlockExpressionFlow::Unit,
+            BlockExpressionFlow::Value => saw_value = true,
+            BlockExpressionFlow::Diverges => {}
+        }
+    }
+    if !saw_branch {
+        BlockExpressionFlow::Unit
+    } else if saw_value {
+        BlockExpressionFlow::Value
+    } else {
+        BlockExpressionFlow::Diverges
+    }
+}
+
+fn block_flow(block: &Block) -> BlockExpressionFlow {
+    if block.statements.iter().any(statement_diverges) {
+        return BlockExpressionFlow::Diverges;
+    }
+    block
+        .tail
+        .as_deref()
+        .map_or(BlockExpressionFlow::Unit, block_expression_flow)
+}
+
+fn statement_diverges(statement: &Statement) -> bool {
+    match statement.kind() {
+        Statement::Return(_) | Statement::Break | Statement::Continue => true,
+        Statement::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        }
+        | Statement::IfLet {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => {
+            block_flow(then_branch) == BlockExpressionFlow::Diverges
+                && block_flow(else_branch) == BlockExpressionFlow::Diverges
+        }
+        Statement::Expr(expression)
+        | Statement::Let {
+            value: expression, ..
+        }
+        | Statement::Assign {
+            value: expression, ..
+        } => block_expression_flow(expression) == BlockExpressionFlow::Diverges,
+        Statement::AssignExpr { target, value, .. } => {
+            block_expression_flow(target) == BlockExpressionFlow::Diverges
+                || block_expression_flow(value) == BlockExpressionFlow::Diverges
+        }
+        Statement::Source { .. } | Statement::Resolved { .. } => {
+            unreachable!("kind() strips provenance wrappers")
+        }
+        Statement::If {
+            else_branch: None, ..
+        }
+        | Statement::IfLet {
+            else_branch: None, ..
+        }
+        | Statement::While { .. }
+        | Statement::For { .. }
+        | Statement::ForEachMap { .. } => false,
+    }
+}
+
+fn block_expression_flow(expression: &Expr) -> BlockExpressionFlow {
     match expression.kind() {
         Expr::If {
             then_branch,
@@ -4323,17 +4456,17 @@ fn block_expression_has_value(expression: &Expr) -> bool {
             then_branch,
             else_branch: Some(else_branch),
             ..
-        } => then_branch.tail.is_some() && else_branch.tail.is_some(),
+        } => combine_expression_branch_flows([block_flow(then_branch), block_flow(else_branch)]),
         Expr::Match { arms, .. } => {
-            !arms.is_empty() && arms.iter().all(|arm| arm.body.tail.is_some())
+            combine_expression_branch_flows(arms.iter().map(|arm| block_flow(&arm.body)))
         }
         Expr::If {
             else_branch: None, ..
         }
         | Expr::IfLet {
             else_branch: None, ..
-        } => false,
-        _ => true,
+        } => BlockExpressionFlow::Unit,
+        _ => BlockExpressionFlow::Value,
     }
 }
 
@@ -4757,22 +4890,104 @@ mod tests {
         let Item::Function(function) = &program.items[0] else {
             panic!("expected function")
         };
-        let Statement::If {
+        let Expr::If {
             else_branch: Some(outer_else),
             ..
-        } = function.body.statements[0].kind()
+        } = function
+            .body
+            .tail
+            .as_deref()
+            .expect("divergent if tail")
+            .kind()
         else {
-            panic!("expected outer if with else")
+            panic!("expected outer divergent if tail with else")
         };
-        assert_eq!(outer_else.statements.len(), 1);
-        let Statement::If {
+        let Expr::If {
             else_branch: Some(inner_else),
             ..
-        } = outer_else.statements[0].kind()
+        } = outer_else
+            .tail
+            .as_deref()
+            .expect("nested divergent if tail")
+            .kind()
         else {
-            panic!("else-if must lower to one nested if statement")
+            panic!("else-if must remain one nested divergent if expression")
         };
         assert_eq!(inner_else.statements.len(), 1);
+    }
+
+    #[test]
+    fn mixed_value_and_divergent_control_flow_remains_a_tail_expression() {
+        let program = parse_module(
+            r#"
+            fn via_if(bool flag) -> int {
+                if flag { 7 } else { return 9; }
+            }
+            fn via_if_let(Option<int> value) -> int {
+                if let Option::some(item) = value { item } else { return 0; }
+            }
+            fn via_match(Option<int> value) -> int {
+                match value {
+                    Option::some(item) => item,
+                    Option::none => { return 0; },
+                }
+            }
+            "#,
+        )
+        .expect("parse mixed value/divergent tails");
+
+        for (function, expected) in program.items.iter().zip(["if", "if let", "match"]) {
+            let Item::Function(function) = function else {
+                panic!("expected function")
+            };
+            assert!(
+                function.body.statements.is_empty(),
+                "{expected} tail must not be demoted to a statement"
+            );
+            let tail = function.body.tail.as_deref().expect("control-flow tail");
+            assert!(
+                matches!(
+                    (expected, tail.kind()),
+                    ("if", Expr::If { .. })
+                        | ("if let", Expr::IfLet { .. })
+                        | ("match", Expr::Match { .. })
+                ),
+                "unexpected {expected} tail: {tail:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_literal_ternary_is_distinct_from_propagation_followed_by_indexing() {
+        let program = parse_module(
+            r#"
+            fn choose(bool flag) -> List<int, 1> { flag ? [1] : [2] }
+            fn index_after_propagation(Option<List<int, 1>> value) -> int { value?[0] }
+            "#,
+        )
+        .expect("parse list ternary and propagation-index adjacency");
+
+        let Item::Function(choose) = &program.items[0] else {
+            panic!("expected choose function")
+        };
+        assert!(matches!(
+            choose.body.tail.as_deref().map(Expr::kind),
+            Some(Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            }) if matches!(then_expr.kind(), Expr::List(_))
+                && matches!(else_expr.kind(), Expr::List(_))
+        ));
+
+        let Item::Function(index) = &program.items[1] else {
+            panic!("expected index function")
+        };
+        assert!(matches!(
+            index.body.tail.as_deref().map(Expr::kind),
+            Some(Expr::Index { target, .. })
+                if matches!(target.kind(), Expr::Propagate(_))
+        ));
     }
 
     #[test]
@@ -5764,6 +5979,23 @@ mod tests {
         let src = "fn f(StateMap<int, int> m) { for (k, v) in m #[bounded(1)] { let z = k; } }";
         let error = parse_module(src).expect_err("#[bounded] is not Kotodama V1 syntax");
         assert!(error.contains("`.take(N)` or `.range(start, end)`"));
+    }
+
+    #[test]
+    fn free_calls_cannot_claim_postfix_state_map_bounds() {
+        for iterator in ["take(m, 1)", "range(m, 0, 1)"] {
+            let source = format!(
+                "fn f(StateMap<int, int> m) {{ for (k, v) in {iterator} {{ let z = k; }} }}"
+            );
+            let error =
+                parse_module(&source).expect_err("a free call is not a StateMap bound source");
+            assert!(
+                error.contains(
+                    "StateMap iteration requires `.take(N)` or `.range(start, end)` with int literals"
+                ),
+                "{iterator}: {error}"
+            );
+        }
     }
 
     #[test]

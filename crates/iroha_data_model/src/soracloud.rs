@@ -5411,7 +5411,7 @@ fn validate_soracloud_fhe_input_admission_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe input admission proof",
             field: "proof.proof.bytes",
@@ -5453,7 +5453,7 @@ fn validate_soracloud_fhe_input_admission_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe input admission proof",
             field: "proof.proof.bytes",
@@ -5500,7 +5500,7 @@ fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe public-key proof",
             field: "proof.proof.bytes",
@@ -5542,7 +5542,7 @@ fn validate_soracloud_fhe_public_key_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe public-key proof",
             field: "proof.proof.bytes",
@@ -5589,7 +5589,7 @@ fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe bootstrap key proof",
             field: "proof.proof.bytes",
@@ -5631,7 +5631,7 @@ fn validate_soracloud_fhe_bootstrap_key_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe bootstrap key proof",
             field: "proof.proof.bytes",
@@ -5678,7 +5678,7 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap material proof",
             field: "proof.proof.bytes",
@@ -5721,7 +5721,7 @@ fn validate_soracloud_fhe_full_bootstrap_material_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap material proof",
             field: "proof.proof.bytes",
@@ -5768,7 +5768,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
             ),
         });
     }
-    let envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).map_err(|err| {
         SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap execution proof",
             field: "proof.proof.bytes",
@@ -5812,7 +5812,7 @@ fn validate_soracloud_fhe_full_bootstrap_execution_proof_open_verify_envelope(
             reason: "must match OpenVerifyEnvelope.vk_hash".to_string(),
         });
     }
-    let open_proof = norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+    let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
         .map_err(|err| SoracloudManifestError::InvalidField {
             manifest: "soracloud fhe full-bootstrap execution proof",
             field: "proof.proof.bytes",
@@ -14703,7 +14703,7 @@ fn validate_soracloud_host_found_payload(
 pub fn encode_bundle_provenance_payload(
     bundle: &SoraDeploymentBundleV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(bundle)
+    norito::encode_canonical(bundle)
 }
 
 /// Encode the canonical provenance signature payload for app-level infrastructure manifests.
@@ -14716,7 +14716,7 @@ pub fn encode_bundle_provenance_payload(
 pub fn encode_app_infra_provenance_payload(
     manifest: &SoraAppInfraManifestV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(manifest)
+    norito::encode_canonical(manifest)
 }
 
 /// Encode the canonical provenance signature payload for deployment bundles plus inline materials.
@@ -14731,7 +14731,7 @@ pub fn encode_bundle_with_materials_provenance_payload(
     initial_service_configs: &BTreeMap<String, Json>,
     initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         bundle.clone(),
         initial_service_configs.clone(),
         initial_service_secrets.clone(),
@@ -14749,7 +14749,7 @@ pub fn encode_rollback_provenance_payload(
     service_name: &str,
     target_version: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, target_version))
+    norito::encode_canonical(&(service_name, target_version))
 }
 
 /// Encode the canonical provenance signature payload for service config upserts.
@@ -14764,7 +14764,7 @@ pub fn encode_set_service_config_provenance_payload(
     config_name: &str,
     value_json: &Json,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, config_name, value_json.clone()))
+    norito::encode_canonical(&(service_name, config_name, value_json.clone()))
 }
 
 /// Encode the canonical provenance signature payload for service config deletions.
@@ -14778,7 +14778,7 @@ pub fn encode_delete_service_config_provenance_payload(
     service_name: &str,
     config_name: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, config_name))
+    norito::encode_canonical(&(service_name, config_name))
 }
 
 /// Encode the canonical provenance signature payload for service secret upserts.
@@ -14793,7 +14793,7 @@ pub fn encode_set_service_secret_provenance_payload(
     secret_name: &str,
     secret: &SecretEnvelopeV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, secret_name, secret.clone()))
+    norito::encode_canonical(&(service_name, secret_name, secret.clone()))
 }
 
 /// Encode the canonical provenance signature payload for service secret deletions.
@@ -14807,7 +14807,7 @@ pub fn encode_delete_service_secret_provenance_payload(
     service_name: &str,
     secret_name: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, secret_name))
+    norito::encode_canonical(&(service_name, secret_name))
 }
 
 /// Encode the canonical provenance signature payload for state mutations.
@@ -14834,7 +14834,7 @@ pub fn encode_state_mutation_provenance_payload(
     governance_tx_hash: Hash,
     fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         binding_name,
         key,
@@ -14955,7 +14955,7 @@ pub fn derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode(
     bound_mode: BfvCiphertextBoundModeV1,
 ) -> Result<Hash, norito::Error> {
     let ciphertext_proof_statement_digests = ciphertext_proof_statement_digests.to_vec();
-    let payload = norito::to_bytes(&(
+    let payload = norito::encode_canonical(&(
         (
             service_name,
             binding_name,
@@ -14992,7 +14992,7 @@ pub fn encode_rollout_provenance_payload(
     promote_to_percent: Option<u8>,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         rollout_handle,
         healthy,
@@ -15013,7 +15013,7 @@ pub fn encode_agent_deploy_provenance_payload(
     lease_ticks: u64,
     autonomy_budget_units: Option<u64>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(manifest, lease_ticks, autonomy_budget_units))
+    norito::encode_canonical(&(manifest, lease_ticks, autonomy_budget_units))
 }
 
 /// Encode the canonical provenance signature payload for apartment lease renewal.
@@ -15027,7 +15027,7 @@ pub fn encode_agent_lease_renew_provenance_payload(
     apartment_name: &str,
     lease_ticks: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, lease_ticks))
+    norito::encode_canonical(&(apartment_name, lease_ticks))
 }
 
 /// Encode the canonical provenance signature payload for apartment restart requests.
@@ -15041,7 +15041,7 @@ pub fn encode_agent_restart_provenance_payload(
     apartment_name: &str,
     reason: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, reason))
+    norito::encode_canonical(&(apartment_name, reason))
 }
 
 /// Encode the canonical provenance signature payload for apartment policy revocation.
@@ -15056,7 +15056,7 @@ pub fn encode_agent_policy_revoke_provenance_payload(
     capability: &str,
     reason: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, capability, reason))
+    norito::encode_canonical(&(apartment_name, capability, reason))
 }
 
 /// Encode the canonical provenance signature payload for apartment wallet spend requests.
@@ -15071,7 +15071,7 @@ pub fn encode_agent_wallet_spend_provenance_payload(
     asset_definition: &str,
     amount: &Quantity,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, asset_definition, amount.clone()))
+    norito::encode_canonical(&(apartment_name, asset_definition, amount.clone()))
 }
 
 /// Encode the canonical provenance signature payload for apartment wallet approvals.
@@ -15085,7 +15085,7 @@ pub fn encode_agent_wallet_approve_provenance_payload(
     apartment_name: &str,
     request_id: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, request_id))
+    norito::encode_canonical(&(apartment_name, request_id))
 }
 
 /// Encode the canonical provenance signature payload for apartment mailbox send requests.
@@ -15101,7 +15101,7 @@ pub fn encode_agent_message_send_provenance_payload(
     channel: &str,
     payload: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(from_apartment, to_apartment, channel, payload))
+    norito::encode_canonical(&(from_apartment, to_apartment, channel, payload))
 }
 
 /// Encode the canonical provenance signature payload for apartment mailbox acknowledgements.
@@ -15115,7 +15115,7 @@ pub fn encode_agent_message_ack_provenance_payload(
     apartment_name: &str,
     message_id: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, message_id))
+    norito::encode_canonical(&(apartment_name, message_id))
 }
 
 /// Encode the canonical provenance signature payload for apartment artifact allowlists.
@@ -15130,7 +15130,7 @@ pub fn encode_agent_artifact_allow_provenance_payload(
     artifact_hash: &str,
     provenance_hash: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(apartment_name, artifact_hash, provenance_hash))
+    norito::encode_canonical(&(apartment_name, artifact_hash, provenance_hash))
 }
 
 /// Encode the canonical provenance signature payload for apartment autonomy runs.
@@ -15152,7 +15152,7 @@ pub fn encode_agent_autonomy_run_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     let canonical_workflow_input_json =
         canonical_agent_workflow_input_json_for_payload(workflow_input_json);
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         apartment_name,
         artifact_hash,
         provenance_hash,
@@ -15223,7 +15223,7 @@ pub fn encode_training_job_start_provenance_payload(
     compute_budget_units: u64,
     storage_budget_bytes: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         job_id,
@@ -15251,7 +15251,7 @@ pub fn encode_training_job_checkpoint_provenance_payload(
     checkpoint_size_bytes: u64,
     metrics_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         job_id,
         completed_step,
@@ -15272,7 +15272,7 @@ pub fn encode_training_job_retry_provenance_payload(
     job_id: &str,
     reason: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, job_id, reason))
+    norito::encode_canonical(&(service_name, job_id, reason))
 }
 
 /// Encode the canonical provenance signature payload for model-artifact registration.
@@ -15293,7 +15293,7 @@ pub fn encode_model_artifact_register_provenance_payload(
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         training_job_id,
@@ -15325,7 +15325,7 @@ pub fn encode_model_weight_register_provenance_payload(
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         weight_version,
@@ -15353,7 +15353,7 @@ pub fn encode_model_weight_promote_provenance_payload(
     gate_approved: bool,
     gate_report_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         weight_version,
@@ -15375,7 +15375,7 @@ pub fn encode_model_weight_rollback_provenance_payload(
     target_version: &str,
     reason: &str,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, model_name, target_version, reason))
+    norito::encode_canonical(&(service_name, model_name, target_version, reason))
 }
 
 /// Encode the canonical provenance signature payload for uploaded-model bundle registration.
@@ -15388,7 +15388,7 @@ pub fn encode_model_weight_rollback_provenance_payload(
 pub fn encode_uploaded_model_bundle_register_provenance_payload(
     bundle: SoraUploadedModelBundleV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&bundle)
+    norito::encode_canonical(&bundle)
 }
 
 /// Encode the canonical provenance signature payload for uploaded-model bundle finalization.
@@ -15412,7 +15412,7 @@ pub fn encode_uploaded_model_finalize_provenance_payload(
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         service_name,
         model_name,
         model_id,
@@ -15446,7 +15446,7 @@ pub fn encode_hf_shared_lease_join_provenance_payload(
     lease_asset_definition_id: &AssetDefinitionId,
     base_fee: &Quantity,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         repo_id,
         resolved_revision,
         model_name,
@@ -15474,7 +15474,7 @@ pub fn encode_hf_shared_lease_leave_provenance_payload(
     service_name: Option<&str>,
     apartment_name: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         repo_id,
         resolved_revision,
         storage_class,
@@ -15503,7 +15503,7 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
     lease_asset_definition_id: &AssetDefinitionId,
     base_fee: &Quantity,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(
+    norito::encode_canonical(&(
         repo_id,
         resolved_revision,
         model_name,
@@ -15526,7 +15526,7 @@ pub fn encode_hf_shared_lease_renew_provenance_payload(
 pub fn encode_model_host_advertise_provenance_payload(
     capability: &SoraModelHostCapabilityRecordV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(capability)
+    norito::encode_canonical(capability)
 }
 
 /// Encode the canonical provenance signature payload for model-host heartbeats.
@@ -15540,7 +15540,7 @@ pub fn encode_model_host_heartbeat_provenance_payload(
     validator_account_id: &AccountId,
     heartbeat_expires_at_ms: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(validator_account_id.clone(), heartbeat_expires_at_ms))
+    norito::encode_canonical(&(validator_account_id.clone(), heartbeat_expires_at_ms))
 }
 
 /// Encode the canonical provenance signature payload for model-host withdrawals.
@@ -15552,7 +15552,7 @@ pub fn encode_model_host_heartbeat_provenance_payload(
 pub fn encode_model_host_withdraw_provenance_payload(
     validator_account_id: &AccountId,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(validator_account_id)
+    norito::encode_canonical(validator_account_id)
 }
 
 /// Encode the canonical provenance signature payload for Inrou host adverts.
@@ -15565,7 +15565,7 @@ pub fn encode_model_host_withdraw_provenance_payload(
 pub fn encode_inrou_host_advertise_provenance_payload(
     capability: &SoraInrouHostCapabilityRecordV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(capability)
+    norito::encode_canonical(capability)
 }
 
 /// Encode the canonical provenance signature payload for Inrou host withdrawals.
@@ -15577,7 +15577,7 @@ pub fn encode_inrou_host_advertise_provenance_payload(
 pub fn encode_inrou_host_withdraw_provenance_payload(
     validator_account_id: &AccountId,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(validator_account_id)
+    norito::encode_canonical(validator_account_id)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -15625,7 +15625,7 @@ pub fn encode_fhe_job_run_provenance_payload(
     full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     governance_tx_hash: Hash,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&FheJobRunProvenancePayloadV1 {
+    norito::encode_canonical(&FheJobRunProvenancePayloadV1 {
         service_name,
         binding_name,
         job,
@@ -15654,7 +15654,7 @@ pub fn encode_decryption_request_provenance_payload(
     policy: DecryptionAuthorityPolicyV1,
     request: DecryptionRequestV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&(service_name, policy, request))
+    norito::encode_canonical(&(service_name, policy, request))
 }
 
 /// Encode the canonical provenance signature payload for ciphertext queries.
@@ -15666,7 +15666,7 @@ pub fn encode_decryption_request_provenance_payload(
 pub fn encode_ciphertext_query_provenance_payload(
     query: &CiphertextQuerySpecV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(query)
+    norito::encode_canonical(query)
 }
 
 /// Re-export commonly used `Soracloud` schema types.
@@ -16596,11 +16596,13 @@ mod tests {
             SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE input admission STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE input admission STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE input admission OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE input admission OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16627,8 +16629,8 @@ mod tests {
         admission: &mut SoracloudFheInputAdmissionProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        admission.proof.proof.bytes =
-            norito::to_bytes(envelope).expect("encode FHE input admission OpenVerifyEnvelope");
+        admission.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE input admission OpenVerifyEnvelope");
         admission.proof.envelope_hash =
             Some(<[u8; 32]>::from(Hash::new(&admission.proof.proof.bytes)));
     }
@@ -16646,11 +16648,13 @@ mod tests {
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE public-key STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE public-key STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE public-key OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE public-key OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16673,8 +16677,8 @@ mod tests {
         proof: &mut SoracloudFhePublicKeyProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes =
-            norito::to_bytes(envelope).expect("encode FHE public-key OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE public-key OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
     }
 
@@ -16691,11 +16695,13 @@ mod tests {
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof).expect("encode FHE bootstrap-key STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE bootstrap-key STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope).expect("encode FHE bootstrap-key OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE bootstrap-key OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16718,8 +16724,8 @@ mod tests {
         proof: &mut SoracloudFheBootstrapKeyProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes =
-            norito::to_bytes(envelope).expect("encode FHE bootstrap-key OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE bootstrap-key OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
     }
 
@@ -16736,13 +16742,13 @@ mod tests {
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof)
-                .expect("encode FHE full-bootstrap material STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE full-bootstrap material STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope)
-                .expect("encode FHE full-bootstrap material OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE full-bootstrap material OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16779,13 +16785,13 @@ mod tests {
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
             vk_hash,
             SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
-            norito::to_bytes(&open_proof)
-                .expect("encode FHE full-bootstrap execution STARK wrapper"),
+            norito::encode_canonical(&open_proof)
+                .expect("encode canonical FHE full-bootstrap execution STARK wrapper"),
         );
         let proof = crate::proof::ProofBox::new(
             "stark/fri/sha256-goldilocks".into(),
-            norito::to_bytes(&envelope)
-                .expect("encode FHE full-bootstrap execution OpenVerifyEnvelope"),
+            norito::encode_canonical(&envelope)
+                .expect("encode canonical FHE full-bootstrap execution OpenVerifyEnvelope"),
         );
         let mut attachment = ProofAttachment::new_ref(
             "stark/fri/sha256-goldilocks".into(),
@@ -16953,8 +16959,8 @@ mod tests {
         proof: &mut SoracloudFheFullBootstrapMaterialProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes = norito::to_bytes(envelope)
-            .expect("encode FHE full-bootstrap material OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE full-bootstrap material OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
     }
 
@@ -16962,9 +16968,115 @@ mod tests {
         proof: &mut SoracloudFheFullBootstrapExecutionProofV1,
         envelope: &OpenVerifyEnvelope,
     ) {
-        proof.proof.proof.bytes = norito::to_bytes(envelope)
-            .expect("encode FHE full-bootstrap execution OpenVerifyEnvelope");
+        proof.proof.proof.bytes = norito::encode_canonical(envelope)
+            .expect("encode canonical FHE full-bootstrap execution OpenVerifyEnvelope");
         proof.proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.proof.bytes)));
+    }
+
+    fn encode_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(value).expect("encode alternate-layout Norito frame")
+        };
+        let canonical = norito::encode_canonical(value).expect("encode canonical comparison frame");
+        assert_ne!(
+            alternate, canonical,
+            "adversarial fixture must use a distinct Norito layout"
+        );
+        alternate
+    }
+
+    fn alternate_open_verify_layouts(proof_bytes: &[u8]) -> [Vec<u8>; 2] {
+        let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes)
+            .expect("decode canonical sample OpenVerifyEnvelope");
+        let alternate_outer = encode_alternate_norito_layout(&envelope);
+
+        let open_proof = norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .expect("decode canonical sample STARK wrapper");
+        let mut canonical_outer_with_alternate_inner = envelope;
+        canonical_outer_with_alternate_inner.proof_bytes =
+            encode_alternate_norito_layout(&open_proof);
+        let alternate_inner = norito::encode_canonical(&canonical_outer_with_alternate_inner)
+            .expect("encode canonical outer envelope with alternate-layout STARK wrapper");
+
+        [alternate_outer, alternate_inner]
+    }
+
+    fn assert_alternate_open_verify_layouts_rejected<T>(
+        sample: T,
+        attachment: impl for<'a> Fn(&'a mut T) -> &'a mut ProofAttachment + Copy,
+        validate: impl Fn(&T) -> Result<(), SoracloudManifestError>,
+        proof_family: &str,
+    ) where
+        T: Clone,
+    {
+        let canonical_bytes = {
+            let mut sample = sample.clone();
+            attachment(&mut sample).proof.bytes.clone()
+        };
+        for (layout, bytes) in ["outer", "inner"]
+            .into_iter()
+            .zip(alternate_open_verify_layouts(&canonical_bytes))
+        {
+            let mut candidate = sample.clone();
+            let proof = attachment(&mut candidate);
+            proof.proof.bytes = bytes;
+            proof.envelope_hash = Some(<[u8; 32]>::from(Hash::new(&proof.proof.bytes)));
+
+            let err = validate(&candidate).expect_err(
+                "alternate-layout proof frame must be rejected before verifier execution",
+            );
+            assert!(
+                matches!(
+                    err,
+                    SoracloudManifestError::InvalidField {
+                        field: "proof.proof.bytes",
+                        ..
+                    }
+                ),
+                "{proof_family} {layout} alternate layout returned the wrong field: {err}"
+            );
+            assert!(
+                err.to_string().contains("non-canonical"),
+                "{proof_family} {layout} alternate layout returned the wrong reason: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn fhe_proof_admission_rejects_alternate_outer_and_nested_norito_layouts() {
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_input_admission_proof(),
+            |proof: &mut SoracloudFheInputAdmissionProofV1| &mut proof.proof,
+            SoracloudFheInputAdmissionProofV1::validate,
+            "input admission",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_public_key_proof(),
+            |proof: &mut SoracloudFhePublicKeyProofV1| &mut proof.proof,
+            SoracloudFhePublicKeyProofV1::validate,
+            "public key",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_bootstrap_key_proof(),
+            |proof: &mut SoracloudFheBootstrapKeyProofV1| &mut proof.proof,
+            SoracloudFheBootstrapKeyProofV1::validate,
+            "bootstrap key",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_full_bootstrap_material_proof(),
+            |proof: &mut SoracloudFheFullBootstrapMaterialProofV1| &mut proof.proof,
+            SoracloudFheFullBootstrapMaterialProofV1::validate,
+            "full-bootstrap material",
+        );
+        assert_alternate_open_verify_layouts_rejected(
+            sample_fhe_full_bootstrap_execution_proof(),
+            |proof: &mut SoracloudFheFullBootstrapExecutionProofV1| &mut proof.proof,
+            SoracloudFheFullBootstrapExecutionProofV1::validate,
+            "full-bootstrap execution",
+        );
     }
 
     fn zero_prehash_statement_hash() -> Hash {
@@ -16975,14 +17087,14 @@ mod tests {
         proof_bytes: &[u8],
         statement_hash: Hash,
     ) -> OpenVerifyEnvelope {
-        let mut envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes)
+        let mut envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes)
             .expect("decode sample OpenVerifyEnvelope");
         let mut open_proof =
-            norito::decode_from_bytes::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
+            norito::decode_canonical::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
                 .expect("decode sample STARK public-input wrapper");
         open_proof.public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
-        envelope.proof_bytes =
-            norito::to_bytes(&open_proof).expect("encode rewritten STARK wrapper");
+        envelope.proof_bytes = norito::encode_canonical(&open_proof)
+            .expect("encode canonical rewritten STARK wrapper");
         envelope
     }
 
@@ -16990,14 +17102,14 @@ mod tests {
         proof_bytes: &[u8],
         native_envelope_bytes: Vec<u8>,
     ) -> OpenVerifyEnvelope {
-        let mut envelope = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes)
+        let mut envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes)
             .expect("decode sample OpenVerifyEnvelope");
         let mut open_proof =
-            norito::decode_from_bytes::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
+            norito::decode_canonical::<StarkFriOpenProofV1>(envelope.proof_bytes.as_slice())
                 .expect("decode sample STARK public-input wrapper");
         open_proof.envelope_bytes = native_envelope_bytes;
-        envelope.proof_bytes =
-            norito::to_bytes(&open_proof).expect("encode rewritten STARK wrapper");
+        envelope.proof_bytes = norito::encode_canonical(&open_proof)
+            .expect("encode canonical rewritten STARK wrapper");
         envelope
     }
 
@@ -23922,16 +24034,34 @@ mod tests {
             request.clone(),
         )
         .expect("encode payload");
-        let expected = norito::to_bytes(&("health_portal", policy, request)).expect("encode tuple");
+        let expected =
+            norito::encode_canonical(&("health_portal", policy.clone(), request.clone()))
+                .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(
+            encode_decryption_request_provenance_payload("health_portal", policy, request)
+                .expect("encode payload under alternate ambient layout"),
+            expected
+        );
     }
 
     #[test]
     fn ciphertext_query_provenance_payload_encodes_canonical_layout() {
         let query = sample_ciphertext_query_spec();
         let encoded = encode_ciphertext_query_provenance_payload(&query).expect("encode payload");
-        let expected = norito::to_bytes(&query).expect("encode query");
+        let expected = norito::encode_canonical(&query).expect("encode canonical query");
         assert_eq!(encoded, expected);
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(
+            encode_ciphertext_query_provenance_payload(&query)
+                .expect("encode query under alternate ambient layout"),
+            expected
+        );
     }
 
     #[test]
@@ -23945,8 +24075,16 @@ mod tests {
             service,
         };
         let encoded = encode_bundle_provenance_payload(&bundle).expect("encode payload");
-        let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
+        let expected = norito::encode_canonical(&bundle).expect("encode canonical layout");
         assert_eq!(encoded, expected);
+        let _ambient = norito::core::DecodeFlagsGuard::enter(
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN,
+        );
+        assert_eq!(
+            encode_bundle_provenance_payload(&bundle)
+                .expect("encode bundle under alternate ambient layout"),
+            expected
+        );
     }
 
     fn sample_binding(name: &str) -> SoraStateBindingV1 {

@@ -275,7 +275,7 @@ where
         payload_size_bytes,
         payload_sha256,
     )?;
-    let header_bytes = norito::to_bytes(&header)
+    let header_bytes = norito::encode_canonical(&header)
         .map_err(|error| format!("failed to encode Kagemusha V4 artifact header: {error}"))?;
     if header_bytes.is_empty()
         || header_bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4
@@ -365,7 +365,7 @@ pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
         payload_size_bytes,
         payload_sha256,
     )?;
-    let header_bytes = norito::to_bytes(&header)
+    let header_bytes = norito::encode_canonical(&header)
         .map_err(|error| format!("failed to encode Kagemusha V4 artifact header: {error}"))?;
     if header_bytes.is_empty()
         || header_bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4
@@ -658,7 +658,7 @@ impl KagemushaArtifactManifestBindingV4 {
     ) -> Result<Self, String> {
         candidate.validate().map_err(|error| error.to_string())?;
         let candidate_sha256 = candidate.sha256().map_err(|error| error.to_string())?;
-        let manifest_bytes = norito::to_bytes(&candidate.manifest).map_err(|error| {
+        let manifest_bytes = norito::encode_canonical(&candidate.manifest).map_err(|error| {
             format!("failed to encode Kagemusha V4 candidate manifest: {error}")
         })?;
         let manifest_sha256: [u8; 32] = Sha256::digest(manifest_bytes).into();
@@ -723,9 +723,10 @@ impl KagemushaArtifactManifestBindingV4 {
                 candidate.validate().map_err(|error| error.to_string())?;
                 let observed_candidate_sha256 =
                     candidate.sha256().map_err(|error| error.to_string())?;
-                let manifest_bytes = norito::to_bytes(&candidate.manifest).map_err(|error| {
-                    format!("failed to encode Kagemusha V4 candidate manifest: {error}")
-                })?;
+                let manifest_bytes =
+                    norito::encode_canonical(&candidate.manifest).map_err(|error| {
+                        format!("failed to encode Kagemusha V4 candidate manifest: {error}")
+                    })?;
                 let observed_manifest_sha256: [u8; 32] = Sha256::digest(manifest_bytes).into();
                 if *candidate_sha256 == [0; 32]
                     || *manifest_sha256 == [0; 32]
@@ -898,14 +899,15 @@ where
         16,
     );
     let header: KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 =
-        norito::decode_from_bytes_with_limits(&header_bytes, header_decode_limits)
-            .map_err(|_| "Kagemusha V4 artifact header is malformed".to_owned())?;
-    if norito::to_bytes(&header)
-        .map_err(|error| format!("failed to re-encode Kagemusha V4 header: {error}"))?
-        != header_bytes
-    {
-        return Err("Kagemusha V4 artifact header is not canonical".to_owned());
-    }
+        norito::decode_canonical_with_limits(&header_bytes, header_decode_limits).map_err(
+            |error| {
+                if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                    "Kagemusha V4 artifact header is not canonical".to_owned()
+                } else {
+                    "Kagemusha V4 artifact header is malformed".to_owned()
+                }
+            },
+        )?;
     validate_header_v4(&header)?;
     if header.kind != descriptor.kind
         || header.payload_size_bytes != descriptor.payload_size_bytes
@@ -1183,15 +1185,23 @@ fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
         .read_exact(&mut header_bytes)
         .map_err(|error| format!("failed to read Kagemusha V4 artifact header: {error}"))?;
     framed_hasher.update(&header_bytes);
+    let header_decode_limits = norito::core::DecodeLimits::new(
+        1024,
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4,
+        4096,
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4.saturating_mul(4),
+        16,
+    );
     let header: KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 =
-        norito::decode_from_bytes(&header_bytes)
-            .map_err(|_| "Kagemusha V4 artifact header is malformed".to_owned())?;
-    if norito::to_bytes(&header)
-        .map_err(|error| format!("failed to re-encode Kagemusha V4 header: {error}"))?
-        != header_bytes
-    {
-        return Err("Kagemusha V4 artifact header is not canonical".to_owned());
-    }
+        norito::decode_canonical_with_limits(&header_bytes, header_decode_limits).map_err(
+            |error| {
+                if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                    "Kagemusha V4 artifact header is not canonical".to_owned()
+                } else {
+                    "Kagemusha V4 artifact header is malformed".to_owned()
+                }
+            },
+        )?;
     binding.validate_header(&header, descriptor)?;
     if u64::try_from(prefix_len)
         .ok()
@@ -1592,6 +1602,13 @@ mod tests {
 
     use super::*;
 
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout Kagemusha artifact value")
+    }
+
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
         let layout =
@@ -1659,6 +1676,22 @@ mod tests {
     fn streaming_writer_matches_canonical_frame_and_rejects_inexact_payloads() {
         let payload = b"streamed authenticated artifact payload";
         let (expected_frame, expected_descriptor) = framed_fixture(payload);
+        let mut ambient_frame = Vec::new();
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_descriptor = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            write_kagemusha_pasta_cycle_artifact_v4(
+                &mut ambient_frame,
+                "test-generation-v4",
+                &profile(),
+                KagemushaPastaCycleArtifactKindV4::ProvingKey,
+                payload,
+            )
+            .expect("write frame under alternate ambient layout")
+        };
+        assert_eq!(ambient_frame, expected_frame);
+        assert_eq!(ambient_descriptor, expected_descriptor);
         let payload_size = u64::try_from(payload.len()).expect("small fixture");
         let payload_sha256 = Sha256::digest(payload).into();
         let mut streamed_frame = Vec::new();
@@ -1825,6 +1858,37 @@ mod tests {
             bytes[8..12].try_into().expect("header length fixture"),
         ))
         .expect("header length fits usize");
+        let header = export_header_v4(
+            "test-generation-v4",
+            &profile(),
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            payload,
+        )
+        .expect("artifact header fixture");
+        let alternate_header = encode_with_alternate_norito_layout(&header);
+        let mut alternate_frame = Vec::new();
+        alternate_frame.extend_from_slice(KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4);
+        alternate_frame.extend_from_slice(
+            &u32::try_from(alternate_header.len())
+                .expect("alternate header length fits u32")
+                .to_le_bytes(),
+        );
+        alternate_frame.extend_from_slice(&alternate_header);
+        alternate_frame.extend_from_slice(&bytes[12 + original_header_len..]);
+        let mut alternate_descriptor = descriptor.clone();
+        alternate_descriptor.size_bytes =
+            u64::try_from(alternate_frame.len()).expect("alternate frame length fits u64");
+        alternate_descriptor.sha256 = Sha256::digest(&alternate_frame).into();
+        assert_eq!(
+            inspect_kagemusha_pasta_cycle_artifact_content_v4(
+                &mut Cursor::new(alternate_frame),
+                &alternate_descriptor,
+                accept_test_binding,
+            )
+            .expect_err("alternate-layout header must be rejected"),
+            "Kagemusha V4 artifact header is not canonical"
+        );
+
         let mut noncanonical_header = bytes.clone();
         noncanonical_header.insert(12 + original_header_len, 0);
         noncanonical_header[8..12].copy_from_slice(

@@ -938,19 +938,16 @@ pub fn parse_asset_hidden_transfer_public_inputs(
 }
 
 fn extract_confidential_public_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
-    if let Ok(envelope) = norito::decode_from_bytes::<OpenVerifyEnvelope>(proof_bytes) {
-        return match envelope.backend {
-            BackendTag::Halo2IpaPasta => {
-                super::extract_pasta_instance_columns_bytes(&envelope.proof_bytes)
-            }
-            BackendTag::Stark => {
-                norito::decode_from_bytes::<StarkFriOpenProofV1>(&envelope.proof_bytes)
-                    .ok()
-                    .map(|proof| proof.public_inputs)
-            }
-        };
+    let envelope = norito::decode_canonical::<OpenVerifyEnvelope>(proof_bytes).ok()?;
+    envelope.validate_for_admission().ok()?;
+    match envelope.backend {
+        BackendTag::Halo2IpaPasta => {
+            super::extract_pasta_instance_columns_bytes(&envelope.proof_bytes)
+        }
+        BackendTag::Stark => norito::decode_canonical::<StarkFriOpenProofV1>(&envelope.proof_bytes)
+            .ok()
+            .map(|proof| proof.public_inputs),
     }
-    super::extract_pasta_instance_columns_bytes(proof_bytes)
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -5135,7 +5132,7 @@ fn encode_halo2_envelope(
         proof_bytes: proof_payload,
         aux: Vec::new(),
     };
-    let encoded = norito::to_bytes(&envelope)
+    let encoded = norito::encode_canonical(&envelope)
         .map_err(|err| format!("failed to encode confidential proof envelope: {err}"))?;
     Ok(ProofBox::new(
         super::ZK_BACKEND_HALO2_IPA.to_owned(),
@@ -6799,6 +6796,96 @@ pub fn build_confidential_unshield_proof_v3_with_paths(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn public_input_extraction_requires_canonical_outer_and_rejects_raw_zk1() {
+        use halo2_proofs::halo2curves::pasta::Fp;
+
+        let columns = (1_u64..=9)
+            .map(|value| vec![Fp::from(value)])
+            .collect::<Vec<_>>();
+        let column_refs = columns.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut zk1 = crate::zk::zk1_test_helpers::wrap_start();
+        crate::zk::zk1_test_helpers::wrap_append_proof(&mut zk1, &[0xA5]);
+        crate::zk::zk1_test_helpers::wrap_append_instances_pasta_fp_cols(&column_refs, &mut zk1);
+        let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            circuit_id: super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+            vk_hash: [0x42; 32],
+            public_inputs: super::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+            proof_bytes: zk1.clone(),
+            aux: Vec::new(),
+        };
+        let canonical =
+            norito::encode_canonical(&envelope).expect("encode canonical confidential envelope");
+        let parsed = super::parse_transfer_public_inputs(&canonical)
+            .expect("canonical confidential envelope exposes public inputs");
+        assert_eq!(parsed.0[0], scalar_bytes(1));
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_outer = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&envelope)
+                .expect("encode alternate-layout confidential outer envelope")
+        };
+        assert_ne!(alternate_outer, canonical);
+        norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&alternate_outer)
+            .expect("ordinary Norito accepts the advertised layout");
+        assert!(
+            super::parse_transfer_public_inputs(&alternate_outer).is_err(),
+            "alternate-layout outer envelope must be rejected"
+        );
+        assert!(
+            super::parse_transfer_public_inputs(&zk1).is_err(),
+            "raw ZK1 payload must not bypass the V1 outer envelope"
+        );
+    }
+
+    #[test]
+    fn public_input_extraction_rejects_alternate_layout_stark_wrapper() {
+        let columns = (1_u8..=9)
+            .map(|value| vec![[value; 32]])
+            .collect::<Vec<_>>();
+        let wrapper = iroha_data_model::zk::StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: columns,
+            envelope_bytes: vec![0xA5],
+        };
+        let canonical_wrapper =
+            norito::encode_canonical(&wrapper).expect("encode canonical STARK wrapper");
+        let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Stark,
+            circuit_id: "stark/fri/sha256-goldilocks:confidential-test".to_owned(),
+            vk_hash: [0x42; 32],
+            public_inputs: b"confidential:test:schema:v1".to_vec(),
+            proof_bytes: canonical_wrapper,
+            aux: Vec::new(),
+        };
+        let canonical_outer =
+            norito::encode_canonical(&envelope).expect("encode canonical STARK outer envelope");
+        assert!(
+            super::parse_transfer_public_inputs(&canonical_outer).is_ok(),
+            "canonical nested wrapper must expose its public inputs"
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_wrapper = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&wrapper).expect("encode alternate-layout STARK wrapper")
+        };
+        norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(&alternate_wrapper)
+            .expect("ordinary Norito accepts the advertised layout");
+        let mut alternate_nested = envelope;
+        alternate_nested.proof_bytes = alternate_wrapper;
+        let alternate_nested = norito::encode_canonical(&alternate_nested)
+            .expect("encode canonical outer around alternate STARK wrapper");
+        assert!(
+            super::parse_transfer_public_inputs(&alternate_nested).is_err(),
+            "alternate-layout nested STARK wrapper must be rejected"
+        );
+    }
+
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn scalar_bytes(value: u64) -> [u8; 32] {
         use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};

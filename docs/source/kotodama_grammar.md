@@ -353,6 +353,11 @@ The V1 type vocabulary is:
 | Reserved retired numeric type spellings | `i8`, `i16`, `i32`, `i64`, `i128`, `isize`, `u8`, `u16`, `u32`, `u64`, `u128`, `usize`, `num`, `Int`, `Integer`, `float`, `f32`, `f64`, `Decimal`, `Fixed`, `FixedPoint`, `Amount`, `amount`, `money`, `Quantity`, `number` |
 | Ordinary value/function identifier examples | `amount` |
 | Retired literal suffixes with safe fix-its | `amt` (remove the suffix), `qty` (remove the suffix) |
+| Durable `StateMap` key types (ordered) | `int`, `decimal`, `quantity`, `bool`, `string`, `bytes`, `DataSpaceId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `DomainId`, `Name` |
+| Dynamic-access bound kinds (ordered) | `range`, `take` |
+| Dynamic-access key bound | `1..=64` |
+| Dynamic-access base | One direct declared top-level `StateMap`, encoded as `state:<state_declaration_identifier>` |
+| Dynamic-access scheduler semantics | Advisory only; never authorization or scheduler-authoritative evidence |
 
 | Source type | Rust nominal type | Pointer ID | Schema name | Schema hash |
 | --- | --- | --- | --- | --- |

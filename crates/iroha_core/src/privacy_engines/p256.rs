@@ -19,6 +19,8 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
+use super::prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1};
+
 /// Maximum chain-id bytes accepted by a privacy transcript.
 pub const MAX_TRANSCRIPT_CHAIN_ID_BYTES_V1: usize = 255;
 /// Maximum opaque proof bytes accepted before Norito decoding.
@@ -71,6 +73,12 @@ pub enum P256EngineError {
     /// RFC 9380 expansion rejected a domain separation tag.
     #[error("RFC 9380 P-256 hash-to-curve failed")]
     HashToCurve,
+    /// The operating-system or caller-supplied cryptographic RNG failed.
+    #[error("P-256 cryptographic random source is unavailable")]
+    RandomnessUnavailable,
+    /// The random source repeated a catastrophic constant or short-period prefix.
+    #[error("P-256 cryptographic random source failed its health check")]
+    RandomnessHealthCheckFailed,
     /// Rejection sampling did not produce a canonical non-zero scalar within the fixed work bound.
     #[error("P-256 scalar rejection sampling exhausted its fixed work bound")]
     RejectionSamplingExhausted,
@@ -281,7 +289,8 @@ impl SecretScalarV1 {
     where
         R: CryptoRng + RngCore,
     {
-        let scalar = random_nonzero_scalar(rng)?;
+        let mut checked = health_checked_p256_rng_v1(rng)?;
+        let scalar = random_nonzero_scalar(&mut checked)?;
         Ok(Self {
             bytes: Zeroizing::new(scalar.to_repr().into()),
         })
@@ -480,13 +489,28 @@ pub(crate) fn scalar_from_bytes(bytes: [u8; 32]) -> Result<Scalar, P256EngineErr
         .ok_or(P256EngineError::InvalidScalarEncoding)
 }
 
+pub(crate) fn health_checked_p256_rng_v1<R>(
+    rng: &mut R,
+) -> Result<HealthCheckedCryptoRngV1<'_, R>, P256EngineError>
+where
+    R: CryptoRng + RngCore,
+{
+    HealthCheckedCryptoRngV1::new(rng).map_err(|error| match error {
+        ProverRandomnessErrorV1::Unavailable => P256EngineError::RandomnessUnavailable,
+        ProverRandomnessErrorV1::Unhealthy => P256EngineError::RandomnessHealthCheckFailed,
+    })
+}
+
 pub(crate) fn random_nonzero_scalar<R>(rng: &mut R) -> Result<Scalar, P256EngineError>
 where
     R: CryptoRng + RngCore,
 {
     for _ in 0..MAX_REJECTION_ATTEMPTS {
         let mut candidate = [0_u8; 32];
-        rng.fill_bytes(&mut candidate);
+        if rng.try_fill_bytes(&mut candidate).is_err() {
+            candidate.zeroize();
+            return Err(P256EngineError::RandomnessUnavailable);
+        }
         let parsed = scalar_from_bytes(candidate);
         candidate.zeroize();
         if let Ok(scalar) = parsed {
@@ -557,6 +581,53 @@ mod tests {
     use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
     use super::*;
+
+    struct FailingRng;
+
+    impl RngCore for FailingRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("P-256 privacy engines must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("P-256 privacy engines must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("P-256 privacy engines must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+            Err(rand_core_06::Error::new("injected P-256 RNG failure"))
+        }
+    }
+
+    impl CryptoRng for FailingRng {}
+
+    struct PeriodicRng;
+
+    impl RngCore for PeriodicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("P-256 privacy engines must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("P-256 privacy engines must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("P-256 privacy engines must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), rand_core_06::Error> {
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = ((index % 16) as u8).wrapping_mul(17).wrapping_add(5);
+            }
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for PeriodicRng {}
 
     fn binding() -> TranscriptBindingV1<'static> {
         TranscriptBindingV1 {
@@ -635,6 +706,14 @@ mod tests {
         assert!(matches!(
             SecretScalarV1::from_bytes([0; 32]),
             Err(P256EngineError::ZeroScalar)
+        ));
+        assert!(matches!(
+            SecretScalarV1::generate(&mut FailingRng),
+            Err(P256EngineError::RandomnessUnavailable)
+        ));
+        assert!(matches!(
+            SecretScalarV1::generate(&mut PeriodicRng),
+            Err(P256EngineError::RandomnessHealthCheckFailed)
         ));
     }
 

@@ -233,7 +233,7 @@ helpers are available:
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |
 | 0x010000 | `SYSCALL_QUERY_EXECUTE_NORITO` | Execute a Norito-encoded read-only query request |
 | 0x010001 | `SYSCALL_CORE_QUERY_GET` | Return `Option<View>` for one stable-tagged core entity |
-| 0x010002 | `SYSCALL_CORE_QUERY_PAGE` | Return `List<View,64>` plus `Option<i64>` handles in canonical ID order |
+| 0x010002 | `SYSCALL_CORE_QUERY_PAGE` | Return `List<View,64>` plus `Option<int>` handles in canonical ID order |
 | 0x010020..0x010025 | `SYSCALL_SYSVAR_*` | Read deterministic chain/block/authority/contract context |
 
 ### NFT syscall naming alignment

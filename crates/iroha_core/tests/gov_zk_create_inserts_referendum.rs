@@ -15,13 +15,17 @@ use iroha_data_model::{
     block::BlockHeader,
     confidential::ConfidentialStatus,
     domain::Domain,
-    isi::{verifying_keys, zk::CreateElection},
+    isi::{
+        error::{InstructionExecutionError, InvalidParameterError},
+        verifying_keys,
+        zk::{CreateElection, FinalizeElection, MAX_ELECTION_OPTIONS_V1},
+    },
     permission::Permission,
     prelude::Grant,
-    proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
-use iroha_executor_data_model::permission::governance::CanManageParliament;
+use iroha_executor_data_model::permission::governance::{CanEnactGovernance, CanManageParliament};
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -75,12 +79,16 @@ fn create_election_inserts_referendum_with_configured_window() {
     vk_record.gas_schedule_id = Some("halo2_default".into());
     let perm_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
     let perm_parliament: Permission = CanManageParliament.into();
+    let perm_enact: Permission = CanEnactGovernance.into();
     Grant::account_permission(perm_vk, alice_id.clone())
         .execute(&alice_id, &mut stx)
         .expect("grant vk permission");
     Grant::account_permission(perm_parliament, alice_id.clone())
         .execute(&alice_id, &mut stx)
         .expect("grant parliament permission");
+    Grant::account_permission(perm_enact, alice_id.clone())
+        .execute(&alice_id, &mut stx)
+        .expect("grant enact permission");
     verifying_keys::RegisterVerifyingKey {
         id: vk_id.clone(),
         record: vk_record.clone(),
@@ -88,19 +96,129 @@ fn create_election_inserts_referendum_with_configured_window() {
     .execute(&alice_id, &mut stx)
     .expect("register verifying key");
 
+    for options in [0, MAX_ELECTION_OPTIONS_V1 + 1] {
+        let election_id = format!("ref-invalid-{options}");
+        let election_count_before = stx.world.elections_mut().iter().count();
+        let referendum_count_before = stx.world.governance_referenda_mut().iter().count();
+        let invalid = CreateElection {
+            election_id: election_id.clone(),
+            options,
+            eligible_root: [0u8; 32],
+            start_ts: 0,
+            end_ts: 0,
+            vk_ballot: vk_id.clone(),
+            vk_tally: vk_id.clone(),
+            domain_tag: "gov:ballot:v1".to_string(),
+        };
+        let error = invalid
+            .execute(&alice_id, &mut stx)
+            .expect_err("out-of-range election options must be rejected");
+        assert!(
+            matches!(
+                error,
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    _
+                ))
+            ),
+            "caller-supplied option count must be an invalid parameter"
+        );
+        assert!(
+            stx.world.elections_mut().get(&election_id).is_none(),
+            "rejected election must not mutate election state"
+        );
+        assert!(
+            stx.world
+                .governance_referenda_mut()
+                .get(&election_id)
+                .is_none(),
+            "rejected election must not seed a referendum"
+        );
+        assert_eq!(
+            stx.world.elections_mut().iter().count(),
+            election_count_before,
+            "rejected election must preserve the election registry"
+        );
+        assert_eq!(
+            stx.world.governance_referenda_mut().iter().count(),
+            referendum_count_before,
+            "rejected election must preserve the referendum registry"
+        );
+    }
+
+    let election_count_before = stx.world.elections_mut().iter().count();
+    let referendum_count_before = stx.world.governance_referenda_mut().iter().count();
     let create = CreateElection {
         election_id: "ref-auto".to_string(),
-        options: 2,
+        options: MAX_ELECTION_OPTIONS_V1,
         eligible_root: [0u8; 32],
         start_ts: 0,
         end_ts: 0,
         vk_ballot: vk_id.clone(),
-        vk_tally: vk_id,
+        vk_tally: vk_id.clone(),
         domain_tag: "gov:ballot:v1".to_string(),
     };
     create
         .execute(&alice_id, &mut stx)
         .expect("create election seeds referendum");
+    let election = stx
+        .world
+        .elections_mut()
+        .get("ref-auto")
+        .cloned()
+        .expect("bounded election inserted");
+    assert_eq!(election.options, MAX_ELECTION_OPTIONS_V1);
+    assert_eq!(election.tally.len(), MAX_ELECTION_OPTIONS_V1 as usize);
+    assert_eq!(
+        stx.world.elections_mut().iter().count(),
+        election_count_before + 1
+    );
+    assert_eq!(
+        stx.world.governance_referenda_mut().iter().count(),
+        referendum_count_before + 1
+    );
+
+    for tally_len in [0, 64, 65] {
+        stx.world
+            .elections_mut()
+            .get_mut("ref-auto")
+            .expect("bounded election remains present")
+            .tally = vec![0; tally_len];
+        let finalize = FinalizeElection {
+            election_id: "ref-auto".to_string(),
+            tally: vec![0; MAX_ELECTION_OPTIONS_V1 as usize],
+            tally_proof: ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), Vec::new()),
+                vk_id.clone(),
+            ),
+        };
+        let error = finalize
+            .execute(&alice_id, &mut stx)
+            .expect_err("invalid or unproved tally must not finalize");
+        if tally_len == MAX_ELECTION_OPTIONS_V1 as usize {
+            assert!(
+                error.to_string().contains("invalid tally proof"),
+                "a 64-counter stored tally must pass the shape gate: {error}"
+            );
+        } else {
+            assert!(
+                error.to_string().contains("invalid stored election shape"),
+                "stored tally length {tally_len} must fail the shape gate: {error}"
+            );
+        }
+        let rejected = stx
+            .world
+            .elections_mut()
+            .get("ref-auto")
+            .cloned()
+            .expect("rejected finalize must preserve election state");
+        assert!(!rejected.finalized);
+        assert_eq!(
+            rejected.tally.len(),
+            tally_len,
+            "rejection must not truncate or replace the stored tally"
+        );
+    }
 
     let rec = stx
         .world

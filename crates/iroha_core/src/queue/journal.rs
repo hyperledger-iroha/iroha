@@ -178,7 +178,7 @@ impl QueuePlanJournalLimits {
                 "queue plan journal compaction threshold exceeds the file limit",
             ));
         }
-        let bootstrap_payload = norito::to_bytes(&bootstrap_frame()).map_err(|error| {
+        let bootstrap_payload = norito::encode_canonical(&bootstrap_frame()).map_err(|error| {
             invalid_input(format!(
                 "queue plan journal bootstrap cannot be encoded: {error}"
             ))
@@ -279,7 +279,7 @@ impl QueuePlanJournalRecordV4 {
     /// # Errors
     /// Returns a Norito encoding error if the canonical record cannot be encoded.
     pub fn claim_digest(&self) -> Result<Hash, norito::Error> {
-        norito::to_bytes(self).map(|bytes| {
+        norito::encode_canonical(self).map(|bytes| {
             Hash::new_from_chunks(&[QUEUE_PLAN_JOURNAL_RECORD_CLAIM_DOMAIN, bytes.as_slice()])
         })
     }
@@ -2124,7 +2124,7 @@ fn encode_frame(
     limits: QueuePlanJournalLimits,
 ) -> io::Result<Vec<u8>> {
     validate_frame(frame)?;
-    let payload = norito::to_bytes(frame).map_err(io::Error::other)?;
+    let payload = norito::encode_canonical(frame).map_err(io::Error::other)?;
     let payload_len = u64::try_from(payload.len())
         .map_err(|_| invalid_data("queue plan journal frame payload exceeds u64"))?;
     if payload_len == 0 || payload_len > limits.max_frame_payload_bytes {
@@ -2341,11 +2341,23 @@ fn decode_frame(
             "queue plan journal payload exceeds the configured frame limit",
         ));
     }
-    // Journal writers emit only the canonical uncompressed `to_bytes` archive.
+    // Journal writers emit only the canonical uncompressed archive.
     // Reject compressed envelopes before the owned decoder can decompress an
     // attacker-controlled archive whose wire size is much smaller than its
     // declared payload.
-    norito::core::from_bytes_view(payload).map_err(|error| {
+    let advertised_flags = payload
+        .get(norito::core::Header::SIZE - 1)
+        .copied()
+        .unwrap_or_else(norito::core::default_encode_flags);
+    let preflight = {
+        let _payload_context = norito::core::PayloadCtxGuard::enter(payload);
+        // Preflight the archive under its advertised layout so ambient caller
+        // state cannot cause a false mismatch. The canonical decoder below
+        // independently requires the one fixed durable layout.
+        let _advertised_flags = norito::core::DecodeFlagsGuard::enter(advertised_flags);
+        norito::core::from_bytes_view(payload).map(|_| ())
+    };
+    preflight.map_err(|error| {
         invalid_data(format!(
             "queue plan journal payload is not a canonical uncompressed archive: {error}"
         ))
@@ -2370,23 +2382,17 @@ fn decode_frame(
         128,
     );
     let frame =
-        norito::decode_from_bytes_with_limits::<QueuePlanJournalFrameV4>(payload, decode_limits)
+        norito::decode_canonical_with_limits::<QueuePlanJournalFrameV4>(payload, decode_limits)
             .map_err(|error| {
-                invalid_data(format!(
-                    "queue plan journal payload cannot be decoded: {error}"
-                ))
+                if matches!(&error, norito::Error::NonCanonicalEncoding) {
+                    invalid_data("queue plan journal payload is not canonically encoded")
+                } else {
+                    invalid_data(format!(
+                        "queue plan journal payload cannot be decoded: {error}"
+                    ))
+                }
             })?;
     validate_frame(&frame)?;
-    if norito::to_bytes(&frame).map_err(|error| {
-        invalid_data(format!(
-            "queue plan journal payload cannot be canonicalized: {error}"
-        ))
-    })? != payload
-    {
-        return Err(invalid_data(
-            "queue plan journal payload is not canonically encoded",
-        ));
-    }
     Ok(frame)
 }
 
@@ -4046,7 +4052,8 @@ mod tests {
     #[test]
     fn queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context() {
         let exact = record("claim-digest-exact");
-        let exact_bytes = norito::to_bytes(&exact).expect("encode exact journal record");
+        let exact_bytes =
+            norito::encode_canonical(&exact).expect("encode exact canonical journal record");
         let exact_digest = exact.claim_digest().expect("hash exact journal record");
         assert_eq!(
             exact_digest,
@@ -4162,7 +4169,7 @@ mod tests {
     }
 
     fn raw_frame(frame: &QueuePlanJournalFrameV4) -> Vec<u8> {
-        let payload = norito::to_bytes(frame).expect("encode raw payload");
+        let payload = norito::encode_canonical(frame).expect("encode canonical frame payload");
         let len = u32::try_from(payload.len()).expect("payload length");
         encode_payload(&payload, len).expect("frame payload")
     }
@@ -4172,10 +4179,87 @@ mod tests {
     }
 
     #[test]
+    fn durable_frames_and_claims_ignore_ambient_layout_and_survive_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("canonical-ambient-restart.norito");
+        let expected = record("canonical-ambient-restart");
+        let canonical_record =
+            norito::encode_canonical(&expected).expect("encode canonical record");
+        let expected_claim = expected.claim_digest().expect("hash canonical record");
+        let mut expected_file = raw_bootstrap_frame();
+        expected_file
+            .extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(expected.clone())));
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let ambient_record =
+                norito::to_bytes(&expected).expect("encode alternate-layout ambient record");
+            assert_ne!(ambient_record, canonical_record);
+            assert_eq!(
+                expected
+                    .claim_digest()
+                    .expect("hash record under alternate ambient layout"),
+                expected_claim
+            );
+
+            let mut journal = open(&path).expect("open under alternate ambient layout");
+            journal
+                .replace_strict_durable(expected.clone())
+                .expect("persist under alternate ambient layout");
+            drop(journal);
+
+            assert_eq!(
+                norito::to_bytes(&expected).expect("encode ambient record after journal calls"),
+                ambient_record,
+                "canonical journal helpers must restore the caller's ambient layout"
+            );
+        }
+
+        assert_eq!(
+            fs::read(&path).expect("read canonical journal bytes"),
+            expected_file,
+            "bootstrap, payload, checksum, and commit bytes must be ambient-invariant"
+        );
+        let reopened = open(&path).expect("reopen canonical journal");
+        assert_eq!(
+            reopened.replay().expect("replay canonical journal"),
+            vec![expected]
+        );
+    }
+
+    #[test]
+    fn frame_decoder_rejects_an_advertised_alternate_layout() {
+        let frame = QueuePlanJournalFrameV4::Put(record("alternate-layout-frame"));
+        let canonical = norito::encode_canonical(&frame).expect("encode canonical frame payload");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&frame).expect("encode alternate-layout frame payload")
+        };
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            norito::decode_from_bytes::<QueuePlanJournalFrameV4>(&alternate)
+                .expect("ordinary Norito accepts the advertised alternate layout"),
+            frame
+        );
+
+        let error = decode_frame(&alternate, limits(1))
+            .expect_err("durable frame decoding must reject alternate layouts");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            "queue plan journal payload is not canonically encoded"
+        );
+    }
+
+    #[test]
     fn bootstrap_limits_fail_before_creating_or_mutating_the_journal() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let bootstrap_payload =
-            norito::to_bytes(&bootstrap_frame()).expect("encode bootstrap payload");
+        let bootstrap_payload = norito::encode_canonical(&bootstrap_frame())
+            .expect("encode canonical bootstrap payload");
         let bootstrap_payload_len =
             u64::try_from(bootstrap_payload.len()).expect("bootstrap payload length");
         let bootstrap_frame_len =
@@ -6251,7 +6335,8 @@ mod tests {
             "decode-budget",
             "x".repeat(256 * 1024),
         ));
-        let payload = norito::to_bytes(&frame).expect("encode large canonical frame payload");
+        let payload =
+            norito::encode_canonical(&frame).expect("encode large canonical frame payload");
         let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
         let exact_limits = QueuePlanJournalLimits::new(1, payload_len, TEST_MAX_BYTES, 1);
         let configured_element_budget = payload
@@ -6311,8 +6396,8 @@ mod tests {
             "allocation-calibration",
             calibration_instructions,
         ));
-        let calibration_payload =
-            norito::to_bytes(&calibration_frame).expect("encode allocation calibration frame");
+        let calibration_payload = norito::encode_canonical(&calibration_frame)
+            .expect("encode allocation calibration frame");
         let configured_element_budget = calibration_payload
             .len()
             .checked_mul(FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT)
@@ -6349,7 +6434,7 @@ mod tests {
             "allocation-dense",
             instructions,
         ));
-        let payload = norito::to_bytes(&frame).expect("encode allocation-dense frame");
+        let payload = norito::encode_canonical(&frame).expect("encode allocation-dense frame");
         let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
         let exact_limits = QueuePlanJournalLimits::new(
             1,
@@ -6373,7 +6458,7 @@ mod tests {
             "compressed-frame",
             "z".repeat(2 * 1024 * 1024),
         ));
-        let canonical = norito::to_bytes(&frame).expect("encode canonical frame");
+        let canonical = norito::encode_canonical(&frame).expect("encode canonical frame");
         let compressed =
             norito::to_compressed_bytes(&frame, Some(norito::CompressionConfig::default()))
                 .expect("compress frame");

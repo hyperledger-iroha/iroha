@@ -41,6 +41,12 @@ def _generated_body(text: str, prefix: str = "//") -> str:
     return text.split(start, 1)[1].split(end, 1)[0].strip()
 
 
+def _marked_body(text: str, marker: str) -> str:
+    return text.split(f"BEGIN GENERATED: {marker}", 1)[1].split(
+        f"END GENERATED: {marker}", 1
+    )[0]
+
+
 def test_policy_fixture_has_no_clock_or_provenance_fields() -> None:
     raw = json.loads(
         (MODULE.REPOSITORY_ROOT / MODULE.DEFAULT_POLICY).read_text(encoding="utf-8")
@@ -61,6 +67,7 @@ def test_policy_fixture_has_no_clock_or_provenance_fields() -> None:
 def test_final_policy_pins_quantity_without_an_abi_tombstone() -> None:
     policy = MODULE.load_policy(MODULE.REPOSITORY_ROOT)
     schemas = {schema.source_type: schema for schema in policy.numeric_schemas}
+    dynamic_access = policy.dynamic_access_hints
 
     assert schemas["quantity"].rust_type == "Quantity"
     assert schemas["quantity"].pointer_id == 0x0010
@@ -77,6 +84,145 @@ def test_final_policy_pins_quantity_without_an_abi_tombstone() -> None:
         "decimal",
         "quantity",
     }
+    assert dynamic_access.state_map_key_types == (
+        "int",
+        "decimal",
+        "quantity",
+        "bool",
+        "string",
+        "bytes",
+        "DataSpaceId",
+        "AccountId",
+        "AssetDefinitionId",
+        "AssetId",
+        "NftId",
+        "DomainId",
+        "Name",
+    )
+    assert dynamic_access.bound_kinds == ("range", "take")
+    assert dynamic_access.max_keys == 64
+    assert dynamic_access.base_prefix == "state:"
+    assert dynamic_access.base_identifier == "state_declaration_identifier"
+    assert dynamic_access.base_reserved_prefixes == ("__kotodama_link_",)
+    assert dynamic_access.requires_declared_state_map is True
+    assert dynamic_access.scheduler_authoritative is False
+    assert (
+        policy.declaration_reserved_extras
+        == MODULE.EXPECTED_DECLARATION_RESERVED_EXTRAS
+    )
+    assert {
+        "Json",
+        "AxtDescriptor",
+        "AssetHandle",
+        "ProofBlob",
+        "SoracloudRequest",
+        "SoracloudResponse",
+    }.isdisjoint(dynamic_access.state_map_key_types)
+
+
+def test_dynamic_access_policy_drift_fails_closed(tmp_path: Path) -> None:
+    _copy_generator_inputs(tmp_path)
+    policy_path = tmp_path / MODULE.DEFAULT_POLICY
+    raw = json.loads(policy_path.read_text(encoding="utf-8"))
+    raw["dynamic_access_hints"]["scheduler_authoritative"] = True
+    policy_path.write_text(
+        json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        MODULE.GenerationError,
+        match="must remain advisory",
+    ):
+        MODULE.load_policy(tmp_path)
+
+
+def test_declaration_reserved_extras_drift_fails_closed(tmp_path: Path) -> None:
+    _copy_generator_inputs(tmp_path)
+    policy_path = tmp_path / MODULE.DEFAULT_POLICY
+    raw = json.loads(policy_path.read_text(encoding="utf-8"))
+    raw["declaration_reserved_extras"].remove("is_some")
+    policy_path.write_text(
+        json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        MODULE.GenerationError,
+        match="must exactly cover the compiler-owned V1 declaration vocabulary",
+    ):
+        MODULE.load_policy(tmp_path)
+
+
+def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
+    root = MODULE.REPOSITORY_ROOT
+    policy = MODULE.load_policy(root)
+    grammar = MODULE.load_lexical_grammar(root, policy)
+    semantic_policy = MODULE.render_semantic_policy(policy)
+    assert "V1_DECLARATION_RESERVED_EXTRA_NAMES" in semantic_policy
+    for intrinsic in (
+        "is_some",
+        "is_none",
+        "is_ok",
+        "is_err",
+        "unwrap_or",
+        "unwrap_err_or",
+    ):
+        assert f'"{intrinsic}",' in semantic_policy
+
+    rust_policy = MODULE.render_ivm_abi_access_hint_policy(policy, grammar)
+    assert "DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1" in rust_policy
+    assert "DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1" in rust_policy
+    assert '"state",' in rust_policy
+    assert '"int",' in rust_policy
+    for intrinsic in (
+        "is_some",
+        "is_none",
+        "is_ok",
+        "is_err",
+        "unwrap_or",
+        "unwrap_err_or",
+    ):
+        assert f'"{intrinsic}",' in rust_policy
+    assert '"__kotodama_link_"' in rust_policy
+    assert '"amount",' not in rust_policy
+    assert '"誓約",' not in rust_policy
+
+    validator_paths = (
+        *MODULE.JAVASCRIPT_IDENTIFIER_PATHS,
+        MODULE.PYTHON_MANIFEST_PATH,
+        MODULE.KOTLIN_MANIFEST_PATH,
+        MODULE.JAVA_MANIFEST_PATH,
+        MODULE.SWIFT_MANIFEST_PATH,
+        MODULE.CSHARP_MANIFEST_PATH,
+    )
+    for path in validator_paths:
+        body = _marked_body(
+            (root / path).read_text(encoding="utf-8"),
+            MODULE.VALIDATOR_MARKER_NAME,
+        )
+        assert "range" in body
+        assert "take" in body
+        assert "64" in body
+        assert "DataSpaceId" in body
+        assert "Name" in body
+
+    typescript = _marked_body(
+        (root / MODULE.TYPESCRIPT_PATH).read_text(encoding="utf-8"),
+        "kotodama-v1-dynamic-access-policy",
+    )
+    assert "KOTODAMA_V1_STATE_MAP_KEY_TYPES" in typescript
+    assert "KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS" in typescript
+    assert "KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS: 64" in typescript
+
+    docs = (root / MODULE.GRAMMAR_DOC_PATH).read_text(encoding="utf-8")
+    assert "| Dynamic-access bound kinds (ordered) | `range`, `take` |" in docs
+    assert "| Dynamic-access key bound | `1..=64` |" in docs
+    assert (
+        "One direct declared top-level `StateMap`, encoded as "
+        "`state:<state_declaration_identifier>`"
+    ) in docs
+    assert "Advisory only; never authorization or scheduler-authoritative evidence" in docs
 
 
 def test_repository_generated_outputs_are_current_and_complete() -> None:
@@ -84,7 +230,7 @@ def test_repository_generated_outputs_are_current_and_complete() -> None:
     outputs = MODULE.render_outputs(MODULE.REPOSITORY_ROOT, policy)
 
     assert tuple(outputs) == MODULE.GENERATED_TARGETS
-    assert len(outputs) == 18
+    assert len(outputs) == 19
     assert MODULE.apply_outputs(MODULE.REPOSITORY_ROOT, outputs, check=True) == 0
 
 

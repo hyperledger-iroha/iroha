@@ -15,6 +15,7 @@ const POWER_OF_TWO_V1: u64 = 1_u64 << DECOMPOSITION_BITS_V1;
 const POWER_OF_TWO_HALF_V1: i64 = (POWER_OF_TWO_V1 / 2) as i64;
 const GAMMA_HALF_V1: i64 = (COMPRESSION_GAMMA_V1 / 2) as i64;
 const COMPRESSION_MODULUS_HALF_V1: i64 = (COMPRESSION_MODULUS_V1 / 2) as i64;
+const PROOF_MODULUS_HALF_V1: i64 = (PROOF_MODULUS_V1 / 2) as i64;
 
 /// Rounded high part and signed low part of one proof-ring residue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,11 +105,11 @@ pub fn recompose_gamma_v1(decomposition: GammaDecompositionV1) -> Result<u64, Co
 ///
 /// # Errors
 ///
-/// Rejects non-canonical `r` or a correction outside
-/// `[-gamma/2, gamma/2]`.
+/// Rejects non-canonical `r` or a correction outside the unique centered
+/// proof-ring lift `[-floor(q/2), floor(q/2)]`.
 pub fn make_gamma_hint_v1(residue: u64, correction: i64) -> Result<i64, CompressionErrorV1> {
     require_canonical(residue)?;
-    if !(-GAMMA_HALF_V1..=GAMMA_HALF_V1).contains(&correction) {
+    if !(-PROOF_MODULUS_HALF_V1..=PROOF_MODULUS_HALF_V1).contains(&correction) {
         return Err(CompressionErrorV1::CorrectionOutOfRange);
     }
     let base = gamma_decompose_v1(residue)?;
@@ -200,8 +201,8 @@ pub enum CompressionErrorV1 {
     /// A gamma low part was not in `(-gamma/2,gamma/2]`.
     #[error("Bootle/Lantern gamma low part is outside its canonical range")]
     InvalidGammaLow,
-    /// A correction was outside `[-gamma/2,gamma/2]`.
-    #[error("Bootle/Lantern gamma correction is outside its canonical range")]
+    /// A correction was not the unique centered proof-ring lift.
+    #[error("Bootle/Lantern gamma correction is not a canonical centered proof-ring lift")]
     CorrectionOutOfRange,
     /// A hint was outside `(-m/2,m/2]`.
     #[error("Bootle/Lantern reconciliation hint is outside its canonical range")]
@@ -294,6 +295,8 @@ mod tests {
             PROOF_MODULUS_V1 - 1,
         ] {
             for correction in [
+                -PROOF_MODULUS_HALF_V1,
+                -(GAMMA_HALF_V1 + 1),
                 -GAMMA_HALF_V1,
                 -GAMMA_HALF_V1 + 1,
                 -1,
@@ -301,6 +304,8 @@ mod tests {
                 1,
                 GAMMA_HALF_V1 - 1,
                 GAMMA_HALF_V1,
+                GAMMA_HALF_V1 + 1,
+                PROOF_MODULUS_HALF_V1,
             ] {
                 let hint = make_gamma_hint_v1(residue, correction).expect("hint");
                 let recovered = use_gamma_hint_v1(residue, hint).expect("reconcile");
@@ -310,6 +315,30 @@ mod tests {
                 .expect("corrected decomposition");
                 assert_eq!(recovered, corrected.high);
             }
+        }
+    }
+
+    #[test]
+    fn hint_recovers_the_full_centered_response_domain_on_an_adversarial_corpus() {
+        let mut state = 0xC6BC_2796_92B5_CC83_u64;
+        for _ in 0..100_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let residue = state % PROOF_MODULUS_V1;
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let correction_residue = state % PROOF_MODULUS_V1;
+            let correction =
+                center_proof_residue_v1(correction_residue).expect("canonical correction");
+            let hint = make_gamma_hint_v1(residue, correction).expect("full-domain hint");
+            let recovered = use_gamma_hint_v1(residue, hint).expect("full-domain reconciliation");
+            let corrected = gamma_decompose_v1(canonicalize_i128(
+                i128::from(residue) + i128::from(correction),
+            ))
+            .expect("corrected decomposition");
+            assert_eq!(recovered, corrected.high);
         }
     }
 
@@ -346,7 +375,12 @@ mod tests {
                 Err(CompressionErrorV1::InvalidGammaLow)
             );
         }
-        for correction in [-(GAMMA_HALF_V1 + 1), GAMMA_HALF_V1 + 1] {
+        for correction in [
+            -(PROOF_MODULUS_HALF_V1 + 1),
+            PROOF_MODULUS_HALF_V1 + 1,
+            i64::MIN,
+            i64::MAX,
+        ] {
             assert_eq!(
                 make_gamma_hint_v1(0, correction),
                 Err(CompressionErrorV1::CorrectionOutOfRange)

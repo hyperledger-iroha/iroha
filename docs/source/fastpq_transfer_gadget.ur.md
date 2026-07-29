@@ -2,7 +2,7 @@
 lang: ur
 direction: rtl
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T10:01:27.059307+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (مشترکہ RNS سڑن کے ساتھ رینج گیجٹ)۔
      - `from_balance_after = from_balance_before - amount`۔
      - `to_balance_after = to_balance_before + amount`۔
-   - ایک کسٹم گیٹ میں بھری ہوئی ہے لہذا تینوں مساوات ایک قطار گروپ کا استعمال کرتی ہیں۔2. ** پوسیڈن عزم بلاک **
+   - ایک کسٹم گیٹ میں بھری ہوئی ہے لہذا تینوں مساوات ایک قطار گروپ کا استعمال کرتی ہیں۔
+
+2. ** پوسیڈن عزم بلاک **
    - مشترکہ پوسیڈن لوک اپ ٹیبل کا استعمال کرتے ہوئے `poseidon_preimage_digest` کو دوبارہ شامل کریں جو پہلے سے دوسرے گیجٹ میں استعمال ہوتا ہے۔ ٹریس میں فی ٹرانسفر پوسیڈن راؤنڈ نہیں ہے۔
 
 3. ** مرکل پاتھ بلاک **
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. ** بیچ لوپ **
    - پروگرام `transfer_asset` بلڈرز اور `transfer_v1_batch_end()` کے لوپ سے پہلے `transfer_v1_batch_begin()` پر کال کریں۔ اگرچہ دائرہ کار فعال ہے میزبان ہر منتقلی کو بفر کرتا ہے اور انہیں ایک واحد `TransferAssetBatch` کے طور پر دوبارہ بھیج دیتا ہے ، پوسیڈن/ایس ایم ٹی سیاق و سباق کو ایک بار ایک بیچ میں دوبارہ استعمال کرتے ہوئے۔ ہر اضافی ڈیلٹا میں صرف ریاضی اور دو پتیوں کی جانچ پڑتال ہوتی ہے۔ ٹرانسکرپٹ ڈیکوڈر اب ملٹی ڈیلٹا بیچوں کو قبول کرتا ہے اور ان کو `TransferGadgetInput::deltas` کے طور پر سطح پر رکھتا ہے تاکہ منصوبہ ساز Norito کو دوبارہ پڑھنے کے بغیر گواہوں کو جوڑ سکے۔ معاہدے جن میں پہلے ہی Norito پے لوڈ ہانڈی ہے (جیسے ، CLI/SDKs) `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` کو کال کرکے مکمل طور پر دائرہ کار کو چھوڑ سکتا ہے ، جس میں میزبان کو ایک سیسکل میں مکمل طور پر انکوڈڈ بیچ کے حوالے کیا جاتا ہے۔
 
-# میزبان اور پروور تبدیلیاں| پرت | تبدیلیاں |
+# میزبان اور پروور تبدیلیاں
+
+| پرت | تبدیلیاں |
 | ------- | --------- |
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) شامل کریں تاکہ پروگرام متعدد `transfer_v1` syscals کو انٹرمیڈیٹ ISIS ، پلس `transfer_v1_batch_apply` (`transfer_v1_batch_apply` (`transfer_v1_batch_apply` کے علاوہ |
 | `ivm::host` & ٹیسٹ | کور/ڈیفالٹ میزبان `transfer_v1` کو بیچ کے ساتھ جوڑتے ہیں جبکہ دائرہ کار فعال ہوتا ہے ، سطح `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` ، اور MOCK WSV میزبان بفرز اندراجات سے پہلے رجعت ٹیسٹوں کا ارتکاب کرنے سے پہلے ڈٹرمینسٹک توازن کا دعوی کرسکتا ہے۔ تازہ ترین معلومات .
@@ -125,20 +129,17 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```خارج شدہ JSON فاسٹ پی کیو بیچ نمونے کی آئینہ دار ہے جو `iroha_cli audit witness` اب ڈیفالٹ کے ذریعہ خارج ہوتا ہے (ان کو دبانے کے لئے `--no-fastpq-batches` کو پاس کریں) ، لہذا `scripts/fastpq/check_row_usage.py` اور CI گیٹ مصنوعی رنز کو اسنیپ شاٹس کے خلاف مختلف ہوسکتا ہے جب پلانر کی تبدیلیوں کی توثیق کرتے ہو۔
+```
+
+خارج شدہ JSON فاسٹ پی کیو بیچ نمونے کی آئینہ دار ہے جو `iroha_cli audit witness` اب ڈیفالٹ کے ذریعہ خارج ہوتا ہے (ان کو دبانے کے لئے `--no-fastpq-batches` کو پاس کریں) ، لہذا `scripts/fastpq/check_row_usage.py` اور CI گیٹ مصنوعی رنز کو اسنیپ شاٹس کے خلاف مختلف ہوسکتا ہے جب پلانر کی تبدیلیوں کی توثیق کرتے ہو۔
 
 # رول آؤٹ پلان
 
 1. ** TF-1 (ٹرانسکرپٹ پلمبنگ) **: ✅ `StateTransaction::record_transfer_transcripts` اب ہر Kotodama/بیچ کے لئے Norito ٹرانسکرپٹس کا اخراج کرتا ہے ، Kotodama کے آپریٹرز اور پروور لین (اگر آپ کو کسی پتلی کی ضرورت ہو تو `--no-fastpq-batches` استعمال کریں آؤٹ پٹ). 【کریٹس/آئروہ_کور/ایس آر سی/اسٹیٹ۔ آر ایس: 8801 】【 کریٹس/اروہ_کور/ایس آر سی/سمرگی/گواہ۔
 2. ** TF-2 (گیجٹ پر عمل درآمد) **: ✅ `gadgets::transfer` اب ملٹی ڈیلٹا ٹرانسکرپٹس (بیلنس ریاضی + پوسیڈن ڈائجسٹ) کی توثیق کرتا ہے ، جب میزبان ان کو چھوڑ دیتے ہیں تو ان کو الگ الگ کرنے والے SMT ثبوتوں کی ترکیبیں ، `TransferGadgetPlan` ، اور I18NIC کے ذریعہ ساختی گواہوں کو بے نقاب کرتی ہیں۔ `Trace::transfer_witnesses` ثبوتوں سے ایس ایم ٹی کالموں کو مقبول کرتے ہوئے۔ `fastpq_row_bench` 65536-قطار رجعت کنٹرول کو اپنی گرفت میں لے لیتا ہے لہذا منصوبہ سازوں کو دوبارہ استعمال کیے بغیر Norito کو دوبارہ کھیلے بغیر ٹریک کرتا ہے پے لوڈز۔ 【کریٹس/فاسٹ پی کیو_پروور/ایس آر سی/گیجٹ/ٹرانسفر۔
-3.
-4.
-
 # سوالات کھولیں
 
 - ** ڈومین کی حدود **: 2⁴ قطار سے زیادہ نشانات کے لئے موجودہ FFT پلانر گھبراہٹ۔ TF-2 کو یا تو ڈومین سائز میں اضافہ کرنا چاہئے یا کم بینچ مارک ہدف کی دستاویز کرنا چاہئے۔
 - ** ملٹی ایسٹ بیچز **: ابتدائی گیجٹ فی ڈیلٹا میں ایک ہی اثاثہ شناخت سنبھالتا ہے۔ اگر ہمیں متضاد بیچوں کی ضرورت ہو تو ، ہمیں یہ یقینی بنانا ہوگا کہ پوسیڈن گواہ کو کراس اثاثہ ری پلے کو روکنے کے لئے ہر بار اثاثہ شامل ہوتا ہے۔
-۔
-
 
 یہ دستاویز ڈیزائن کے فیصلوں کا سراغ لگاتی ہے۔ جب سنگ میل اتریں تو اسے روڈ میپ اندراجات کے ساتھ ہم آہنگ رکھیں۔

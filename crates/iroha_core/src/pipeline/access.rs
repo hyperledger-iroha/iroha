@@ -1695,13 +1695,7 @@ fn access_set_from_hint_keys(
 }
 
 fn ingest_dynamic_hint(hint: &DynamicAccessHint, state_keys: &mut BTreeSet<String>) -> Option<()> {
-    if hint.max_keys == 0 {
-        return None;
-    }
-    let rest = hint.base_key.strip_prefix("state:")?;
-    if rest.is_empty() || rest.contains('/') || rest == "*" {
-        return None;
-    }
+    ivm::access_hints::validate_dynamic_access_hint_v1(hint).ok()?;
     state_keys.insert(hint.base_key.clone());
     Some(())
 }
@@ -2549,6 +2543,8 @@ where
     }
     .with_access_logging();
     host.set_prepared_contract_cache(state_ro.prepared_contract_cache());
+    host.hydrate_axt_state(state_ro)
+        .map_err(|e| format!("ivm.axt_state: {e}"))?;
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
     host.set_crypto_config(state_ro.crypto());
@@ -3346,6 +3342,12 @@ mod tests {
         let program = state_get_test_program();
         let code_hash = ivm::contract_code_hash(&program);
         for dynamic_hint in [
+            DynamicAccessHint {
+                base_key: "state:Orders".to_owned(),
+                key_type: "int".to_owned(),
+                bound_kind: "take".to_owned(),
+                max_keys: 1,
+            },
             DynamicAccessHint {
                 base_key: "state:Victim".to_owned(),
                 key_type: "forged-key-type".to_owned(),
@@ -4870,25 +4872,75 @@ seiyaku DynamicAccessCounter {
 
     #[test]
     fn access_set_hints_reject_invalid_dynamic_state_hints() {
-        let zero_bound = vec![
-            iroha_data_model::smart_contract::manifest::DynamicAccessHint {
-                base_key: "state:Orders".to_owned(),
-                key_type: "int".to_owned(),
-                bound_kind: "range".to_owned(),
-                max_keys: 0,
-            },
-        ];
-        assert!(access_set_from_hint_keys(&[], &[], &zero_bound, &[]).is_none());
+        use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
 
-        let wildcard = vec![
-            iroha_data_model::smart_contract::manifest::DynamicAccessHint {
+        let valid = DynamicAccessHint {
+            base_key: "state:Orders".to_owned(),
+            key_type: "int".to_owned(),
+            bound_kind: "range".to_owned(),
+            max_keys: 1,
+        };
+        let invalid = [
+            DynamicAccessHint {
+                max_keys: 0,
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                max_keys: 65,
+                ..valid.clone()
+            },
+            DynamicAccessHint {
                 base_key: "state:*".to_owned(),
-                key_type: "int".to_owned(),
-                bound_kind: "take".to_owned(),
-                max_keys: 64,
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                base_key: "state:Orders/child".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                base_key: "state:".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                base_key: "state:state".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                base_key: "state:int".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                base_key: "state:__kotodama_link_private".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                key_type: "Numeric".to_owned(),
+                ..valid.clone()
+            },
+            DynamicAccessHint {
+                bound_kind: "bounded".to_owned(),
+                ..valid.clone()
             },
         ];
-        assert!(access_set_from_hint_keys(&[], &[], &wildcard, &[]).is_none());
+
+        for hint in invalid {
+            assert!(
+                access_set_from_hint_keys(&[], &[], &[hint.clone()], &[]).is_none(),
+                "invalid dynamic read hint must reject: {hint:?}"
+            );
+            assert!(
+                access_set_from_hint_keys(&[], &[], &[], &[hint.clone()]).is_none(),
+                "invalid dynamic write hint must reject: {hint:?}"
+            );
+        }
+
+        let upper_bound = vec![DynamicAccessHint {
+            base_key: "state:Orders".to_owned(),
+            key_type: "int".to_owned(),
+            bound_kind: "take".to_owned(),
+            max_keys: ivm::access_hints::DYNAMIC_ACCESS_HINT_MAX_KEYS_V1,
+        }];
+        assert!(access_set_from_hint_keys(&[], &[], &upper_bound, &[]).is_some());
     }
 
     #[test]

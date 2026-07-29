@@ -94,6 +94,7 @@ export MACOSX_DEPLOYMENT_TARGET
 BRIDGE_VERSION=""
 PRIVACY_PRODUCTION_ENABLED=0
 ALLOW_DIRTY_SOURCE=0
+CARGO_LOCKFILE="$ROOT_DIR/Cargo.lock"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-version)
@@ -113,9 +114,24 @@ while [[ $# -gt 0 ]]; do
     --allow-dirty-source)
       ALLOW_DIRTY_SOURCE=1
       ;;
+    --lockfile-path)
+      shift
+      CARGO_LOCKFILE="${1:-}"
+      if [[ -z "$CARGO_LOCKFILE" ]]; then
+        echo "[-] --lockfile-path requires a value" >&2
+        exit 1
+      fi
+      ;;
+    --lockfile-path=*)
+      CARGO_LOCKFILE="${1#*=}"
+      if [[ -z "$CARGO_LOCKFILE" ]]; then
+        echo "[-] --lockfile-path requires a value" >&2
+        exit 1
+      fi
+      ;;
     *)
       echo "[-] Unknown argument: $1" >&2
-      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled] [--allow-dirty-source]" >&2
+      echo "    Usage: $0 [--bridge-version <version>] [--privacy-production-enabled] [--allow-dirty-source] [--lockfile-path <absolute-Cargo.lock>]" >&2
       exit 1
       ;;
   esac
@@ -261,17 +277,70 @@ run_isolated_python() {
     "$PYTHON_BINARY" -I "$@"
 }
 
+selected_cargo_lock_sha256() {
+  run_isolated_python - "$CARGO_LOCKFILE" <<'PY'
+import hashlib
+import os
+from pathlib import Path
+import stat
+import sys
+
+candidate = Path(sys.argv[1])
+if not candidate.is_absolute():
+    raise SystemExit("selected Cargo lock path must be absolute")
+if candidate != Path(os.path.abspath(candidate)):
+    raise SystemExit("selected Cargo lock path must be canonical")
+try:
+    metadata = candidate.lstat()
+    resolved = candidate.resolve(strict=True)
+except OSError:
+    raise SystemExit(
+        "selected Cargo lock must be a non-symbolic regular file"
+    ) from None
+if (
+    resolved != candidate
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISREG(metadata.st_mode)
+):
+    raise SystemExit("selected Cargo lock must be a non-symbolic regular file")
+digest = hashlib.sha256()
+with candidate.open("rb") as handle:
+    while chunk := handle.read(1024 * 1024):
+        digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+CARGO_LOCK_SHA256_START="$(selected_cargo_lock_sha256)"
+
+assert_selected_cargo_lock() {
+  local phase="$1"
+  local current_digest
+  if ! current_digest="$(selected_cargo_lock_sha256)"; then
+    echo "[-] Selected Cargo lock became unreadable during $phase" >&2
+    exit 1
+  fi
+  if [[ "$current_digest" != "$CARGO_LOCK_SHA256_START" ]]; then
+    echo "[-] Selected Cargo lock changed during $phase" >&2
+    exit 1
+  fi
+}
+
 bridge_source_fingerprint() {
-  run_source_seal fingerprint --root "$ROOT_DIR" --platform apple
+  run_source_seal fingerprint --root "$ROOT_DIR" --platform apple \
+    --lockfile-path "$CARGO_LOCKFILE"
 }
 
 bridge_source_status() {
-  run_source_seal status --root "$ROOT_DIR" --platform apple
+  run_source_seal status --root "$ROOT_DIR" --platform apple \
+    --lockfile-path "$CARGO_LOCKFILE"
 }
 
+assert_selected_cargo_lock "initial source authentication"
 SOURCE_COMMIT_START=$(run_source_git -C "$ROOT_DIR" rev-parse --verify HEAD)
 SOURCE_STATUS_START=$(bridge_source_status)
 SOURCE_FINGERPRINT_START=$(bridge_source_fingerprint)
+assert_selected_cargo_lock "initial source authentication"
 if [[ -n "$SOURCE_STATUS_START" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
   echo "[-] NoritoBridge production artifacts require a clean dependency-closure source tree" >&2
   echo "    Commit the bridge inputs or pass --allow-dirty-source for a fingerprint-bound local integration artifact." >&2
@@ -281,6 +350,7 @@ fi
 assert_bridge_source_seal() {
   local phase="$1"
   local current_commit current_status current_fingerprint
+  assert_selected_cargo_lock "$phase"
   if ! current_commit=$(run_source_git -C "$ROOT_DIR" rev-parse --verify HEAD) \
       || ! current_status=$(bridge_source_status) \
       || ! current_fingerprint=$(bridge_source_fingerprint); then
@@ -293,6 +363,7 @@ assert_bridge_source_seal() {
     echo "[-] NoritoBridge source changed during $phase; refusing mixed-source Apple slices" >&2
     exit 1
   fi
+  assert_selected_cargo_lock "$phase"
 }
 
 if [[ "${NORITO_BRIDGE_SOURCE_SEAL_TEST_ONLY:-0}" == "1" ]]; then
@@ -533,6 +604,9 @@ run_hermetic_apple_cargo() {
   local cargo_target_dir="$2"
   local sdkroot="$3"
   shift 3
+  local cargo_subcommand="$1"
+  shift
+  local cargo_status
   local platform_environment=()
   case "$profile" in
     apple-ios-device)
@@ -562,23 +636,32 @@ run_hermetic_apple_cargo() {
       exit 1
       ;;
   esac
-  "$PYTHON_BINARY" -I "$HERMETIC_RUNNER" \
-    --profile "$profile" \
-    --set "CARGO=$CARGO_BINARY" \
-    --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
-    --set "CARGO_INCREMENTAL=0" \
-    --set "CARGO_NET_OFFLINE=true" \
-    --set "CARGO_TARGET_DIR=$cargo_target_dir" \
-    --set "HOME=$USER_HOME_DIR" \
-    --set "LANG=C.UTF-8" \
-    --set "LC_ALL=C.UTF-8" \
-    --set "NORITO_SKIP_BINDINGS_SYNC=1" \
-    --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin" \
-    --set "RUSTC=$RUSTC_BINARY" \
-    --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
-    --set "TMPDIR=$MOBILE_TMPDIR" \
-    "${platform_environment[@]}" \
-    -- "$CARGO_BINARY" "$@"
+  assert_selected_cargo_lock "the $profile Cargo preflight"
+  if "$PYTHON_BINARY" -I "$HERMETIC_RUNNER" \
+      --profile "$profile" \
+      --set "CARGO=$CARGO_BINARY" \
+      --set "CARGO_HOME=$MOBILE_CARGO_HOME" \
+      --set "CARGO_INCREMENTAL=0" \
+      --set "CARGO_NET_OFFLINE=true" \
+      --set "CARGO_TARGET_DIR=$cargo_target_dir" \
+      --set "HOME=$USER_HOME_DIR" \
+      --set "LANG=C.UTF-8" \
+      --set "LC_ALL=C.UTF-8" \
+      --set "NORITO_SKIP_BINDINGS_SYNC=1" \
+      --set "PATH=${CARGO_BINARY%/*}:${RUSTC_BINARY%/*}:/usr/bin:/bin" \
+      --set "RUSTC=$RUSTC_BINARY" \
+      --set "RUSTC_BOOTSTRAP=1" \
+      --set "RUSTUP_HOME=$MOBILE_RUSTUP_HOME" \
+      --set "TMPDIR=$MOBILE_TMPDIR" \
+      "${platform_environment[@]}" \
+      -- "$CARGO_BINARY" "$cargo_subcommand" \
+      -Z unstable-options --lockfile-path "$CARGO_LOCKFILE" "$@"; then
+    cargo_status=0
+  else
+    cargo_status=$?
+  fi
+  assert_selected_cargo_lock "the $profile Cargo invocation"
+  return "$cargo_status"
 }
 
 if [[ "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
@@ -885,6 +968,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
         "RUSTC",
+        "RUSTC_BOOTSTRAP",
         "RUSTUP_HOME",
         "SDKROOT",
         "TMPDIR"
@@ -904,6 +988,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
         "RUSTC",
+        "RUSTC_BOOTSTRAP",
         "RUSTUP_HOME",
         "SDKROOT",
         "TMPDIR"
@@ -922,6 +1007,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
         "NORITO_SKIP_BINDINGS_SYNC",
         "PATH",
         "RUSTC",
+        "RUSTC_BOOTSTRAP",
         "RUSTUP_HOME",
         "SDKROOT",
         "TMPDIR"
@@ -949,6 +1035,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
   "source_commit": "$SOURCE_COMMIT",
   "source_tree_dirty": $SOURCE_TREE_DIRTY,
   "source_fingerprint_sha256": "$SOURCE_FINGERPRINT",
+  "cargo_lock_sha256": "$CARGO_LOCK_SHA256_START",
   "bridge_header_sha256": "$HEADER_HASH",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
@@ -962,6 +1049,10 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_sorafs_reference_validate_bundle_json",
+    "connect_norito_sorafs_reference_validate_governance_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_block_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
@@ -1402,11 +1493,13 @@ assert_bridge_source_seal "staged artifact validation"
 if [[ "$ALLOW_DIRTY_SOURCE" == "1" ]]; then
   MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 \
     MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+    MOBILE_SDK_APPLE_CARGO_LOCK_PATH="$CARGO_LOCKFILE" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
     MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
 else
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$PUBLISH_ROOT" \
+    MOBILE_SDK_APPLE_CARGO_LOCK_PATH="$CARGO_LOCKFILE" \
     MOBILE_SDK_STAGED_BUILD_VALIDATION=1 \
     MOBILE_SDK_PROSPECTIVE_SWIFT_LOADER_PATH="$PUBLISH_PROSPECTIVE_LOADER" \
     bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only

@@ -15894,9 +15894,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   workflow test command. The focused Kagemusha and SoraFS JS runner patterns
   must include their runtime-gate meta tests so those lane checks prove the
 	  runtime preflights directly. The JavaScript privacy helper lane must keep
-	  Jindo, SIS-with-hints, and the research adapter source/package-dist exports
-	  covered against class-instance option objects while retaining raw envelope
-	  bytes verifier shortcuts for canonical proof bytes. It must also keep
+	  Jindo and the research adapter source/package-dist exports covered against
+	  class-instance option objects while retaining raw envelope bytes verifier
+	  shortcuts for canonical proof bytes. It must keep both retired SIS
+	  identifiers (`sis-hints-anoncred-pq-v0` and `sis-with-hints`) rejection-only
+	  across source and package-dist surfaces. It must also keep
 	  research catalog labels for Orchard, FCMP++, Miden, Aztec, and PQ MASP
 	  pinned to their dedicated OpenVerify backend tags.
 - Keep privacy, Kagemusha, and SoraFS Python workflow lanes on the Python 3.11
@@ -15921,11 +15923,12 @@ digest-bound pending-XSD source probe summaries for reviewed
   if they are tracked. The Python native loader must keep stale macOS extension
 	  artifacts fail-closed instead of aborting package imports. The Python privacy
 	  lane must also keep VeRange, Anonymous PGC, zkAt, ZK-AMS, Vega, Silent
-	  Threshold, ZK-X.509, Jindo, SIS-with-hints, and the Orchard/Penumbra/FCMP++/
-	  Miden/Aztec/PQ MASP research adapters on the plain-dict contract, including
-	  nested commitment descriptors and adapter metadata, while retaining the raw
+	  Threshold, ZK-X.509, Jindo, and the Orchard/Penumbra/FCMP++/Miden/Aztec/PQ
+	  MASP research adapters on the plain-dict contract, including nested
+	  commitment descriptors and adapter metadata, while retaining the raw
 	  envelope bytes verifier shortcut for callers that already hold canonical
-	  proof bytes.
+	  proof bytes. Both retired SIS identifiers (`sis-hints-anoncred-pq-v0` and
+	  `sis-with-hints`) must remain rejection-only.
 - Keep public SCCP release evidence tied to every UI-side full-light-client
   role helper, not only aggregate request builders; Solana and TON readiness
   rows now require the per-role audit proof request symbols across web, Python,
@@ -23528,14 +23531,13 @@ signed ancestor-linked solid-block header proof,
 
 - Recover the independently archived original `Cargo.lock` and toolchain
   provenance for the source-evidenced predecessor
-  `a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`, authenticate them with its source
-  and 33-workload hash inventory, then run it and the candidate on the same
-  controlled runner. That Git revision has no lock, and the available older
-  lock is incompatible; do not reconstruct it from the candidate lock or
-  harness. Until the original archive is recovered, no reproducible locked 5%
-  comparison is claimed.
-- Run the C# SDK gate on a supported .NET 8 environment; `dotnet` is unavailable
-  on the current host.
+  `a9dbbe91eb86765b1226ba071b30d2e3b4ab20ab`, then run its 33 comparable native
+  workloads and the candidate on the same controlled runner. The predecessor
+  contains no `Cargo.lock`; its workload hashes bind benchmark source only and
+  cannot replace the missing provenance. Until it is recovered, no
+  reproducible locked 5% comparison is claimed.
+- Run the current C# Numeric V1 and contract-manifest SDK gate on a supported
+  .NET 8 environment; `dotnet` is unavailable on this host.
 
 ## Privacy, ZK, and FHE
 

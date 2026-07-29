@@ -27,6 +27,7 @@ pub(super) fn evaluation_table_size(variable_count: usize) -> Result<usize, Alge
     Ok(size)
 }
 
+#[cfg(test)]
 pub(super) fn log2_ceil(value: usize) -> Result<usize, AlgebraError> {
     if value == 0 {
         return Err(AlgebraError::InvalidDimension);
@@ -68,6 +69,7 @@ pub(super) fn eq_evaluate(left: &[Scalar], right: &[Scalar]) -> Result<Scalar, A
     Ok(result)
 }
 
+#[cfg(test)]
 pub(super) fn power_evaluate(
     base: Scalar,
     variable_count: usize,
@@ -89,6 +91,7 @@ pub(super) fn power_evaluate(
     Ok(result)
 }
 
+#[cfg(test)]
 pub(super) fn sparse_polynomial_evaluate(
     variable_count: usize,
     values: &[Scalar],

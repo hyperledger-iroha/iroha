@@ -1852,10 +1852,10 @@ impl Iso20022BridgeRuntime {
                 ValidationFail::AxtReject(ctx) => {
                     let mut detail =
                         format!("AXT rejection ({}): {}", ctx.reason.label(), ctx.detail);
-                    if ctx.snapshot_version > 0 {
+                    if let Some(snapshot_version) = ctx.snapshot_version {
                         let _ = FmtWrite::write_fmt(
                             &mut detail,
-                            format_args!(" snapshot_version={}", ctx.snapshot_version),
+                            format_args!(" snapshot_version={snapshot_version}"),
                         );
                     }
                     if let Some(dsid) = ctx.dataspace {
@@ -22804,7 +22804,7 @@ mod tests {
             reason: AxtRejectReason::HandleEra,
             dataspace: Some(DataSpaceId::new(11)),
             lane: Some(LaneId::new(2)),
-            snapshot_version: 99,
+            snapshot_version: Some(99),
             detail: "handle era below policy minimum".to_owned(),
             next_min_handle_era: Some(7),
             next_min_sub_nonce: Some(4),

@@ -90,7 +90,8 @@ impl MergeLedgerCandidate {
     /// Return the canonical framed Norito body transferred before QC signing.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
-        norito::to_bytes(self).expect("merge candidate must have a canonical Norito encoding")
+        norito::encode_canonical(self)
+            .expect("merge candidate must have a canonical Norito encoding")
     }
 
     /// Return the domain-separated hash of [`Self::canonical_bytes`].
@@ -806,6 +807,23 @@ mod tests {
             queue_plan_admissions: Vec::new(),
             global_state_root: Hash::new(b"global"),
         };
+        let canonical_candidate_bytes = candidate.canonical_bytes();
+        let canonical_candidate_hash = candidate.canonical_hash();
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                candidate.canonical_bytes(),
+                canonical_candidate_bytes,
+                "merge candidate bytes must ignore the caller's ambient Norito layout"
+            );
+            assert_eq!(
+                candidate.canonical_hash(),
+                canonical_candidate_hash,
+                "merge candidate identity must ignore the caller's ambient Norito layout"
+            );
+        }
         let chain_id: ChainId = "nexus-merge".parse().expect("chain id parses");
         let validator_set = Vec::<PeerId>::new();
         let validator_set_hash = HashOf::new(&validator_set);

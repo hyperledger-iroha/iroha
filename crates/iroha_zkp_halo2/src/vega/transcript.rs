@@ -2,8 +2,10 @@
 
 use thiserror::Error;
 
+#[cfg(test)]
+use super::VegaT256PointV1;
 use super::{
-    VegaCurveError, VegaT256PointV1, VegaT256ScalarV1,
+    VegaCurveError, VegaT256ScalarV1,
     commitment::{Commitment, CommitmentError},
     sponge::keccak256,
 };
@@ -80,6 +82,7 @@ impl VegaTranscriptV1 {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn absorb_point(
         &mut self,
         label: &'static [u8],

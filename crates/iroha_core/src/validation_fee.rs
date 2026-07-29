@@ -3398,6 +3398,7 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1,
         iroha_data_model::isi::privacy::PublishPrivacyRootV1,
         iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1,
+        iroha_data_model::isi::privacy::BootstrapPrivacyProofManagedPoolV1,
         iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1,
         iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1,
         iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1,

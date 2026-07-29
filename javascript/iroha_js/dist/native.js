@@ -223,6 +223,9 @@ function verifyNativeBindingInternal(
   const expectedPeUnsignedSize = expectedEntry?.pe_unsigned_size;
   const expectedSourceGitRevision = expectedEntry?.source_git_revision;
   const expectedSourceTreeClean = expectedEntry?.source_tree_clean;
+  const expectedSourceTreeSha256 = expectedEntry?.source_tree_sha256;
+  const expectedBuildExecutionPolicy = expectedEntry?.build_execution_policy;
+  const expectedBuildProvenanceVersion = expectedEntry?.build_provenance_version;
   if (!validChecksumEntry(expectedEntry, platform)) {
     return {
       ok: false,
@@ -340,8 +343,11 @@ function verifyNativeBindingInternal(
     ...(expectedSourceGitRevision === undefined
       ? {}
       : {
+          buildExecutionPolicy: expectedBuildExecutionPolicy,
+          buildProvenanceVersion: expectedBuildProvenanceVersion,
           sourceGitRevision: expectedSourceGitRevision,
           sourceTreeClean: expectedSourceTreeClean,
+          sourceTreeSha256: expectedSourceTreeSha256,
         }),
   };
   if (retainBytes) {
@@ -543,10 +549,13 @@ function validChecksumEntry(entry, platform) {
     return false;
   }
   const allowed = new Set([
+    "build_execution_policy",
+    "build_provenance_version",
     "cargo_profile",
     "sha256",
     "source_git_revision",
     "source_tree_clean",
+    "source_tree_sha256",
   ]);
   const hasMachO = Object.hasOwn(entry, "mach_o_signing_independent_sha256");
   const hasPeHash = Object.hasOwn(entry, "pe_signing_independent_sha256");
@@ -565,12 +574,28 @@ function validChecksumEntry(entry, platform) {
   }
   const hasSourceRevision = Object.hasOwn(entry, "source_git_revision");
   const hasSourceClean = Object.hasOwn(entry, "source_tree_clean");
+  const hasSourceTreeSha256 = Object.hasOwn(entry, "source_tree_sha256");
+  const hasBuildExecutionPolicy = Object.hasOwn(
+    entry,
+    "build_execution_policy",
+  );
+  const hasBuildProvenanceVersion = Object.hasOwn(
+    entry,
+    "build_provenance_version",
+  );
   if (
-    hasSourceRevision !== hasSourceClean ||
-    (hasSourceRevision &&
-      (typeof entry.source_git_revision !== "string" ||
-        !/^[0-9a-f]{40}$/u.test(entry.source_git_revision) ||
-        typeof entry.source_tree_clean !== "boolean"))
+    !hasBuildExecutionPolicy ||
+    !hasBuildProvenanceVersion ||
+    !hasSourceRevision ||
+    !hasSourceClean ||
+    !hasSourceTreeSha256 ||
+    entry.build_execution_policy !== "trusted-local-cargo-v1" ||
+    entry.build_provenance_version !== 3 ||
+    typeof entry.source_git_revision !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(entry.source_git_revision) ||
+    typeof entry.source_tree_clean !== "boolean" ||
+    typeof entry.source_tree_sha256 !== "string" ||
+    !SHA256_PATTERN.test(entry.source_tree_sha256)
   ) {
     return false;
   }

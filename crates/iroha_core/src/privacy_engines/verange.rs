@@ -14,8 +14,8 @@ use thiserror::Error;
 
 use super::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
-    TranscriptV1, generator_digest, hash_to_curve_rfc9380, random_nonzero_scalar,
-    validate_generator_independence,
+    TranscriptV1, generator_digest, hash_to_curve_rfc9380, health_checked_p256_rng_v1,
+    random_nonzero_scalar, validate_generator_independence,
 };
 
 /// Closed suite identifier committed by every VeRange transcript.
@@ -42,6 +42,30 @@ const VERANGE_H_DST_V1: &[u8] = b"IROHA-VERANGE-V1-H-P256_XMD:SHA-256_SSWU_RO_";
 const PARAMETER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.verange.type1.parameters.v1";
 const BATCH_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.verange.type1.batch-commitments.v1";
 const MAX_PROVER_RESTARTS: usize = 128;
+const MAX_VERANGE_TYPE1_SEQUENCE_ELEMENTS_V1: usize = 64;
+const MAX_VERANGE_TYPE1_TOTAL_ELEMENTS_V1: usize = 8 + 8 + 64;
+const MAX_VERANGE_TYPE1_BATCH_TOTAL_ELEMENTS_V1: usize =
+    MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1 * (1 + MAX_VERANGE_TYPE1_TOTAL_ELEMENTS_V1);
+
+fn verange_proof_decode_limits(payload_len: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        MAX_VERANGE_TYPE1_SEQUENCE_ELEMENTS_V1,
+        payload_len,
+        MAX_VERANGE_TYPE1_TOTAL_ELEMENTS_V1,
+        MAX_VERANGE_TYPE1_PROOF_BYTES_V1.saturating_mul(4),
+        16,
+    )
+}
+
+fn verange_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        MAX_VERANGE_TYPE1_SEQUENCE_ELEMENTS_V1,
+        payload_len,
+        MAX_VERANGE_TYPE1_BATCH_TOTAL_ELEMENTS_V1,
+        MAX_VERANGE_TYPE1_BATCH_PROOF_BYTES_V1.saturating_mul(4),
+        24,
+    )
+}
 
 /// Admitted VeRange bit widths and their exact matrix geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -500,8 +524,14 @@ impl VeRangeType1ProofV1 {
             }
             .into());
         }
-        let proof = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| P256EngineError::InvalidProofEncoding)?;
+        let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            verange_proof_decode_limits(bytes.len()),
+        )
+        .map_err(|_| P256EngineError::InvalidProofEncoding)?;
+        if proof.encode().as_slice() != bytes {
+            return Err(P256EngineError::InvalidProofEncoding.into());
+        }
         proof.validate_wire()?;
         Ok(proof)
     }
@@ -587,8 +617,14 @@ impl VeRangeType1BatchProofV1 {
             }
             .into());
         }
-        let proof = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| P256EngineError::InvalidProofEncoding)?;
+        let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            verange_batch_decode_limits(bytes.len()),
+        )
+        .map_err(|_| P256EngineError::InvalidProofEncoding)?;
+        if proof.encode().as_slice() != bytes {
+            return Err(P256EngineError::InvalidProofEncoding.into());
+        }
         proof.validate_wire()?;
         Ok(proof)
     }
@@ -724,6 +760,9 @@ pub enum VeRangeError {
     /// Prover randomness repeatedly produced a prohibited zero/identity intermediate.
     #[error("VeRange prover exhausted its fixed restart bound")]
     ProverRestartExhausted,
+    /// A locally produced proof failed the independent public verifier.
+    #[error("VeRange prover self-check failed")]
+    ProverSelfCheckFailed,
 }
 
 /// Commit to a value under the exact generator basis for `profile`.
@@ -766,6 +805,16 @@ pub fn prove<R>(
 where
     R: CryptoRng + RngCore,
 {
+    validate_prover_witness(statement, value, blinding)?;
+    let mut checked_rng = health_checked_p256_rng_v1(rng)?;
+    prove_validated(statement, value, blinding, &mut checked_rng)
+}
+
+fn validate_prover_witness(
+    statement: &VeRangeType1StatementV1<'_>,
+    value: u64,
+    blinding: &SecretScalarV1,
+) -> Result<(), VeRangeError> {
     if !statement.profile.value_is_admitted(value) {
         return Err(VeRangeError::WitnessOutOfRange {
             value,
@@ -775,11 +824,25 @@ where
     if commit(statement.profile, value, blinding)? != statement.commitment {
         return Err(VeRangeError::CommitmentOpeningMismatch);
     }
+    Ok(())
+}
 
+fn prove_validated<R>(
+    statement: &VeRangeType1StatementV1<'_>,
+    value: u64,
+    blinding: &SecretScalarV1,
+    rng: &mut R,
+) -> Result<VeRangeType1ProofV1, VeRangeError>
+where
+    R: CryptoRng + RngCore,
+{
     let parameters = VeRangeParametersV1::for_profile(statement.profile)?;
     for _ in 0..MAX_PROVER_RESTARTS {
         match prove_once(statement, value, blinding, rng, parameters) {
-            Ok(proof) => return Ok(proof),
+            Ok(proof) => {
+                verify(statement, &proof).map_err(|_| VeRangeError::ProverSelfCheckFailed)?;
+                return Ok(proof);
+            }
             Err(VeRangeError::P256(P256EngineError::IdentityPoint))
             | Err(VeRangeError::P256(P256EngineError::ZeroScalar)) => continue,
             Err(error) => return Err(error),
@@ -1078,13 +1141,17 @@ where
             proofs: 0,
         });
     }
+    for index in 0..statement.len() {
+        validate_prover_witness(&statement.child(index), values[index], &blindings[index])?;
+    }
+    let mut checked_rng = health_checked_p256_rng_v1(rng)?;
     let mut proofs = Vec::with_capacity(statement.len());
     for index in 0..statement.len() {
-        proofs.push(prove(
+        proofs.push(prove_validated(
             &statement.child(index),
             values[index],
             &blindings[index],
-            rng,
+            &mut checked_rng,
         )?);
     }
     let batch = VeRangeType1BatchProofV1 {
@@ -1093,6 +1160,7 @@ where
         proofs,
     };
     batch.validate_wire()?;
+    verify_batch(statement, &batch).map_err(|_| VeRangeError::ProverSelfCheckFailed)?;
     Ok(batch)
 }
 
@@ -1257,6 +1325,51 @@ mod tests {
     }
 
     impl CryptoRng for KatRng {}
+
+    #[derive(Clone, Copy)]
+    enum AdversarialRngMode {
+        Periodic,
+        PartialFailure,
+        Panic,
+    }
+
+    struct AdversarialRng(AdversarialRngMode);
+
+    impl RngCore for AdversarialRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("VeRange must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("VeRange must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("VeRange must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            match self.0 {
+                AdversarialRngMode::Periodic => {
+                    for (index, byte) in destination.iter_mut().enumerate() {
+                        *byte = ((index % 8) as u8).wrapping_mul(37).wrapping_add(11);
+                    }
+                    Ok(())
+                }
+                AdversarialRngMode::PartialFailure => {
+                    for (index, byte) in destination.iter_mut().take(17).enumerate() {
+                        *byte = index as u8;
+                    }
+                    Err(RngError::new("injected partial VeRange entropy failure"))
+                }
+                AdversarialRngMode::Panic => {
+                    panic!("invalid VeRange witness consumed entropy")
+                }
+            }
+        }
+    }
+
+    impl CryptoRng for AdversarialRng {}
 
     fn scalar(value: u8) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
@@ -1584,6 +1697,46 @@ mod tests {
     }
 
     #[test]
+    fn prover_entropy_is_health_checked_after_witness_validation() {
+        let profile = VeRangeBitLengthV1::Bits32;
+        let value = 19;
+        let blinding = scalar(9);
+        let commitment = commit(profile, value, &blinding).expect("commitment");
+        let statement =
+            VeRangeType1StatementV1::new(profile, commitment, binding(profile)).expect("statement");
+
+        assert!(matches!(
+            prove(
+                &statement,
+                value,
+                &blinding,
+                &mut AdversarialRng(AdversarialRngMode::Periodic),
+            ),
+            Err(VeRangeError::P256(
+                P256EngineError::RandomnessHealthCheckFailed
+            ))
+        ));
+        assert!(matches!(
+            prove(
+                &statement,
+                value,
+                &blinding,
+                &mut AdversarialRng(AdversarialRngMode::PartialFailure),
+            ),
+            Err(VeRangeError::P256(P256EngineError::RandomnessUnavailable))
+        ));
+        assert!(matches!(
+            prove(
+                &statement,
+                value + 1,
+                &blinding,
+                &mut AdversarialRng(AdversarialRngMode::Panic),
+            ),
+            Err(VeRangeError::CommitmentOpeningMismatch)
+        ));
+    }
+
+    #[test]
     fn exact_decoder_rejects_every_truncation_and_trailing_data() {
         let (_, _, proof) = fixture(VeRangeBitLengthV1::Bits32, 17);
         let bytes = proof.encode();
@@ -1599,6 +1752,32 @@ mod tests {
         assert!(matches!(
             VeRangeType1ProofV1::decode_exact(&vec![0; MAX_VERANGE_TYPE1_PROOF_BYTES_V1 + 1]),
             Err(VeRangeError::P256(P256EngineError::ProofTooLarge { .. }))
+        ));
+    }
+
+    #[test]
+    fn decoder_preflights_oversized_and_forged_vector_counts() {
+        let (_, _, mut proof) = fixture(VeRangeBitLengthV1::Bits32, 19);
+        proof.responses.resize(
+            MAX_VERANGE_TYPE1_SEQUENCE_ELEMENTS_V1 + 1,
+            proof.responses[0],
+        );
+        let encoded = proof.encode();
+        assert!(matches!(
+            VeRangeType1ProofV1::decode_exact(&encoded),
+            Err(VeRangeError::P256(P256EngineError::InvalidProofEncoding))
+        ));
+
+        let encoded_count = 65_u64.to_le_bytes();
+        let count_offset = encoded
+            .windows(encoded_count.len())
+            .position(|window| window == encoded_count)
+            .expect("oversized response count is present in canonical wire");
+        let mut forged = encoded;
+        forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(matches!(
+            VeRangeType1ProofV1::decode_exact(&forged),
+            Err(VeRangeError::P256(P256EngineError::InvalidProofEncoding))
         ));
     }
 

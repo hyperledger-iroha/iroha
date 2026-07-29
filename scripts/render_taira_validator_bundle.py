@@ -14,12 +14,49 @@ from typing import Any
 
 DEFAULT_NETWORK_ADDRESS = "0.0.0.0:1337"
 DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
+DEFAULT_INSTALL_ROOT = Path("/etc/iroha/taira-validator")
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 128
 TAIRA_CHAIN_DISCRIMINANT = 369
 TAIRA_DS_ASSET_ALIAS = "ds#boi.is"
 TAIRA_DS_ASSET_SCALE = 2
+MIB = 1024 * 1024
+# First-release privacy admission permits one 9 MiB action per 10 MiB
+# transaction and two such actions per block. The body retains another 1 MiB
+# for canonical block framing and context attachments.
+TAIRA_PRIVACY_MAX_ACTION_BYTES = 9 * MIB
+TAIRA_TRANSACTION_MAX_BYTES = 10 * MIB
+TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK = 2
+TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES = MIB
+TAIRA_BLOCK_MAX_PAYLOAD_BYTES = (
+    TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK * TAIRA_TRANSACTION_MAX_BYTES
+    + TAIRA_BLOCK_BODY_FRAME_HEADROOM_BYTES
+)
+# Sumeragi isolates an ordinary body envelope, a completion envelope with the
+# recommended 1,024-hash manifest, and one timeout vote for every source.
+SUMERAGI_BODY_ENVELOPE_HEADROOM_BYTES = 64 * 1024
+SUMERAGI_RECOMMENDED_MANIFEST_WIRE_BYTES = 8 + 1024 * 33
+SUMERAGI_TIMEOUT_VOTE_RESERVE_BYTES = 64 * 1024
+TAIRA_BODY_SOURCE_MIN_BYTES = (
+    2 * (TAIRA_BLOCK_MAX_PAYLOAD_BYTES + SUMERAGI_BODY_ENVELOPE_HEADROOM_BYTES)
+    + SUMERAGI_RECOMMENDED_MANIFEST_WIRE_BYTES
+    + SUMERAGI_TIMEOUT_VOTE_RESERVE_BYTES
+)
+# Preserve the reviewed whole-MiB deployment margin above the exact minimum.
+TAIRA_BODY_SOURCE_BYTES = (
+    (TAIRA_BODY_SOURCE_MIN_BYTES + MIB - 1) // MIB
+) * MIB
+# Exact completion/P2P geometry is checked by the node at height activation.
+# The deployment rounds its maximum block-sync plaintext frame to the next MiB
+# and its maximum 10 MiB transaction frame to the next MiB. The global cap adds
+# the first-release ChaCha20-Poly1305 nonce/tag to the block-sync ceiling.
+TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES = 11 * MIB
+TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES = 22 * MIB
+TAIRA_AEAD_FRAME_OVERHEAD_BYTES = 12 + 16
+TAIRA_MAX_FRAME_BYTES = (
+    TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES + TAIRA_AEAD_FRAME_OVERHEAD_BYTES
+)
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 I105_ALPHABET = tuple(BASE58_ALPHABET) + (
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
@@ -128,6 +165,19 @@ def _scaled_sumeragi_body_bytes(
     sumeragi = template.get("sumeragi")
     if not isinstance(sumeragi, dict):
         raise ValueError("config template must define a `[sumeragi]` table")
+    block = sumeragi.get("block")
+    if not isinstance(block, dict):
+        raise ValueError("config template must define a `[sumeragi.block]` table")
+    block_context = "config template `[sumeragi.block]`"
+    max_payload_bytes = _require_positive_integer(
+        block, "max_payload_bytes", block_context
+    )
+    if max_payload_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES:
+        raise ValueError(
+            f"{block_context} field `max_payload_bytes` must be at least "
+            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES} bytes to carry two maximum "
+            "first-release privacy transactions and canonical block framing"
+        )
     queues = sumeragi.get("queues")
     if not isinstance(queues, dict):
         raise ValueError("config template must define a `[sumeragi.queues]` table")
@@ -137,6 +187,48 @@ def _scaled_sumeragi_body_bytes(
     authenticated_non_validator_sources = _require_positive_integer(
         queues, "authenticated_non_validator_sources", context
     )
+    minimum_source_bytes = (
+        2 * (max_payload_bytes + SUMERAGI_BODY_ENVELOPE_HEADROOM_BYTES)
+        + SUMERAGI_RECOMMENDED_MANIFEST_WIRE_BYTES
+        + SUMERAGI_TIMEOUT_VOTE_RESERVE_BYTES
+    )
+    if source_bytes < minimum_source_bytes:
+        raise ValueError(
+            f"{context} field `body_source_bytes` must be at least "
+            f"{minimum_source_bytes} bytes for the configured block payload"
+        )
+    network = template.get("network")
+    if not isinstance(network, dict):
+        raise ValueError("config template must define a `[network]` table")
+    network_context = "config template `[network]`"
+    max_frame_bytes = _require_positive_integer(
+        network, "max_frame_bytes", network_context
+    )
+    max_frame_bytes_block_sync = _require_positive_integer(
+        network, "max_frame_bytes_block_sync", network_context
+    )
+    max_frame_bytes_tx_gossip = _require_positive_integer(
+        network, "max_frame_bytes_tx_gossip", network_context
+    )
+    if max_frame_bytes_tx_gossip < TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES:
+        raise ValueError(
+            f"{network_context} field `max_frame_bytes_tx_gossip` must be at "
+            f"least {TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES} bytes"
+        )
+    if max_frame_bytes_block_sync < TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES:
+        raise ValueError(
+            f"{network_context} field `max_frame_bytes_block_sync` must be at "
+            f"least {TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES} bytes"
+        )
+    if (
+        max_frame_bytes
+        < max_frame_bytes_block_sync + TAIRA_AEAD_FRAME_OVERHEAD_BYTES
+    ):
+        raise ValueError(
+            f"{network_context} field `max_frame_bytes` must include "
+            f"{TAIRA_AEAD_FRAME_OVERHEAD_BYTES} AEAD bytes beyond "
+            "`max_frame_bytes_block_sync`"
+        )
     minimum = (
         validator_count + authenticated_non_validator_sources + 1
     ) * source_bytes
@@ -756,6 +848,54 @@ def render_genesis_template(
         raise ValueError(
             f"base genesis {base_genesis_path} is missing required sumeragi_v2 parameters"
         )
+    da_layout = payload["sumeragi_v2"].get("da_layout")
+    if not isinstance(da_layout, dict):
+        raise ValueError(
+            f"base genesis {base_genesis_path} is missing required "
+            "sumeragi_v2.da_layout parameters"
+        )
+    max_payload_size_bytes = da_layout.get("max_payload_size_bytes")
+    if (
+        isinstance(max_payload_size_bytes, bool)
+        or not isinstance(max_payload_size_bytes, int)
+        or max_payload_size_bytes < TAIRA_BLOCK_MAX_PAYLOAD_BYTES
+    ):
+        raise ValueError(
+            f"base genesis {base_genesis_path} sumeragi_v2.da_layout."
+            f"max_payload_size_bytes must be at least "
+            f"{TAIRA_BLOCK_MAX_PAYLOAD_BYTES}"
+        )
+    transaction_parameter_tables = [
+        transaction["parameters"]["transaction"]
+        for transaction in transactions
+        if isinstance(transaction, dict)
+        and isinstance(transaction.get("parameters"), dict)
+        and isinstance(transaction["parameters"].get("transaction"), dict)
+    ]
+    if len(transaction_parameter_tables) != 1:
+        raise ValueError(
+            f"base genesis {base_genesis_path} must define exactly one "
+            "transaction admission parameter table"
+        )
+    transaction_parameters = transaction_parameter_tables[0]
+    transaction_context = "base genesis transaction admission parameters"
+    max_tx_bytes = _require_positive_integer(
+        transaction_parameters, "max_tx_bytes", transaction_context
+    )
+    if max_tx_bytes < TAIRA_TRANSACTION_MAX_BYTES:
+        raise ValueError(
+            f"{transaction_context} field `max_tx_bytes` must be at least "
+            f"{TAIRA_TRANSACTION_MAX_BYTES} bytes to carry one maximum "
+            "first-release privacy action and transaction framing"
+        )
+    max_decompressed_bytes = _require_positive_integer(
+        transaction_parameters, "max_decompressed_bytes", transaction_context
+    )
+    if max_decompressed_bytes < max_tx_bytes:
+        raise ValueError(
+            f"{transaction_context} field `max_decompressed_bytes` must be at "
+            "least `max_tx_bytes`"
+        )
     for transaction in transactions:
         if not isinstance(transaction, dict):
             raise ValueError(
@@ -950,6 +1090,11 @@ def render_validator_config(
     onboarding_private_key_file: Path | None = None,
     onboarding_token_hash: str | None = None,
     faucet_private_key_file: Path | None = None,
+    manifest_directory: Path = DEFAULT_INSTALL_ROOT / "manifests",
+    sorafs_admission_directory: Path = DEFAULT_INSTALL_ROOT / "sorafs_admission",
+    kagemusha_release_policy_path: Path = (
+        DEFAULT_INSTALL_ROOT / "kagemusha" / "release-policy.norito"
+    ),
     sumeragi_body_bytes: int | None = None,
 ) -> str:
     """Rewrite the checked-in peer-1 baseline for one validator."""
@@ -1094,6 +1239,15 @@ def render_validator_config(
             )
             continue
         if (
+            current_section == "[settlement.offline]"
+            and stripped.startswith("kagemusha_release_policy_path = ")
+        ):
+            rendered.append(
+                "kagemusha_release_policy_path = "
+                f"{_quote_toml(str(kagemusha_release_policy_path))}"
+            )
+            continue
+        if (
             current_section == "[torii.faucet]"
             and stripped.startswith("private_key_file = ")
             and faucet_private_key_file is not None
@@ -1109,6 +1263,14 @@ def render_validator_config(
         ):
             rendered.append(
                 f'identity_public_key = {_quote_toml(shared.streaming_identity_public_key)}'
+            )
+            continue
+        if (
+            current_section == "[sorafs.discovery.admission]"
+            and stripped.startswith("envelopes_dir = ")
+        ):
+            rendered.append(
+                f"envelopes_dir = {_quote_toml(str(sorafs_admission_directory))}"
             )
             continue
         if (
@@ -1143,12 +1305,16 @@ def render_validator_config(
         if current_section == "[nexus.registry]" and stripped.startswith(
             "manifest_directory = "
         ):
-            rendered.append('manifest_directory = "manifests"')
+            rendered.append(
+                f"manifest_directory = {_quote_toml(str(manifest_directory))}"
+            )
             continue
         if current_section == "[nexus.registry]" and stripped.startswith(
             "cache_directory = "
         ):
-            rendered.append('cache_directory = "manifests"')
+            rendered.append(
+                f"cache_directory = {_quote_toml(str(manifest_directory))}"
+            )
             continue
 
         rendered.append(raw_line)
@@ -1177,6 +1343,7 @@ def render_bundle(
     secrets_path: Path | None = None,
     only: str | None = None,
     base_genesis_path: Path | None = None,
+    install_root: Path = DEFAULT_INSTALL_ROOT,
 ) -> list[Path]:
     """Render one config.toml per validator into output_dir."""
 
@@ -1187,6 +1354,17 @@ def render_bundle(
     template = _load_toml(base_config_path)
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
+    install_root_text = str(install_root)
+    if (
+        not install_root.is_absolute()
+        or install_root == Path("/")
+        or install_root_text.startswith("//")
+        or os.path.normpath(install_root_text) != install_root_text
+        or any(ord(character) < 0x20 for character in install_root_text)
+    ):
+        raise ValueError(
+            "install_root must be a canonical, non-root absolute path"
+        )
     output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     output_dir.chmod(0o700)
     _write_private_text(output_dir / ".gitignore", "*\n!.gitignore")
@@ -1204,18 +1382,30 @@ def render_bundle(
         manifest_dir = target_dir / "manifests"
         manifest_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         manifest_dir.chmod(0o700)
+        sorafs_admission_dir = target_dir / "sorafs_admission"
+        sorafs_admission_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        sorafs_admission_dir.chmod(0o700)
+        kagemusha_dir = target_dir / "kagemusha"
+        kagemusha_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        kagemusha_dir.chmod(0o700)
 
         onboarding_private_key_file: Path | None = None
         onboarding_token_hash: str | None = None
         faucet_private_key_file: Path | None = None
+        installed_runtime_dir = install_root / "runtime"
+        installed_manifest_dir = install_root / "manifests"
+        installed_sorafs_admission_dir = install_root / "sorafs_admission"
+        installed_kagemusha_release_policy = (
+            install_root / "kagemusha" / "release-policy.norito"
+        )
         if secret_material is not None:
             shared = secret_material.shared
             if shared.account_onboarding_private_key is not None:
                 onboarding_private_key_file = (
-                    runtime_dir / "onboarding-signer.key"
-                ).resolve()
+                    installed_runtime_dir / "onboarding-signer.key"
+                )
                 _write_private_text(
-                    onboarding_private_key_file,
+                    runtime_dir / "onboarding-signer.key",
                     shared.account_onboarding_private_key,
                 )
             if shared.account_onboarding_api_token is not None:
@@ -1227,9 +1417,9 @@ def render_bundle(
                     shared.account_onboarding_api_token
                 )
             if shared.torii_faucet_private_key is not None:
-                faucet_private_key_file = (runtime_dir / "faucet-signer.key").resolve()
+                faucet_private_key_file = installed_runtime_dir / "faucet-signer.key"
                 _write_private_text(
-                    faucet_private_key_file,
+                    runtime_dir / "faucet-signer.key",
                     shared.torii_faucet_private_key,
                 )
 
@@ -1244,6 +1434,9 @@ def render_bundle(
                 onboarding_private_key_file=onboarding_private_key_file,
                 onboarding_token_hash=onboarding_token_hash,
                 faucet_private_key_file=faucet_private_key_file,
+                manifest_directory=installed_manifest_dir,
+                sorafs_admission_directory=installed_sorafs_admission_dir,
+                kagemusha_release_policy_path=installed_kagemusha_release_policy,
                 sumeragi_body_bytes=sumeragi_body_bytes,
             ),
         )
@@ -1291,6 +1484,14 @@ def main(argv: list[str] | None = None) -> int:
         help="directory where <validator-slug>/config.toml files will be written",
     )
     parser.add_argument(
+        "--install-root",
+        default=str(DEFAULT_INSTALL_ROOT),
+        help=(
+            "canonical absolute directory where one rendered validator directory "
+            "will be installed on its host"
+        ),
+    )
+    parser.add_argument(
         "--only",
         help="render only one validator slug instead of the full bundle",
     )
@@ -1303,6 +1504,7 @@ def main(argv: list[str] | None = None) -> int:
         secrets_path=Path(args.secrets) if args.secrets else None,
         only=args.only,
         base_genesis_path=Path(args.base_genesis),
+        install_root=Path(args.install_root),
     )
     for path in written:
         print(f"config: {path}")

@@ -159,45 +159,41 @@ smaller caller-supplied budget can fail hostile tiny-chunk peers before value
 creation. One NFC profile policy binds request, payment, and acknowledgement to
 the same profile; mixed-profile sessions fail closed. A complete NFC IPM1 value
 is capped at 24,660 bytes. That is a hard constructor ceiling. Wire policies
-likewise cannot exceed 32 KiB canonical or 24,576 encoded bytes for either
-Offline Note or the bounded Kagemusha handoff.
+likewise cannot exceed 32 KiB canonical or 24,576 encoded bytes for the bounded
+Kagemusha handoff.
 
-Profile `1` requires schema `1` and a maximum 24,576-byte encoded body. Profile
-`2` requires schema `0x0102` and is a 24,576-byte bounded handoff for a mainline
-typed Kagemusha native archive. Generic IPM validates its exact ABI21 envelope
-without native code; `IrohaPeerKagemushaAdapterV1` then performs deeper typed
-semantic decoding. Full ABI21
+IPM1 admits only profile `2` / schema `0x0102` as a 24,576-byte bounded
+handoff for a mainline typed Kagemusha native archive. Generic IPM validates
+its exact ABI21 envelope without native code; `IrohaPeerKagemushaAdapterV1`
+then performs deeper typed semantic decoding. Full ABI21
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
 `KagemushaNearbyEnvelopeCodec` rails. Kagemusha retains its distinct
 `PKK2*`/`PKKQ1` text and Bonjour identifiers, while NFC uses the sole canonical
 AID `F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
 envelope and its own smaller bound. Those rails are never negotiated,
-reinterpreted, or used as fallback for Retail Offline Peer V1. Only
-`IrohaPeer*V1` has no unauthenticated Nearby, raw-text, or alternate profile-2
-representation fallback.
+reinterpreted, or used as fallback for IPM1. `IrohaPeer*V1` has no
+unauthenticated Nearby, raw-text, alternate profile representation, alias, or
+migration fallback.
 
 These transport changes are client-side and require no backend API change.
 
-IPM1 profile-1 canonical application bytes are opaque. Offline Note apps can
-use `IrohaPeerCanonicalTextPayloadCodecV1` for an exact UTF-8 round trip; the
-codec rejects profile 2. Profile-2 construction and decode instead enforce
-native-independent ABI21 NRT0 framing, the authoritative fully-qualified kind
-schema, CRC64, exact compact-length flags, and static padding
-(request/payment 8, ACK 0). Deeper semantics remain in the typed adapter.
+The sole first-release IPM1 profile code 2 requires schema `0x0102`.
+Construction and decode enforce native-independent ABI21 NRT0 framing, the
+authoritative fully-qualified kind schema, CRC64, exact compact-length flags,
+and static padding (request/payment 8, ACK 0). Deeper semantics remain in the
+typed adapter.
 `PEER_OPTIMIZED` compression is cross-rail and
 uses zlib only when it saves at least 32 bytes and one 256-byte shard.
 
 Do not stop at generic structural acceptance for a production profile-2
 payload; wrap and decode it through `IrohaPeerKagemushaAdapterV1` so deeper
-typed semantics are enforced. Canonical vectors are
-shared from `../fixtures/offline/peer_{transport,nearby,nfc}_v1.json`. From this
-directory, run both portable and Android adapter coverage with:
-
-The additional `../fixtures/offline/kagemusha_peer_transport_v2.json` vector
+typed semantics are enforced. The canonical
+`../fixtures/offline/kagemusha_peer_transport_v2.json` vector
 pins a qualified 49-byte structural archive and its exact IPM1, IQR1, NFC, and
 authenticated Nearby bytes across Swift, Kotlin, and Java. Its one-byte body is
-not semantically valid and must not be passed to the typed adapter.
+not semantically valid and must not be passed to the typed adapter. From this
+directory, run both portable and Android adapter coverage with:
 
 ```bash
 ./gradlew :core-jvm:test \
@@ -353,26 +349,21 @@ exposed as `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` exposes the privacy FFI as raw Norito archives through
-`capabilitiesArchive()`, `buildProof(requestArchive)`, and
-`verifyProof(requestArchive)`. The bridge validates the Norito V1 frame and
-non-empty payload, enforces the 64 MiB native size cap, copies request bytes for
-native dispatch, and clears that temporary copy afterward. Returned archives
-must carry the operation-specific result schema: capabilities, build, and
-verify results are not interchangeable.
+`PrivacyNativeBridge` is capability-only. `capabilitiesArchiveV1()` returns the
+canonical typed `PrivacyCapabilitySnapshotV1` Norito archive, and
+`protocolsV1()` exposes the closed `ProtocolIdV1` enum in exact wire order. The
+generic proof request/build/verify ABI and free-form algorithm selectors are
+absent; proofs must use protocol-specific typed APIs.
 
-Capability metadata is bound to `privacy-production-gate-v1`. It remains
-fail-closed with `productionReady = false` until every native production gate
-and audit reference is present; native availability or a decoded capabilities
-archive alone is not a production-readiness claim.
-
-The deterministic privacy FFI status/error-code contract exposes
-`STATUS_ERROR`, `ERROR_NULL_POINTER`, `ERROR_MALFORMED_NORITO`,
-`ERROR_UNSUPPORTED_ALGORITHM`, `ERROR_PRODUCTION_DISABLED`, and
-`ERROR_INVALID_REQUEST`. The stable wire values are `status_error = 1`,
-`null_pointer = 1`, `malformed_norito = 2`, `unsupported_algorithm = 3`,
-`production_disabled = 4`, and `invalid_request = 5`; treat them as sanitized
-status metadata, not proof success.
+The registry has exactly twelve IDs: `zk-ace-pq-authorization-v0`,
+`anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
+`iroha-zk-ams-v1`, `vega-existing-credential-zk-v0`,
+`iroha-zk-x509-stark-p256-v0`,
+`iroha-jindo-polynomial-commitment-v0`,
+`iroha-bootle-lantern-anoncred-v1`, `orchard-halo2-actions-v1`,
+`monero-fcmp-plus-plus-v1`, `iroha-ivm-private-note-stark-v1`, and
+`pq-masp-stark-v0`. Parsing is exact: aliases, retired IDs, case changes, and
+whitespace normalization fail closed.
 
 ---
 
@@ -422,11 +413,8 @@ echo $ANDROID_NDK_HOME  # must point to NDK 28+
 **Build the .so files:**
 
 ```bash
-# Default developer build: privacy proof builders stay fail-closed.
+# Build the capability-only native bridge.
 ./gradlew :client-android:buildNativeLibs
-
-# Production-gated build: only use after the privacy production gate evidence is complete.
-./gradlew :client-android:buildNativeLibs -PprivacyProductionEnabled=true
 ```
 
 This Gradle task (and every `client-android` release assembly):

@@ -2119,6 +2119,9 @@ fn overlay_build_error_to_validation_fail(
         crate::pipeline::overlay::OverlayBuildError::AxtReject(context) => {
             ValidationFail::AxtReject(context)
         }
+        crate::pipeline::overlay::OverlayBuildError::InvalidAxtPolicySnapshot(error) => {
+            ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+        }
         other => ValidationFail::NotPermitted(other.to_string()),
     }
 }
@@ -5573,6 +5576,9 @@ impl Executor {
             contract_call_context.argument_record,
         );
         host.set_prepared_contract_cache(summary.prepared_contract_cache());
+        host.hydrate_axt_state(state_transaction).map_err(|error| {
+            ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+        })?;
         // User contract calls execute before the enclosing block has a finalized creation
         // timestamp, so their caller supplies the deterministic logical time. Trigger callers
         // additionally bind the trigger id and deterministic NFT sequence base.
@@ -6409,7 +6415,6 @@ impl Executor {
                             );
                         let bound_contract_records =
                             code::snapshot_bound_contract_records_by_subject(state_transaction);
-                        let axt_policy_snapshot = state_transaction.axt_policy_snapshot();
                         let mut runtime = ivm_cache
                             .checkout_generic_runtime(&summary, effective_limit)
                             .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
@@ -6426,8 +6431,11 @@ impl Executor {
                                 state_transaction.pipeline(),
                             ),
                         );
-                        host.set_axt_timing(state_transaction.nexus().axt);
-                        host.hydrate_axt_replay_ledger(state_transaction);
+                        host.hydrate_axt_state(state_transaction).map_err(|error| {
+                            ValidationFail::InternalError(format!(
+                                "invalid AXT policy snapshot: {error}"
+                            ))
+                        })?;
                         host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                         host.set_zk_config(&state_transaction.zk);
                         host.set_public_inputs_from_parameters(
@@ -6436,7 +6444,6 @@ impl Executor {
                         host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                         host.set_query_state(state_transaction);
                         host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
-                        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
                         crate::pipeline::overlay::apply_streaming_metadata(
                             &mut host,
                             streaming_metadata,
@@ -6602,6 +6609,9 @@ impl Executor {
                     CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
                 };
                 host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                host.hydrate_axt_state(state_transaction).map_err(|error| {
+                    ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
+                })?;
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_zk_config(&state_transaction.zk);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());

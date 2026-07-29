@@ -18009,7 +18009,7 @@ mod tests {
         let losing_lock = (losing_manifest.round, losing_manifest.subject);
         let mut losing_prepare = fixture.qc(wire::GlobalPhase::Prepare);
         losing_prepare.subject = losing_manifest.subject;
-        let certified_sources = certified_sources(&fixture, &losing_prepare);
+        let losing_certified_sources = certified_sources(&fixture, &losing_prepare);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -18017,7 +18017,7 @@ mod tests {
                     round: losing_manifest.round,
                     subject: losing_manifest.subject,
                     manifest: Some(losing_manifest),
-                    certified_sources,
+                    certified_sources: losing_certified_sources,
                     certificate: Some(losing_prepare),
                 }],
                 &mut services,

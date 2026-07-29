@@ -69,6 +69,11 @@ fn result_propagation_matches_the_exhaustive_early_return_form() {
         }
     "#;
 
+    assert_ir_equivalent(
+        propagated,
+        explicit,
+        "postfix Result propagation with a changed success layout",
+    );
     assert_executable_equivalent(
         propagated,
         explicit,
@@ -98,6 +103,11 @@ fn option_propagation_matches_the_exhaustive_early_return_form() {
         }
     "#;
 
+    assert_ir_equivalent(
+        propagated,
+        explicit,
+        "postfix Option propagation with a changed payload layout",
+    );
     assert_executable_equivalent(
         propagated,
         explicit,
@@ -164,6 +174,30 @@ fn if_let_matches_the_exhaustive_match_form() {
 
     assert_ir_equivalent(if_let, exhaustive, "if let expression");
     assert_executable_equivalent(if_let, exhaustive, "if let expression");
+}
+
+#[test]
+fn result_if_let_matches_the_exhaustive_match_form() {
+    let if_let = r#"
+        seiyaku ResultIfLetExpression {
+            view fn main(Result<int, bool> value, int fallback) -> int {
+                if let Result::ok(payload) = value { payload } else { fallback }
+            }
+        }
+    "#;
+    let exhaustive = r#"
+        seiyaku ResultIfLetExpression {
+            view fn main(Result<int, bool> value, int fallback) -> int {
+                match value {
+                    Result::ok(payload) => payload,
+                    Result::err(_) => fallback,
+                }
+            }
+        }
+    "#;
+
+    assert_ir_equivalent(if_let, exhaustive, "Result if let expression");
+    assert_executable_equivalent(if_let, exhaustive, "Result if let expression");
 }
 
 #[test]

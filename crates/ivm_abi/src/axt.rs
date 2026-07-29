@@ -13,17 +13,24 @@ use std::{
 
 use iroha_crypto::Hash;
 use iroha_data_model::nexus::{
-    AssetHandle as ModelAssetHandle, AxtBinding, AxtHandleFragment,
-    AxtPolicyEntry as ModelAxtPolicyEntry, AxtPolicySnapshot as ModelAxtPolicySnapshot,
-    AxtProofEnvelope as ModelAxtProofEnvelope, DataSpaceId, GroupBinding as ModelGroupBinding,
-    HandleBudget as ModelHandleBudget, HandleSubject as ModelHandleSubject, LaneId,
-    ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
-    SpendOp as ModelSpendOp, compute_descriptor_binding,
+    AssetHandle as ModelAssetHandle, AxtBinding, AxtDescriptor as ModelAxtDescriptor,
+    AxtHandleFragment, AxtPolicyEntry as ModelAxtPolicyEntry,
+    AxtPolicySnapshot as ModelAxtPolicySnapshot,
+    AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
+    AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec, DataSpaceId,
+    GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
+    HandleSubject as ModelHandleSubject, LaneId, ProofBlob as ModelProofBlob,
+    RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
+    TouchManifest as ModelTouchManifest, compute_descriptor_binding,
+    validate_descriptor as validate_model_descriptor,
 };
 use iroha_data_model::prelude::Quantity;
 use norito::codec::{Decode, Encode};
 
-use crate::error::VMError;
+use crate::{
+    codec::{decode_canonical_norito, encode_canonical_norito},
+    error::VMError,
+};
 
 /// Alias for the Norito proof envelope used in AXT proof verification.
 pub type AxtProofEnvelope = ModelAxtProofEnvelope;
@@ -44,6 +51,8 @@ pub struct ResolvedHandleAmount {
 pub enum HandleAmountResolutionError {
     /// No cleartext amount was provided and no committed amount could be loaded from proof.
     MissingAmount,
+    /// The supplied proof payload is not a canonical AXT proof envelope.
+    InvalidProofEnvelope,
     /// Cleartext and committed amounts disagree.
     Mismatch,
     /// Resolved amount is zero and therefore invalid for handle usage.
@@ -59,7 +68,7 @@ impl HandleAmountResolutionError {
     #[must_use]
     pub const fn to_vm_error(self) -> VMError {
         match self {
-            Self::MissingAmount => VMError::NoritoInvalid,
+            Self::MissingAmount | Self::InvalidProofEnvelope => VMError::NoritoInvalid,
             Self::Mismatch
             | Self::ZeroAmount
             | Self::InvalidProofScalar
@@ -97,11 +106,11 @@ pub fn derive_amount_commitment(
     proof_payload: Option<&[u8]>,
 ) -> [u8; 32] {
     let normalized_proof_payload = proof_payload.map(|payload| {
-        norito::decode_from_bytes::<AxtProofEnvelope>(payload).map_or_else(
+        decode_canonical_norito::<AxtProofEnvelope>(payload).map_or_else(
             |_| payload.to_vec(),
             |mut envelope| {
                 envelope.amount_commitment = None;
-                norito::to_bytes(&envelope)
+                encode_canonical_norito(&envelope)
                     .expect("a decoded canonical AXT proof envelope always re-encodes")
             },
         )
@@ -161,7 +170,11 @@ pub fn resolve_handle_amount_components(
     proof_payload: Option<&[u8]>,
 ) -> Result<ResolvedHandleAmount, HandleAmountResolutionError> {
     let envelope = proof_payload
-        .and_then(|payload| norito::decode_from_bytes::<AxtProofEnvelope>(payload).ok());
+        .map(|payload| {
+            decode_canonical_norito::<AxtProofEnvelope>(payload)
+                .map_err(|_| HandleAmountResolutionError::InvalidProofEnvelope)
+        })
+        .transpose()?;
     let committed_amount = envelope.as_ref().and_then(|env| env.committed_amount);
 
     let amount = match (intent_amount, &committed_amount) {
@@ -310,23 +323,22 @@ where
 
 /// Validate basic invariants of an AXT descriptor.
 pub fn validate_descriptor(descriptor: &AxtDescriptor) -> Result<(), VMError> {
-    if descriptor.dsids.is_empty() {
-        return Err(VMError::PermissionDenied);
+    validate_model_descriptor(&model_descriptor(descriptor)).map_err(|_| VMError::PermissionDenied)
+}
+
+fn model_descriptor(descriptor: &AxtDescriptor) -> ModelAxtDescriptor {
+    ModelAxtDescriptor {
+        dsids: descriptor.dsids.clone(),
+        touches: descriptor
+            .touches
+            .iter()
+            .map(|touch| ModelAxtTouchSpec {
+                dsid: touch.dsid,
+                read: touch.read.clone(),
+                write: touch.write.clone(),
+            })
+            .collect(),
     }
-    let dsid_set = descriptor.dsid_set();
-    if dsid_set.len() != descriptor.dsids.len() {
-        return Err(VMError::PermissionDenied);
-    }
-    let mut touch_dsids: BTreeSet<DataSpaceId> = BTreeSet::new();
-    for touch in &descriptor.touches {
-        if !dsid_set.contains(&touch.dsid) {
-            return Err(VMError::PermissionDenied);
-        }
-        if !touch_dsids.insert(touch.dsid) {
-            return Err(VMError::PermissionDenied);
-        }
-    }
-    Ok(())
 }
 
 /// Compute the expiry slot after applying a wall-clock skew allowance.
@@ -381,8 +393,14 @@ pub struct SnapshotAxtPolicy {
 
 impl SnapshotAxtPolicy {
     /// Construct a policy from a snapshot.
-    #[must_use]
-    pub fn new(snapshot: &ModelAxtPolicySnapshot) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelAxtPolicySnapshotValidationError`] when the snapshot is
+    /// not canonically ordered or its version does not bind its exact entries.
+    pub fn new(
+        snapshot: &ModelAxtPolicySnapshot,
+    ) -> Result<Self, ModelAxtPolicySnapshotValidationError> {
         Self::new_with_timing(
             snapshot,
             NonZeroU64::new(1).expect("slot length must be non-zero"),
@@ -391,22 +409,27 @@ impl SnapshotAxtPolicy {
     }
 
     /// Construct a policy from a snapshot and explicit timing parameters.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelAxtPolicySnapshotValidationError`] when the snapshot is
+    /// not canonically ordered or its version does not bind its exact entries.
     pub fn new_with_timing(
         snapshot: &ModelAxtPolicySnapshot,
         slot_length_ms: NonZeroU64,
         max_clock_skew_ms: u64,
-    ) -> Self {
+    ) -> Result<Self, ModelAxtPolicySnapshotValidationError> {
+        snapshot.validate()?;
         let entries = snapshot
             .entries
             .iter()
             .map(|binding| (binding.dsid, binding.policy))
             .collect();
-        Self {
+        Ok(Self {
             entries,
             slot_length_ms,
             max_clock_skew_ms,
-        }
+        })
     }
 }
 
@@ -485,6 +508,41 @@ pub struct TouchManifest {
     pub write: Vec<String>,
 }
 
+/// Validate the semantic canonical form of an AXT touch manifest.
+///
+/// Empty read/write sets are valid, but every present key must be non-empty,
+/// trimmed, strictly sorted, and unique. In particular, an empty prefix is
+/// forbidden because every key starts with it.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] when a key list is not canonical.
+pub fn validate_touch_manifest(manifest: &TouchManifest) -> Result<(), VMError> {
+    if !canonical_nonempty_strings(&manifest.read) || !canonical_nonempty_strings(&manifest.write) {
+        return Err(VMError::NoritoInvalid);
+    }
+    Ok(())
+}
+
+/// Validate a persisted data-model touch manifest with the runtime invariants.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] when a key list is not canonical.
+pub fn validate_model_touch_manifest(manifest: &ModelTouchManifest) -> Result<(), VMError> {
+    validate_touch_manifest(&TouchManifest {
+        read: manifest.read.clone(),
+        write: manifest.write.clone(),
+    })
+}
+
+fn canonical_nonempty_strings(values: &[String]) -> bool {
+    values
+        .iter()
+        .all(|value| !value.is_empty() && value.trim() == value)
+        && values.windows(2).all(|pair| pair[0] < pair[1])
+}
+
 /// Subset of the AssetHandle ticket encoded by asset dataspace capability issuers.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct AssetHandle {
@@ -524,6 +582,73 @@ impl AssetHandle {
             None
         }
     }
+}
+
+/// Validate the context-free shape and value invariants of an asset handle.
+///
+/// Policy bindings, current slots, descriptor identity, subjects, operations,
+/// and cumulative budgets require host context and are intentionally checked
+/// by [`AxtPolicy`] and [`HostAxtState`].
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] for malformed fixed-width fields and
+/// [`VMError::PermissionDenied`] for unusable zero/empty capability values.
+pub fn validate_asset_handle(handle: &AssetHandle) -> Result<(), VMError> {
+    if handle.axt_binding.len() != 32
+        || handle.manifest_view_root.len() != 32
+        || handle.group_binding.composability_group_id.is_empty()
+        || !canonical_nonempty_strings(&handle.scope)
+        || handle.subject.account.trim() != handle.subject.account
+    {
+        return Err(VMError::NoritoInvalid);
+    }
+    if handle.scope.is_empty()
+        || handle.subject.account.is_empty()
+        || handle.budget.remaining.is_zero()
+        || handle
+            .budget
+            .per_use
+            .as_ref()
+            .is_some_and(Quantity::is_zero)
+        || handle.handle_era == 0
+        || handle.sub_nonce == 0
+        || handle.group_binding.epoch_id == 0
+        || handle.expiry_slot == 0
+    {
+        return Err(VMError::PermissionDenied);
+    }
+    Ok(())
+}
+
+/// Validate a persisted data-model handle with the pointer-runtime invariants.
+///
+/// # Errors
+///
+/// Returns the same error classification as [`validate_asset_handle`].
+pub fn validate_model_asset_handle(handle: &ModelAssetHandle) -> Result<(), VMError> {
+    validate_asset_handle(&AssetHandle {
+        scope: handle.scope.clone(),
+        subject: HandleSubject {
+            account: handle.subject.account.clone(),
+            origin_dsid: handle.subject.origin_dsid,
+        },
+        budget: HandleBudget {
+            remaining: handle.budget.remaining.clone(),
+            per_use: handle.budget.per_use.clone(),
+        },
+        handle_era: handle.handle_era,
+        sub_nonce: handle.sub_nonce,
+        group_binding: GroupBinding {
+            composability_group_id: handle.group_binding.composability_group_id.clone(),
+            epoch_id: handle.group_binding.epoch_id,
+        },
+        target_lane: handle.target_lane,
+        axt_binding: handle.axt_binding.as_bytes().to_vec(),
+        manifest_view_root: handle.manifest_view_root.to_vec(),
+        expiry_slot: handle.expiry_slot,
+        max_clock_skew_ms: handle.max_clock_skew_ms,
+    })
 }
 
 /// Capability subject metadata.
@@ -589,6 +714,42 @@ pub struct SpendOp {
     pub amount: Option<Quantity>,
 }
 
+/// Validate context-free invariants of a remote spend intent.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] for empty or non-canonical operation and
+/// account strings, and [`VMError::PermissionDenied`] for an explicit zero
+/// amount.
+pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VMError> {
+    for value in [&intent.op.kind, &intent.op.from, &intent.op.to] {
+        if value.is_empty() || value.trim() != value {
+            return Err(VMError::NoritoInvalid);
+        }
+    }
+    if intent.op.amount.as_ref().is_some_and(Quantity::is_zero) {
+        return Err(VMError::PermissionDenied);
+    }
+    Ok(())
+}
+
+/// Validate a persisted data-model intent with the pointer-runtime invariants.
+///
+/// # Errors
+///
+/// Returns the same error classification as [`validate_remote_spend_intent`].
+pub fn validate_model_remote_spend_intent(intent: &ModelRemoteSpendIntent) -> Result<(), VMError> {
+    validate_remote_spend_intent(&RemoteSpendIntent {
+        asset_dsid: intent.asset_dsid,
+        op: SpendOp {
+            kind: intent.op.kind.clone(),
+            from: intent.op.from.clone(),
+            to: intent.op.to.clone(),
+            amount: intent.op.amount.clone(),
+        },
+    })
+}
+
 /// Wrapper around proof artifacts provided by dataspace verifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct ProofBlob {
@@ -600,6 +761,22 @@ pub struct ProofBlob {
     /// hosts can reject stale proofs deterministically.
     #[norito(default)]
     pub expiry_slot: Option<u64>,
+}
+
+/// Validate context-free proof-blob invariants.
+///
+/// Proof schema, dataspace binding, manifest binding, freshness relative to a
+/// current slot, and cryptographic validity require host context.
+///
+/// # Errors
+///
+/// Returns [`VMError::NoritoInvalid`] when proof bytes are empty or an explicit
+/// expiry uses the forbidden zero sentinel.
+pub fn validate_proof_blob(proof: &ProofBlob) -> Result<(), VMError> {
+    if proof.payload.is_empty() || proof.expiry_slot == Some(0) {
+        return Err(VMError::NoritoInvalid);
+    }
+    Ok(())
 }
 
 /// Preflight the structural FastPQ V1 binding carried by an AXT proof envelope.
@@ -663,29 +840,42 @@ fn fastpq_binding_shape_is_concrete(binding: &iroha_data_model::nexus::AxtFastpq
         && binding_hex_digest_is_present(&binding.witness_commitment)
         && binding_hex_digest_is_present(&binding.policy_commitment)
         && binding_string_is_present(&binding.verified_effect_type)
+        && binding_string_is_present(&binding.corridor)
         && !binding.target_dsids.is_empty()
         && binding
             .target_dsids
-            .iter()
-            .enumerate()
-            .all(|(idx, value)| !binding.target_dsids[..idx].contains(value))
+            .windows(2)
+            .all(|pair| pair[0] < pair[1])
+        && binding.effect_binding.as_ref().is_none_or(|effect| {
+            [
+                &effect.destination_domain,
+                &effect.destination_account_id,
+                &effect.vault_account_id,
+                &effect.issuance_account_id,
+                &effect.source_asset_definition_id,
+                &effect.destination_asset_definition_id,
+            ]
+            .into_iter()
+            .all(|value| value.as_deref().is_none_or(binding_string_is_present))
+        })
 }
 
 fn binding_string_is_present(value: &str) -> bool {
-    !value.trim().is_empty()
+    !value.is_empty() && value.trim() == value
 }
 
 fn binding_hex_digest_is_present(value: &str) -> bool {
-    let value = value.trim();
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn fastpq_claim_type_is_supported(value: &str) -> bool {
-    let value = value.trim();
-    value.eq_ignore_ascii_case("authorization")
-        || value.eq_ignore_ascii_case("compliance")
-        || value.eq_ignore_ascii_case("tx_predicate")
-        || value.eq_ignore_ascii_case("value_conservation")
+    matches!(
+        value,
+        "authorization" | "compliance" | "tx_predicate" | "value_conservation"
+    )
 }
 
 /// Compute the canonical descriptor binding used by asset handles.
@@ -695,19 +885,7 @@ fn fastpq_claim_type_is_supported(value: &str) -> bool {
 /// (rate 2, capacity 1, +1 padding). This matches the normative definition
 /// documented in `nexus.md`.
 pub fn compute_binding(descriptor: &AxtDescriptor) -> Result<[u8; 32], norito::Error> {
-    let model_descriptor = iroha_data_model::nexus::AxtDescriptor {
-        dsids: descriptor.dsids.clone(),
-        touches: descriptor
-            .touches
-            .iter()
-            .map(|touch| iroha_data_model::nexus::AxtTouchSpec {
-                dsid: touch.dsid,
-                read: touch.read.clone(),
-                write: touch.write.clone(),
-            })
-            .collect(),
-    };
-    compute_descriptor_binding(&model_descriptor)
+    compute_descriptor_binding(&model_descriptor(descriptor))
 }
 
 /// Shared helper used by hosts to track in-flight AXT state.
@@ -757,6 +935,7 @@ impl HostAxtState {
         dsid: DataSpaceId,
         manifest: TouchManifest,
     ) -> Result<(), VMError> {
+        validate_touch_manifest(&manifest)?;
         if self.touches.contains_key(&dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -800,13 +979,8 @@ impl HostAxtState {
             return Err(VMError::PermissionDenied);
         }
         if let Some(p) = proof {
-            if p.payload.is_empty() {
-                return Err(VMError::NoritoInvalid);
-            }
+            validate_proof_blob(&p)?;
             if let Some(expiry) = p.expiry_slot {
-                if expiry == 0 {
-                    return Err(VMError::NoritoInvalid);
-                }
                 if let Some(slot) = current_slot
                     && slot > 0
                     && slot > expiry
@@ -825,24 +999,8 @@ impl HostAxtState {
         if usage.amount.is_zero() {
             return Err(VMError::PermissionDenied);
         }
-        if usage.handle.scope.is_empty() {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.budget.remaining.is_zero() {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.handle_era == 0 || usage.handle.sub_nonce == 0 {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.expiry_slot == 0 {
-            return Err(VMError::PermissionDenied);
-        }
-        if usage.handle.group_binding.composability_group_id.is_empty() {
-            return Err(VMError::NoritoInvalid);
-        }
-        if usage.handle.manifest_view_root.len() != 32 {
-            return Err(VMError::NoritoInvalid);
-        }
+        validate_asset_handle(&usage.handle)?;
+        validate_remote_spend_intent(&usage.intent)?;
         if !self.expected_dsids.contains(&usage.intent.asset_dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -884,10 +1042,8 @@ impl HostAxtState {
         {
             return Err(VMError::PermissionDenied);
         }
-        if let Some(proof) = &usage.proof
-            && proof.payload.is_empty()
-        {
-            return Err(VMError::NoritoInvalid);
+        if let Some(proof) = &usage.proof {
+            validate_proof_blob(proof)?;
         }
         let fragment = AxtHandleFragment::try_from(&usage)?;
         self.handles.push(usage);
@@ -1194,10 +1350,85 @@ mod tests {
         assert_eq!(first, second);
     }
 
+    #[test]
+    fn descriptor_validation_rejects_noncanonical_order_and_paths() {
+        let first = DataSpaceId::new(1);
+        let second = DataSpaceId::new(2);
+        let valid = AxtDescriptor {
+            dsids: vec![first, second],
+            touches: vec![
+                AxtTouchSpec {
+                    dsid: first,
+                    read: vec!["orders".into()],
+                    write: vec!["ledger".into()],
+                },
+                AxtTouchSpec {
+                    dsid: second,
+                    read: Vec::new(),
+                    write: Vec::new(),
+                },
+            ],
+        };
+        assert_eq!(validate_descriptor(&valid), Ok(()));
+
+        let mut cases = Vec::new();
+        let mut descriptor = valid.clone();
+        descriptor.dsids.swap(0, 1);
+        cases.push(descriptor);
+        let mut descriptor = valid.clone();
+        descriptor.touches.swap(0, 1);
+        cases.push(descriptor);
+        for paths in [
+            vec!["".to_owned()],
+            vec![" orders".to_owned()],
+            vec!["orders".to_owned(), "orders".to_owned()],
+            vec!["z".to_owned(), "a".to_owned()],
+        ] {
+            let mut descriptor = valid.clone();
+            descriptor.touches[0].read = paths;
+            cases.push(descriptor);
+        }
+
+        for descriptor in cases {
+            assert_eq!(
+                validate_descriptor(&descriptor),
+                Err(VMError::PermissionDenied),
+                "noncanonical descriptor must fail: {descriptor:?}"
+            );
+        }
+    }
+
     fn sample_touch_manifest() -> TouchManifest {
         TouchManifest {
             read: vec!["orders/item".into()],
             write: vec!["ledger/item".into()],
+        }
+    }
+
+    #[test]
+    fn touch_manifest_rejects_empty_whitespace_duplicate_and_unsorted_keys() {
+        assert_eq!(validate_touch_manifest(&sample_touch_manifest()), Ok(()));
+        assert_eq!(
+            validate_touch_manifest(&TouchManifest {
+                read: Vec::new(),
+                write: Vec::new(),
+            }),
+            Ok(()),
+            "an explicitly empty runtime manifest is valid"
+        );
+        for keys in [
+            vec!["".to_owned()],
+            vec![" key".to_owned()],
+            vec!["key".to_owned(), "key".to_owned()],
+            vec!["z".to_owned(), "a".to_owned()],
+        ] {
+            assert_eq!(
+                validate_touch_manifest(&TouchManifest {
+                    read: keys,
+                    write: Vec::new(),
+                }),
+                Err(VMError::NoritoInvalid)
+            );
         }
     }
 
@@ -1231,6 +1462,118 @@ mod tests {
         }
     }
 
+    #[test]
+    fn standalone_handle_validation_rejects_every_context_free_fault() {
+        let dsid = DataSpaceId::new(7);
+        let valid = sample_handle(dsid, [0x11; 32], 10, Some(5));
+        assert_eq!(validate_asset_handle(&valid), Ok(()));
+
+        let mut malformed = valid.clone();
+        malformed.axt_binding.pop();
+        assert_eq!(
+            validate_asset_handle(&malformed),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let mut malformed = valid.clone();
+        malformed.manifest_view_root.push(0);
+        assert_eq!(
+            validate_asset_handle(&malformed),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let mut malformed = valid.clone();
+        malformed.group_binding.composability_group_id.clear();
+        assert_eq!(
+            validate_asset_handle(&malformed),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let mut unusable = valid.clone();
+        unusable.scope.clear();
+        assert_eq!(
+            validate_asset_handle(&unusable),
+            Err(VMError::PermissionDenied)
+        );
+
+        let mut unusable = valid.clone();
+        unusable.budget.remaining = Quantity::zero();
+        assert_eq!(
+            validate_asset_handle(&unusable),
+            Err(VMError::PermissionDenied)
+        );
+
+        let mut unusable = valid.clone();
+        unusable.budget.per_use = Some(Quantity::zero());
+        assert_eq!(
+            validate_asset_handle(&unusable),
+            Err(VMError::PermissionDenied)
+        );
+
+        for field in ["handle era", "sub nonce", "group epoch", "expiry slot"] {
+            let mut unusable = valid.clone();
+            match field {
+                "handle era" => unusable.handle_era = 0,
+                "sub nonce" => unusable.sub_nonce = 0,
+                "group epoch" => unusable.group_binding.epoch_id = 0,
+                "expiry slot" => unusable.expiry_slot = 0,
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                validate_asset_handle(&unusable),
+                Err(VMError::PermissionDenied),
+                "zero {field} must fail validation"
+            );
+        }
+
+        let malformed_mutations: [fn(&mut AssetHandle); 4] = [
+            |handle: &mut AssetHandle| handle.scope[0].push(' '),
+            |handle: &mut AssetHandle| handle.scope.push("transfer".to_owned()),
+            |handle: &mut AssetHandle| {
+                handle.scope = vec!["withdraw".to_owned(), "transfer".to_owned()];
+            },
+            |handle: &mut AssetHandle| handle.subject.account.push(' '),
+        ];
+        for mutate in malformed_mutations {
+            let mut malformed = valid.clone();
+            mutate(&mut malformed);
+            assert_eq!(
+                validate_asset_handle(&malformed),
+                Err(VMError::NoritoInvalid)
+            );
+        }
+
+        let mut unusable = valid;
+        unusable.subject.account.clear();
+        assert_eq!(
+            validate_asset_handle(&unusable),
+            Err(VMError::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn standalone_proof_blob_validation_rejects_empty_and_zero_expiry() {
+        let valid = ProofBlob {
+            payload: vec![1],
+            expiry_slot: Some(1),
+        };
+        assert_eq!(validate_proof_blob(&valid), Ok(()));
+        assert_eq!(
+            validate_proof_blob(&ProofBlob {
+                payload: Vec::new(),
+                expiry_slot: None,
+            }),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            validate_proof_blob(&ProofBlob {
+                payload: vec![1],
+                expiry_slot: Some(0),
+            }),
+            Err(VMError::NoritoInvalid)
+        );
+    }
+
     fn sample_intent(dsid: DataSpaceId, amount: Option<u128>) -> RemoteSpendIntent {
         RemoteSpendIntent {
             asset_dsid: dsid,
@@ -1246,6 +1589,32 @@ mod tests {
                 }),
             },
         }
+    }
+
+    #[test]
+    fn remote_spend_intent_rejects_empty_whitespace_and_zero_values() {
+        let dsid = DataSpaceId::new(7);
+        let valid = sample_intent(dsid, Some(1));
+        assert_eq!(validate_remote_spend_intent(&valid), Ok(()));
+
+        for field in ["kind", "from", "to"] {
+            let mut invalid = valid.clone();
+            match field {
+                "kind" => invalid.op.kind.clear(),
+                "from" => invalid.op.from.push(' '),
+                "to" => invalid.op.to.clear(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                validate_remote_spend_intent(&invalid),
+                Err(VMError::NoritoInvalid),
+                "invalid {field} must fail"
+            );
+        }
+        assert_eq!(
+            validate_remote_spend_intent(&sample_intent(dsid, Some(0))),
+            Err(VMError::PermissionDenied)
+        );
     }
 
     fn sample_fastpq_binding(dsid: DataSpaceId) -> iroha_data_model::nexus::AxtFastpqBinding {
@@ -1393,12 +1762,110 @@ mod tests {
     }
 
     #[test]
+    fn preflight_fastpq_v1_proof_envelope_rejects_noncanonical_binding_fields() {
+        let dsid = DataSpaceId::new(92);
+        let manifest_root = [0xAD; 32];
+        let mut uppercase_digest = sample_fastpq_binding(dsid);
+        uppercase_digest.claim_digest.make_ascii_uppercase();
+        let mut unordered_targets = sample_fastpq_binding(dsid);
+        unordered_targets.target_dsids = vec![dsid.as_u64() + 1, dsid.as_u64()];
+        let mut untrimmed_corridor = sample_fastpq_binding(dsid);
+        untrimmed_corridor.corridor.push(' ');
+
+        for binding in [uppercase_digest, unordered_targets, untrimmed_corridor] {
+            let envelope = AxtProofEnvelope {
+                dsid,
+                manifest_root,
+                da_commitment: None,
+                proof: vec![0x01, 0x02],
+                fastpq_binding: Some(binding),
+                committed_amount: None,
+                amount_commitment: None,
+            };
+            assert_eq!(
+                preflight_fastpq_v1_proof_envelope_for_manifest(&envelope, dsid, manifest_root),
+                Err(VMError::PermissionDenied)
+            );
+        }
+    }
+
+    #[test]
     fn resolve_handle_amount_accepts_cleartext_intent() {
         let dsid = DataSpaceId::new(90);
         let intent = sample_intent(dsid, Some(42));
         let resolved = resolve_handle_amount(&intent, None).expect("resolve amount");
         assert_eq!(resolved.amount, quantity(42));
         assert_eq!(resolved.amount_commitment, None);
+    }
+
+    #[test]
+    fn amount_commitment_is_independent_of_ambient_norito_layout() {
+        let dsid = DataSpaceId::new(90);
+        let proof = proof_with_amount(dsid, Some(42), None);
+        let amount = quantity(42);
+        let expected = derive_amount_commitment(dsid, &amount, Some(&proof.payload));
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_before = norito::to_bytes(&AxtProofEnvelope {
+            dsid,
+            manifest_root: [0xAB; 32],
+            da_commitment: None,
+            proof: vec![0x01, 0x02],
+            fastpq_binding: Some(sample_fastpq_binding(dsid)),
+            committed_amount: Some(42),
+            amount_commitment: None,
+        })
+        .expect("encode ambient proof");
+        assert_eq!(
+            derive_amount_commitment(dsid, &amount, Some(&proof.payload)),
+            expected
+        );
+        assert_eq!(
+            norito::to_bytes(
+                &decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
+                    .expect("decode canonical proof")
+            )
+            .expect("re-encode under ambient flags"),
+            ambient_before,
+            "canonical commitment derivation must restore the caller's ambient flags"
+        );
+    }
+
+    #[test]
+    fn resolve_handle_amount_rejects_malformed_and_alternate_proof_envelopes() {
+        let dsid = DataSpaceId::new(90);
+        let intent = sample_intent(dsid, Some(42));
+        let malformed = ProofBlob {
+            payload: vec![1, 2, 3],
+            expiry_slot: None,
+        };
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&malformed)),
+            Err(HandleAmountResolutionError::InvalidProofEnvelope)
+        );
+
+        let canonical = proof_with_amount(dsid, Some(42), None);
+        let envelope = decode_canonical_norito::<AxtProofEnvelope>(&canonical.payload)
+            .expect("decode canonical proof");
+        let alternate = {
+            let flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(flags);
+            norito::to_bytes(&envelope).expect("encode alternate proof")
+        };
+        assert_ne!(alternate, canonical.payload);
+        assert_eq!(
+            resolve_handle_amount(
+                &intent,
+                Some(&ProofBlob {
+                    payload: alternate,
+                    expiry_slot: canonical.expiry_slot,
+                })
+            ),
+            Err(HandleAmountResolutionError::InvalidProofEnvelope)
+        );
     }
 
     #[test]
@@ -1567,7 +2034,8 @@ mod tests {
             &snapshot,
             NonZeroU64::new(10).expect("slot length"),
             5,
-        );
+        )
+        .expect("canonical policy snapshot");
 
         let binding = [0x11; 32];
         let mut handle = sample_handle(dsid, binding, 25, None);
@@ -1588,6 +2056,30 @@ mod tests {
         assert!(matches!(
             policy.allow_handle(&usage),
             Err(VMError::PermissionDenied)
+        ));
+    }
+
+    #[test]
+    fn snapshot_policy_rejects_noncanonical_snapshot_without_panicking() {
+        let dsid = DataSpaceId::new(8);
+        let entry = ModelAxtPolicyEntry {
+            manifest_root: [0xAB; 32],
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 10,
+        };
+        let snapshot = ModelAxtPolicySnapshot {
+            version: 1,
+            entries: vec![iroha_data_model::nexus::AxtPolicyBinding {
+                dsid,
+                policy: entry,
+            }],
+        };
+
+        assert!(matches!(
+            SnapshotAxtPolicy::new(&snapshot),
+            Err(ModelAxtPolicySnapshotValidationError::VersionMismatch { .. })
         ));
     }
 

@@ -1,10 +1,15 @@
 //! Gregorian date, RFC 3339, expiry, and completed-age R1CS gadgets.
 
 use super::{
-    VegaT256ScalarV1 as Scalar,
+    VEGA_MDL_FULL_DATE_TEXT_BYTES_V1, VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1,
+    VEGA_MDL_MAX_PRESENTATION_YEAR_V1, VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
+    VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1, VegaT256ScalarV1 as Scalar,
     circuit::{Bit, CircuitBuilder, CircuitError, LinearCombination},
     sha256::{ByteVar, enforce_byte_constant},
 };
+
+pub(super) const RFC3339_SECONDS_PER_DAY_V1: u64 = 86_400;
+pub(super) const RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1: usize = 40;
 
 #[derive(Clone)]
 pub(super) struct DateVar {
@@ -16,11 +21,17 @@ pub(super) struct DateVar {
     day_bits: Vec<Bit>,
 }
 
+#[derive(Clone)]
+pub(super) struct Rfc3339SecondsVar {
+    pub(super) date: DateVar,
+    seconds_since_midnight: LinearCombination,
+}
+
 pub(super) fn parse_full_date(
     builder: &mut CircuitBuilder,
     bytes: &[ByteVar],
 ) -> Result<DateVar, CircuitError> {
-    if bytes.len() != 10 {
+    if bytes.len() != VEGA_MDL_FULL_DATE_TEXT_BYTES_V1 {
         return Err(CircuitError::InvalidDimension);
     }
     enforce_byte_constant(builder, bytes[4], b'-')?;
@@ -36,8 +47,8 @@ pub(super) fn parse_full_date(
 pub(super) fn parse_rfc3339_seconds(
     builder: &mut CircuitBuilder,
     bytes: &[ByteVar],
-) -> Result<DateVar, CircuitError> {
-    if bytes.len() != 20 {
+) -> Result<Rfc3339SecondsVar, CircuitError> {
+    if bytes.len() != VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1 {
         return Err(CircuitError::InvalidDimension);
     }
     for (index, expected) in [(10, b'T'), (13, b':'), (16, b':'), (19, b'Z')] {
@@ -47,10 +58,17 @@ pub(super) fn parse_rfc3339_seconds(
     let hour = decimal(builder, &bytes[11..13])?;
     let minute = decimal(builder, &bytes[14..16])?;
     let second = decimal(builder, &bytes[17..19])?;
-    enforce_small_range(builder, hour, 7, 24, false)?;
-    enforce_small_range(builder, minute, 7, 60, false)?;
-    enforce_small_range(builder, second, 7, 60, false)?;
-    Ok(date)
+    enforce_small_range(builder, hour.clone(), 7, 24, false)?;
+    enforce_small_range(builder, minute.clone(), 7, 60, false)?;
+    enforce_small_range(builder, second.clone(), 7, 60, false)?;
+    let seconds_since_midnight = hour
+        .scaled(Scalar::from_u64(3_600))
+        .plus(&minute.scaled(Scalar::from_u64(60)))
+        .plus(&second);
+    Ok(Rfc3339SecondsVar {
+        date,
+        seconds_since_midnight,
+    })
 }
 
 pub(super) fn public_date(
@@ -63,8 +81,13 @@ pub(super) fn public_date(
     let month = builder.public(month_index)?;
     let day = builder.public(day_index)?;
     let date = date_from_lcs(builder, year.into(), month.into(), day.into())?;
-    enforce_valid_date(builder, &date, 1970)?;
-    enforce_less_than_constant(builder, &date.year_bits, 10_000, true)?;
+    enforce_valid_date(builder, &date, u64::from(VEGA_MDL_MIN_PRESENTATION_YEAR_V1))?;
+    enforce_less_than_constant(
+        builder,
+        &date.year_bits,
+        u64::from(VEGA_MDL_MAX_PRESENTATION_YEAR_V1) + 1,
+        true,
+    )?;
     Ok(date)
 }
 
@@ -75,7 +98,12 @@ pub(super) fn public_age_threshold(
     let threshold: LinearCombination = builder.public(index)?.into();
     let bits = decompose(builder, threshold.clone(), 8)?;
     enforce_nonzero(builder, threshold.clone())?;
-    enforce_less_than_constant(builder, &bits, 151, true)?;
+    enforce_less_than_constant(
+        builder,
+        &bits,
+        u64::from(VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1) + 1,
+        true,
+    )?;
     Ok((threshold, bits))
 }
 
@@ -144,6 +172,20 @@ pub(super) fn enforce_not_before(
     let earlier_value = scalar_to_u64(builder.evaluate(&earlier_code))?;
     let slack = later_value.checked_sub(earlier_value).unwrap_or(0);
     let (_, slack_lc) = allocate_unsigned(builder, slack, 24)?;
+    builder.enforce_equal(later_code, earlier_code.plus(&slack_lc))
+}
+
+pub(super) fn enforce_rfc3339_not_before(
+    builder: &mut CircuitBuilder,
+    later: &Rfc3339SecondsVar,
+    earlier: &Rfc3339SecondsVar,
+) -> Result<(), CircuitError> {
+    let later_code = rfc3339_seconds_code(later);
+    let earlier_code = rfc3339_seconds_code(earlier);
+    let later_value = scalar_to_u64(builder.evaluate(&later_code))?;
+    let earlier_value = scalar_to_u64(builder.evaluate(&earlier_code))?;
+    let slack = later_value.checked_sub(earlier_value).unwrap_or(0);
+    let (_, slack_lc) = allocate_unsigned(builder, slack, RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1)?;
     builder.enforce_equal(later_code, earlier_code.plus(&slack_lc))
 }
 
@@ -461,6 +503,12 @@ fn date_code(date: &DateVar) -> LinearCombination {
         .plus(&date.day)
 }
 
+fn rfc3339_seconds_code(value: &Rfc3339SecondsVar) -> LinearCombination {
+    date_code(&value.date)
+        .scaled(Scalar::from_u64(RFC3339_SECONDS_PER_DAY_V1))
+        .plus(&value.seconds_since_midnight)
+}
+
 fn scalar_to_u64(value: Scalar) -> Result<u64, CircuitError> {
     let bytes = value.to_be_bytes();
     if bytes[..24].iter().any(|byte| *byte != 0) {
@@ -495,6 +543,31 @@ mod tests {
         assert_eq!(result.is_ok() && satisfied, expected, "{value}");
     }
 
+    fn check_rfc3339_order(earlier: &str, later: &str, expected: bool) {
+        let mut builder = CircuitBuilder::new(vec![Scalar::one()]).expect("public");
+        let earlier_bytes =
+            allocate_bytes(&mut builder, earlier.as_bytes()).expect("earlier bytes");
+        let later_bytes = allocate_bytes(&mut builder, later.as_bytes()).expect("later bytes");
+        let earlier_value = parse_rfc3339_seconds(&mut builder, &earlier_bytes).expect("earlier");
+        let later_value = parse_rfc3339_seconds(&mut builder, &later_bytes).expect("later");
+        enforce_rfc3339_not_before(&mut builder, &later_value, &earlier_value)
+            .expect("timestamp ordering");
+        let assignment = builder.finalize().expect("shape");
+        let satisfied = assignment
+            .shape
+            .validate_relaxed_assignment(
+                &assignment.witness,
+                Scalar::one(),
+                &assignment.public_inputs,
+                &vec![Scalar::zero(); assignment.shape.constraint_count()],
+            )
+            .is_ok();
+        assert_eq!(
+            satisfied, expected,
+            "expected {earlier} <= {later} to be {expected}"
+        );
+    }
+
     #[test]
     fn gregorian_boundaries_and_leap_rules_are_exact() {
         for valid in ["2000-02-29", "2024-02-29", "2026-07-26", "9999-12-31"] {
@@ -513,18 +586,42 @@ mod tests {
     }
 
     #[test]
+    fn private_rfc3339_order_retains_every_second_of_day() {
+        for (earlier, later, accepted) in [
+            ("2026-07-26T00:00:00Z", "2026-07-26T00:00:00Z", true),
+            ("2026-07-26T00:00:00Z", "2026-07-26T00:00:01Z", true),
+            ("2026-07-26T12:34:56Z", "2026-07-26T12:34:55Z", false),
+            ("2026-07-26T23:59:59Z", "2026-07-27T00:00:00Z", true),
+            ("2026-07-27T00:00:00Z", "2026-07-26T23:59:59Z", false),
+        ] {
+            check_rfc3339_order(earlier, later, accepted);
+        }
+    }
+
+    #[test]
     fn completed_age_and_strict_expiry_reject_boundary_attacks() {
         for (birth, expiry, accepted) in [
             ("2008-07-26", "2026-07-27", true),
             ("2008-07-27", "2026-07-27", false),
             ("2008-07-26", "2026-07-26", false),
+            ("9848-12-31", "9999-12-31", true),
         ] {
-            let public = vec![
-                Scalar::from_u64(2026),
-                Scalar::from_u64(7),
-                Scalar::from_u64(26),
-                Scalar::from_u64(18),
-            ];
+            let maximum = birth.starts_with("9848");
+            let public = if maximum {
+                vec![
+                    Scalar::from_u64(u64::from(VEGA_MDL_MAX_PRESENTATION_YEAR_V1)),
+                    Scalar::from_u64(12),
+                    Scalar::from_u64(31),
+                    Scalar::from_u64(u64::from(VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1)),
+                ]
+            } else {
+                vec![
+                    Scalar::from_u64(2026),
+                    Scalar::from_u64(7),
+                    Scalar::from_u64(26),
+                    Scalar::from_u64(18),
+                ]
+            };
             let mut builder = CircuitBuilder::new(public).expect("public");
             let birth_bytes = allocate_bytes(&mut builder, birth.as_bytes()).expect("birth bytes");
             let expiry_bytes =
@@ -547,6 +644,35 @@ mod tests {
                 )
                 .is_ok();
             assert_eq!(satisfied, accepted);
+        }
+    }
+
+    #[test]
+    fn public_presentation_year_has_a_satisfiable_closed_upper_bound() {
+        for (year, accepted) in [
+            (VEGA_MDL_MIN_PRESENTATION_YEAR_V1 - 1, false),
+            (VEGA_MDL_MIN_PRESENTATION_YEAR_V1, true),
+            (VEGA_MDL_MAX_PRESENTATION_YEAR_V1, true),
+            (VEGA_MDL_MAX_PRESENTATION_YEAR_V1 + 1, false),
+        ] {
+            let public = vec![
+                Scalar::from_u64(u64::from(year)),
+                Scalar::from_u64(12),
+                Scalar::from_u64(31),
+            ];
+            let mut builder = CircuitBuilder::new(public).expect("public inputs");
+            let parsed = public_date(&mut builder, 0, 1, 2);
+            let assignment = builder.finalize().expect("shape");
+            let satisfied = assignment
+                .shape
+                .validate_relaxed_assignment(
+                    &assignment.witness,
+                    Scalar::one(),
+                    &assignment.public_inputs,
+                    &vec![Scalar::zero(); assignment.shape.constraint_count()],
+                )
+                .is_ok();
+            assert_eq!(parsed.is_ok() && satisfied, accepted, "year={year}");
         }
     }
 }

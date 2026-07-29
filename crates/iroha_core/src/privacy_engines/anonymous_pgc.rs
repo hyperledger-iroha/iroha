@@ -22,8 +22,8 @@ use thiserror::Error;
 
 use super::p256::{
     CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
-    TranscriptV1, generator_digest, hash_to_curve_rfc9380, random_nonzero_scalar,
-    validate_generator_independence,
+    TranscriptV1, generator_digest, hash_to_curve_rfc9380, health_checked_p256_rng_v1,
+    random_nonzero_scalar, validate_generator_independence,
 };
 
 /// Closed identifier for Twisted-ElGamal public-key possession transcripts.
@@ -48,6 +48,10 @@ pub const ANONYMOUS_PGC_FULL_ENGINE_AVAILABLE_V1: bool = true;
 pub const MAX_PGC_CIPHERTEXT_BYTES_V1: usize = 256;
 /// Tight maximum encoded length of either Schnorr building-block proof.
 pub const MAX_PGC_BUILDING_BLOCK_PROOF_BYTES_V1: usize = 1024;
+
+fn fixed_pgc_decode_limits(payload_len: usize, byte_cap: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(0, payload_len, 0, byte_cap.saturating_mul(4), 8)
+}
 /// Fixed baby-step table bound for wallet-side 32-bit decryption.
 pub const PGC_DECRYPTION_BABY_STEP_BOUND_V1: usize = 1 << 16;
 /// Fixed giant-step search bound for wallet-side 32-bit decryption.
@@ -311,8 +315,11 @@ impl TwistedElGamalPublicKeyV1 {
                 max: MAX_PGC_CIPHERTEXT_BYTES_V1,
             });
         }
-        let key = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
+        let key = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            fixed_pgc_decode_limits(bytes.len(), MAX_PGC_CIPHERTEXT_BYTES_V1),
+        )
+        .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
         let _ = key.point.to_projective()?;
         Ok(key)
     }
@@ -384,8 +391,11 @@ impl TwistedElGamalCiphertextV1 {
                 max: MAX_PGC_CIPHERTEXT_BYTES_V1,
             });
         }
-        let ciphertext = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
+        let ciphertext = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            fixed_pgc_decode_limits(bytes.len(), MAX_PGC_CIPHERTEXT_BYTES_V1),
+        )
+        .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
         ciphertext.validate()?;
         Ok(ciphertext)
     }
@@ -680,6 +690,9 @@ pub enum AnonymousPgcError {
     /// Prover randomness repeatedly produced a prohibited identity intermediate.
     #[error("Anonymous-PGC building-block prover exhausted its restart bound")]
     ProverRestartExhausted,
+    /// A locally produced proof failed the independent public verifier.
+    #[error("Anonymous-PGC prover self-check failed")]
+    ProverSelfCheckFailed,
 }
 
 /// Encrypt a 32-bit message with caller-provided independent non-zero randomness.
@@ -890,8 +903,11 @@ impl PgcKeyPossessionProofV1 {
                 max: MAX_PGC_BUILDING_BLOCK_PROOF_BYTES_V1,
             });
         }
-        let proof = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
+        let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            fixed_pgc_decode_limits(bytes.len(), MAX_PGC_BUILDING_BLOCK_PROOF_BYTES_V1),
+        )
+        .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
         proof.validate()?;
         Ok(proof)
     }
@@ -928,8 +944,9 @@ where
     {
         return Err(AnonymousPgcError::SecretKeyMismatch);
     }
+    let mut checked_rng = health_checked_p256_rng_v1(rng)?;
     for _ in 0..MAX_PROVER_RESTARTS {
-        let mask = random_nonzero_scalar(rng)?;
+        let mask = random_nonzero_scalar(&mut checked_rng)?;
         let announcement = CompressedPointV1::from_projective(parameters.g * mask)?;
         let mut transcript = key_possession_transcript(statement, &announcement)?;
         let challenge = transcript
@@ -941,6 +958,8 @@ where
             response: CanonicalScalarV1::from_scalar(mask + challenge * secret.expose_scalar()),
         };
         proof.validate()?;
+        verify_key_possession(statement, &proof)
+            .map_err(|_| AnonymousPgcError::ProverSelfCheckFailed)?;
         return Ok(proof);
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
@@ -1053,8 +1072,11 @@ impl PgcCiphertextOpeningProofV1 {
                 max: MAX_PGC_BUILDING_BLOCK_PROOF_BYTES_V1,
             });
         }
-        let proof = norito::codec::decode_exact_from_slice::<Self>(bytes)
-            .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
+        let proof = norito::codec::decode_exact_from_slice_with_limits::<Self>(
+            bytes,
+            fixed_pgc_decode_limits(bytes.len(), MAX_PGC_BUILDING_BLOCK_PROOF_BYTES_V1),
+        )
+        .map_err(|_| AnonymousPgcError::InvalidNoritoEncoding)?;
         proof.validate()?;
         Ok(proof)
     }
@@ -1093,9 +1115,10 @@ where
         return Err(AnonymousPgcError::CiphertextOpeningMismatch);
     }
     let parameters = AnonymousPgcParametersV1::get()?;
+    let mut checked_rng = health_checked_p256_rng_v1(rng)?;
     for _ in 0..MAX_PROVER_RESTARTS {
-        let randomness_mask = random_nonzero_scalar(rng)?;
-        let message_mask = random_nonzero_scalar(rng)?;
+        let randomness_mask = random_nonzero_scalar(&mut checked_rng)?;
+        let message_mask = random_nonzero_scalar(&mut checked_rng)?;
         let announcement_left = CompressedPointV1::from_projective(
             statement.public_key.point.to_projective()? * randomness_mask,
         )?;
@@ -1123,6 +1146,8 @@ where
             ),
         };
         proof.validate()?;
+        verify_ciphertext_opening(statement, &proof)
+            .map_err(|_| AnonymousPgcError::ProverSelfCheckFailed)?;
         return Ok(proof);
     }
     Err(AnonymousPgcError::ProverRestartExhausted)
@@ -1275,6 +1300,53 @@ mod tests {
 
     impl CryptoRng for KatRng {}
 
+    #[derive(Clone, Copy)]
+    enum AdversarialRngMode {
+        Periodic,
+        PartialFailure,
+        Panic,
+    }
+
+    struct AdversarialRng(AdversarialRngMode);
+
+    impl RngCore for AdversarialRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("Anonymous-PGC must use the fallible RNG interface")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("Anonymous-PGC must use the fallible RNG interface")
+        }
+
+        fn fill_bytes(&mut self, _destination: &mut [u8]) {
+            panic!("Anonymous-PGC must use the fallible RNG interface")
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            match self.0 {
+                AdversarialRngMode::Periodic => {
+                    for (index, byte) in destination.iter_mut().enumerate() {
+                        *byte = ((index % 4) as u8).wrapping_mul(53).wrapping_add(3);
+                    }
+                    Ok(())
+                }
+                AdversarialRngMode::PartialFailure => {
+                    for (index, byte) in destination.iter_mut().take(23).enumerate() {
+                        *byte = index as u8;
+                    }
+                    Err(RngError::new(
+                        "injected partial Anonymous-PGC entropy failure",
+                    ))
+                }
+                AdversarialRngMode::Panic => {
+                    panic!("invalid Anonymous-PGC witness consumed entropy")
+                }
+            }
+        }
+    }
+
+    impl CryptoRng for AdversarialRng {}
+
     fn scalar(value: u8) -> SecretScalarV1 {
         let mut bytes = [0_u8; 32];
         bytes[31] = value;
@@ -1382,6 +1454,49 @@ mod tests {
             mutated_response.response.to_scalar().expect("response") + Scalar::ONE,
         );
         assert!(verify_key_possession(&statement, &mutated_response).is_err());
+    }
+
+    #[test]
+    fn prover_entropy_failures_are_typed_and_follow_witness_checks() {
+        let key_pair = TwistedElGamalKeyPairV1::from_secret(scalar(9)).expect("key pair");
+        let possession =
+            PgcKeyPossessionStatementV1::new(key_pair.public_key(), binding()).expect("statement");
+        assert!(matches!(
+            prove_key_possession(
+                &possession,
+                key_pair.secret_scalar(),
+                &mut AdversarialRng(AdversarialRngMode::Periodic),
+            ),
+            Err(AnonymousPgcError::P256(
+                P256EngineError::RandomnessHealthCheckFailed
+            ))
+        ));
+        assert!(matches!(
+            prove_key_possession(
+                &possession,
+                &scalar(10),
+                &mut AdversarialRng(AdversarialRngMode::Panic),
+            ),
+            Err(AnonymousPgcError::SecretKeyMismatch)
+        ));
+
+        let randomness = scalar(11);
+        let ciphertext =
+            encrypt_with_randomness(key_pair.public_key(), 42, &randomness).expect("ciphertext");
+        let opening =
+            PgcCiphertextOpeningStatementV1::new(key_pair.public_key(), ciphertext, binding())
+                .expect("opening statement");
+        assert!(matches!(
+            prove_ciphertext_opening(
+                &opening,
+                42,
+                &randomness,
+                &mut AdversarialRng(AdversarialRngMode::PartialFailure),
+            ),
+            Err(AnonymousPgcError::P256(
+                P256EngineError::RandomnessUnavailable
+            ))
+        ));
     }
 
     #[test]

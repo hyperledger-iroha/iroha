@@ -80,6 +80,10 @@ pub const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const KOTODAMA_ABI_VERSION: u8 = 1;
 const COLLECTION_ITERATION_CAP: u8 = 64;
 const _: () = assert!(semantic::COLLECTION_ITERATION_LIMIT == COLLECTION_ITERATION_CAP as i64);
+const _: () = assert!(semantic::V1_DYNAMIC_ACCESS_MAX_KEYS == COLLECTION_ITERATION_CAP as u32);
+const _: () = assert!(
+    ivm_abi::access_hints::DYNAMIC_ACCESS_HINT_MAX_KEYS_V1 == COLLECTION_ITERATION_CAP as u32
+);
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
 const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-resolved";
@@ -174,6 +178,7 @@ struct CompilationArtifacts {
 
 struct LoweredCompilation {
     typed: TypedProgram,
+    state_descriptors: Vec<EmbeddedStateDescriptor>,
     ir_program: ir::Program,
     executable_roots: BTreeSet<String>,
     source_name: Option<String>,
@@ -181,6 +186,7 @@ struct LoweredCompilation {
 
 struct SsaCompilation {
     typed: TypedProgram,
+    state_descriptors: Vec<EmbeddedStateDescriptor>,
     ssa_program: crate::ssa::Program,
     executable_roots: BTreeSet<String>,
     source_name: Option<String>,
@@ -188,12 +194,14 @@ struct SsaCompilation {
 
 struct PreparedCompilation {
     typed: TypedProgram,
+    state_descriptors: Vec<EmbeddedStateDescriptor>,
     ssa_program: crate::ssa::Program,
     source_name: Option<String>,
 }
 
 struct CodegenCompilation {
     typed: TypedProgram,
+    state_descriptors: Vec<EmbeddedStateDescriptor>,
     ir_program: ir::Program,
     source_name: Option<String>,
 }
@@ -1554,41 +1562,58 @@ fn decode_fixed32_chunks(
 fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>> {
     use ir::DataRefKind as DRK;
     use iroha_primitives::json::Json;
-    use norito::{decode_from_bytes, to_bytes};
-
-    let _canonical_flags =
-        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
 
     let (type_id, payload) = match kind {
         DRK::Account => {
             let id = iroha_data_model::account::AccountId::parse_encoded(raw)
                 .ok()?
                 .into_account_id();
-            (PointerType::AccountId, to_bytes(&id).ok()?)
+            (
+                PointerType::AccountId,
+                ivm_abi::codec::encode_canonical_norito(&id).ok()?,
+            )
         }
         DRK::AssetDef => {
             let id: iroha_data_model::asset::AssetDefinitionId = raw.parse().ok()?;
-            (PointerType::AssetDefinitionId, to_bytes(&id).ok()?)
+            (
+                PointerType::AssetDefinitionId,
+                ivm_abi::codec::encode_canonical_norito(&id).ok()?,
+            )
         }
         DRK::AssetId => {
             let id: iroha_data_model::asset::AssetId = raw.parse().ok()?;
-            (PointerType::AssetId, to_bytes(&id).ok()?)
+            (
+                PointerType::AssetId,
+                ivm_abi::codec::encode_canonical_norito(&id).ok()?,
+            )
         }
         DRK::NftId => {
             let id: iroha_data_model::nft::NftId = raw.parse().ok()?;
-            (PointerType::NftId, to_bytes(&id).ok()?)
+            (
+                PointerType::NftId,
+                ivm_abi::codec::encode_canonical_norito(&id).ok()?,
+            )
         }
         DRK::Name => {
             let nm: iroha_data_model::name::Name = raw.parse().ok()?;
-            (PointerType::Name, to_bytes(&nm).ok()?)
+            (
+                PointerType::Name,
+                ivm_abi::codec::encode_canonical_norito(&nm).ok()?,
+            )
         }
         DRK::Domain => {
             let id = iroha_data_model::domain::DomainId::parse_fully_qualified(raw).ok()?;
-            (PointerType::DomainId, to_bytes(&id).ok()?)
+            (
+                PointerType::DomainId,
+                ivm_abi::codec::encode_canonical_norito(&id).ok()?,
+            )
         }
         DRK::Json => {
             let json = Json::from_str_norito(raw).ok()?;
-            (PointerType::Json, to_bytes(&json).ok()?)
+            (
+                PointerType::Json,
+                ivm_abi::codec::encode_canonical_norito(&json).ok()?,
+            )
         }
         DRK::Blob => (PointerType::Blob, decode_hex_or_raw_bytes(raw).ok()?),
         DRK::NoritoBytes => (PointerType::NoritoBytes, decode_hex_or_raw_bytes(raw).ok()?),
@@ -1627,41 +1652,69 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
         DRK::DataSpaceId => {
             if let Some(raw_id) = parse_u64_literal(raw) {
                 let id = iroha_data_model::nexus::DataSpaceId::new(raw_id);
-                (PointerType::DataSpaceId, to_bytes(&id).ok()?)
+                (
+                    PointerType::DataSpaceId,
+                    ivm_abi::codec::encode_canonical_norito(&id).ok()?,
+                )
             } else {
                 let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-                let value: iroha_data_model::nexus::DataSpaceId = decode_from_bytes(&bytes).ok()?;
-                (PointerType::DataSpaceId, to_bytes(&value).ok()?)
+                let value: iroha_data_model::nexus::DataSpaceId =
+                    ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
+                (
+                    PointerType::DataSpaceId,
+                    ivm_abi::codec::encode_canonical_norito(&value).ok()?,
+                )
             }
         }
         DRK::AxtDescriptor => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let value: crate::axt::AxtDescriptor = decode_from_bytes(&bytes).ok()?;
-            (PointerType::AxtDescriptor, to_bytes(&value).ok()?)
+            let value: crate::axt::AxtDescriptor =
+                ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
+            crate::axt::validate_descriptor(&value).ok()?;
+            (
+                PointerType::AxtDescriptor,
+                ivm_abi::codec::encode_canonical_norito(&value).ok()?,
+            )
         }
         DRK::AssetHandle => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let value: crate::axt::AssetHandle = decode_from_bytes(&bytes).ok()?;
-            (PointerType::AssetHandle, to_bytes(&value).ok()?)
+            let value: crate::axt::AssetHandle =
+                ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
+            crate::axt::validate_asset_handle(&value).ok()?;
+            (
+                PointerType::AssetHandle,
+                ivm_abi::codec::encode_canonical_norito(&value).ok()?,
+            )
         }
         DRK::ProofBlob => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-            let value: crate::axt::ProofBlob = decode_from_bytes(&bytes).ok()?;
-            (PointerType::ProofBlob, to_bytes(&value).ok()?)
+            let value: crate::axt::ProofBlob =
+                ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
+            crate::axt::validate_proof_blob(&value).ok()?;
+            (
+                PointerType::ProofBlob,
+                ivm_abi::codec::encode_canonical_norito(&value).ok()?,
+            )
         }
         DRK::SoracloudRequest => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
             let value: iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 =
-                decode_from_bytes(&bytes).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
             value.validate().ok()?;
-            (PointerType::SoracloudRequest, to_bytes(&value).ok()?)
+            (
+                PointerType::SoracloudRequest,
+                ivm_abi::codec::encode_canonical_norito(&value).ok()?,
+            )
         }
         DRK::SoracloudResponse => {
             let bytes = decode_hex_or_raw_bytes(raw).ok()?;
             let value: iroha_data_model::soracloud::SoracloudHostResponseEnvelopeV1 =
-                decode_from_bytes(&bytes).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
             value.validate().ok()?;
-            (PointerType::SoracloudResponse, to_bytes(&value).ok()?)
+            (
+                PointerType::SoracloudResponse,
+                ivm_abi::codec::encode_canonical_norito(&value).ok()?,
+            )
         }
     };
 
@@ -1761,11 +1814,12 @@ mod tests {
         HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI,
         IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES,
         TransferKind, WIDE_IMM_MAX, checked_align_stack_frame_size, classify_ir_access,
-        decoded_control_target, emit_addi, emit_get_private_input_arguments, emit_load64,
-        emit_parallel_register_moves, emit_private_numeric_valcom_arguments, emit_store64,
-        encode_addi, encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load,
-        pointer_type_for_kind, push_word, record_isi_access,
-        relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
+        collect_dynamic_access_hints, decoded_control_target, emit_addi,
+        emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
+        emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
+        patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
+        record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
+        stack_slot_offset_bytes,
     };
     use crate::{
         ast::BinaryOp,
@@ -1774,7 +1828,11 @@ mod tests {
         parser::parse_test_fragment as parse,
         semantic::{self, analyze},
     };
-    use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
+    use crate::{
+        encoding, instruction,
+        metadata::{EmbeddedStateDescriptor, EmbeddedStateType, ProgramMetadata},
+        pointer_abi::PointerType,
+    };
     use ivm_abi::syscalls;
 
     fn test_mode_compiler() -> Compiler {
@@ -1782,6 +1840,99 @@ mod tests {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         })
+    }
+
+    fn canonical_norito_hex<T: norito::NoritoSerialize>(value: &T) -> String {
+        let bytes =
+            ivm_abi::codec::encode_canonical_norito(value).expect("encode canonical test frame");
+        format!("0x{}", hex::encode(bytes))
+    }
+
+    fn alternate_norito_hex<T: norito::NoritoSerialize>(value: &T) -> String {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let bytes = norito::to_bytes(value).expect("encode alternate-layout test frame");
+        format!("0x{}", hex::encode(bytes))
+    }
+
+    fn sample_asset_handle() -> crate::axt::AssetHandle {
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+
+        use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject};
+
+        AssetHandle {
+            scope: vec!["transfer".to_owned()],
+            subject: HandleSubject {
+                account: "subject".to_owned(),
+                origin_dsid: Some(DataSpaceId::new(7)),
+            },
+            budget: HandleBudget {
+                remaining: "1".parse().expect("canonical quantity"),
+                per_use: None,
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![1],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(0),
+            axt_binding: vec![1; 32],
+            manifest_view_root: vec![2; 32],
+            expiry_slot: 1,
+            max_clock_skew_ms: None,
+        }
+    }
+
+    fn compile_with_injected_ir(instructions: Vec<ir::Instr>) -> Result<Vec<u8>, String> {
+        let options = CompilerOptions::default();
+        let session = crate::session::CompilerSession::new(options.clone());
+        let source_name = "axt_literal_validation.ko";
+        let parsed = session
+            .parse_compilation_unit(crate::session::CompileRequest {
+                source: r#"
+seiyaku AxtLiteralValidation {
+    kotoage fn run() authorize("AxtLiteralValidation") {}
+}
+"#,
+                source_name: Some(source_name),
+            })
+            .map_err(|diagnostics| diagnostics.render_human())?;
+        let resolved = session
+            .resolve_compilation_unit(parsed)
+            .map_err(|diagnostics| diagnostics.render_human())?;
+        let typed = session
+            .type_effect_compilation_unit(resolved)
+            .map_err(|diagnostics| diagnostics.render_human())?;
+        let compiler = Compiler::new_with_options(options);
+        let lowered = compiler
+            .lower_typed_program(typed, Some(source_name))
+            .map_err(|diagnostics| diagnostics.render_human())?;
+        let ssa = compiler
+            .construct_ssa_program(lowered)
+            .map_err(|diagnostics| diagnostics.render_human())?;
+        let optimized = compiler
+            .optimize_ssa_program(ssa)
+            .map_err(|diagnostics| diagnostics.render_human())?;
+        let mut codegen = compiler
+            .destroy_ssa_program(optimized)
+            .map_err(|diagnostics| diagnostics.render_human())?;
+        let function = codegen
+            .ir_program
+            .functions
+            .iter_mut()
+            .find(|function| function.name == "run")
+            .expect("production entrypoint survives SSA retention");
+        function.entry = ir::Label(0);
+        function.blocks = vec![ir::BasicBlock {
+            label: ir::Label(0),
+            instrs: instructions,
+            terminator: ir::Terminator::Return(None),
+        }];
+        compiler
+            .compile_codegen(codegen)
+            .map(|artifact| artifact.bytes)
     }
 
     fn assert_internal_source_names_rejected(names: &[&str]) {
@@ -2099,6 +2250,490 @@ mod tests {
                 "DataRefKind::{kind:?} should map to PointerType::{expected:?}"
             );
         }
+    }
+
+    #[test]
+    fn axt_descriptor_literal_encoding_enforces_host_invariants() {
+        use iroha_data_model::nexus::DataSpaceId;
+
+        use crate::axt::{AxtDescriptor, AxtTouchSpec};
+
+        fn literal(descriptor: &AxtDescriptor) -> String {
+            let bytes = norito::to_bytes(descriptor).expect("encode AXT descriptor");
+            format!("0x{}", hex::encode(bytes))
+        }
+
+        let dsid = DataSpaceId::new(7);
+        let other = DataSpaceId::new(11);
+        let touch = AxtTouchSpec {
+            dsid,
+            read: vec!["orders".to_owned()],
+            write: vec!["ledger".to_owned()],
+        };
+        let valid = AxtDescriptor {
+            dsids: vec![dsid],
+            touches: vec![touch.clone()],
+        };
+        let valid_literal = literal(&valid);
+        assert!(
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &valid_literal)
+                .is_some()
+        );
+        assert_eq!(
+            super::decode_axt_descriptor_literal(&valid_literal),
+            Some(valid.clone())
+        );
+        let alternate_literal = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            literal(&valid)
+        };
+        assert_ne!(alternate_literal, valid_literal);
+        assert!(
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &alternate_literal)
+                .is_none(),
+            "the compiler must not normalize an alternate Norito layout"
+        );
+        assert_eq!(
+            super::decode_axt_descriptor_literal(&alternate_literal),
+            None
+        );
+
+        let invalid = [
+            AxtDescriptor {
+                dsids: Vec::new(),
+                touches: Vec::new(),
+            },
+            AxtDescriptor {
+                dsids: vec![dsid, dsid],
+                touches: Vec::new(),
+            },
+            AxtDescriptor {
+                dsids: vec![other],
+                touches: vec![touch.clone()],
+            },
+            AxtDescriptor {
+                dsids: vec![dsid],
+                touches: vec![touch.clone(), touch],
+            },
+            AxtDescriptor {
+                dsids: vec![other, dsid],
+                touches: Vec::new(),
+            },
+            AxtDescriptor {
+                dsids: vec![dsid, other],
+                touches: vec![AxtTouchSpec {
+                    dsid,
+                    read: vec![String::new()],
+                    write: Vec::new(),
+                }],
+            },
+        ];
+        for descriptor in invalid {
+            let raw = literal(&descriptor);
+            assert!(
+                super::encode_pointer_tlv_bytes(ir::DataRefKind::AxtDescriptor, &raw).is_none(),
+                "compiler must reject host-invalid descriptor: {descriptor:?}"
+            );
+            assert_eq!(
+                super::decode_axt_descriptor_literal(&raw),
+                None,
+                "access-hint decoding must reject host-invalid descriptor: {descriptor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn capability_pointer_encoding_rejects_context_free_faults() {
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+
+        use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject, ProofBlob};
+
+        fn literal<T: norito::NoritoSerialize>(value: &T) -> String {
+            let bytes = norito::to_bytes(value).expect("encode capability literal");
+            format!("0x{}", hex::encode(bytes))
+        }
+
+        let valid_handle = AssetHandle {
+            scope: vec!["transfer".to_owned()],
+            subject: HandleSubject {
+                account: "subject".to_owned(),
+                origin_dsid: Some(DataSpaceId::new(7)),
+            },
+            budget: HandleBudget {
+                remaining: "1".parse().expect("canonical quantity"),
+                per_use: None,
+            },
+            handle_era: 1,
+            sub_nonce: 1,
+            group_binding: GroupBinding {
+                composability_group_id: vec![1],
+                epoch_id: 1,
+            },
+            target_lane: LaneId::new(0),
+            axt_binding: vec![1; 32],
+            manifest_view_root: vec![2; 32],
+            expiry_slot: 1,
+            max_clock_skew_ms: None,
+        };
+        let valid_handle_literal = literal(&valid_handle);
+        assert!(
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::AssetHandle, &valid_handle_literal)
+                .is_some()
+        );
+        assert_eq!(
+            super::decode_asset_handle_literal(&valid_handle_literal),
+            Some(valid_handle.clone())
+        );
+
+        let alternate_handle_literal = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            literal(&valid_handle)
+        };
+        assert_ne!(alternate_handle_literal, valid_handle_literal);
+        assert!(
+            super::encode_pointer_tlv_bytes(
+                ir::DataRefKind::AssetHandle,
+                &alternate_handle_literal
+            )
+            .is_none()
+        );
+        assert_eq!(
+            super::decode_asset_handle_literal(&alternate_handle_literal),
+            None
+        );
+
+        let mut malformed_handle = valid_handle.clone();
+        malformed_handle.manifest_view_root.pop();
+        let malformed_handle_literal = literal(&malformed_handle);
+        assert!(
+            super::encode_pointer_tlv_bytes(
+                ir::DataRefKind::AssetHandle,
+                &malformed_handle_literal
+            )
+            .is_none()
+        );
+        assert_eq!(
+            super::decode_asset_handle_literal(&malformed_handle_literal),
+            None
+        );
+
+        let mut unusable_handle = valid_handle.clone();
+        unusable_handle.budget.per_use = Some("0".parse().expect("zero quantity"));
+        let unusable_handle_literal = literal(&unusable_handle);
+        assert!(
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::AssetHandle, &unusable_handle_literal)
+                .is_none()
+        );
+        assert_eq!(
+            super::decode_asset_handle_literal(&unusable_handle_literal),
+            None
+        );
+
+        let empty_proof_literal = literal(&ProofBlob {
+            payload: Vec::new(),
+            expiry_slot: None,
+        });
+        assert!(
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::ProofBlob, &empty_proof_literal)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn instruction_access_hints_reject_alternate_layout_independent_of_ambient_flags() {
+        let instruction =
+            iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "canonical access hint".to_owned(),
+            ));
+        let canonical_payload = ivm_abi::codec::encode_canonical_norito(&instruction)
+            .expect("encode canonical InstructionBox fixture");
+        let canonical_literal = format!("0x{}", hex::encode(&canonical_payload));
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate_payload = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&instruction).expect("encode alternate-layout InstructionBox fixture")
+        };
+        assert_ne!(alternate_payload, canonical_payload);
+        assert!(
+            norito::decode_from_bytes::<iroha_data_model::isi::InstructionBox>(&alternate_payload)
+                .is_ok(),
+            "ordinary Norito must accept its advertised alternate layout"
+        );
+        let alternate_literal = format!("0x{}", hex::encode(alternate_payload));
+
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        assert!(super::decode_instruction_box_literal(&canonical_literal).is_some());
+        assert!(super::access_for_instruction_literal(&canonical_literal).is_some());
+        assert!(super::decode_instruction_box_literal(&alternate_literal).is_none());
+        assert!(super::access_for_instruction_literal(&alternate_literal).is_none());
+    }
+
+    #[test]
+    fn instruction_access_hints_do_not_unwrap_prewrapped_norito_tlvs() {
+        let instruction =
+            iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Log::new(
+                iroha_data_model::Level::INFO,
+                "prewrapped access hint".to_owned(),
+            ));
+        let instruction_literal = canonical_norito_hex(&instruction);
+        let prewrapped =
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &instruction_literal)
+                .expect("wrap the canonical instruction as a source-level NoritoBytes TLV");
+        let prewrapped_literal = format!("0x{}", hex::encode(&prewrapped));
+
+        let emitted =
+            super::encode_pointer_tlv_bytes(ir::DataRefKind::NoritoBytes, &prewrapped_literal)
+                .expect("emit the literal's exact bytes in the outer pointer TLV");
+        let emitted_tlv =
+            crate::pointer_abi::validate_tlv_bytes(&emitted).expect("validate emitted pointer TLV");
+        assert_eq!(emitted_tlv.payload, prewrapped.as_slice());
+        assert_eq!(
+            super::decode_norito_literal_payload(&prewrapped_literal),
+            Some(prewrapped)
+        );
+        assert!(super::decode_instruction_box_literal(&prewrapped_literal).is_none());
+        assert!(super::access_for_instruction_literal(&prewrapped_literal).is_none());
+    }
+
+    #[test]
+    fn instruction_access_hints_reject_direct_concrete_instruction_frames() {
+        use iroha_data_model::{
+            isi::{InstructionBox, zk::SubmitBallot},
+            proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+        };
+
+        let backend = "halo2/ipa".to_owned();
+        let submit = SubmitBallot {
+            election_id: "election".to_owned(),
+            ciphertext: vec![1, 2, 3],
+            ballot_proof: ProofAttachment::new_ref(
+                backend.clone(),
+                ProofBox::new(backend.clone(), vec![4, 5, 6]),
+                VerifyingKeyId::new(backend, "ballot_vk"),
+            ),
+            nullifier: [7; 32],
+        };
+        let direct_literal = canonical_norito_hex(&submit);
+        assert!(super::decode_instruction_box_literal(&direct_literal).is_none());
+        assert!(super::access_for_instruction_literal(&direct_literal).is_none());
+
+        let boxed_literal = canonical_norito_hex(&InstructionBox::from(submit));
+        assert!(super::decode_instruction_box_literal(&boxed_literal).is_some());
+        assert!(super::access_for_instruction_literal(&boxed_literal).is_some());
+    }
+
+    #[test]
+    fn codegen_rejects_noncanonical_or_invalid_literal_axt_touch_manifests() {
+        use crate::axt::TouchManifest;
+
+        let invalid = TouchManifest {
+            read: vec!["z".to_owned(), "a".to_owned()],
+            write: Vec::new(),
+        };
+        let valid = TouchManifest {
+            read: vec!["orders".to_owned()],
+            write: vec!["ledger".to_owned()],
+        };
+        let alternate = alternate_norito_hex(&valid);
+        assert_ne!(alternate, canonical_norito_hex(&valid));
+
+        for manifest in [canonical_norito_hex(&invalid), alternate] {
+            let error = compile_with_injected_ir(vec![
+                ir::Instr::DataRef {
+                    dest: ir::Temp(0),
+                    kind: ir::DataRefKind::DataSpaceId,
+                    value: "7".to_owned(),
+                },
+                ir::Instr::DataRef {
+                    dest: ir::Temp(1),
+                    kind: ir::DataRefKind::NoritoBytes,
+                    value: manifest,
+                },
+                ir::Instr::AxtTouch {
+                    dsid: ir::Temp(0),
+                    manifest: Some(ir::Temp(1)),
+                },
+            ])
+            .expect_err("literal AXT touch manifests must fail closed during full codegen");
+            assert!(
+                error.contains("invalid AXT touch manifest literal")
+                    && error.contains("canonical, context-valid TouchManifest frame"),
+                "unexpected compiler error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents() {
+        use iroha_data_model::nexus::DataSpaceId;
+
+        use crate::axt::{RemoteSpendIntent, SpendOp};
+
+        let invalid = RemoteSpendIntent {
+            asset_dsid: DataSpaceId::new(7),
+            op: SpendOp {
+                kind: String::new(),
+                from: "from".to_owned(),
+                to: "to".to_owned(),
+                amount: Some("1".parse().expect("canonical quantity")),
+            },
+        };
+        let valid = RemoteSpendIntent {
+            asset_dsid: DataSpaceId::new(7),
+            op: SpendOp {
+                kind: "transfer".to_owned(),
+                from: "from".to_owned(),
+                to: "to".to_owned(),
+                amount: Some("1".parse().expect("canonical quantity")),
+            },
+        };
+        let alternate = alternate_norito_hex(&valid);
+        assert_ne!(alternate, canonical_norito_hex(&valid));
+        let handle = canonical_norito_hex(&sample_asset_handle());
+
+        for intent in [canonical_norito_hex(&invalid), alternate] {
+            let error = compile_with_injected_ir(vec![
+                ir::Instr::DataRef {
+                    dest: ir::Temp(0),
+                    kind: ir::DataRefKind::AssetHandle,
+                    value: handle.clone(),
+                },
+                ir::Instr::DataRef {
+                    dest: ir::Temp(1),
+                    kind: ir::DataRefKind::NoritoBytes,
+                    value: intent,
+                },
+                ir::Instr::UseAssetHandle {
+                    handle: ir::Temp(0),
+                    intent: ir::Temp(1),
+                    proof: None,
+                },
+            ])
+            .expect_err("literal remote spend intents must fail closed during full codegen");
+            assert!(
+                error.contains("invalid AXT remote spend intent literal")
+                    && error.contains("canonical, context-valid RemoteSpendIntent frame"),
+                "unexpected compiler error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
+        use ivm_abi::host_payload::{RootsGetRequest, VoteGetTallyRequest, VrfEpochSeedRequest};
+
+        let asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("canonical asset definition");
+        let roots = RootsGetRequest {
+            asset_id: asset.to_string(),
+            max: 8,
+        };
+        let tally = VoteGetTallyRequest {
+            election_id: "election".to_owned(),
+        };
+        let vrf = VrfEpochSeedRequest {
+            epoch: 42,
+            fallback_to_latest: true,
+        };
+
+        let mut roots_access = AccessSets::default();
+        assert_eq!(
+            super::record_zk_roots_get_access(&canonical_norito_hex(&roots), &mut roots_access),
+            Some(())
+        );
+        assert_eq!(
+            roots_access.reads,
+            IndexSet::from([super::key_zk_asset(&asset)])
+        );
+        assert!(roots_access.writes.is_empty());
+
+        let mut tally_access = AccessSets::default();
+        assert_eq!(
+            super::record_zk_vote_get_tally_access(
+                &canonical_norito_hex(&tally),
+                &mut tally_access
+            ),
+            Some(())
+        );
+        assert_eq!(
+            tally_access.reads,
+            IndexSet::from(["zk:election:election:tally".to_owned()])
+        );
+        assert!(tally_access.writes.is_empty());
+
+        let mut vrf_access = AccessSets::default();
+        assert_eq!(
+            super::record_vrf_epoch_seed_access(&canonical_norito_hex(&vrf), &mut vrf_access),
+            Some(())
+        );
+        assert_eq!(
+            vrf_access.reads,
+            IndexSet::from([
+                "vrf:epoch_seed:42".to_owned(),
+                "vrf:epoch_seed:latest".to_owned(),
+            ])
+        );
+        assert!(vrf_access.writes.is_empty());
+
+        let alternate_roots = alternate_norito_hex(&roots);
+        let alternate_tally = alternate_norito_hex(&tally);
+        let alternate_vrf = alternate_norito_hex(&vrf);
+        assert_ne!(alternate_roots, canonical_norito_hex(&roots));
+        assert_ne!(alternate_tally, canonical_norito_hex(&tally));
+        assert_ne!(alternate_vrf, canonical_norito_hex(&vrf));
+
+        for (raw, decode) in [
+            (
+                alternate_roots,
+                super::record_zk_roots_get_access as fn(&str, &mut AccessSets) -> Option<()>,
+            ),
+            (
+                canonical_norito_hex(&tally),
+                super::record_zk_roots_get_access,
+            ),
+            (alternate_tally, super::record_zk_vote_get_tally_access),
+            (
+                canonical_norito_hex(&roots),
+                super::record_zk_vote_get_tally_access,
+            ),
+            (alternate_vrf, super::record_vrf_epoch_seed_access),
+            (
+                canonical_norito_hex(&tally),
+                super::record_vrf_epoch_seed_access,
+            ),
+        ] {
+            let mut access = AccessSets::default();
+            assert_eq!(decode(&raw, &mut access), None);
+            assert!(access.reads.is_empty() && access.writes.is_empty());
+        }
+
+        let mut malformed_bool =
+            ivm_abi::codec::encode_canonical_norito(&vrf).expect("encode canonical VRF request");
+        assert_eq!(
+            malformed_bool.last(),
+            Some(&1),
+            "the fixture's final bare field is the true boolean"
+        );
+        *malformed_bool
+            .last_mut()
+            .expect("canonical VRF request has a bool field") = 2;
+        let mut access = AccessSets::default();
+        assert_eq!(
+            super::record_vrf_epoch_seed_access(
+                &format!("0x{}", hex::encode(malformed_bool)),
+                &mut access,
+            ),
+            None
+        );
+        assert!(access.reads.is_empty() && access.writes.is_empty());
     }
 
     #[test]
@@ -8126,6 +8761,9 @@ seiyaku ReachableHints {
 
   fn dead_lookup(int key) {
     let _value = DeadEntries.get(key);
+    for (dead_key, dead_value) in DeadEntries.take(4) {
+      let _copy = dead_value;
+    }
   }
 
   view fn counter() -> int { return Counter; }
@@ -8147,6 +8785,371 @@ seiyaku ReachableHints {
             hints.dynamic_reads.is_empty(),
             "a dynamic read in removed private code must not constrain scheduler metadata: {hints:?}"
         );
+    }
+
+    #[test]
+    fn unreachable_scans_in_retained_functions_emit_no_dynamic_hints() {
+        for body in [
+            r#"
+    return 0;
+    for (dead_key, dead_value) in Entries.take(4) {
+      let _copy = dead_value;
+    }
+"#,
+            r#"
+    if flag {
+      return 1;
+    } else {
+      return 2;
+    }
+    for (dead_key, dead_value) in Entries.range(1, 5) {
+      let _copy = dead_value;
+    }
+"#,
+            r#"
+    if false {
+      for (dead_key, dead_value) in Entries.take(4) {
+        let _copy = dead_value;
+      }
+    }
+    return 0;
+"#,
+            r#"
+    if true {
+      return 1;
+    } else {
+      for (dead_key, dead_value) in Entries.range(1, 5) {
+        let _copy = dead_value;
+      }
+      return 2;
+    }
+"#,
+        ] {
+            let source = format!(
+                r#"
+seiyaku ReachableHintControlFlow {{
+  state StateMap<int, int> Entries;
+
+  view fn scan(bool flag) -> int {{
+{body}
+  }}
+}}
+"#
+            );
+            let (_bytes, manifest) = Compiler::new()
+                .compile_source_with_manifest(&source)
+                .expect("compile retained function with unreachable scan");
+            assert!(
+                manifest
+                    .access_set_hints
+                    .as_ref()
+                    .is_none_or(|hints| hints.dynamic_reads.is_empty()),
+                "a scan with no reachable bytecode must not emit a dynamic hint"
+            );
+        }
+    }
+
+    #[test]
+    fn expression_nested_scans_retain_post_optimization_provenance() {
+        let cases = [
+            (
+                r#"
+seiyaku ExpressionHintIf {
+  state StateMap<Name, int> Entries;
+
+  view fn scan(bool flag) -> int {
+    if flag {
+      var int total = 0;
+      for (key, value) in Entries.take(3) {
+        total = total + value;
+      }
+      total
+    } else {
+      0
+    }
+  }
+}
+"#,
+                ("state:Entries", "Name", "take", 3),
+            ),
+            (
+                r#"
+seiyaku ExpressionHintMatch {
+  state StateMap<int, int> Entries;
+
+  fn identity(int value) -> int { value }
+
+  view fn scan(Option<int> maybe) -> int {
+    return identity(match maybe {
+      Option::some(seed) => {
+        var int total = seed;
+        for (key, value) in Entries.range(1, 3) {
+          total = total + key + value;
+        }
+        total
+      },
+      Option::none => 0,
+    });
+  }
+}
+"#,
+                ("state:Entries", "int", "range", 2),
+            ),
+        ];
+
+        for (source, expected) in cases {
+            let (_artifact, manifest) = Compiler::new()
+                .compile_source_with_manifest(source)
+                .expect("compile expression-nested StateMap scan");
+            let hints = manifest
+                .access_set_hints
+                .expect("reachable expression scan must emit access hints");
+            let actual = hints
+                .dynamic_reads
+                .iter()
+                .map(|hint| {
+                    (
+                        hint.base_key.as_str(),
+                        hint.key_type.as_str(),
+                        hint.bound_kind.as_str(),
+                        hint.max_keys,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, vec![expected]);
+        }
+    }
+
+    #[test]
+    fn optimized_ir_dynamic_provenance_must_match_the_emitted_state_schema() {
+        use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
+
+        fn state_keys(hint: Option<DynamicAccessHint>) -> ir::Instr {
+            ir::Instr::StateKeys {
+                dest: ir::Temp(0),
+                prefix: ir::Temp(1),
+                offset: ir::Temp(2),
+                limit: ir::Temp(3),
+                dynamic_access_hint: hint,
+            }
+        }
+
+        fn hint(key_type: &str) -> DynamicAccessHint {
+            DynamicAccessHint {
+                base_key: "state:Orders".to_owned(),
+                key_type: key_type.to_owned(),
+                bound_kind: "take".to_owned(),
+                max_keys: 1,
+            }
+        }
+
+        fn state(name: &str, ty: EmbeddedStateType) -> EmbeddedStateDescriptor {
+            EmbeddedStateDescriptor {
+                name: name.to_owned(),
+                ty,
+            }
+        }
+
+        let exact_hint = hint("int");
+        let exact_states = [state(
+            "Orders",
+            EmbeddedStateType::StateMap {
+                key: Box::new(EmbeddedStateType::Int),
+                value: Box::new(EmbeddedStateType::Bool),
+            },
+        )];
+        let (reads, writes) = collect_dynamic_access_hints(
+            &[call_graph_function(
+                "scan",
+                vec![state_keys(Some(exact_hint.clone()))],
+            )],
+            &exact_states,
+        )
+        .expect("exact optimized-IR provenance must validate");
+        assert_eq!(reads, vec![exact_hint]);
+        assert!(writes.is_empty());
+
+        let (reads, writes) = collect_dynamic_access_hints(
+            &[call_graph_function(
+                "direct_state_keys",
+                vec![state_keys(None)],
+            )],
+            &[],
+        )
+        .expect("direct state::keys has no compiler-proven StateMap hint");
+        assert!(reads.is_empty());
+        assert!(writes.is_empty());
+
+        for (states, expected) in [
+            (Vec::new(), "does not name a declared top-level StateMap"),
+            (
+                vec![state("Orders", EmbeddedStateType::Int)],
+                "does not name a declared top-level StateMap",
+            ),
+            (
+                vec![state(
+                    "Orders",
+                    EmbeddedStateType::StateMap {
+                        key: Box::new(EmbeddedStateType::Quantity),
+                        value: Box::new(EmbeddedStateType::Bool),
+                    },
+                )],
+                "declared StateMap key type is `quantity`",
+            ),
+        ] {
+            let error = collect_dynamic_access_hints(
+                &[call_graph_function(
+                    "scan",
+                    vec![state_keys(Some(hint("int")))],
+                )],
+                &states,
+            )
+            .expect_err("unknown, scalar, or key-mismatched provenance must fail closed");
+            assert!(error.starts_with("K3098:"), "{error}");
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn bounded_state_map_scans_emit_exact_dynamic_read_hints() {
+        let src = r#"
+seiyaku BoundedHints {
+  state StateMap<Name, int> Names;
+  state StateMap<quantity, int> Quantities;
+  state StateMap<int, int> Empty;
+
+  view fn scan() -> int {
+    var int total = 0;
+    for (name1, value1) in Names.take(2) {
+      total = total + value1;
+    }
+    for (name2, value2) in Names.take(5) {
+      total = total + value2;
+    }
+    for (name3, value3) in Names.range(3, 7) {
+      total = total + value3;
+    }
+    for (quantity_key, quantity_value) in Quantities.range(0, 1) {
+      total = total + quantity_value;
+    }
+    for (empty_key, empty_value) in Empty.take(0) {
+      total = total + empty_value;
+    }
+    return total;
+  }
+}
+"#;
+        let (_bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile bounded StateMap scans");
+        let hints = manifest
+            .access_set_hints
+            .expect("bounded scans must emit access hints");
+        let dynamic_reads = hints
+            .dynamic_reads
+            .iter()
+            .map(|hint| {
+                (
+                    hint.base_key.as_str(),
+                    hint.key_type.as_str(),
+                    hint.bound_kind.as_str(),
+                    hint.max_keys,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            dynamic_reads,
+            vec![
+                ("state:Names", "Name", "range", 4),
+                ("state:Names", "Name", "take", 2),
+                ("state:Names", "Name", "take", 5),
+                ("state:Quantities", "quantity", "range", 1),
+            ]
+        );
+        assert!(
+            hints.dynamic_writes.is_empty(),
+            "first-release scan hints never infer dynamic writes"
+        );
+    }
+
+    #[test]
+    fn zero_length_state_map_scans_are_exact_bytecode_no_ops() {
+        let baseline = r#"
+seiyaku ZeroScanNoOp {
+  state StateMap<int, int> Entries;
+
+  view fn scan() -> int {
+    var int total = 0;
+    return total;
+  }
+}
+"#;
+        let (baseline_artifact, baseline_manifest) = Compiler::new()
+            .compile_source_with_manifest(baseline)
+            .expect("compile no-scan baseline");
+
+        for iterator in ["Entries.take(0)", "Entries.range(3, 3)"] {
+            let source = format!(
+                r#"
+seiyaku ZeroScanNoOp {{
+  state StateMap<int, int> Entries;
+
+  view fn scan() -> int {{
+    var int total = 0;
+    for (key, value) in {iterator} {{
+      total = total + key + value;
+    }}
+    return total;
+  }}
+}}
+"#
+            );
+            let (artifact, manifest) = Compiler::new()
+                .compile_source_with_manifest(&source)
+                .unwrap_or_else(|error| panic!("compile zero scan `{iterator}`: {error}"));
+            assert_eq!(
+                artifact, baseline_artifact,
+                "{iterator} must emit no STATE_KEYS query, loop bytecode, gas work, or host access"
+            );
+            assert_eq!(manifest.code_hash, baseline_manifest.code_hash);
+            assert!(
+                manifest
+                    .access_set_hints
+                    .as_ref()
+                    .is_none_or(|hints| hints.dynamic_reads.is_empty()),
+                "{iterator} must emit no dynamic-access hint"
+            );
+        }
+    }
+
+    #[test]
+    fn free_calls_cannot_forge_state_map_scan_provenance() {
+        for iterator in ["take(Names, 2)", "range(Names, 0, 2)"] {
+            let source = format!(
+                r#"
+seiyaku ExactScanProvenance {{
+  state StateMap<Name, int> Names;
+
+  view fn scan() -> int {{
+    var int total = 0;
+    for (name, value) in {iterator} {{
+      total = total + value;
+    }}
+    return total;
+  }}
+}}
+"#
+            );
+            let error = Compiler::new()
+                .compile_source_with_manifest(&source)
+                .expect_err("only postfix StateMap.take/range may provide scan provenance");
+            assert!(
+                error.contains(
+                    "StateMap iteration requires `.take(N)` or `.range(start, end)` with int literals"
+                ),
+                "{iterator}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -11467,6 +12470,197 @@ seiyaku RoundedQuantity {
         );
     }
 
+    fn wide_durable_state_source(field_count: usize, use_state: bool) -> String {
+        let mut source = String::from("seiyaku RuntimeSchemaBoundary {\nstruct Wide {\n");
+        for index in 0..field_count {
+            source.push_str(&format!("int field_{index};\n"));
+        }
+        if use_state {
+            source.push_str("}\nstate Wide value;\n");
+            source.push_str("hajimari() {\nvalue = Wide {\n");
+            for index in 0..field_count {
+                source.push_str(&format!("field_{index}: 0,\n"));
+            }
+            source.push_str("};\n}\n");
+        } else {
+            // StateMap storage has no scalar initialization obligation, so it
+            // isolates descriptor validation even when the declared map is
+            // otherwise unused by executable code.
+            source.push_str("}\nstate StateMap<Name, Wide> value;\n");
+        }
+        source.push_str("view fn inspect() {}\n");
+        source.push_str("}\n");
+        source
+    }
+
+    #[test]
+    fn compiler_enforces_the_exact_runtime_state_schema_node_limit() {
+        Compiler::new()
+            .compile_source(&wide_durable_state_source(
+                ivm_abi::state_value::MAX_STATE_VALUE_NODES - 1,
+                false,
+            ))
+            .expect("one struct plus 255 leaves is exactly 256 runtime schema nodes");
+
+        let error = Compiler::new()
+            .compile_source(&wide_durable_state_source(
+                ivm_abi::state_value::MAX_STATE_VALUE_NODES,
+                false,
+            ))
+            .expect_err("compiler must not emit a 257-node CNTR durable-state schema");
+        assert!(
+            error.contains(
+                "state `value` exceeds the exact V1 runtime StateValueSchema limit of 256 nodes or levels and 65536 encoded bytes"
+            ),
+            "unexpected compiler error: {error}"
+        );
+    }
+
+    #[test]
+    fn used_state_reports_the_exact_runtime_schema_limit_before_lowering() {
+        let error = Compiler::new()
+            .compile_source(&wide_durable_state_source(
+                ivm_abi::state_value::MAX_STATE_VALUE_NODES,
+                true,
+            ))
+            .expect_err("a used 257-node state schema must fail before IR lowering");
+        assert!(
+            error.contains(
+                "state `value` exceeds the exact V1 runtime StateValueSchema limit of 256 nodes or levels and 65536 encoded bytes"
+            ),
+            "unexpected compiler error: {error}"
+        );
+        assert!(
+            !error.contains("durable state value is not encodable"),
+            "the generic lowering error must not hide the exact CNTR limit: {error}"
+        );
+    }
+
+    #[test]
+    fn lowering_time_abi_schemas_ignore_ambient_norito_flags() {
+        let source = r#"
+seiyaku CanonicalSchemas {
+    state int stored;
+
+    hajimari() {
+        stored = 0;
+    }
+
+    view fn inspect(int marker) -> Json {
+        return json { marker: marker, stored: stored };
+    }
+}
+"#;
+        let canonical = {
+            let _ambient =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            Compiler::new()
+                .compile_source(source)
+                .expect("compile with default canonical Norito flags")
+        };
+        let alternate = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            Compiler::new()
+                .compile_source(source)
+                .expect("compile independently of ambient Norito flags")
+        };
+        assert_eq!(
+            alternate, canonical,
+            "ambient Norito flags must not change a deployable artifact"
+        );
+
+        let parsed = ProgramMetadata::parse(&canonical).expect("parse canonical artifact");
+        let literals = parsed.literal_section.expect("schema literal table");
+        let mut norito_payloads = Vec::new();
+        for index in 0..literals.count {
+            let descriptor_start = index
+                .checked_mul(8)
+                .and_then(|offset| literals.entries_start.checked_add(offset))
+                .expect("literal descriptor offset");
+            let descriptor_end = descriptor_start
+                .checked_add(8)
+                .expect("literal descriptor range");
+            let descriptor = u64::from_le_bytes(
+                canonical
+                    .get(descriptor_start..descriptor_end)
+                    .expect("literal descriptor inside artifact")
+                    .try_into()
+                    .expect("literal descriptor"),
+            );
+            let (kind, relative_offset) = crate::metadata::decode_literal_descriptor(descriptor)
+                .expect("decode literal descriptor");
+            if kind != crate::metadata::LiteralKindV1::PointerTlv {
+                continue;
+            }
+            let start = literals
+                .start
+                .checked_add(usize::try_from(relative_offset).expect("literal offset fits usize"))
+                .expect("literal start offset");
+            assert!(
+                (literals.data_start..literals.data_end).contains(&start),
+                "literal start must be inside the validated data range"
+            );
+            let header_end = start.checked_add(7).expect("pointer TLV header range");
+            let header = canonical
+                .get(start..header_end)
+                .expect("pointer TLV header inside artifact");
+            let pointer_type = u16::from_be_bytes(
+                header
+                    .get(..2)
+                    .expect("pointer type id bytes")
+                    .try_into()
+                    .expect("pointer type id"),
+            );
+            if pointer_type != PointerType::NoritoBytes as u16 {
+                continue;
+            }
+            let payload_len = usize::try_from(u32::from_be_bytes(
+                header
+                    .get(3..7)
+                    .expect("pointer payload length bytes")
+                    .try_into()
+                    .expect("pointer payload length"),
+            ))
+            .expect("pointer payload length fits usize");
+            let payload_end = header_end
+                .checked_add(payload_len)
+                .expect("pointer payload range");
+            let envelope_end = payload_end
+                .checked_add(iroha_crypto::Hash::LENGTH)
+                .expect("pointer hash range");
+            assert!(
+                envelope_end <= literals.data_end,
+                "pointer TLV must fit the validated literal-data range"
+            );
+            norito_payloads.push(
+                canonical
+                    .get(header_end..payload_end)
+                    .expect("pointer payload inside artifact"),
+            );
+        }
+
+        assert!(norito_payloads.iter().any(|payload| {
+            ivm_abi::codec::decode_canonical_norito::<ivm_abi::state_value::StateValueSchemaV1>(
+                payload,
+            )
+            .is_ok()
+        }));
+        assert!(norito_payloads.iter().any(|payload| {
+            ivm_abi::codec::decode_canonical_norito::<
+                ivm_abi::entrypoint::EntrypointArgumentSchemaV1,
+            >(payload)
+            .is_ok()
+        }));
+        assert!(norito_payloads.iter().any(|payload| {
+            ivm_abi::codec::decode_canonical_norito::<ivm_abi::json::JsonConstructionSchemaV1>(
+                payload,
+            )
+            .is_ok()
+        }));
+    }
+
     #[test]
     fn contract_identity_is_preserved_in_artifact_and_manifest() {
         let source = r#"
@@ -12505,6 +13699,15 @@ impl Compiler {
         // Validate features supported by the current code generator.
         validate_codegen_supported(&typed)
             .map_err(|failures| lowering_diagnostic_bundle("K3001", failures, source_name))?;
+        let state_descriptors = build_state_descriptors(&typed).map_err(|message| {
+            native_diagnostic_bundle(
+                "K3099",
+                DiagnosticPhase::Lowering,
+                source_name,
+                None,
+                message,
+            )
+        })?;
         let ir_program = ir::lower_with_cap_and_test_mode_diagnostics(
             &typed,
             usize::from(COLLECTION_ITERATION_CAP),
@@ -12514,6 +13717,7 @@ impl Compiler {
         let executable_roots = executable_ir_roots(&typed, self.opts.mode == CompilerMode::Test);
         Ok(LoweredCompilation {
             typed,
+            state_descriptors,
             ir_program,
             executable_roots,
             source_name: source_name.map(ToOwned::to_owned),
@@ -12526,6 +13730,7 @@ impl Compiler {
     ) -> Result<SsaCompilation, DiagnosticBundle> {
         let LoweredCompilation {
             typed,
+            state_descriptors,
             ir_program,
             executable_roots,
             source_name,
@@ -12541,6 +13746,7 @@ impl Compiler {
         })?;
         Ok(SsaCompilation {
             typed,
+            state_descriptors,
             ssa_program,
             executable_roots,
             source_name,
@@ -12553,6 +13759,7 @@ impl Compiler {
     ) -> Result<PreparedCompilation, DiagnosticBundle> {
         let SsaCompilation {
             typed,
+            state_descriptors,
             mut ssa_program,
             executable_roots,
             source_name,
@@ -12570,6 +13777,7 @@ impl Compiler {
             })?;
         Ok(PreparedCompilation {
             typed,
+            state_descriptors,
             ssa_program,
             source_name,
         })
@@ -12581,6 +13789,7 @@ impl Compiler {
     ) -> Result<CodegenCompilation, DiagnosticBundle> {
         let PreparedCompilation {
             typed,
+            state_descriptors,
             ssa_program,
             source_name,
         } = prepared;
@@ -12595,6 +13804,7 @@ impl Compiler {
         })?;
         Ok(CodegenCompilation {
             typed,
+            state_descriptors,
             ir_program,
             source_name,
         })
@@ -12606,6 +13816,7 @@ impl Compiler {
     ) -> Result<CompilationArtifacts, String> {
         let CodegenCompilation {
             typed,
+            state_descriptors,
             ir_program: mut ir_prog,
             source_name,
         } = prepared;
@@ -12805,7 +14016,8 @@ impl Compiler {
                     if let ir::Instr::EncodeInt { dest, value } = instr
                         && let Some(raw) = int_const_map.get(&(func_idx, *value)).copied()
                     {
-                        let payload = norito::to_bytes(&raw).expect("encode canonical int key");
+                        let payload = ivm_abi::codec::encode_canonical_norito(&raw)
+                            .expect("encode canonical int key");
                         norito_literal_map
                             .insert((func_idx, *dest), format!("0x{}", hex::encode(payload)));
                     }
@@ -15090,12 +16302,13 @@ impl Compiler {
                                 nullifier: null32,
                             };
                             let bytes =
-                                norito::to_bytes(&InstructionBox::from(sb)).map_err(|e| {
-                                    let err = format!(
-                                        "build_submit_ballot_inline encode InstructionBox: {e}"
-                                    );
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
+                                ivm_abi::codec::encode_canonical_norito(&InstructionBox::from(sb))
+                                    .map_err(|e| {
+                                        let err = format!(
+                                            "build_submit_ballot_inline encode InstructionBox: {e}"
+                                        );
+                                        i18n::translate(self.lang, Message::SemanticError(&err))
+                                    })?;
                             // Store as NoritoBytes in data and emit load into dest
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
@@ -15190,11 +16403,13 @@ impl Compiler {
                                 root_hint: None,
                             };
                             let bytes =
-                                norito::to_bytes(&InstructionBox::from(uz)).map_err(|e| {
-                                    let err =
-                                        format!("build_unshield_inline encode InstructionBox: {e}");
-                                    i18n::translate(self.lang, Message::SemanticError(&err))
-                                })?;
+                                ivm_abi::codec::encode_canonical_norito(&InstructionBox::from(uz))
+                                    .map_err(|e| {
+                                        let err = format!(
+                                            "build_unshield_inline encode InstructionBox: {e}"
+                                        );
+                                        i18n::translate(self.lang, Message::SemanticError(&err))
+                                    })?;
                             let hex_payload = hex::encode(bytes);
                             let key = DataKey(DataKind::NoritoBytes, hex_payload);
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -17316,6 +18531,7 @@ impl Compiler {
                             prefix,
                             offset,
                             limit,
+                            ..
                         } => {
                             if let Some(s) = string_map.get(&(func_idx, *prefix)) {
                                 let key = DataKey(DataKind::Name, s.clone());
@@ -18762,6 +19978,15 @@ impl Compiler {
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(m) = manifest {
                                 if let Some(s) = string_map.get(&(func_idx, *m)) {
+                                    if decode_axt_touch_manifest_literal(s).is_none() {
+                                        let err = format!(
+                                            "invalid AXT touch manifest literal `{s}`: expected one canonical, context-valid TouchManifest frame"
+                                        );
+                                        return Err(i18n::translate(
+                                            self.lang,
+                                            Message::SemanticError(&err),
+                                        ));
+                                    }
                                     let key = DataKey(DataKind::NoritoBytes, s.clone());
                                     emit_literal_load(&mut code, &fixups, 11, key);
                                 } else {
@@ -18827,6 +20052,15 @@ impl Compiler {
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
                             if let Some(s) = string_map.get(&(func_idx, *intent)) {
+                                if decode_remote_spend_intent_literal(s).is_none() {
+                                    let err = format!(
+                                        "invalid AXT remote spend intent literal `{s}`: expected one canonical, context-valid RemoteSpendIntent frame"
+                                    );
+                                    return Err(i18n::translate(
+                                        self.lang,
+                                        Message::SemanticError(&err),
+                                    ));
+                                }
                                 let key = DataKey(DataKind::NoritoBytes, s.clone());
                                 emit_literal_load(&mut code, &fixups, 11, key);
                             } else {
@@ -19216,7 +20450,6 @@ impl Compiler {
         use iroha_crypto::Hash as IrohaHash;
         use iroha_data_model::prelude::*;
         use iroha_primitives::json::Json;
-        use norito::{decode_from_bytes, to_bytes};
         // Stable key order based on first occurrence in fixups. Also include datarefs seen even if unused
         // in emitted code to ensure TLVs are generated (useful for constructor-only samples/tests).
         let mut key_order: IndexSet<DataKey> = IndexSet::new();
@@ -19300,10 +20533,12 @@ impl Compiler {
                         })?;
                     (
                         1u16,
-                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid AccountId literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&id)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid AccountId literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::AssetDef, s) => {
@@ -19313,10 +20548,12 @@ impl Compiler {
                     })?;
                     (
                         2u16,
-                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid AssetDefinitionId literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&id)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid AssetDefinitionId literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::NftId, s) => {
@@ -19326,10 +20563,12 @@ impl Compiler {
                     })?;
                     (
                         5u16,
-                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid NftId literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&id)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid NftId literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::AssetId, s) => {
@@ -19339,10 +20578,12 @@ impl Compiler {
                     })?;
                     (
                         7u16,
-                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid AssetId literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&id)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid AssetId literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::Name, s) => {
@@ -19352,10 +20593,12 @@ impl Compiler {
                     })?;
                     (
                         3u16,
-                        to_bytes(&nm).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid Name literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&nm)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid Name literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::Json, s) => {
@@ -19370,10 +20613,12 @@ impl Compiler {
                     })?;
                     (
                         4u16,
-                        to_bytes(&json).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid JSON literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&json)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid JSON literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::Domain, s) => {
@@ -19385,10 +20630,12 @@ impl Compiler {
                     )?;
                     (
                         8u16,
-                        to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid DomainId literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&id)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid DomainId literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::Blob, s) => (
@@ -19410,18 +20657,20 @@ impl Compiler {
                         let id = iroha_data_model::nexus::DataSpaceId::new(raw);
                         (
                             PointerType::DataSpaceId as u16,
-                            to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
-                                let err = format!("invalid DataSpaceId literal `{s}`: {e}");
-                                i18n::translate(self.lang, Message::SemanticError(&err))
-                            })?,
+                            ivm_abi::codec::encode_canonical_norito(&id)
+                                .map_err(|e| e.to_string())
+                                .map_err(|e| {
+                                    let err = format!("invalid DataSpaceId literal `{s}`: {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?,
                         )
                     } else {
                         let bytes = decode_hex_or_raw_bytes(s).map_err(|e| {
                             let err = format!("invalid DataSpaceId literal `{s}`: {e}");
                             i18n::translate(self.lang, Message::SemanticError(&err))
                         })?;
-                        let value: iroha_data_model::nexus::DataSpaceId = decode_from_bytes(&bytes)
-                            .map_err(|e| {
+                        let value: iroha_data_model::nexus::DataSpaceId =
+                            ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
                                 let err = format!(
                                     "invalid DataSpaceId literal `{s}`: cannot decode ({e})"
                                 );
@@ -19429,10 +20678,12 @@ impl Compiler {
                             })?;
                         (
                             PointerType::DataSpaceId as u16,
-                            to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
-                                let err = format!("invalid DataSpaceId literal `{s}`: {e}");
-                                i18n::translate(self.lang, Message::SemanticError(&err))
-                            })?,
+                            ivm_abi::codec::encode_canonical_norito(&value)
+                                .map_err(|e| e.to_string())
+                                .map_err(|e| {
+                                    let err = format!("invalid DataSpaceId literal `{s}`: {e}");
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?,
                         )
                     }
                 }
@@ -19442,17 +20693,25 @@ impl Compiler {
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
                     let value: crate::axt::AxtDescriptor =
-                        decode_from_bytes(&bytes).map_err(|e| {
+                        ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
                             let err =
                                 format!("invalid AxtDescriptor literal `{s}`: cannot decode ({e})");
                             i18n::translate(self.lang, Message::SemanticError(&err))
                         })?;
+                    crate::axt::validate_descriptor(&value).map_err(|e| {
+                        let err = format!(
+                            "invalid AxtDescriptor literal `{s}`: invalid descriptor ({e})"
+                        );
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
                     (
                         PointerType::AxtDescriptor as u16,
-                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid AxtDescriptor literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&value)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid AxtDescriptor literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::AssetHandle, s) => {
@@ -19461,17 +20720,24 @@ impl Compiler {
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
                     let value: crate::axt::AssetHandle =
-                        decode_from_bytes(&bytes).map_err(|e| {
+                        ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
                             let err =
                                 format!("invalid AssetHandle literal `{s}`: cannot decode ({e})");
                             i18n::translate(self.lang, Message::SemanticError(&err))
                         })?;
+                    crate::axt::validate_asset_handle(&value).map_err(|e| {
+                        let err =
+                            format!("invalid AssetHandle literal `{s}`: invalid handle ({e})");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
                     (
                         PointerType::AssetHandle as u16,
-                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid AssetHandle literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&value)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid AssetHandle literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::ProofBlob, s) => {
@@ -19479,16 +20745,24 @@ impl Compiler {
                         let err = format!("invalid ProofBlob literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
-                    let value: crate::axt::ProofBlob = decode_from_bytes(&bytes).map_err(|e| {
-                        let err = format!("invalid ProofBlob literal `{s}`: cannot decode ({e})");
+                    let value: crate::axt::ProofBlob =
+                        ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
+                            let err =
+                                format!("invalid ProofBlob literal `{s}`: cannot decode ({e})");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        })?;
+                    crate::axt::validate_proof_blob(&value).map_err(|e| {
+                        let err = format!("invalid ProofBlob literal `{s}`: invalid proof ({e})");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
                     (
                         PointerType::ProofBlob as u16,
-                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid ProofBlob literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&value)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid ProofBlob literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::SoracloudRequest, s) => {
@@ -19497,7 +20771,7 @@ impl Compiler {
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
                     let value: iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 =
-                        decode_from_bytes(&bytes).map_err(|e| {
+                        ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
                             let err = format!(
                                 "invalid SoracloudRequest literal `{s}`: cannot decode ({e})"
                             );
@@ -19509,10 +20783,12 @@ impl Compiler {
                     })?;
                     (
                         PointerType::SoracloudRequest as u16,
-                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&value)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid SoracloudRequest literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
                 DataKey(DataKind::SoracloudResponse, s) => {
@@ -19521,7 +20797,7 @@ impl Compiler {
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
                     let value: iroha_data_model::soracloud::SoracloudHostResponseEnvelopeV1 =
-                        decode_from_bytes(&bytes).map_err(|e| {
+                        ivm_abi::codec::decode_canonical_norito(&bytes).map_err(|e| {
                             let err = format!(
                                 "invalid SoracloudResponse literal `{s}`: cannot decode ({e})"
                             );
@@ -19533,10 +20809,12 @@ impl Compiler {
                     })?;
                     (
                         PointerType::SoracloudResponse as u16,
-                        to_bytes(&value).map_err(|e| e.to_string()).map_err(|e| {
-                            let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?,
+                        ivm_abi::codec::encode_canonical_norito(&value)
+                            .map_err(|e| e.to_string())
+                            .map_err(|e| {
+                                let err = format!("invalid SoracloudResponse literal `{s}`: {e}");
+                                i18n::translate(self.lang, Message::SemanticError(&err))
+                            })?,
                     )
                 }
             };
@@ -19618,9 +20896,12 @@ impl Compiler {
                 entrypoint.name
             ));
         }
-        let state_descriptors = build_state_descriptors(&typed)?;
-        let access_set_hints =
-            build_access_set_hints(&typed, &ir_prog.functions, &access_sets, include_hints);
+        let access_set_hints = build_access_set_hints(
+            &ir_prog.functions,
+            &access_sets,
+            &state_descriptors,
+            include_hints,
+        )?;
         let message_entries = build_message_entries(&typed.message_entries);
         let mut feature_bits = 0u64;
         if meta.mode & metadata::mode::ZK != 0 {
@@ -20034,13 +21315,13 @@ fn state_path_for_norito_key(base: &str, raw: &str) -> Option<String> {
 }
 
 fn build_access_set_hints(
-    typed: &TypedProgram,
     ir_functions: &[ir::Function],
     access_sets: &[AccessSets],
+    state_descriptors: &[EmbeddedStateDescriptor],
     include_hints: bool,
-) -> Option<AccessSetHints> {
+) -> Result<Option<AccessSetHints>, String> {
     if !include_hints {
-        return None;
+        return Ok(None);
     }
     let mut reads: BTreeSet<String> = BTreeSet::new();
     let mut writes: BTreeSet<String> = BTreeSet::new();
@@ -20048,108 +21329,83 @@ fn build_access_set_hints(
         reads.extend(set.reads.iter().cloned());
         writes.extend(set.writes.iter().cloned());
     }
-    if reads.is_empty() && writes.is_empty() {
-        return None;
+    let (dynamic_reads, dynamic_writes) =
+        collect_dynamic_access_hints(ir_functions, state_descriptors)?;
+    if reads.is_empty()
+        && writes.is_empty()
+        && dynamic_reads.is_empty()
+        && dynamic_writes.is_empty()
+    {
+        return Ok(None);
     }
     for key in writes.iter().cloned() {
         reads.insert(key);
     }
-    let (dynamic_reads, dynamic_writes) = collect_dynamic_access_hints(typed, ir_functions);
-    Some(AccessSetHints {
+    Ok(Some(AccessSetHints {
         read_keys: reads.into_iter().collect(),
         write_keys: writes.into_iter().collect(),
         dynamic_reads,
         dynamic_writes,
-    })
+    }))
 }
 
 fn collect_dynamic_access_hints(
-    typed: &TypedProgram,
     ir_functions: &[ir::Function],
-) -> (Vec<DynamicAccessHint>, Vec<DynamicAccessHint>) {
-    let mut reads = BTreeSet::new();
-    let retained_symbols = ir_functions
+    state_descriptors: &[EmbeddedStateDescriptor],
+) -> Result<(Vec<DynamicAccessHint>, Vec<DynamicAccessHint>), String> {
+    let state_map_key_types = state_descriptors
         .iter()
-        .map(|function| function.name.as_str())
-        .collect::<HashSet<_>>();
-    let state_names = typed
-        .states
-        .iter()
-        .map(|state| state.name.as_str())
-        .collect::<HashSet<_>>();
-    for item in &typed.items {
-        let TypedItem::Function(func) = item;
-        if !retained_symbols.contains(func.name.as_str())
-            && !retained_symbols.contains(entrypoint_ir_symbol_name(func).as_str())
-        {
-            continue;
+        .filter_map(|state| {
+            let EmbeddedStateType::StateMap { key, .. } = &state.ty else {
+                return None;
+            };
+            Some((state.name.as_str(), manifest_state_type_name(key)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut reads: BTreeSet<DynamicAccessHint> = BTreeSet::new();
+    for function in ir_functions {
+        for block in &function.blocks {
+            for instruction in &block.instrs {
+                let ir::Instr::StateKeys {
+                    dynamic_access_hint: Some(hint),
+                    ..
+                } = instruction
+                else {
+                    continue;
+                };
+                ivm_abi::access_hints::validate_dynamic_access_hint_v1(hint).map_err(|error| {
+                    format!(
+                        "K3098: optimized IR for `{}` contains invalid dynamic-access provenance `{}`: {error}",
+                        function.name, hint.base_key
+                    )
+                })?;
+                let state_name =
+                    ivm_abi::access_hints::dynamic_access_hint_state_name_v1(&hint.base_key)
+                        .expect("the complete V1 hint validator accepted this base key");
+                let Some(expected_key_type) = state_map_key_types.get(state_name) else {
+                    return Err(format!(
+                        "K3098: optimized IR for `{}` contains dynamic-access provenance `{}` that does not name a declared top-level StateMap",
+                        function.name, hint.base_key
+                    ));
+                };
+                if hint.key_type != *expected_key_type {
+                    return Err(format!(
+                        "K3098: optimized IR for `{}` contains dynamic-access provenance `{}` with key type `{}`, but the declared StateMap key type is `{expected_key_type}`",
+                        function.name, hint.base_key, hint.key_type
+                    ));
+                }
+                reads.insert(hint.clone());
+            }
         }
-        collect_dynamic_access_hints_from_block(&func.body, &state_names, &mut reads);
     }
-    (
-        reads
-            .into_iter()
-            .map(|(base_key, key_type, bound_kind)| DynamicAccessHint {
-                base_key,
-                key_type,
-                bound_kind,
-                max_keys: u32::from(COLLECTION_ITERATION_CAP),
-            })
-            .collect(),
+    Ok((
+        reads.into_iter().collect(),
+        // V1 dynamic hints describe only bounded StateMap scans. Semantic
+        // analysis rejects structural mutation of the iterated map, while
+        // body writes are independent IR effects with no injective key-set
+        // proof. Dynamic writes therefore remain contractually empty.
         Vec::new(),
-    )
-}
-
-fn collect_dynamic_access_hints_from_block(
-    block: &semantic::TypedBlock,
-    state_names: &HashSet<&str>,
-    reads: &mut BTreeSet<(String, String, String)>,
-) {
-    for stmt in &block.statements {
-        collect_dynamic_access_hints_from_statement(stmt, state_names, reads);
-    }
-}
-
-fn collect_dynamic_access_hints_from_statement(
-    stmt: &semantic::TypedStatement,
-    state_names: &HashSet<&str>,
-    reads: &mut BTreeSet<(String, String, String)>,
-) {
-    match stmt.kind() {
-        semantic::TypedStatement::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            collect_dynamic_access_hints_from_block(then_branch, state_names, reads);
-            if let Some(block) = else_branch {
-                collect_dynamic_access_hints_from_block(block, state_names, reads);
-            }
-        }
-        semantic::TypedStatement::IfLet {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            collect_dynamic_access_hints_from_block(then_branch, state_names, reads);
-            if let Some(block) = else_branch {
-                collect_dynamic_access_hints_from_block(block, state_names, reads);
-            }
-        }
-        semantic::TypedStatement::While { body, .. }
-        | semantic::TypedStatement::For { body, .. } => {
-            collect_dynamic_access_hints_from_block(body, state_names, reads);
-        }
-        semantic::TypedStatement::ForEachMap { body, .. } => {
-            collect_dynamic_access_hints_from_block(body, state_names, reads);
-        }
-        semantic::TypedStatement::Let { .. }
-        | semantic::TypedStatement::Expr(_)
-        | semantic::TypedStatement::Return(_)
-        | semantic::TypedStatement::Break
-        | semantic::TypedStatement::Continue
-        | semantic::TypedStatement::MapSet { .. } => {}
-    }
+    ))
 }
 
 fn build_message_entries(
@@ -20180,9 +21436,26 @@ fn build_state_descriptors(typed: &TypedProgram) -> Result<Vec<EmbeddedStateDesc
         .states
         .iter()
         .map(|state| {
+            let ty = build_state_type_descriptor(&state.ty)?;
+            let runtime_value_type = match &ty {
+                EmbeddedStateType::StateMap { value, .. } => value.as_ref(),
+                ty => ty,
+            };
+            if ivm_abi::state_value::admissible_state_value_schema_for_embedded_type_v1(
+                runtime_value_type,
+            )
+            .is_none()
+            {
+                return Err(format!(
+                    "state `{}` exceeds the exact V1 runtime StateValueSchema limit of {} nodes or levels and {} encoded bytes",
+                    state.name,
+                    ivm_abi::state_value::MAX_STATE_VALUE_NODES,
+                    ivm_abi::state_value::MAX_STATE_VALUE_SCHEMA_BYTES,
+                ));
+            }
             Ok(EmbeddedStateDescriptor {
                 name: state.name.clone(),
-                ty: build_state_type_descriptor(&state.ty)?,
+                ty,
             })
         })
         .collect()
@@ -21233,38 +22506,16 @@ fn record_isi_access(
 }
 
 fn decode_norito_literal_payload(raw: &str) -> Option<Vec<u8>> {
-    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    match crate::pointer_abi::validate_tlv_bytes(&bytes) {
-        Ok(tlv) => {
-            if tlv.type_id != PointerType::NoritoBytes {
-                return None;
-            }
-            Some(tlv.payload.to_vec())
-        }
-        Err(_) => Some(bytes),
-    }
+    // `DataKind::NoritoBytes` wraps these exact source bytes in the emitted
+    // pointer TLV. Access analysis must inspect that exact payload: unwrapping a
+    // source-level TLV here would analyze an inner frame that the host never
+    // receives.
+    decode_hex_or_raw_bytes(raw).ok()
 }
 
 fn decode_instruction_box_literal(raw: &str) -> Option<InstructionBox> {
-    use iroha_data_model::isi::zk as DMZk;
-
     let payload = decode_norito_literal_payload(raw)?;
-    if let Ok(instr) = norito::decode_from_bytes::<InstructionBox>(&payload) {
-        return Some(instr);
-    }
-    if let Ok(instr) = norito::decode_from_bytes::<DMZk::CreateElection>(&payload) {
-        return Some(InstructionBox::from(instr));
-    }
-    if let Ok(instr) = norito::decode_from_bytes::<DMZk::SubmitBallot>(&payload) {
-        return Some(InstructionBox::from(instr));
-    }
-    if let Ok(instr) = norito::decode_from_bytes::<DMZk::FinalizeElection>(&payload) {
-        return Some(InstructionBox::from(instr));
-    }
-    if let Ok(instr) = norito::decode_from_bytes::<DMZk::Unshield>(&payload) {
-        return Some(InstructionBox::from(instr));
-    }
-    None
+    ivm_abi::codec::decode_canonical_norito(&payload).ok()
 }
 
 fn access_for_instruction_literal(raw: &str) -> Option<AccessSets> {
@@ -21292,7 +22543,7 @@ fn record_anonymous_escrow_request_access(
     match kind {
         AnonymousEscrowRequestKind::OpenOffer => {
             let request: DMEscrow::OpenAnonymousAssetEscrow =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             record_anonymous_asset_escrow_open_access(
                 access_set,
                 &request.escrow_id,
@@ -21301,17 +22552,17 @@ fn record_anonymous_escrow_request_access(
         }
         AnonymousEscrowRequestKind::Release => {
             let request: DMEscrow::ReleaseAnonymousAssetEscrow =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
         }
         AnonymousEscrowRequestKind::Cancel => {
             let request: DMEscrow::CancelAnonymousAssetEscrow =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
         }
         AnonymousEscrowRequestKind::ResolveDispute => {
             let request: DMEscrow::ResolveAnonymousEscrowDispute =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             record_anonymous_asset_escrow_close_access(access_set, &request.escrow_id);
         }
     }
@@ -21320,50 +22571,34 @@ fn record_anonymous_escrow_request_access(
 
 fn decode_query_request_literal(raw: &str) -> Option<QueryRequest> {
     let payload = decode_norito_literal_payload(raw)?;
-    norito::decode_from_bytes(&payload).ok()
+    ivm_abi::codec::decode_canonical_norito(&payload).ok()
 }
 
 fn record_zk_roots_get_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
-    let (payload, flags) = decode_norito_archive_payload(&payload)?;
-    let mut fields = payload;
-    let asset_field = take_norito_len_prefixed(&mut fields, flags)?;
-    let max_field = take_norito_len_prefixed(&mut fields, flags)?;
-    if !fields.is_empty() || decode_norito_u32_bare(max_field).is_none() {
-        return None;
-    }
-    let asset_id = decode_norito_string_bare(asset_field, flags)?;
-    let asset = asset_id.parse().ok()?;
+    let request: ivm_abi::host_payload::RootsGetRequest =
+        ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
+    let asset = request.asset_id.parse().ok()?;
     add_zk_asset_r(access_set, &asset);
     Some(())
 }
 
 fn record_zk_vote_get_tally_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
-    let (payload, flags) = decode_norito_archive_payload(&payload)?;
-    let mut fields = payload;
-    let election_id_field = take_norito_len_prefixed(&mut fields, flags)?;
-    if !fields.is_empty() {
-        return None;
-    }
-    let election_id = decode_norito_string_bare(election_id_field, flags)?;
-    add_zk_election_tally_r(access_set, &election_id);
+    let request: ivm_abi::host_payload::VoteGetTallyRequest =
+        ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
+    add_zk_election_tally_r(access_set, &request.election_id);
     Some(())
 }
 
 fn record_vrf_epoch_seed_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
-    let (payload, flags) = decode_norito_archive_payload(&payload)?;
-    let mut fields = payload;
-    let epoch_field = take_norito_len_prefixed(&mut fields, flags)?;
-    let fallback_field = take_norito_len_prefixed(&mut fields, flags)?;
-    if !fields.is_empty() {
-        return None;
-    }
-    let epoch = decode_norito_u64_bare(epoch_field)?;
-    let fallback_to_latest = decode_norito_bool_bare(fallback_field)?;
-    access_set.reads.insert(format!("vrf:epoch_seed:{epoch}"));
-    if fallback_to_latest {
+    let request: ivm_abi::host_payload::VrfEpochSeedRequest =
+        ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
+    access_set
+        .reads
+        .insert(format!("vrf:epoch_seed:{}", request.epoch));
+    if request.fallback_to_latest {
         access_set.reads.insert("vrf:epoch_seed:latest".to_owned());
     }
     Some(())
@@ -21380,19 +22615,19 @@ fn record_smart_contract_lifecycle_access(
     match syscall {
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
             let request: DMScode::RegisterSmartContractCode =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             let code_hash = request.manifest.code_hash.as_ref()?;
             add_contract_code_r(access_set, code_hash);
             add_contract_manifest_rw(access_set, code_hash);
         }
         syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
             let request: DMScode::RegisterSmartContractBytes =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             add_contract_code_rw(access_set, &request.code_hash);
         }
         syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
             let request: DMScode::ActivateContractInstance =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             add_contract_code_r(access_set, &request.code_hash);
             add_contract_manifest_r(access_set, &request.code_hash);
             add_contract_instance_rw(access_set, &request.contract_address);
@@ -21400,7 +22635,7 @@ fn record_smart_contract_lifecycle_access(
         }
         syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
             let request: DMScode::RemoveSmartContractBytes =
-                norito::decode_from_bytes(&payload).ok()?;
+                ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
             add_contract_code_rw(access_set, &request.code_hash);
             add_contract_manifest_r(access_set, &request.code_hash);
             add_contract_instance_code_hash_r(access_set, &request.code_hash);
@@ -21413,7 +22648,7 @@ fn record_smart_contract_lifecycle_access(
 fn record_transfer_asset_batch_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
     let payload = decode_norito_literal_payload(raw)?;
     let batch: iroha_data_model::isi::transfer::TransferAssetBatch =
-        norito::decode_from_bytes(&payload).ok()?;
+        ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
     record_transfer_asset_batch_entries_access(&batch, access_set)
 }
 
@@ -21435,22 +22670,30 @@ fn record_transfer_asset_batch_entries_access(
 
 fn decode_axt_descriptor_literal(raw: &str) -> Option<crate::axt::AxtDescriptor> {
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    norito::decode_from_bytes(&bytes).ok()
+    let descriptor = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
+    crate::axt::validate_descriptor(&descriptor).ok()?;
+    Some(descriptor)
 }
 
 fn decode_axt_touch_manifest_literal(raw: &str) -> Option<crate::axt::TouchManifest> {
     let payload = decode_norito_literal_payload(raw)?;
-    norito::decode_from_bytes(&payload).ok()
+    let manifest = ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
+    crate::axt::validate_touch_manifest(&manifest).ok()?;
+    Some(manifest)
 }
 
 fn decode_asset_handle_literal(raw: &str) -> Option<crate::axt::AssetHandle> {
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    norito::decode_from_bytes(&bytes).ok()
+    let handle = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
+    crate::axt::validate_asset_handle(&handle).ok()?;
+    Some(handle)
 }
 
 fn decode_remote_spend_intent_literal(raw: &str) -> Option<crate::axt::RemoteSpendIntent> {
     let payload = decode_norito_literal_payload(raw)?;
-    norito::decode_from_bytes(&payload).ok()
+    let intent = ivm_abi::codec::decode_canonical_norito(&payload).ok()?;
+    crate::axt::validate_remote_spend_intent(&intent).ok()?;
+    Some(intent)
 }
 
 fn parse_dataspace_temp(
@@ -21463,7 +22706,7 @@ fn parse_dataspace_temp(
         return Some(iroha_data_model::nexus::DataSpaceId::new(raw_id));
     }
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    norito::decode_from_bytes(&bytes).ok()
+    ivm_abi::codec::decode_canonical_norito(&bytes).ok()
 }
 
 fn public_key_from_json_value(value: &json::Value) -> Option<iroha_crypto::PublicKey> {
@@ -21519,7 +22762,8 @@ fn record_soracloud_request_access(
     };
 
     let bytes = decode_hex_or_raw_bytes(raw).ok()?;
-    let request: SoracloudHostRequestEnvelopeV1 = norito::decode_from_bytes(&bytes).ok()?;
+    let request: SoracloudHostRequestEnvelopeV1 =
+        ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
     request.validate().ok()?;
     let expected = soracloud_operation_for_syscall(syscall)?;
     if request.operation != expected {
@@ -21604,61 +22848,6 @@ fn soracloud_operation_for_syscall(
     }
 }
 
-fn decode_norito_archive_payload(bytes: &[u8]) -> Option<(&[u8], u8)> {
-    if bytes.len() < norito::core::Header::SIZE || &bytes[0..4] != b"NRT0" || bytes[22] != 0 {
-        return None;
-    }
-    let len = u64::from_le_bytes(bytes[23..31].try_into().ok()?);
-    let payload = &bytes[norito::core::Header::SIZE..];
-    if payload.len() != usize::try_from(len).ok()? {
-        return None;
-    }
-    let flags = bytes[39];
-    norito::core::validate_header_flags(flags).ok()?;
-    Some((payload, flags))
-}
-
-fn take_norito_len_prefixed<'a>(bytes: &mut &'a [u8], flags: u8) -> Option<&'a [u8]> {
-    let (len, header_len) = norito::core::read_len_from_slice_with_flags(bytes, flags).ok()?;
-    let end = header_len.checked_add(len)?;
-    if bytes.len() < end {
-        return None;
-    }
-    let field = &bytes[header_len..end];
-    *bytes = &bytes[end..];
-    Some(field)
-}
-
-fn decode_norito_string_bare(bytes: &[u8], flags: u8) -> Option<String> {
-    let mut bytes = bytes;
-    let raw = take_norito_len_prefixed(&mut bytes, flags)?;
-    if !bytes.is_empty() {
-        return None;
-    }
-    std::str::from_utf8(raw).ok().map(ToOwned::to_owned)
-}
-
-fn decode_norito_u32_bare(bytes: &[u8]) -> Option<u32> {
-    if bytes.len() != 4 {
-        return None;
-    }
-    Some(u32::from_le_bytes(bytes.try_into().ok()?))
-}
-
-fn decode_norito_u64_bare(bytes: &[u8]) -> Option<u64> {
-    if bytes.len() != 8 {
-        return None;
-    }
-    Some(u64::from_le_bytes(bytes.try_into().ok()?))
-}
-
-fn decode_norito_bool_bare(bytes: &[u8]) -> Option<bool> {
-    if bytes.len() != 1 {
-        return None;
-    }
-    Some(bytes[0] != 0)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn submit_ballot_inline_instruction_literal(
     string_map: &HashMap<(usize, ir::Temp), String>,
@@ -21695,7 +22884,7 @@ fn submit_ballot_inline_instruction_literal(
         nullifier: null32,
     };
     let boxed = InstructionBox::from(submit);
-    let bytes = norito::to_bytes(&boxed).ok()?;
+    let bytes = ivm_abi::codec::encode_canonical_norito(&boxed).ok()?;
     Some(format!("0x{}", hex::encode(bytes)))
 }
 
@@ -21767,7 +22956,7 @@ fn unshield_inline_instruction_literal(
         root_hint: None,
     };
     let boxed = InstructionBox::from(unshield);
-    let bytes = norito::to_bytes(&boxed).ok()?;
+    let bytes = ivm_abi::codec::encode_canonical_norito(&boxed).ok()?;
     Some(format!("0x{}", hex::encode(bytes)))
 }
 
@@ -22414,7 +23603,7 @@ fn trigger_id_from_json(raw: &str) -> Option<TriggerId> {
     match value {
         json::Value::String(encoded) => {
             let bytes = STANDARD.decode(encoded.as_bytes()).ok()?;
-            let trigger: Trigger = norito::decode_from_bytes(&bytes).ok()?;
+            let trigger: Trigger = ivm_abi::codec::decode_canonical_norito(&bytes).ok()?;
             Some(trigger.id().clone())
         }
         json::Value::Object(map) => {
@@ -23019,7 +24208,8 @@ fn add_asset_handle_access(
     handle: &crate::axt::AssetHandle,
     intent: &crate::axt::RemoteSpendIntent,
 ) {
-    let encoded = norito::to_bytes(handle).expect("AssetHandle encoding is infallible");
+    let encoded = ivm_abi::codec::encode_canonical_norito(handle)
+        .expect("AssetHandle encoding is infallible");
     let digest: [u8; 32] = iroha_crypto::Hash::new(&encoded).into();
     let handle_key = format!("axt:asset_handle:{}", hex::encode(digest));
     set.reads.insert(handle_key.clone());

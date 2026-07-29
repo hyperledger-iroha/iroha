@@ -2,7 +2,7 @@
 lang: ru
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T10:01:27.059307+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ struct TransferDeltaTranscript {
      - `from_balance_before >= amount` (диапазонный гаджет с общим разложением СОК).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Упаковано в специальный элемент, поэтому все три уравнения занимают одну группу строк.2. **Блок «Обязательства Посейдона»**
+   - Упаковано в специальный элемент, поэтому все три уравнения занимают одну группу строк.
+
+2. **Блок «Обязательства Посейдона»**
    - Пересчитывает `poseidon_preimage_digest`, используя общую справочную таблицу Poseidon, уже используемую в других гаджетах. В следе нет патронов «Посейдон» для каждой передачи.
 
 3. **Блок «Путь Меркла»**
@@ -96,7 +98,9 @@ struct TransferDeltaTranscript {
 5. **Пакетный цикл**
    - Программы вызывают `transfer_v1_batch_begin()` перед циклом сборщиков `transfer_asset` и `transfer_v1_batch_end()` после него. Пока область активна, хост буферизует каждую передачу и воспроизводит ее как один `TransferAssetBatch`, повторно используя контекст Poseidon/SMT один раз для каждого пакета. Каждая дополнительная дельта добавляет только арифметику и две проверки листьев. Декодер расшифровки теперь принимает пакеты с несколькими дельтами и отображает их как `TransferGadgetInput::deltas`, чтобы планировщик мог складывать свидетелей без повторного считывания Norito. Контракты, в которых уже есть полезная нагрузка Norito (например, CLI/SDK), могут полностью пропустить область действия, вызвав `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`, который передает хосту полностью закодированный пакет за один системный вызов.
 
-# Изменения хоста и проверяющего устройства| Слой | Изменения |
+# Изменения хоста и проверяющего устройства
+
+| Слой | Изменения |
 |-------|---------|
 | `ivm::syscalls` | Добавьте `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`), чтобы программы могли заключать в скобки несколько системных вызовов `transfer_v1` без выдачи промежуточных ISI, а также `transfer_v1_batch_apply`. (`0x2B`) для предварительно закодированных пакетов. |
 | `ivm::host` и тесты | Хосты ядра/по умолчанию обрабатывают `transfer_v1` как пакетное добавление, пока область активна, отображают `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` и макетные записи буфера хоста WSV перед фиксацией, чтобы регрессионные тесты могли подтвердить детерминированный баланс. обновления.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```Создаваемый JSON отражает артефакты пакета FASTPQ, которые `iroha_cli audit witness` теперь выдает по умолчанию (передайте `--no-fastpq-batches` для их подавления), поэтому `scripts/fastpq/check_row_usage.py` и шлюз CI могут сравнивать синтетические прогоны с предыдущими снимками при проверке изменений планировщика.
+```
+
+Создаваемый JSON отражает артефакты пакета FASTPQ, которые `iroha_cli audit witness` теперь выдает по умолчанию (передайте `--no-fastpq-batches` для их подавления), поэтому `scripts/fastpq/check_row_usage.py` и шлюз CI могут сравнивать синтетические прогоны с предыдущими снимками при проверке изменений планировщика.
 
 # План развертывания
 

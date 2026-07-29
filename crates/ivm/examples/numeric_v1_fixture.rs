@@ -2,6 +2,9 @@
 
 use std::{env, fs, path::Path};
 
+#[path = "support/atomic_write.rs"]
+mod fixture_io;
+
 use iroha_crypto::Hash;
 use iroha_primitives::{
     bigint::BigInt,
@@ -779,7 +782,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if flag == "--check" {
                 verify(path)?;
             } else {
-                fs::write(path, render_fixture())?;
+                fixture_io::atomic_write(path, render_fixture().as_bytes())?;
             }
             return Ok(());
         }

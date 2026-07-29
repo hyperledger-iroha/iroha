@@ -2,7 +2,7 @@
 lang: pt
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T10:01:27.059307+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ sempre inclua um caminho SMT determinístico mesmo quando a transcrição omitir
      - `from_balance_before >= amount` (gadget de alcance com decomposição RNS compartilhada).
      -`from_balance_after = from_balance_before - amount`.
      -`to_balance_after = to_balance_before + amount`.
-   - Embalado em uma porta personalizada para que todas as três equações consumam um grupo de linhas.2. **Bloco de Compromisso Poseidon**
+   - Embalado em uma porta personalizada para que todas as três equações consumam um grupo de linhas.
+
+2. **Bloco de Compromisso Poseidon**
    - Recalcula `poseidon_preimage_digest` usando a tabela de pesquisa Poseidon compartilhada já usada em outros gadgets. Nenhuma rodada de Poseidon por transferência no rastreamento.
 
 3. **Bloco de Caminho Merkle**
@@ -96,7 +98,9 @@ sempre inclua um caminho SMT determinístico mesmo quando a transcrição omitir
 5. **Loop em lote**
    - Os programas chamam `transfer_v1_batch_begin()` antes de um loop de construtores `transfer_asset` e `transfer_v1_batch_end()` depois. Enquanto o escopo está ativo, o host armazena em buffer cada transferência e as reproduz como um único `TransferAssetBatch`, reutilizando o contexto Poseidon/SMT uma vez por lote. Cada delta adicional adiciona apenas a aritmética e duas verificações de folhas. O decodificador de transcrição agora aceita lotes multi-delta e os apresenta como `TransferGadgetInput::deltas` para que o planejador possa dobrar as testemunhas sem reler Norito. Contratos que já possuem uma carga útil Norito útil (por exemplo, CLI/SDKs) podem pular totalmente o escopo chamando `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)`, que entrega ao host um lote totalmente codificado em uma syscall.
 
-# Mudanças no Host e no Provador| Camada | Mudanças |
+# Mudanças no Host e no Provador
+
+| Camada | Mudanças |
 |-------|---------|
 | `ivm::syscalls` | Adicione `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) para que os programas possam agrupar vários syscalls `transfer_v1` sem emitir ISIs intermediários, além de `transfer_v1_batch_apply` (`0x2B`) para lotes pré-codificados. |
 | `ivm::host` e testes | Os hosts principais/padrão tratam `transfer_v1` como um acréscimo em lote enquanto o escopo está ativo, superfície `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` e o host WSV simulado armazena em buffer as entradas antes de confirmar, para que os testes de regressão possam afirmar o equilíbrio determinístico atualizações.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```O JSON emitido espelha os artefatos de lote FASTPQ que `iroha_cli audit witness` agora emite por padrão (passe `--no-fastpq-batches` para suprimi-los), portanto, `scripts/fastpq/check_row_usage.py` e a porta CI podem comparar as execuções sintéticas com instantâneos anteriores ao validar alterações do planejador.
+```
+
+O JSON emitido espelha os artefatos de lote FASTPQ que `iroha_cli audit witness` agora emite por padrão (passe `--no-fastpq-batches` para suprimi-los), portanto, `scripts/fastpq/check_row_usage.py` e a porta CI podem comparar as execuções sintéticas com instantâneos anteriores ao validar alterações do planejador.
 
 # Plano de implementação
 

@@ -611,15 +611,24 @@ fn path_index(key: &[u8]) -> u32 {
 /// Decode transfer transcripts embedded in the batch metadata.
 ///
 /// # Errors
-/// Returns an error when the metadata payload cannot be decoded.
+/// Returns an error when the metadata payload cannot be decoded or is not the
+/// exact canonical Norito representation.
 pub fn decode_transcripts(
     metadata: &BTreeMap<String, Vec<u8>>,
 ) -> Result<Option<Vec<TransferTranscript>>, Error> {
     let Some(encoded) = metadata.get(TRANSFER_TRANSCRIPTS_METADATA_KEY) else {
         return Ok(None);
     };
-    let transcripts =
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let transcripts: Vec<TransferTranscript> =
         decode_from_bytes(encoded).map_err(|source| Error::TransferMetadataDecode { source })?;
+    let canonical = norito::to_bytes(&transcripts).map_err(Error::Encode)?;
+    if canonical.as_slice() != encoded.as_slice() {
+        return Err(Error::TransferInvariant {
+            details: "transfer transcript metadata must use canonical Norito bytes".into(),
+        });
+    }
     Ok(Some(transcripts))
 }
 
@@ -964,6 +973,31 @@ mod tests {
             .expect("decode")
             .expect("present");
         assert_eq!(decoded, vec![transcript]);
+    }
+
+    #[test]
+    fn decode_transcripts_rejects_alternate_norito_layout() {
+        let transcripts = vec![sample_transcript()];
+        let canonical = to_bytes(&transcripts).expect("encode canonical transcripts");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            to_bytes(&transcripts).expect("encode alternate-layout transcripts")
+        };
+        assert_ne!(alternate, canonical);
+        assert_eq!(
+            decode_from_bytes::<Vec<TransferTranscript>>(&alternate)
+                .expect("ordinary Norito accepts advertised alternate layout"),
+            transcripts
+        );
+
+        let mut metadata = BTreeMap::new();
+        metadata.insert(TRANSFER_TRANSCRIPTS_METADATA_KEY.into(), alternate);
+        let err = decode_transcripts(&metadata).expect_err("alternate transcript layout must fail");
+        assert!(
+            matches!(err, Error::TransferInvariant { details } if details.contains("canonical Norito"))
+        );
     }
 
     #[test]

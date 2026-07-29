@@ -20045,11 +20045,11 @@ async fn handler_status_tail(
     let nexus = app.state.nexus_snapshot();
     let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let offline = status_offline_snapshot(&app);
     // Allowlist bypass
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+        let authoritative_block_height =
+            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
@@ -20090,6 +20090,8 @@ async fn handler_status_tail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let authoritative_block_height =
+        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
@@ -20112,10 +20114,10 @@ async fn handler_status_root(
     let nexus = app.state.nexus_snapshot();
     let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let offline = status_offline_snapshot(&app);
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
+        let authoritative_block_height =
+            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
@@ -20154,6 +20156,8 @@ async fn handler_status_root(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    let authoritative_block_height =
+        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
@@ -39959,8 +39963,8 @@ async fn handler_debug_axt_cache(
         })
         .collect::<Result<_, Error>>()?;
     let policy_snapshot = app.state.axt_policy_snapshot();
-    let snapshot_version =
-        iroha_data_model::nexus::AxtPolicySnapshot::compute_version(&policy_snapshot.entries);
+    debug_assert!(policy_snapshot.validate().is_ok());
+    let snapshot_version = policy_snapshot.version;
     let reject_hints = app
         .state
         .metrics()
@@ -59425,7 +59429,7 @@ impl IntoResponse for Error {
                 details.axt = axt.as_ref().map(|ctx| AxtErrorDetails {
                     code: Some(ctx.reason.code().to_owned()),
                     reason: Some(ctx.reason.label().to_owned()),
-                    snapshot_version: (ctx.snapshot_version > 0).then_some(ctx.snapshot_version),
+                    snapshot_version: ctx.snapshot_version,
                     dataspace: ctx.dataspace.map(|dsid| dsid.as_u64()),
                     lane: ctx.lane.map(|lane| lane.as_u32()),
                     next_min_handle_era: ctx.next_min_handle_era,
@@ -59446,9 +59450,8 @@ impl IntoResponse for Error {
                         HeaderName::from_static("x-iroha-axt-reason"),
                         HeaderValue::from_static(ctx.reason.label()),
                     );
-                    if ctx.snapshot_version > 0 {
-                        if let Ok(value) = HeaderValue::from_str(&ctx.snapshot_version.to_string())
-                        {
+                    if let Some(snapshot_version) = ctx.snapshot_version {
+                        if let Ok(value) = HeaderValue::from_str(&snapshot_version.to_string()) {
                             headers.insert(
                                 HeaderName::from_static("x-iroha-axt-snapshot-version"),
                                 value,
@@ -86109,10 +86112,10 @@ mod tests {
         let vk_payload = iroha_core::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.to_owned(),
-            n_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
-            blowup_log2: iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+            n_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2,
+            blowup_log2: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
             fold_arity: 2,
-            queries: iroha_core::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
+            queries: iroha_core::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
             merkle_arity: 2,
             hash_fn,
         };
@@ -92271,6 +92274,17 @@ mod tests {
         let mut app = mk_app_state_for_tests();
         let dsid = DataSpaceId::new(9);
         let manifest_root = [0xAA; 32];
+        let policy_entries = vec![iroha_data_model::nexus::AxtPolicyBinding {
+            dsid,
+            policy: iroha_data_model::nexus::AxtPolicyEntry {
+                manifest_root,
+                target_lane: LaneId::new(2),
+                min_handle_era: 10,
+                min_sub_nonce: 11,
+                current_slot: 5,
+            },
+        }];
+        let policy_version = AxtPolicySnapshot::compute_version(&policy_entries);
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app");
             let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
@@ -92292,17 +92306,8 @@ mod tests {
             state
                 .telemetry
                 .set_axt_policy_snapshot_version(&AxtPolicySnapshot {
-                    version: 77,
-                    entries: vec![iroha_data_model::nexus::AxtPolicyBinding {
-                        dsid,
-                        policy: iroha_data_model::nexus::AxtPolicyEntry {
-                            manifest_root,
-                            target_lane: LaneId::new(2),
-                            min_handle_era: 10,
-                            min_sub_nonce: 11,
-                            current_slot: 5,
-                        },
-                    }],
+                    version: policy_version,
+                    entries: policy_entries,
                 });
         }
 
@@ -92322,7 +92327,7 @@ mod tests {
             .to_bytes();
         let snapshot: iroha_core::telemetry::AxtDebugStatus =
             norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(snapshot.policy_snapshot_version, 77);
+        assert_eq!(snapshot.policy_snapshot_version, policy_version);
         assert_eq!(
             snapshot.last_reject.as_ref().map(|reject| reject.reason),
             Some(iroha_data_model::nexus::AxtRejectReason::Manifest)
@@ -92347,7 +92352,7 @@ mod tests {
             reason: AxtRejectReason::HandleEra,
             dataspace: Some(DataSpaceId::new(7)),
             lane: Some(LaneId::new(3)),
-            snapshot_version: 77,
+            snapshot_version: Some(77),
             detail: "handle era below policy minimum".to_owned(),
             next_min_handle_era: Some(5),
             next_min_sub_nonce: Some(2),

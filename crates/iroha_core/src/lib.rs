@@ -137,6 +137,10 @@ pub mod privacy;
 pub mod privacy_engines;
 /// Deterministic compiled manifests for executable privacy engines.
 pub mod privacy_profiles;
+/// Native deterministic privacy release evidence, compiled only into the
+/// isolated Taira validation runner.
+#[cfg(feature = "privacy-release-evidence")]
+pub mod privacy_release_evidence;
 /// Durable records produced by verified first-release privacy actions.
 pub mod privacy_state;
 /// Exhaustive native proof verification and verified-effect derivation.

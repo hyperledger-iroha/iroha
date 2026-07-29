@@ -124,9 +124,7 @@ FORBIDDEN_FIRST_RELEASE_EXPORTS = {
 
 required_privacy_ffi = (
     "iroha_privacy_capabilities_v1",
-    "iroha_privacy_proof_request_v1",
-    "iroha_privacy_build_proof_v1",
-    "iroha_privacy_verify_proof_v1",
+    "iroha_privacy_validate_capabilities_v1",
     "iroha_privacy_free_buffer",
 )
 PRIVACY_EXPORTS = set(required_privacy_ffi)
@@ -312,9 +310,7 @@ if undeclared_privacy_exports:
 
 expected_privacy_signatures = {
     "iroha_privacy_capabilities_v1": 2,
-    "iroha_privacy_proof_request_v1": 14,
-    "iroha_privacy_build_proof_v1": 4,
-    "iroha_privacy_verify_proof_v1": 4,
+    "iroha_privacy_validate_capabilities_v1": 2,
     "iroha_privacy_free_buffer": 1,
 }
 for name, expected_parameter_count in expected_privacy_signatures.items():
@@ -651,18 +647,18 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \
-        "iroha_privacy_build_proof_v1" \
-        "removed_iroha_privacy_build_proof_v1"
+        "iroha_privacy_capabilities_v1" \
+        "removed_iroha_privacy_capabilities_v1"
       ;;
     --self-test-bad-privacy-signature)
       replace_regex_once "${tmp_header}" \
-        '(iroha_privacy_build_proof_v1\s*\([^;]*?)unsigned long request_len' \
-        '\g<1>unsigned long* request_len'
+        '(iroha_privacy_capabilities_v1\s*\([^;]*?)unsigned long\* out_len' \
+        '\g<1>unsigned long out_len'
       ;;
     --self-test-missing-privacy-rust-symbol)
       replace_once "${tmp_rust}" \
-        "iroha_privacy_build_proof_v1" \
-        "removed_iroha_privacy_build_proof_v1"
+        "iroha_privacy_capabilities_v1" \
+        "removed_iroha_privacy_capabilities_v1"
       ;;
     --self-test-umbrella-drift)
       replace_once "${tmp_umbrella}" \

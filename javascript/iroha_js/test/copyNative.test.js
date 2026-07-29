@@ -5,11 +5,16 @@ import {
   chmodSync,
   copyFileSync,
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -34,15 +39,24 @@ const MANIFEST_FILENAME = "iroha_js_host.checksums.json";
 const COPY_NATIVE_SCRIPT = path.resolve("scripts/copy-native.mjs");
 const SOURCE_REVISION = "a".repeat(40);
 const SOURCE_TREE_DIGEST = "b".repeat(64);
+const TRANSACTION_INITIALIZER_PREFIX = ".iroha-js-host-init-txn-v1-";
+const CLEANUP_MARKER_PATTERN =
+  /^\.iroha-js-host-cleanup-v1-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.owner\.json$/u;
 
-function fixtureBuildProvenance(source, cargoProfile = "debug") {
+function fixtureBuildProvenance(
+  source,
+  cargoProfile = "debug",
+  sourceOverrides = {},
+) {
   return {
-    version: 2,
+    version: 3,
+    build_execution_policy: "trusted-local-cargo-v1",
     cargo_profile: cargoProfile,
     native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
     source_git_revision: SOURCE_REVISION,
     source_tree_clean: true,
     source_tree_sha256: SOURCE_TREE_DIGEST,
+    ...sourceOverrides,
   };
 }
 
@@ -62,7 +76,8 @@ async function waitForFile(file, child, timeoutMs = 10_000) {
 }
 
 function spawnCrashPublisher(layout, phase) {
-  const marker = path.join(layout.root, `phase-${phase}`);
+  const markerId = createHash("sha256").update(phase).digest("hex");
+  const marker = path.join(layout.root, `phase-${markerId}`);
 const source = String.raw`
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -78,7 +93,8 @@ await publishNativeBinding({
   cargoProfile: "debug",
   readBuildProvenance(source) {
     return {
-      version: 2,
+      version: 3,
+      build_execution_policy: "trusted-local-cargo-v1",
       cargo_profile: "debug",
       native_sha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
       source_git_revision: ${JSON.stringify(SOURCE_REVISION)},
@@ -173,6 +189,53 @@ function publicationArtifacts(destDir) {
     .sort();
 }
 
+function interruptedCleanupPaths(layout) {
+  const names = readdirSync(layout.destDir);
+  const markerName = names.find((name) =>
+    CLEANUP_MARKER_PATTERN.test(name),
+  );
+  assert.ok(markerName, "interrupted cleanup ownership marker must exist");
+  const marker = path.join(layout.destDir, markerName);
+  const transactionId = JSON.parse(
+    readFileSync(marker, "utf8"),
+  ).transactionId;
+  const directoryName = `.iroha-js-host-txn-${transactionId}`;
+  const directory = path.join(layout.destDir, directoryName);
+  assert.ok(
+    existsSync(directory),
+    "interrupted owned transaction directory must exist",
+  );
+  return {
+    directory,
+    directoryName,
+    marker,
+    markerName,
+  };
+}
+
+function cleanupMarkerEntryCount(layout) {
+  const markerName = readdirSync(layout.destDir).find((name) =>
+    CLEANUP_MARKER_PATTERN.test(name),
+  );
+  assert.ok(markerName);
+  const marker = JSON.parse(
+    readFileSync(path.join(layout.destDir, markerName), "utf8"),
+  );
+  assert.ok(Array.isArray(marker.entries));
+  return marker.entries.length;
+}
+
+function assertPublishedPairWithoutCleanup(layout, expectedBytes) {
+  assert.deepEqual(readFileSync(layout.bindingPath), expectedBytes);
+  assert.equal(
+    verifyNativeBinding(layout.bindingPath, {
+      manifestPath: layout.manifestPath,
+      platformKey: PLATFORM_KEY,
+    }).ok,
+    true,
+  );
+}
+
 function snapshotPair(layout) {
   return {
     binding: readFileSync(layout.bindingPath),
@@ -211,6 +274,8 @@ test("native publication replaces an existing pair repeatably without rename-ove
     JSON.parse(readFileSync(layout.manifestPath, "utf8")).entries[PLATFORM_KEY],
     {
       sha256: firstResult.sha256,
+      build_provenance_version: 3,
+      build_execution_policy: "trusted-local-cargo-v1",
       cargo_profile: "debug",
       source_git_revision: SOURCE_REVISION,
       source_tree_clean: true,
@@ -284,6 +349,59 @@ test("an identical binary with a different valid manifest encoding is idempotent
   assert.equal(readFileSync(layout.manifestPath, "utf8"), alternateManifest);
   assert.match(logs.at(-1), /already matches the verified build output/u);
   assertVerifiedPair(layout, bytes);
+});
+
+test("an identical binary with different sealed-source provenance replaces the manifest", async (t) => {
+  const layout = createLayout(t);
+  const bytes = Buffer.from("same binary from two sealed source states");
+  writeFileSync(layout.source, bytes);
+  await publishNativeBinding(publicationOptions(layout));
+
+  const nextDigest = "c".repeat(64);
+  const second = await publishNativeBinding(
+    publicationOptions(layout, {
+      readBuildProvenance(source) {
+        return fixtureBuildProvenance(source, "debug", {
+          source_tree_clean: false,
+          source_tree_sha256: nextDigest,
+        });
+      },
+    }),
+  );
+
+  assert.equal(second.sha256, createHash("sha256").update(bytes).digest("hex"));
+  const verification = assertVerifiedPair(layout, bytes);
+  assert.equal(verification.sourceTreeClean, false);
+  assert.equal(verification.sourceTreeSha256, nextDigest);
+});
+
+test("identical-binary provenance replacement failpoints restore the exact previous pair", async (t) => {
+  for (const failpoint of ["after-backup", "after-native", "after-manifest"]) {
+    await t.test(failpoint, async (subtest) => {
+      const layout = createLayout(subtest);
+      const bytes = Buffer.from(`same binary provenance replacement ${failpoint}`);
+      writeFileSync(layout.source, bytes);
+      await publishNativeBinding(publicationOptions(layout));
+      const before = snapshotPair(layout);
+
+      await assert.rejects(
+        publishNativeBinding(
+          publicationOptions(layout, {
+            failpoint,
+            readBuildProvenance(source) {
+              return fixtureBuildProvenance(source, "debug", {
+                source_tree_clean: false,
+                source_tree_sha256: "d".repeat(64),
+              });
+            },
+          }),
+        ),
+        new RegExp(`injected test failure at ${failpoint}`, "u"),
+      );
+      assert.deepEqual(snapshotPair(layout), before);
+      assertVerifiedPair(layout, bytes);
+    });
+  }
 });
 
 test("every publication failpoint restores the exact previous pair and cleans staging", async (t) => {
@@ -420,6 +538,10 @@ test("publisher rejects an ambiguous partial destination before mutation", async
 
 test("SIGKILL recovery resolves every durable replacement phase to an exact old or new pair", async (t) => {
   const phases = [
+    ["transaction-owner-written", "previous"],
+    ["transaction-owner-synced", "previous"],
+    ["transaction-initializer-renamed", "previous"],
+    ["transaction-created", "previous"],
     ["staged-native-synced", "previous"],
     ["staged-manifest-synced", "previous"],
     ["journal-prepared", "previous"],
@@ -434,6 +556,12 @@ test("SIGKILL recovery resolves every durable replacement phase to an exact old 
     ["published-pair-verified", "next"],
     ["published-verified", "next"],
     ["journal-committed", "next"],
+    ["cleanup-marker-temp-synced", "next"],
+    ["cleanup-marker-linked", "existing"],
+    ["cleanup-marker-synced", "existing"],
+    ["cleanup-owned", "existing"],
+    ["cleanup-entry-removed:1", "existing"],
+    ["cleanup-directory-removed", "existing"],
   ];
   for (const [phase, expected] of phases) {
     await t.test(phase, async (subtest) => {
@@ -455,7 +583,10 @@ test("SIGKILL recovery resolves every durable replacement phase to an exact old 
       } else {
         assert.equal(recovery.outcome, expected);
       }
-      assertVerifiedPair(layout, expected === "next" ? next : previous);
+      assertVerifiedPair(
+        layout,
+        expected === "next" || expected === "existing" ? next : previous,
+      );
 
       const final = Buffer.from(`repeatable-${phase}`);
       writeFileSync(layout.source, final);
@@ -467,6 +598,10 @@ test("SIGKILL recovery resolves every durable replacement phase to an exact old 
 
 test("SIGKILL recovery covers every first-publication phase without inventing a prior pair", async (t) => {
   const phases = [
+    ["transaction-owner-written", "absent"],
+    ["transaction-owner-synced", "absent"],
+    ["transaction-initializer-renamed", "absent"],
+    ["transaction-created", "absent"],
     ["staged-native-synced", "absent"],
     ["staged-manifest-synced", "absent"],
     ["journal-prepared", "absent"],
@@ -477,6 +612,12 @@ test("SIGKILL recovery covers every first-publication phase without inventing a 
     ["published-pair-verified", "next"],
     ["published-verified", "next"],
     ["journal-committed", "next"],
+    ["cleanup-marker-temp-synced", "next"],
+    ["cleanup-marker-linked", "existing"],
+    ["cleanup-marker-synced", "existing"],
+    ["cleanup-owned", "existing"],
+    ["cleanup-entry-removed:1", "existing"],
+    ["cleanup-directory-removed", "existing"],
   ];
   for (const [phase, expected] of phases) {
     await t.test(phase, async (subtest) => {
@@ -490,8 +631,8 @@ test("SIGKILL recovery covers every first-publication phase without inventing a 
         platform: PLATFORM,
         arch: ARCH,
       });
-      if (expected === "next") {
-        assert.equal(recovery.outcome, "next");
+      if (expected === "next" || expected === "existing") {
+        assert.equal(recovery.outcome, expected);
         assertVerifiedPair(layout, next);
       } else {
         assert.ok(["absent", "none"].includes(recovery.outcome));
@@ -506,6 +647,586 @@ test("SIGKILL recovery covers every first-publication phase without inventing a 
       assertVerifiedPair(layout, final);
     });
   }
+});
+
+test("SIGKILL after initializer mkdir leaves unowned data untouched without blocking publication", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("initializer-created-before-owner");
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "transaction-initializer-created");
+
+  const initializers = readdirSync(layout.destDir).filter((name) =>
+    name.startsWith(TRANSACTION_INITIALIZER_PREFIX),
+  );
+  assert.equal(initializers.length, 1);
+  const initializer = path.join(layout.destDir, initializers[0]);
+  assert.deepEqual(readdirSync(initializer), []);
+
+  const recovery = await recoverNativeBindingPublication({
+    destDir: layout.destDir,
+    platform: PLATFORM,
+    arch: ARCH,
+  });
+  assert.ok(["absent", "none"].includes(recovery.outcome));
+  assert.equal(existsSync(initializer), true);
+
+  await publishNativeBinding(publicationOptions(layout));
+  assertPublishedPairWithoutCleanup(layout, next);
+  assert.equal(existsSync(initializer), true);
+  assert.deepEqual(readdirSync(initializer), []);
+});
+
+test("a partial initializer owner marker remains forensic and cannot block publication", async (t) => {
+  const layout = createLayout(t);
+  const initializer = path.join(
+    layout.destDir,
+    `${TRANSACTION_INITIALIZER_PREFIX}11111111-1111-4111-8111-111111111111-22222222-2222-4222-8222-222222222222`,
+  );
+  const owner = path.join(
+    initializer,
+    ".iroha-js-host-transaction-owner-v1.json",
+  );
+  mkdirSync(initializer, { recursive: true });
+  writeFileSync(owner, '{"version":');
+
+  const recovery = await recoverNativeBindingPublication({
+    destDir: layout.destDir,
+    platform: PLATFORM,
+    arch: ARCH,
+  });
+  assert.ok(["absent", "none"].includes(recovery.outcome));
+  assert.equal(readFileSync(owner, "utf8"), '{"version":');
+
+  const next = Buffer.from("publication-after-partial-initializer-owner");
+  writeFileSync(layout.source, next);
+  await publishNativeBinding(publicationOptions(layout));
+  assertPublishedPairWithoutCleanup(layout, next);
+  assert.equal(readFileSync(owner, "utf8"), '{"version":');
+});
+
+test("an owner-sync failure leaves a fully written initializer recoverable", async (t) => {
+  const layout = createLayout(t);
+  writeFileSync(layout.source, Buffer.from("owner-sync-failure"));
+
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        phaseHook(phase) {
+          if (phase === "transaction-owner-written") {
+            throw new Error("injected owner sync failure");
+          }
+        },
+      }),
+    ),
+    /injected owner sync failure/u,
+  );
+  const initializer = readdirSync(layout.destDir).find((name) =>
+    name.startsWith(TRANSACTION_INITIALIZER_PREFIX),
+  );
+  assert.ok(initializer);
+
+  const recovery = await recoverNativeBindingPublication({
+    destDir: layout.destDir,
+    platform: PLATFORM,
+    arch: ARCH,
+  });
+  assert.ok(["absent", "none"].includes(recovery.outcome));
+  assert.equal(
+    existsSync(path.join(layout.destDir, initializer)),
+    false,
+  );
+  assert.deepEqual(publicationArtifacts(layout.destDir), []);
+});
+
+test("a truncated owner write during initialization is preserved without blocking publication", async (t) => {
+  const layout = createLayout(t);
+  writeFileSync(layout.source, Buffer.from("truncated-initializer-owner"));
+
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        phaseHook(phase) {
+          if (phase !== "transaction-owner-written") return;
+          const initializer = readdirSync(layout.destDir).find((name) =>
+            name.startsWith(TRANSACTION_INITIALIZER_PREFIX),
+          );
+          assert.ok(initializer);
+          writeFileSync(
+            path.join(
+              layout.destDir,
+              initializer,
+              ".iroha-js-host-transaction-owner-v1.json",
+            ),
+            '{"version":',
+          );
+        },
+      }),
+    ),
+    /ownership marker is not valid JSON/u,
+  );
+  const initializer = readdirSync(layout.destDir).find((name) =>
+    name.startsWith(TRANSACTION_INITIALIZER_PREFIX),
+  );
+  assert.ok(initializer);
+  const owner = path.join(
+    layout.destDir,
+    initializer,
+    ".iroha-js-host-transaction-owner-v1.json",
+  );
+  assert.equal(readFileSync(owner, "utf8"), '{"version":');
+
+  const next = Buffer.from("publication-after-truncated-owner-write");
+  writeFileSync(layout.source, next);
+  await publishNativeBinding(publicationOptions(layout));
+  assertPublishedPairWithoutCleanup(layout, next);
+  assert.equal(readFileSync(owner, "utf8"), '{"version":');
+});
+
+test("SIGKILL recovery accepts every canonical cleanup-deletion suffix", async (t) => {
+  await t.test("first publication", async (group) => {
+    const probe = createLayout(group);
+    const probeBytes = Buffer.from("cleanup-suffix-first-probe");
+    writeFileSync(probe.source, probeBytes);
+    await killPublisherAtPhase(probe, "cleanup-marker-synced");
+    const entryCount = cleanupMarkerEntryCount(probe);
+    await recoverNativeBindingPublication({
+      destDir: probe.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    });
+    assertVerifiedPair(probe, probeBytes);
+
+    for (let removed = 1; removed <= entryCount; removed += 1) {
+      await group.test(`after ${removed} removals`, async (subtest) => {
+        const layout = createLayout(subtest);
+        const next = Buffer.from(`cleanup-suffix-first-${removed}`);
+        writeFileSync(layout.source, next);
+        await killPublisherAtPhase(
+          layout,
+          `cleanup-entry-removed:${removed}`,
+        );
+        const recovery = await recoverNativeBindingPublication({
+          destDir: layout.destDir,
+          platform: PLATFORM,
+          arch: ARCH,
+        });
+        assert.equal(recovery.outcome, "existing");
+        assertVerifiedPair(layout, next);
+      });
+    }
+  });
+
+  await t.test("replacement publication", async (group) => {
+    const probe = createLayout(group);
+    const probeNext = Buffer.from("cleanup-suffix-replacement-probe-next");
+    writeFileSync(
+      probe.source,
+      Buffer.from("cleanup-suffix-replacement-probe-previous"),
+    );
+    await publishNativeBinding(publicationOptions(probe));
+    writeFileSync(probe.source, probeNext);
+    await killPublisherAtPhase(probe, "cleanup-marker-synced");
+    const entryCount = cleanupMarkerEntryCount(probe);
+    await recoverNativeBindingPublication({
+      destDir: probe.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    });
+    assertVerifiedPair(probe, probeNext);
+
+    for (let removed = 1; removed <= entryCount; removed += 1) {
+      await group.test(`after ${removed} removals`, async (subtest) => {
+        const layout = createLayout(subtest);
+        const next = Buffer.from(`cleanup-suffix-replacement-${removed}`);
+        writeFileSync(
+          layout.source,
+          Buffer.from(`cleanup-suffix-previous-${removed}`),
+        );
+        await publishNativeBinding(publicationOptions(layout));
+        writeFileSync(layout.source, next);
+        await killPublisherAtPhase(
+          layout,
+          `cleanup-entry-removed:${removed}`,
+        );
+        const recovery = await recoverNativeBindingPublication({
+          destDir: layout.destDir,
+          platform: PLATFORM,
+          arch: ARCH,
+        });
+        assert.equal(recovery.outcome, "existing");
+        assertVerifiedPair(layout, next);
+      });
+    }
+  });
+});
+
+test("recovery refuses arbitrary cleanup-prefixed user data without deleting it", async (t) => {
+  const layout = createLayout(t);
+  const userDirectory = path.join(
+    layout.destDir,
+    ".iroha-js-host-cleanup-user-data",
+  );
+  const keep = path.join(userDirectory, "keep.txt");
+  mkdirSync(userDirectory, { recursive: true });
+  writeFileSync(keep, "must survive");
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /unowned cleanup-prefixed artifact/u,
+  );
+  assert.equal(readFileSync(keep, "utf8"), "must survive");
+});
+
+test("recovery refuses an exact cleanup directory name without its ownership marker", async (t) => {
+  const layout = createLayout(t);
+  const spoofed = path.join(
+    layout.destDir,
+    ".iroha-js-host-cleanup-v1-11111111-1111-4111-8111-111111111111-22222222-2222-4222-8222-222222222222",
+  );
+  const keep = path.join(spoofed, "keep.txt");
+  mkdirSync(spoofed, { recursive: true });
+  writeFileSync(keep, "unowned exact-name data");
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /unmarked cleanup directory/u,
+  );
+  assert.equal(readFileSync(keep, "utf8"), "unowned exact-name data");
+});
+
+test("recovery refuses an exact unjournaled transaction without its pre-existing owner marker", async (t) => {
+  const layout = createLayout(t);
+  const transaction = path.join(
+    layout.destDir,
+    ".iroha-js-host-txn-77777777-7777-4777-8777-777777777777",
+  );
+  const keep = path.join(transaction, `${NATIVE_FILENAME}.next`);
+  mkdirSync(transaction, { recursive: true });
+  writeFileSync(keep, "allowlisted name containing unowned user data");
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /without its durable ownership marker/u,
+  );
+  assert.equal(
+    readFileSync(keep, "utf8"),
+    "allowlisted name containing unowned user data",
+  );
+  assert.equal(existsSync(transaction), true);
+});
+
+test("cleanup never overwrites an intervening exact cleanup directory", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("no-clobber-cleanup-target");
+  let inserted;
+  let insertedIdentity;
+  writeFileSync(layout.source, next);
+
+  await assert.rejects(
+    publishNativeBinding(
+      publicationOptions(layout, {
+        phaseHook(phase) {
+          if (phase !== "cleanup-marker-synced") return;
+          const markerName = readdirSync(layout.destDir).find((name) =>
+            CLEANUP_MARKER_PATTERN.test(name),
+          );
+          assert.ok(markerName);
+          inserted = path.join(
+            layout.destDir,
+            markerName.slice(0, -".owner.json".length),
+          );
+          mkdirSync(inserted);
+          const metadata = lstatSync(inserted, { bigint: true });
+          insertedIdentity = {
+            dev: metadata.dev,
+            ino: metadata.ino,
+          };
+        },
+      }),
+    ),
+    (error) => {
+      const messages = [
+        error.message,
+        ...(error instanceof AggregateError
+          ? error.errors.map((nested) => nested.message)
+          : []),
+      ].join("\n");
+      return /intervening cleanup directory|cleanup artifacts must be recovered/u.test(
+        messages,
+      );
+    },
+  );
+  assert.ok(inserted);
+  const after = lstatSync(inserted, { bigint: true });
+  assert.deepEqual(
+    { dev: after.dev, ino: after.ino },
+    insertedIdentity,
+  );
+  assert.equal(existsSync(layout.bindingPath), false);
+  assert.equal(existsSync(layout.manifestPath), false);
+});
+
+test("recovery refuses a spoofed exact marker and preserves it", async (t) => {
+  const layout = createLayout(t);
+  mkdirSync(layout.destDir, { recursive: true });
+  const marker = path.join(
+    layout.destDir,
+    ".iroha-js-host-cleanup-v1-33333333-3333-4333-8333-333333333333-44444444-4444-4444-8444-444444444444.owner.json",
+  );
+  writeFileSync(marker, '{"attacker":"not an ownership marker"}\n');
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /unexpected or missing fields/u,
+  );
+  assert.equal(
+    readFileSync(marker, "utf8"),
+    '{"attacker":"not an ownership marker"}\n',
+  );
+});
+
+test("recovery discards a partial cleanup-marker temporary only for an owned transaction", async (t) => {
+  const layout = createLayout(t);
+  writeFileSync(layout.source, Buffer.from("partial-cleanup-marker-temporary"));
+  await killPublisherAtPhase(layout, "staged-native-synced");
+  const transactionName = readdirSync(layout.destDir).find((name) =>
+    name.startsWith(".iroha-js-host-txn-"),
+  );
+  assert.ok(transactionName);
+  const transactionId = transactionName.slice(
+    ".iroha-js-host-txn-".length,
+  );
+  const temporary = path.join(
+    layout.destDir,
+    `.iroha-js-host-cleanup-v1-${transactionId}-88888888-8888-4888-8888-888888888888.owner-99999999-9999-4999-8999-999999999999.tmp`,
+  );
+  writeFileSync(temporary, '{"version":');
+
+  const recovery = await recoverNativeBindingPublication({
+    destDir: layout.destDir,
+    platform: PLATFORM,
+    arch: ARCH,
+  });
+  assert.ok(["absent", "none"].includes(recovery.outcome));
+  assert.equal(existsSync(temporary), false);
+  assert.equal(
+    existsSync(path.join(layout.destDir, transactionName)),
+    false,
+  );
+  assert.deepEqual(publicationArtifacts(layout.destDir), []);
+});
+
+test("recovery fails closed on a truncated published cleanup marker", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("truncated-cleanup-marker");
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "cleanup-marker-synced");
+  const cleanup = interruptedCleanupPaths(layout);
+  writeFileSync(cleanup.marker, '{"version":');
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /ownership marker is not valid JSON/u,
+  );
+  assert.equal(existsSync(cleanup.directory), true);
+  assert.equal(readFileSync(cleanup.marker, "utf8"), '{"version":');
+  assertPublishedPairWithoutCleanup(layout, next);
+});
+
+test("recovery rejects a cleanup marker symlink without touching its target", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("cleanup-marker-symlink");
+  const external = path.join(layout.root, "external-marker-target.json");
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "cleanup-marker-synced");
+  const cleanup = interruptedCleanupPaths(layout);
+  const bytes = "external marker target must survive";
+  writeFileSync(external, bytes);
+  unlinkSync(cleanup.marker);
+  symlinkSync(external, cleanup.marker);
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /regular non-symbolic-link file/u,
+  );
+  assert.equal(readFileSync(external, "utf8"), bytes);
+  assert.equal(lstatSync(cleanup.marker).isSymbolicLink(), true);
+  assert.equal(existsSync(cleanup.directory), true);
+  assertPublishedPairWithoutCleanup(layout, next);
+});
+
+test("recovery rejects a multiply linked cleanup marker", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("cleanup-marker-hardlink");
+  const extraLink = path.join(layout.root, "extra-cleanup-marker-link.json");
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "cleanup-marker-synced");
+  const cleanup = interruptedCleanupPaths(layout);
+  linkSync(cleanup.marker, extraLink);
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /singly linked regular file/u,
+  );
+  assert.deepEqual(readFileSync(extraLink), readFileSync(cleanup.marker));
+  assert.equal(existsSync(cleanup.directory), true);
+  assertPublishedPairWithoutCleanup(layout, next);
+});
+
+test("recovery rejects a cleanup marker whose transaction identity was replaced", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("cleanup-marker-identity-next");
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "cleanup-owned");
+  const cleanup = interruptedCleanupPaths(layout);
+  const marker = JSON.parse(readFileSync(cleanup.marker, "utf8"));
+  marker.transactionId = "55555555-5555-4555-8555-555555555555";
+  writeFileSync(cleanup.marker, `${JSON.stringify(marker, null, 2)}\n`);
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /transaction id does not match its artifact name/u,
+  );
+  assert.equal(existsSync(cleanup.directory), true);
+  assert.equal(existsSync(cleanup.marker), true);
+  assertPublishedPairWithoutCleanup(layout, next);
+});
+
+test("recovery rejects a marker/journal transaction mismatch even with a rewritten inventory", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("cleanup-journal-mismatch-next");
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "cleanup-owned");
+  const cleanup = interruptedCleanupPaths(layout);
+  const journal = path.join(cleanup.directory, "journal-000000.json");
+  const entry = JSON.parse(readFileSync(journal, "utf8"));
+  entry.transactionId = "66666666-6666-4666-8666-666666666666";
+  writeFileSync(journal, `${JSON.stringify(entry, null, 2)}\n`);
+  const marker = JSON.parse(readFileSync(cleanup.marker, "utf8"));
+  const journalMetadata = lstatSync(journal, { bigint: true });
+  const journalIndex = marker.entries.findIndex(
+    ({ name }) => name === "journal-000000.json",
+  );
+  assert.notEqual(journalIndex, -1);
+  marker.entries[journalIndex] = {
+    name: "journal-000000.json",
+    birthtimeNs: String(journalMetadata.birthtimeNs),
+    dev: String(journalMetadata.dev),
+    ino: String(journalMetadata.ino),
+    mtimeNs: String(journalMetadata.mtimeNs),
+    sha256: createHash("sha256").update(readFileSync(journal)).digest("hex"),
+    size: String(journalMetadata.size),
+  };
+  writeFileSync(cleanup.marker, `${JSON.stringify(marker, null, 2)}\n`);
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /journal transaction id does not match its directory/u,
+  );
+  assert.equal(existsSync(cleanup.directory), true);
+  assert.equal(existsSync(cleanup.marker), true);
+  assertPublishedPairWithoutCleanup(layout, next);
+});
+
+test("recovery rejects a replacement directory at an owned cleanup pathname", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("cleanup-directory-replacement-next");
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "cleanup-owned");
+  const cleanup = interruptedCleanupPaths(layout);
+  const preservedOwnedDirectory = path.join(
+    layout.destDir,
+    ".forensic-original-cleanup",
+  );
+  renameSync(cleanup.directory, preservedOwnedDirectory);
+  mkdirSync(cleanup.directory);
+  const keep = path.join(cleanup.directory, "keep.txt");
+  writeFileSync(keep, "replacement must survive");
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /no longer matches its ownership marker/u,
+  );
+  assert.equal(readFileSync(keep, "utf8"), "replacement must survive");
+  assert.equal(existsSync(preservedOwnedDirectory), true);
+  assert.equal(existsSync(cleanup.marker), true);
+  assertPublishedPairWithoutCleanup(layout, next);
+});
+
+test("recovery rejects an impossible non-suffix cleanup inventory", async (t) => {
+  const layout = createLayout(t);
+  const next = Buffer.from("cleanup-impossible-inventory-next");
+  writeFileSync(
+    layout.source,
+    Buffer.from("cleanup-impossible-inventory-previous"),
+  );
+  await publishNativeBinding(publicationOptions(layout));
+  writeFileSync(layout.source, next);
+  await killPublisherAtPhase(layout, "cleanup-owned");
+  const cleanup = interruptedCleanupPaths(layout);
+  const removedOutOfOrder = path.join(
+    cleanup.directory,
+    `${NATIVE_FILENAME}.previous`,
+  );
+  const mustPrecedeIt = path.join(
+    cleanup.directory,
+    `${MANIFEST_FILENAME}.previous`,
+  );
+  assert.equal(existsSync(removedOutOfOrder), true);
+  assert.equal(existsSync(mustPrecedeIt), true);
+  unlinkSync(removedOutOfOrder);
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /not a canonical deletion suffix/u,
+  );
+  assert.equal(existsSync(mustPrecedeIt), true);
+  assert.equal(existsSync(cleanup.marker), true);
+  assertPublishedPairWithoutCleanup(layout, next);
 });
 
 test("recovery refuses tampered backup bytes and preserves the forensic transaction", async (t) => {
@@ -571,6 +1292,41 @@ test("recovery rejects a journal with injected fields before mutating the prior 
     true,
   );
   assert.ok(publicationArtifacts(layout.destDir).includes(transaction));
+});
+
+test("recovery rejects a journal symlink before reading its target", async (t) => {
+  const layout = createLayout(t);
+  const previous = Buffer.from("journal-symlink-previous");
+  const external = path.join(layout.root, "external-journal-target.json");
+  writeFileSync(layout.source, previous);
+  await publishNativeBinding(publicationOptions(layout));
+  writeFileSync(layout.source, Buffer.from("journal-symlink-next"));
+  await killPublisherAtPhase(layout, "journal-prepared");
+  const transaction = readdirSync(layout.destDir).find((name) =>
+    name.startsWith(".iroha-js-host-txn-"),
+  );
+  assert.ok(transaction);
+  const journal = path.join(
+    layout.destDir,
+    transaction,
+    "journal-000000.json",
+  );
+  const externalBytes = '{"external":"must not be consumed or changed"}\n';
+  writeFileSync(external, externalBytes);
+  unlinkSync(journal);
+  symlinkSync(external, journal);
+
+  await assert.rejects(
+    recoverNativeBindingPublication({
+      destDir: layout.destDir,
+      platform: PLATFORM,
+      arch: ARCH,
+    }),
+    /regular non-symbolic-link file/u,
+  );
+  assert.equal(readFileSync(external, "utf8"), externalBytes);
+  assert.deepEqual(readFileSync(layout.bindingPath), previous);
+  assert.equal(lstatSync(journal).isSymbolicLink(), true);
 });
 
 test("recovery rejects a journal that skips durable phases", async (t) => {

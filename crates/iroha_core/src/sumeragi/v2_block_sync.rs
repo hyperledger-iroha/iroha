@@ -1848,13 +1848,29 @@ pub(super) mod tests {
         archive_outstanding
             .register(authenticated_archive_request)
             .expect("register archive request");
-        archive_outstanding
+        let authenticated_archive_response = archive_outstanding
             .authenticate_response(
                 &context,
                 archive_response,
                 &peer(&fixture.old_validators[3]),
             )
             .expect("lagging peer accepts non-QC-signer archive response");
+        assert_eq!(
+            authenticated_archive_response.response().request_hash,
+            request_hash
+        );
+        assert_eq!(
+            authenticated_archive_response.response().responder,
+            u32::try_from(fixture.old_validators.len() - 1)
+                .expect("historical fixture responder index fits u32")
+        );
+        assert_eq!(
+            authenticated_archive_response.response().body,
+            canonical_wire
+        );
+        assert!(archive_outstanding.contains(request_hash));
+        assert!(archive_outstanding.complete(request_hash));
+        assert!(archive_outstanding.is_empty());
         assert_eq!(server.body_len(), 1);
         assert!(
             server

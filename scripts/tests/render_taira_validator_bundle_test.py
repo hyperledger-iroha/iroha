@@ -9,6 +9,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "render_taira_validator_bundle.py"
 SPEC = importlib.util.spec_from_file_location("render_taira_validator_bundle", MODULE_PATH)
@@ -76,6 +78,39 @@ def test_taira_templates_require_operator_provisioned_scale_2_ds_offline_binding
     assert "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" in config_text
     offline_section = config_text.split("[settlement.offline]", 1)[1].split("\n[", 1)[0]
     assert TAIRA_GAS_ASSET_ID not in offline_section
+
+
+def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
+    config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+
+    assert config["torii"]["address"] == "addr:0.0.0.0:18080#2F16"
+    assert config["torii"]["deploy_rate_per_origin_per_sec"] == 4
+    assert config["torii"]["deploy_burst_per_origin"] == 8
+    assert config["sumeragi"]["block"]["max_payload_bytes"] == 21 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_source_bytes"] == 43 * MODULE.MIB
+    assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 43 * MODULE.MIB
+    assert (
+        config["network"]["max_frame_bytes_block_sync"]
+        == MODULE.TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES
+    )
+    assert (
+        config["network"]["max_frame_bytes_tx_gossip"]
+        == MODULE.TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES
+    )
+    assert config["network"]["max_frame_bytes"] == MODULE.TAIRA_MAX_FRAME_BYTES
+    assert (
+        genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"]
+        == config["sumeragi"]["block"]["max_payload_bytes"]
+    )
+    assert (
+        config["settlement"]["offline"]["kagemusha_release_policy_path"]
+        == "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
+    )
+    assert (
+        config["settlement"]["offline"]["kagemusha_artifact_dir"]
+        == "/var/lib/iroha/taira-validator/kagemusha/v4"
+    )
 
 
 def test_taira_governance_timing_contract_is_release_pinned() -> None:
@@ -305,11 +340,17 @@ trusted_peers_pop = [
 [network]
 address = "0.0.0.0:1337"
 public_address = "taira-validator-1.sora.org:1337"
+max_frame_bytes = 23068700
+max_frame_bytes_block_sync = 23068672
+max_frame_bytes_tx_gossip = 11534336
+
+[sumeragi.block]
+max_payload_bytes = 22020096
 
 [sumeragi.queues]
 authenticated_non_validator_sources = 2
-body_bytes = 242221056
-body_source_bytes = 34603008
+body_bytes = 315621376
+body_source_bytes = 45088768
 
 [torii]
 address = "0.0.0.0:18080"
@@ -325,8 +366,8 @@ private_key = "REPLACE_WITH_TAIRA_KAGEMUSHA_COMMANDS_PRIVATE_KEY"
 [settlement.offline]
 escrow_required = true
 escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
-kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
-kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+kagemusha_release_policy_path = "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
+kagemusha_artifact_dir = "/var/lib/iroha/taira-validator/kagemusha/v4"
 kagemusha_max_decoded_bytes = 268435456
 
 [nexus.registry]
@@ -464,8 +505,16 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     onboarding_key = runtime_dir / "onboarding-signer.key"
     faucet_key = runtime_dir / "faucet-signer.key"
     token_file = runtime_dir / "onboarding-token"
-    assert str(onboarding_key.resolve()) in config
-    assert str(faucet_key.resolve()) in config
+    assert (
+        'private_key_file = "/etc/iroha/taira-validator/runtime/'
+        'onboarding-signer.key"' in config
+    )
+    assert (
+        'private_key_file = "/etc/iroha/taira-validator/runtime/'
+        'faucet-signer.key"' in config
+    )
+    assert str(onboarding_key.resolve()) not in config
+    assert str(faucet_key.resolve()) not in config
     assert onboarding_key.read_text(encoding="utf-8") == "bootstrap-private-key\n"
     assert faucet_key.read_text(encoding="utf-8") == "faucet-private-key\n"
     assert token_file.read_text(encoding="utf-8") == "bootstrap-api-token\n"
@@ -483,8 +532,23 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         in config
     )
     assert "signature_threshold = 2" in config
-    assert 'manifest_directory = "manifests"' in config
-    assert 'cache_directory = "manifests"' in config
+    assert (
+        'manifest_directory = "/etc/iroha/taira-validator/manifests"' in config
+    )
+    assert 'cache_directory = "/etc/iroha/taira-validator/manifests"' in config
+    assert (
+        'kagemusha_release_policy_path = '
+        '"/etc/iroha/taira-validator/kagemusha/release-policy.norito"' in config
+    )
+    assert (
+        'envelopes_dir = "/etc/iroha/taira-validator/sorafs_admission"' in config
+    )
+    assert stat.S_IMODE(
+        (output_dir / "taira-validator-3" / "kagemusha").stat().st_mode
+    ) == 0o700
+    assert stat.S_IMODE(
+        (output_dir / "taira-validator-3" / "sorafs_admission").stat().st_mode
+    ) == 0o700
 
     manifest_path = output_dir / "taira-validator-3" / "manifests" / "governance.manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -497,6 +561,76 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         {"validator": "test-validator-3", "peer_id": "peer-3-public"},
         {"validator": "test-validator-4", "peer_id": "peer-4-public"},
     ]
+
+
+def test_render_bundle_uses_explicit_canonical_install_root(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    install_root = Path("/srv/iroha/taira-validator")
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    MODULE.render_bundle(
+        base_config_path,
+        roster_path,
+        output_dir,
+        secrets_path=secrets_path,
+        install_root=install_root,
+    )
+
+    config = (output_dir / "taira-validator-1" / "config.toml").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        'private_key_file = "/srv/iroha/taira-validator/runtime/'
+        'onboarding-signer.key"' in config
+    )
+    assert (
+        'private_key_file = "/srv/iroha/taira-validator/runtime/'
+        'faucet-signer.key"' in config
+    )
+    assert (
+        'manifest_directory = "/srv/iroha/taira-validator/manifests"' in config
+    )
+    assert 'cache_directory = "/srv/iroha/taira-validator/manifests"' in config
+    assert (
+        'kagemusha_release_policy_path = '
+        '"/srv/iroha/taira-validator/kagemusha/release-policy.norito"' in config
+    )
+    assert (
+        'envelopes_dir = "/srv/iroha/taira-validator/sorafs_admission"' in config
+    )
+
+
+def test_render_bundle_rejects_relative_install_root(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+
+    for invalid_root in (
+        Path("../escape"),
+        Path("/"),
+        Path("/etc/iroha/../escape"),
+        Path("//etc/iroha/taira-validator"),
+        Path("/etc/iroha/taira-validator\ninjected"),
+    ):
+        with pytest.raises(
+            ValueError,
+            match="install_root must be a canonical, non-root absolute path",
+        ):
+            MODULE.render_bundle(
+                base_config_path,
+                roster_path,
+                tmp_path / "out",
+                secrets_path=secrets_path,
+                install_root=invalid_root,
+            )
 
 
 def test_socket_addresses_are_crc_bound_and_fail_closed() -> None:
@@ -540,11 +674,23 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
         json.dumps(
             {
                 "sumeragi_v2": {
-                    "da_layout": {},
+                    "da_layout": {
+                        "max_payload_size_bytes": MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES
+                    },
                     "nexus_amx_context_hash": "01" * 32,
                 },
                 "transactions": [
-                    {"instructions": [], "ivm_triggers": [], "topology": []}
+                    {
+                        "instructions": [],
+                        "ivm_triggers": [],
+                        "parameters": {
+                            "transaction": {
+                                "max_tx_bytes": MODULE.TAIRA_TRANSACTION_MAX_BYTES,
+                                "max_decompressed_bytes": MODULE.TAIRA_TRANSACTION_MAX_BYTES,
+                            }
+                        },
+                        "topology": [],
+                    }
                 ],
             }
         ),
@@ -631,7 +777,9 @@ def test_genesis_renderer_rejects_merged_instruction_objects(tmp_path: Path) -> 
         json.dumps(
             {
                 "sumeragi_v2": {
-                    "da_layout": {},
+                    "da_layout": {
+                        "max_payload_size_bytes": MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES
+                    },
                     "nexus_amx_context_hash": "01" * 32,
                 },
                 "transactions": [
@@ -646,6 +794,12 @@ def test_genesis_renderer_rejects_merged_instruction_objects(tmp_path: Path) -> 
                             }
                         ],
                         "ivm_triggers": [],
+                        "parameters": {
+                            "transaction": {
+                                "max_tx_bytes": MODULE.TAIRA_TRANSACTION_MAX_BYTES,
+                                "max_decompressed_bytes": MODULE.TAIRA_TRANSACTION_MAX_BYTES,
+                            }
+                        },
                         "topology": [],
                     }
                 ],
@@ -762,7 +916,7 @@ def test_render_bundle_scales_body_budget_for_five_validators(tmp_path: Path) ->
     )
     queues = rendered["sumeragi"]["queues"]
     assert queues["authenticated_non_validator_sources"] == 2
-    assert queues["body_source_bytes"] == 34_603_008
+    assert queues["body_source_bytes"] == 45_088_768
     assert queues["body_bytes"] == 8 * queues["body_source_bytes"]
 
 
@@ -774,13 +928,13 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
 
     malformed = {
         "authenticated_non_validator_sources": ["0", "-1", '"2"', "true"],
-        "body_bytes": ["0", "-1", '"242221056"', "true"],
-        "body_source_bytes": ["0", "-1", '"34603008"', "true"],
+        "body_bytes": ["0", "-1", '"315621376"', "true"],
+        "body_source_bytes": ["0", "-1", '"45088768"', "true"],
     }
     defaults = {
         "authenticated_non_validator_sources": 2,
-        "body_bytes": 242221056,
-        "body_source_bytes": 34603008,
+        "body_bytes": 315621376,
+        "body_source_bytes": 45088768,
     }
     for key, values in malformed.items():
         for index, value in enumerate(values):
@@ -800,6 +954,121 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
                 raise AssertionError(
                     f"render_bundle accepted malformed {key} value {value}"
                 )
+
+
+@pytest.mark.parametrize(
+    ("field", "current", "replacement", "expected"),
+    [
+        (
+            "max_payload_bytes",
+            "22020096",
+            str(MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1),
+            "must be at least 22020096 bytes",
+        ),
+        (
+            "body_source_bytes",
+            "45088768",
+            str(MODULE.TAIRA_BODY_SOURCE_MIN_BYTES - 1),
+            "must be at least 44270600 bytes",
+        ),
+        (
+            "max_frame_bytes_block_sync",
+            "23068672",
+            str(MODULE.TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES - 1),
+            "must be at least 23068672 bytes",
+        ),
+        (
+            "max_frame_bytes_tx_gossip",
+            "11534336",
+            str(MODULE.TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES - 1),
+            "must be at least 11534336 bytes",
+        ),
+        (
+            "max_frame_bytes",
+            "23068700",
+            str(MODULE.TAIRA_MAX_FRAME_BYTES - 1),
+            "must include 28 AEAD bytes",
+        ),
+    ],
+)
+def test_render_bundle_rejects_privacy_transport_corridor_below_boundary(
+    tmp_path: Path,
+    field: str,
+    current: str,
+    replacement: str,
+    expected: str,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    base_config_path = tmp_path / f"config-{field}.toml"
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            f"{field} = {current}",
+            f"{field} = {replacement}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=expected):
+        MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
+
+
+def test_genesis_renderer_rejects_da_payload_one_byte_below_privacy_corridor(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    validators = MODULE.load_roster(roster_path)
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+    genesis["sumeragi_v2"]["da_layout"]["max_payload_size_bytes"] = (
+        MODULE.TAIRA_BLOCK_MAX_PAYLOAD_BYTES - 1
+    )
+    base_genesis_path = tmp_path / "genesis.json"
+    base_genesis_path.write_text(json.dumps(genesis), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must be at least 22020096"):
+        MODULE.render_genesis_template(
+            base_genesis_path,
+            validators,
+            tmp_path / "out",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        (
+            "max_tx_bytes",
+            MODULE.TAIRA_TRANSACTION_MAX_BYTES - 1,
+            "must be at least 10485760 bytes",
+        ),
+        (
+            "max_decompressed_bytes",
+            MODULE.TAIRA_TRANSACTION_MAX_BYTES - 1,
+            "must be at least `max_tx_bytes`",
+        ),
+    ],
+)
+def test_genesis_renderer_rejects_transaction_corridor_below_boundary(
+    tmp_path: Path,
+    field: str,
+    value: int,
+    expected: str,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    validators = MODULE.load_roster(roster_path)
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+    genesis["transactions"][0]["parameters"]["transaction"][field] = value
+    base_genesis_path = tmp_path / "genesis.json"
+    base_genesis_path.write_text(json.dumps(genesis), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=expected):
+        MODULE.render_genesis_template(
+            base_genesis_path,
+            validators,
+            tmp_path / "out",
+        )
 
 
 def test_load_roster_merges_private_keys_from_secrets(tmp_path: Path) -> None:

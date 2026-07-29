@@ -45,7 +45,7 @@ use crate::{
     nexus::FeeSponsorProgramId,
     privacy::{
         PrivacyNullifierV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyTransactionIntentDigestV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
     },
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
@@ -1015,6 +1015,12 @@ fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1)
     {
         statement.replay_nullifier = PrivacyNullifierV1::new([0; 32]);
     }
+    if let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+        &mut normalized.envelope.statement
+    {
+        statement.device_authentication_digest =
+            PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32]);
+    }
     normalized.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
     normalized.into()
 }
@@ -1088,6 +1094,8 @@ impl TransactionPayload {
     ///
     /// For ZK-ACE, the replay nullifier also becomes 32 zero bytes because it
     /// is derived from the resulting intent-bound authorization projection.
+    /// For Vega, the device-authentication digest also becomes 32 zero bytes
+    /// because `H_dev` binds the resulting transaction-intent digest.
     ///
     /// Zeroing these derived fields removes their otherwise unavoidable
     /// self-reference. Every independent payload field, statement field,
@@ -1458,8 +1466,8 @@ impl SignedTransaction {
     ) {
         let mut combined = Self::fault_injection_overlay(metadata).unwrap_or_default();
         combined.extend(additions.into_iter().map(|instruction| {
-            let bytes =
-                norito::to_bytes(&instruction).expect("fault injection overlay instruction encode");
+            let bytes = norito::encode_canonical(&instruction)
+                .expect("fault injection overlay instruction canonical encode");
             BASE64_STANDARD.encode(bytes)
         }));
         metadata.insert(FAULT_INJECTION_METADATA_NAME.clone(), Json::new(combined));
@@ -1637,10 +1645,11 @@ pub fn compute_sealed_transaction_commitment(
     salt: [u8; 32],
     reveal_deadline_height: u64,
 ) -> Hash {
-    let tx_bytes =
-        norito::to_bytes(signed_transaction).expect("signed transaction must encode to Norito");
+    let tx_bytes = norito::encode_canonical(signed_transaction)
+        .expect("signed transaction must canonically encode to Norito");
     let tx_hash = Hash::new(tx_bytes);
-    let chain_bytes = norito::to_bytes(chain_id).expect("chain id must encode to Norito");
+    let chain_bytes =
+        norito::encode_canonical(chain_id).expect("chain id must canonically encode to Norito");
     let mut bytes = Vec::with_capacity(
         SEALED_TRANSACTION_COMMITMENT_DOMAIN.len()
             + chain_bytes.len()
@@ -2375,14 +2384,18 @@ mod tests {
         prelude::{Log, Register, TriggerId},
         privacy::{
             IROHA_JINDO_FIELD_ELEMENT_BYTES_V1, IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1,
-            IrohaJindoPolynomialCommitmentStatementV1, PrivacyEngineManifestDigestV1,
+            IrohaJindoPolynomialCommitmentStatementV1, PrivacyChallengeV1,
+            PrivacyCredentialDocumentTypeV1, PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1,
             PrivacyJindoFieldElementV1, PrivacyJindoLatticeCommitmentV1, PrivacyNullifierV1,
-            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyDigestV1,
-            PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1,
-            PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
-            PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1, PrivacyStatementV1,
-            PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
-            ZkAcePqAuthorizationStatementV1,
+            PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
+            PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProtocolIdV1,
+            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
+            PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+            PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
+            PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
+            VegaExistingCredentialStatementV1, ZkAcePqAuthorizationStatementV1,
         },
         transaction::{
             ExecutableBatchItem,
@@ -2525,13 +2538,64 @@ mod tests {
                     destination: authority,
                     asset_definition_id: sample_fee_asset(),
                     amount: 7,
-                    fee: 2,
                     authorization_epoch: 1,
                     replay_nullifier: PrivacyNullifierV1::new(privacy_test_bytes(0x74)),
                 });
             submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
             submission.envelope.proof =
                 PrivacyProofV1::ZkAcePqAuthorizationV0(PrivacyProofBytesV1::new(vec![0xA5, 0x5A]));
+        });
+        payload
+    }
+
+    fn draft_vega_privacy_payload() -> TransactionPayload {
+        let mut payload = draft_privacy_payload();
+        mutate_direct_privacy_submission(&mut payload, |submission| {
+            let context = submission.envelope.statement.context().clone();
+            let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+            submission.envelope.protocol_id = protocol_id;
+            submission.envelope.proof_system_id =
+                PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256;
+            submission.envelope.engine_id = protocol_id.expected_engine();
+            submission.envelope.statement =
+                PrivacyStatementV1::VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1 {
+                    context,
+                    issuer_id: PrivacyIssuerIdV1::new(privacy_test_bytes(0x81)),
+                    issuer_record_epoch: 1,
+                    issuer_record_digest: PrivacyVegaIssuerRecordDigestV1::new(privacy_test_bytes(
+                        0x82,
+                    )),
+                    document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+                    namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+                    digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+                    issuer_authentication_algorithm:
+                        PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+                    device_authentication_algorithm:
+                        PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+                    issuer_public_key: PrivacyP256PointV1::new([
+                        0x02, 0x6f, 0xf0, 0x3b, 0x94, 0x92, 0x41, 0xce, 0x1d, 0xad, 0xd4, 0x35,
+                        0x19, 0xe6, 0x96, 0x0e, 0x0a, 0x85, 0xb4, 0x1a, 0x69, 0xa0, 0x5c, 0x32,
+                        0x81, 0x03, 0xaa, 0x2b, 0xce, 0x15, 0x94, 0xca, 0x16,
+                    ]),
+                    device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new(
+                        privacy_test_bytes(0x83),
+                    ),
+                    presentation_date: PrivacyVegaMdlDateV1 {
+                        year: 2026,
+                        month: 7,
+                        day: 28,
+                    },
+                    minimum_age_years: 18,
+                    reader_challenge: PrivacyChallengeV1::new(privacy_test_bytes(0x84)),
+                    session_transcript_digest: PrivacySessionTranscriptDigestV1::new(
+                        privacy_test_bytes(0x85),
+                    ),
+                });
+            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+            submission.envelope.proof =
+                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(vec![
+                    0xA5, 0x5A,
+                ]));
         });
         payload
     }
@@ -2884,7 +2948,7 @@ mod tests {
         );
         assert_eq!(
             hex::encode(expected.as_bytes()),
-            "0b67937ee1c33dfc78baa1c928c55f6365712bc31139cc2dae81fc809adeb2e6",
+            "a9dac5175c7e527acd53f8f71a735afaae89cb5b9cb865c4523c03e2fc1710d8",
             "canonical privacy transaction-intent V1 digest"
         );
 
@@ -3051,6 +3115,100 @@ mod tests {
                 .validate_privacy_transaction_intent_binding_v1()
                 .expect("final ZK-ACE intent binding"),
             expected
+        );
+    }
+
+    #[test]
+    fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
+        let payload = draft_vega_privacy_payload();
+        let expected = payload
+            .privacy_transaction_intent_digest_v1()
+            .expect("derive Vega draft intent");
+        assert_eq!(
+            hex::encode(expected.as_bytes()),
+            "542c40dfa0d36a7aa9ab84eff51f367944a2b6c0614cf5ef355065c8bd038c72",
+            "canonical Vega two-phase transaction-intent projection KAT"
+        );
+
+        let mut changed_hdev = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_hdev, |submission| {
+            let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("Vega fixture statement");
+            };
+            statement.device_authentication_digest =
+                PrivacyVegaDeviceAuthenticationDigestV1::new(privacy_test_bytes(0x86));
+        });
+        assert_eq!(
+            changed_hdev
+                .privacy_transaction_intent_digest_v1()
+                .expect("derived H_dev is projected out"),
+            expected
+        );
+
+        let independent_mutations: [fn(&mut VegaExistingCredentialStatementV1); 3] = [
+            |statement: &mut VegaExistingCredentialStatementV1| {
+                statement.reader_challenge.0[0] ^= 1;
+            },
+            |statement: &mut VegaExistingCredentialStatementV1| {
+                statement.issuer_record_digest.0[0] ^= 1;
+            },
+            |statement: &mut VegaExistingCredentialStatementV1| {
+                statement.presentation_date.day += 1;
+            },
+        ];
+        for mutate in independent_mutations {
+            let mut changed = payload.clone();
+            mutate_direct_privacy_submission(&mut changed, |submission| {
+                let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+                    &mut submission.envelope.statement
+                else {
+                    panic!("Vega fixture statement");
+                };
+                mutate(statement);
+            });
+            assert_ne!(
+                changed
+                    .privacy_transaction_intent_digest_v1()
+                    .expect("independent Vega statement field remains bound"),
+                expected
+            );
+        }
+
+        let mut finalized = payload;
+        mutate_direct_privacy_submission(&mut finalized, |submission| {
+            let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+                &mut submission.envelope.statement
+            else {
+                panic!("Vega fixture statement");
+            };
+            statement.context.transaction_intent_digest = expected;
+            statement.device_authentication_digest =
+                PrivacyVegaDeviceAuthenticationDigestV1::new(privacy_test_bytes(0x87));
+            submission.envelope.statement_digest = submission
+                .envelope
+                .statement
+                .digest()
+                .expect("final Vega statement digest");
+        });
+        assert_eq!(
+            finalized
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect("final intent-bound Vega payload"),
+            expected
+        );
+    }
+
+    #[test]
+    #[ignore = "operator-only KAT regeneration after an intentional intent projection change"]
+    fn print_vega_intent_projection_kat() {
+        let digest = draft_vega_privacy_payload()
+            .privacy_transaction_intent_digest_v1()
+            .expect("Vega intent projection");
+        eprintln!(
+            "VEGA_TRANSACTION_INTENT_PROJECTION_KAT_V1={}",
+            hex::encode(digest.as_bytes())
         );
     }
 
@@ -4642,6 +4800,20 @@ mod tests {
         let reveal_deadline_height = 42;
         let commitment =
             compute_sealed_transaction_commitment(tx.chain(), &tx, salt, reveal_deadline_height);
+        {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            assert_eq!(
+                compute_sealed_transaction_commitment(
+                    tx.chain(),
+                    &tx,
+                    salt,
+                    reveal_deadline_height,
+                ),
+                commitment
+            );
+        }
         let payload = SealedTransactionCommitmentPayload::new(
             tx.chain().clone(),
             tx.authority().clone(),

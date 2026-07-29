@@ -347,6 +347,14 @@ const CASES: &[CompileFailCase] = &[
         line: 2,
     },
     CompileFailCase {
+        name: "non-exhaustive-result-match",
+        source: "seiyaku NonExhaustiveResult {\nfn read(Result<int, bool> value) -> int { match value { Result::ok(item) => { item }, } }\n}",
+        phase: DiagnosticPhase::Semantic,
+        code: "E_MATCH_NON_EXHAUSTIVE",
+        message: "match must cover both namespaced variants",
+        line: 2,
+    },
+    CompileFailCase {
         name: "list-comprehension-capacity",
         source: "seiyaku ComprehensionCapacity {\nfn copy() { let List<int, 8> source = [1]; let List<int, 4> result = [item for item in source if false]; }\n}",
         phase: DiagnosticPhase::Semantic,

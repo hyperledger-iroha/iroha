@@ -40634,6 +40634,16 @@ def _transport_geometry_production_source_fidelity_errors(
         "taira_config": (
             repo_root / "configs" / "soranexus" / "taira" / "config.toml"
         ),
+        "taira_genesis": (
+            repo_root / "configs" / "soranexus" / "taira" / "genesis.json"
+        ),
+        "taira_default_genesis": (
+            repo_root
+            / "defaults"
+            / "kagami"
+            / "iroha3-taira"
+            / "genesis.json"
+        ),
         "taira_readme": (
             repo_root / "configs" / "soranexus" / "taira" / "README.md"
         ),
@@ -42478,23 +42488,78 @@ queues.insert(
         ),
         (
             "taira_default",
+            "max_transactions = 96\n"
+            "max_payload_bytes = 22020096\n"
+            "proposal_queue_scan_multiplier = 4",
+            "default Taira profile admits two maximum privacy transactions and block framing",
+        ),
+        (
+            "taira_default",
             "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 242221056\n"
-            "body_source_bytes = 34603008",
+            "body_bytes = 315621376\n"
+            "body_source_bytes = 45088768",
             "default Taira profile pins H=2 and seven source partitions",
+        ),
+        (
+            "taira_default",
+            "max_frame_bytes = 23068700\n"
+            "max_frame_bytes_block_sync = 23068672\n"
+            "max_frame_bytes_tx_gossip = 11534336",
+            "default Taira profile carries maximum privacy transaction and block-sync frames",
+        ),
+        (
+            "taira_config",
+            "max_frame_bytes = 23068700\n"
+            "max_frame_bytes_block_sync = 23068672\n"
+            "max_frame_bytes_tx_gossip = 11534336",
+            "production Taira profile carries maximum privacy transaction and block-sync frames",
+        ),
+        (
+            "taira_config",
+            "max_transactions = 96\n"
+            "max_payload_bytes = 22020096\n"
+            "proposal_queue_scan_multiplier = 4",
+            "production Taira profile admits two maximum privacy transactions and block framing",
         ),
         (
             "taira_config",
             "authenticated_non_validator_sources = 2\n"
-            "body_bytes = 242221056\n"
-            "body_source_bytes = 34603008",
+            "body_bytes = 315621376\n"
+            "body_source_bytes = 45088768",
             "production Taira profile pins H=2 and seven source partitions",
+        ),
+        (
+            "taira_genesis",
+            '"max_payload_size_bytes":22020096',
+            "production Taira genesis DA admits the complete privacy block corridor",
+        ),
+        (
+            "taira_genesis",
+            '"max_tx_bytes": 10485760',
+            "production Taira genesis admits one maximum privacy transaction",
+        ),
+        (
+            "taira_default_genesis",
+            '"max_payload_size_bytes":22020096',
+            "default Taira genesis DA admits the complete privacy block corridor",
+        ),
+        (
+            "taira_default_genesis",
+            '"max_tx_bytes": 10485760',
+            "default Taira genesis admits one maximum privacy transaction",
         ),
         (
             "taira_readme",
             "(validator_count + authenticated_non_validator_sources + 1) *\n"
             "     body_source_bytes",
             "Taira operator documentation states N+H+1 byte scaling",
+        ),
+        (
+            "taira_readme",
+            "`[network] max_frame_bytes_tx_gossip = 11534336` (11 MiB plaintext),\n"
+            "     `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and\n"
+            "     `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes)",
+            "Taira operator documentation pins the derived privacy transport corridor",
         ),
     )
     for role, fragment, description in deployment_fragments:

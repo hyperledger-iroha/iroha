@@ -55,9 +55,8 @@ const tx = buildTransaction({
 });
 
 tx.sign({publicKey, privateKey});
-const receipt = await client.submitTransaction(tx);
-const txHash = receipt?.payload?.tx_hash ?? "<pending>";
-console.log('Submitted tx', txHash);
+const hash = await client.submitTransaction(tx);
+console.log('Submitted tx', hash);
 
 const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
 for (const asset of balances.items) {

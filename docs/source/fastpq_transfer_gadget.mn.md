@@ -2,7 +2,7 @@
 lang: mn
 direction: ltr
 source: docs/source/fastpq_transfer_gadget.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
 source_hash: 084add6296c5b884a6d6dc07425aeca9966576f0643f6a7cf555da3fc8586466
 source_last_modified: "2026-01-08T12:24:34.985909+00:00"
@@ -50,11 +50,11 @@ struct TransferDeltaTranscript {
     from_account: AccountId,
     to_account: AccountId,
     asset_definition: AssetDefinitionId,
-    amount: Numeric,
-    from_balance_before: Numeric,
-    from_balance_after: Numeric,
-    to_balance_before: Numeric,
-    to_balance_after: Numeric,
+    amount: Quantity,
+    from_balance_before: Quantity,
+    from_balance_after: Quantity,
+    to_balance_before: Quantity,
+    to_balance_after: Quantity,
     from_merkle_proof: Option<Vec<u8>>,
     to_merkle_proof: Option<Vec<u8>>,
 }
@@ -84,7 +84,9 @@ lands, prover нь нийлэг аргаар түлхүүр/баланс хос�
      - `from_balance_before >= amount` (хуваалцсан RNS задрал бүхий хүрээний хэрэгсэл).
      - `from_balance_after = from_balance_before - amount`.
      - `to_balance_after = to_balance_before + amount`.
-   - Захиалгат хаалганд савлагдсан тул гурван тэгшитгэл нь нэг эгнээний бүлгийг ашигладаг.2. **Посейдоны амлалтын блок**
+   - Захиалгат хаалганд савлагдсан тул гурван тэгшитгэл нь нэг эгнээний бүлгийг ашигладаг.
+
+2. **Посейдоны амлалтын блок**
    - Бусад гаджетуудад ашигласан Poseidon хайлтын хуваалцсан хүснэгтийг ашиглан `poseidon_preimage_digest`-г дахин тооцоолно. Ямар ч дамжуулалт бүрт Посейдоны тойрог замд.
 
 3. **Merkle Path Block**
@@ -96,7 +98,9 @@ lands, prover нь нийлэг аргаар түлхүүр/баланс хос�
 5. **Багцын гогцоо**
    - Хөтөлбөрүүд нь `transfer_asset` бүтээгчдийн давталтын өмнө `transfer_v1_batch_begin()`, дараа нь `transfer_v1_batch_end()` гэж дууддаг. Хамрах хүрээ идэвхтэй байх үед хост шилжүүлэг бүрийг буфер болгож, нэг `TransferAssetBatch` хэлбэрээр дахин тоглуулж, Poseidon/SMT контекстийг багц бүрт нэг удаа дахин ашигладаг. Нэмэлт дельта бүр зөвхөн арифметик болон хоёр навчны чекийг нэмнэ. Транскрипт декодлогч нь одоо олон дельта багцуудыг хүлээн авч `TransferGadgetInput::deltas` хэлбэрээр гаргадаг тул төлөвлөгч Norito-г дахин уншихгүйгээр гэрчүүдийг нугалж болно. Аль хэдийн Norito даацтай (жишээ нь, CLI/SDK) гэрээнүүд нь `transfer_v1_batch_apply(&NoritoBytes<TransferAssetBatch>)` руу залгаснаар хамрах хүрээг бүхэлд нь алгасаж болно.
 
-# Хөтлөгч ба Проверийн өөрчлөлтүүд| Давхарга | Өөрчлөлтүүд |
+# Хөтлөгч ба Проверийн өөрчлөлтүүд
+
+| Давхарга | Өөрчлөлтүүд |
 |-------|---------|
 | `ivm::syscalls` | `transfer_v1_batch_begin` (`0x29`) / `transfer_v1_batch_end` (`0x2A`) нэмснээр програмууд `transfer_v1` олон тооны системийн дуудлагуудыг завсрын ISI004, нэмэх нь `transfer_v1` хаалтанд оруулах боломжтой. (`0x2B`) урьдчилан кодлогдсон багцын хувьд. |
 | `ivm::host` & тестүүд | Үндсэн/Өгөгдмөл хостууд нь хамрах хүрээ идэвхтэй байх үед `transfer_v1`-г багцын хавсралт гэж үздэг бөгөөд `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` гадаргуутай, хуурамч WSV хост нь оролтуудыг хийхээс өмнө буферээр хадгалдаг тул регрессийн тестүүд тодорхойлогддог тэнцвэрийг баталгаажуулдаг. шинэчлэлтүүд.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
@@ -125,7 +129,9 @@ cargo run -p fastpq_prover --bin fastpq_row_bench -- \
   --burn-rows 128 \
   --pretty \
   --output fastpq_row_usage_max.json
-```Гаргасан JSON нь одоо `iroha_cli audit witness`-ийн өгөгдмөлөөр ялгаруулдаг FASTPQ багц олдворуудыг тусгадаг (тэдгээрийг дарахын тулд `--no-fastpq-batches`-ийг дамжуулна уу), тиймээс `scripts/fastpq/check_row_usage.py` ба CI хаалга нь өмнөх өөрчлөлтүүдийг төлөвлөхдөө нийлэг гүйлтийг өөрчилдөг.
+```
+
+Гаргасан JSON нь одоо `iroha_cli audit witness`-ийн өгөгдмөлөөр ялгаруулдаг FASTPQ багц олдворуудыг тусгадаг (тэдгээрийг дарахын тулд `--no-fastpq-batches`-ийг дамжуулна уу), тиймээс `scripts/fastpq/check_row_usage.py` ба CI хаалга нь өмнөх өөрчлөлтүүдийг төлөвлөхдөө нийлэг гүйлтийг өөрчилдөг.
 
 # Дамжуулах төлөвлөгөө
 

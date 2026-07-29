@@ -15,8 +15,6 @@ public final class IrohaPeerWireMessageV1 {
   public static final int HEADER_LENGTH = 84;
   public static final int MAXIMUM_CANONICAL_BYTES =
       IrohaPeerWireLimitsV1.PEER_V1.maximumCanonicalBytes();
-  public static final int MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES =
-      IrohaPeerWireLimitsV1.PEER_V1.maximumOfflineNoteEncodedBytes();
   public static final int MAXIMUM_KAGEMUSHA_ENCODED_BYTES =
       IrohaPeerWireLimitsV1.PEER_V1.maximumKagemushaEncodedBytes();
 

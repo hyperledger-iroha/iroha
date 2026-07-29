@@ -19,6 +19,11 @@
       "import": "./dist/browser.js",
       "types": "./index.d.ts"
     },
+    "./privacy-capabilities": {
+      "browser": "./dist/privacyCapabilities.js",
+      "import": "./dist/privacyCapabilities.js",
+      "types": "./privacy-capabilities.d.ts"
+    },
     "./transaction-codec": {
       "browser": "./dist/transactionCodec.js",
       "import": "./dist/transactionCodec.js",
@@ -107,6 +112,9 @@
       ],
       "browser": [
         "./index.d.ts"
+      ],
+      "privacy-capabilities": [
+        "./privacy-capabilities.d.ts"
       ],
       "transaction-codec": [
         "./transaction-codec.d.ts"
@@ -204,6 +212,7 @@
     "README.md",
     "LICENSE",
     "index.d.ts",
+    "privacy-capabilities.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
     "ivm-artifact-admission-wasm.d.ts",

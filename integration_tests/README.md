@@ -37,6 +37,10 @@ This crate hosts cross-component tests for Iroha.
 
 ## Notes
 - Pipeline block rejection scaffold lives at `tests/pipeline_block_rejected.rs` inside the `core_api` harness and is `#[ignore]` until a deterministic trigger is available.
+- Canonical Jindo activation, pre-activation rejection, exact replay, and
+  restarted-peer catch-up coverage lives in
+  `tests/privacy_exact12_jindo_network.rs` inside the `network_functional`
+  harness.
 - Kagemusha lifecycle coverage lives in the dedicated four-wallet driver and
   exercises top-up, offline multihop split/change, restart recovery, and exact
   redemption under Halo2 verification.

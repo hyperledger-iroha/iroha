@@ -32,6 +32,16 @@ fn ipa_open_envelope_verifies() {
         domain_tag: None,
     };
     let bytes = norito::to_bytes(&env).expect("encode");
+    let alternate = {
+        let flags = norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        norito::to_bytes(&env).expect("encode alternate-layout envelope")
+    };
+    assert_ne!(alternate, bytes);
+    assert!(
+        verify_open_envelope(&alternate).is_err(),
+        "the public verifier must reject a noncanonical Norito layout"
+    );
 
     // Verify via IVM helper
     let ok = verify_open_envelope(&bytes).expect("verifier ran");

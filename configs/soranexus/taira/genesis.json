@@ -3,7 +3,7 @@
   "chain_discriminant": 369,
   "consensus_fingerprint": "0x21591690e3c4d51fb3b81425aa8b9986eb417cc6a211dcfb8bce51c7600a6a7e",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"ADBDBE1CA04BDEDC470B3D43D188A802030310C09D537D459763B66273F5438D"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":22020096,"max_chunk_count":1024},"nexus_amx_context_hash":"ADBDBE1CA04BDEDC470B3D43D188A802030310C09D537D459763B66273F5438D"},
   "crypto": {
     "allowed_curve_ids": [
       1,
@@ -283,8 +283,11 @@
           "max_clock_drift_ms": 1000},
         "transaction": {
           "ivm_bytecode_size": 4194304,
+          "max_decompressed_bytes": 10485760,
           "max_instructions": 4096,
-          "max_signatures": 16
+          "max_metadata_depth": 8,
+          "max_signatures": 16,
+          "max_tx_bytes": 10485760
         }
       },
       "topology": []

@@ -11,22 +11,71 @@ Group=iroha
 WorkingDirectory=/opt/iroha
 Environment=RUST_LOG=info
 Environment=ZK_HALO2_ENABLED=true
-Environment=IROHA_TAIRA_IROHAD_BIN=/opt/iroha/bin/irohad
-Environment=IROHA_TAIRA_CONFIG=/opt/iroha/configs/soranexus/taira/config.toml
+Environment=IROHA_TAIRA_IROHAD_BIN=/usr/local/bin/irohad
 Environment=IROHA_TAIRA_GENESIS=/opt/iroha/configs/soranexus/taira/genesis.json
 Environment=IROHA_TAIRA_INROU_PREREQ_CHECK=/opt/iroha/configs/soranexus/taira/check_inrou_host_prereqs.sh
+Environment=KURA_STORE_DIR=/var/lib/iroha/taira-validator-1
+Environment=SNAPSHOT_STORE_DIR=/var/lib/iroha/taira-validator-1/snapshot
 EnvironmentFile=-/etc/default/taira-irohad
 # Keep the shipped Taira config and genesis explicit so each validator's direct
 # public Torii hostname exposes the curated MCP surface at /v1/mcp.
-ExecStartPre=${IROHA_TAIRA_INROU_PREREQ_CHECK}
-ExecStart=${IROHA_TAIRA_IROHAD_BIN} --sora --config ${IROHA_TAIRA_CONFIG} --genesis-manifest-json ${IROHA_TAIRA_GENESIS}
+ExecStartPre=/usr/bin/test -f ${IROHA_TAIRA_IROHAD_BIN}
+ExecStartPre=/usr/bin/test ! -L ${IROHA_TAIRA_IROHAD_BIN}
+ExecStartPre=/usr/bin/test -x ${IROHA_TAIRA_IROHAD_BIN}
+ExecStartPre=/usr/bin/test -f ${IROHA_TAIRA_INROU_PREREQ_CHECK}
+ExecStartPre=/usr/bin/test ! -L ${IROHA_TAIRA_INROU_PREREQ_CHECK}
+ExecStartPre=/usr/bin/test -x ${IROHA_TAIRA_INROU_PREREQ_CHECK}
+ExecStartPre=/usr/bin/test -s /etc/iroha/taira-validator/config.toml
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/config.toml
+ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/config.toml
+ExecStartPre=/usr/bin/test -s ${IROHA_TAIRA_GENESIS}
+ExecStartPre=/usr/bin/test ! -L ${IROHA_TAIRA_GENESIS}
+ExecStartPre=/usr/bin/test -r ${IROHA_TAIRA_GENESIS}
+ExecStartPre=/usr/bin/test ${KURA_STORE_DIR} = /var/lib/iroha/taira-validator-1
+ExecStartPre=/usr/bin/test ${SNAPSHOT_STORE_DIR} = /var/lib/iroha/taira-validator-1/snapshot
+ExecStartPre=/usr/bin/test -d /var/lib/iroha/taira-validator-1
+ExecStartPre=/usr/bin/test ! -L /var/lib/iroha/taira-validator-1
+ExecStartPre=/usr/bin/test -r /var/lib/iroha/taira-validator-1
+ExecStartPre=/usr/bin/test -w /var/lib/iroha/taira-validator-1
+ExecStartPre=/usr/bin/test -x /var/lib/iroha/taira-validator-1
+ExecStartPre=/usr/bin/test -d /etc/iroha/taira-validator
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator
+ExecStartPre=/usr/bin/test -d /etc/iroha/taira-validator/runtime
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/runtime
+ExecStartPre=/usr/bin/test -s /etc/iroha/taira-validator/runtime/onboarding-signer.key
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/runtime/onboarding-signer.key
+ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/runtime/onboarding-signer.key
+ExecStartPre=/usr/bin/test -s /etc/iroha/taira-validator/runtime/faucet-signer.key
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/runtime/faucet-signer.key
+ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/runtime/faucet-signer.key
+ExecStartPre=/usr/bin/test -d /etc/iroha/taira-validator/manifests
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/manifests
+ExecStartPre=/usr/bin/test -s /etc/iroha/taira-validator/manifests/governance.manifest.json
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/manifests/governance.manifest.json
+ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/manifests/governance.manifest.json
+ExecStartPre=/usr/bin/test -d /etc/iroha/taira-validator/sorafs_admission
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/sorafs_admission
+ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/sorafs_admission
+ExecStartPre=/usr/bin/test -x /etc/iroha/taira-validator/sorafs_admission
+ExecStartPre=/usr/bin/test -d /etc/iroha/taira-validator/kagemusha
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/kagemusha
+ExecStartPre=/usr/bin/test -s /etc/iroha/taira-validator/kagemusha/release-policy.norito
+ExecStartPre=/usr/bin/test ! -L /etc/iroha/taira-validator/kagemusha/release-policy.norito
+ExecStartPre=/usr/bin/test -r /etc/iroha/taira-validator/kagemusha/release-policy.norito
+ExecStartPre=/usr/bin/test -d /var/lib/iroha/taira-validator/kagemusha/v4
+ExecStartPre=/usr/bin/test ! -L /var/lib/iroha/taira-validator/kagemusha/v4
+ExecStartPre=/usr/bin/test -r /var/lib/iroha/taira-validator/kagemusha/v4
+ExecStartPre=/usr/bin/test -x /var/lib/iroha/taira-validator/kagemusha/v4
+ExecStartPre=/usr/bin/env -- IROHA_TAIRA_KAGEMUSHA_ARTIFACT_DIR=/var/lib/iroha/taira-validator/kagemusha/v4 /opt/iroha/scripts/docker_entrypoint.sh --validate-taira-production-config /etc/iroha/taira-validator/config.toml
+ExecStartPre=/usr/bin/env -- ${IROHA_TAIRA_INROU_PREREQ_CHECK}
+ExecStart=/usr/bin/env -- ${IROHA_TAIRA_IROHAD_BIN} --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json ${IROHA_TAIRA_GENESIS}
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=/opt/iroha/storage
+ReadWritePaths=/var/lib/iroha/taira-validator-1 /var/lib/iroha/taira-validator
 
 [Install]
 WantedBy=multi-user.target

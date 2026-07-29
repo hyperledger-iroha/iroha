@@ -48,6 +48,12 @@ jobs:
         run: npm run build:dist
       - name: Verify source, browser, builder, and packaged numeric paths
         run: node --test test/numericV1*.test.js test/instructionBuilders.test.js
+      - name: Verify exact dynamic-access manifest policies
+        run: >-
+          node --test
+          --test-name-pattern="dynamic-access|dynamic access|compiler manifest boundary rejects unknown"
+          test/kotodamaCompiler.test.js
+          test/toriiClient.test.js
 
   kotlin:
     runs-on: ubuntu-latest
@@ -63,9 +69,10 @@ jobs:
           java-version: "21"
           cache: gradle
       - run: chmod +x ./gradlew
-      - name: Verify Kotlin Numeric V1 and quantity builders
+      - name: Verify Kotlin Numeric V1, quantity builders, and manifest policies
         run: >-
           ./gradlew :core-jvm:test
+          --tests org.hyperledger.iroha.sdk.client.ContractManifestTest
           --tests org.hyperledger.iroha.sdk.numeric.NumericV1Test
           --tests org.hyperledger.iroha.sdk.core.model.instructions.InstructionQuantityTest
           --tests org.hyperledger.iroha.sdk.nexus.UaidJsonParserQuantityTest
@@ -85,12 +92,14 @@ jobs:
           java-version: "21"
           cache: gradle
       - run: chmod +x ./gradlew
-      - name: Verify Java Numeric V1 and quantity builders
+      - name: Verify Java Numeric V1, quantity builders, and manifest policies
+        env:
+          ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.client.ContractManifestTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.nexus.UaidJsonParserTests
         run: >-
           ./gradlew :core:test
+          --tests org.hyperledger.iroha.android.GradleHarnessTests
           --tests org.hyperledger.iroha.android.numeric.NumericV1Tests
           --tests org.hyperledger.iroha.android.model.instructions.InstructionQuantityTests
-          --tests org.hyperledger.iroha.android.nexus.UaidJsonParserTests
           --console=plain
 
   swift:
@@ -101,11 +110,12 @@ jobs:
         working-directory: IrohaSwift
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Verify Swift Numeric V1 and quantity builders
+      - name: Verify Swift Numeric V1, quantity builders, and manifest policies
         run: |
           swift test --filter NumericV1Tests
           swift test --filter TransactionEncoderValidationTests
           swift test --filter ToriiQuantityReadbackTests
+          swift test --filter testContractManifestDynamicAccessHints
 
   python:
     runs-on: ubuntu-latest
@@ -126,11 +136,12 @@ jobs:
           --require-hashes
           --only-binary=:all:
           -r requirements-ci.lock
-      - name: Verify Python Numeric V1 fixture parity
+      - name: Verify Python Numeric V1 fixture and manifest policy parity
         env:
           PYTHONPATH: src:../norito_py/src:..
         run: >-
           python -m pytest
+          tests/client_contract_manifest_test.py
           tests/dependency_lock_test.py
           tests/numeric_v1_test.py
           tests/numeric_v1_quantity_test.py
@@ -146,8 +157,8 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 8.0.x
-      - name: Verify .NET Numeric V1 and quantity builders
+      - name: Verify .NET Numeric V1, quantity builders, and manifest policies
         run: >-
           dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj
           --configuration Release
-          --filter "FullyQualifiedName~NumericV1Tests|FullyQualifiedName~AssetQuantityInstructionTests"
+          --filter "FullyQualifiedName~NumericV1Tests|FullyQualifiedName~AssetQuantityInstructionTests|FullyQualifiedName~ContractManifestTests"

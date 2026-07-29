@@ -40,7 +40,6 @@ use thiserror::Error;
 
 #[cfg(test)]
 use crate::sumeragi::v2_core::{
-    production_reliable_flush_application_refines_source_lane_kernel,
     production_reliable_flush_trace_refines_outbound_ownership_kernel,
     production_reliable_flush_two_phase_link_kernel,
 };

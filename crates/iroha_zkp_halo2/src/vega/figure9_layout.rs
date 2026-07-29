@@ -4,6 +4,16 @@ use core::{cmp::Ordering, ops::Range};
 
 use once_cell::sync::Lazy;
 
+use super::{
+    VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
+    VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1, VEGA_MDL_MSO_PAYLOAD_BYTES_V1,
+};
+#[cfg(test)]
+use super::{
+    VEGA_MDL_BIRTH_RANDOM_BYTES_V1, VEGA_MDL_FULL_DATE_TEXT_BYTES_V1,
+    VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
+};
+
 pub(super) static FIGURE9_LAYOUT: Lazy<Figure9Layout> = Lazy::new(Figure9Layout::build);
 
 #[derive(Clone, Debug)]
@@ -92,6 +102,15 @@ impl Figure9Layout {
             cbor_bytes(&[]),
             cbor_bytes(&mso_payload),
         ]);
+        assert_eq!(
+            issuer_template.len(),
+            VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1
+        );
+        assert_eq!(mso_payload.len(), VEGA_MDL_MSO_PAYLOAD_BYTES_V1);
+        assert_eq!(
+            birth_template.len(),
+            VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1
+        );
 
         let issuer_birth_digest = find_exact(&issuer_template, &BIRTH_DIGEST);
         let issuer_device_x = find_exact(&issuer_template, &DEVICE_X);
@@ -224,8 +243,14 @@ mod tests {
     #[test]
     fn closed_layout_has_stable_lengths_offsets_and_no_unclassified_bytes() {
         let layout = &*FIGURE9_LAYOUT;
-        assert_eq!(layout.issuer_template.len(), 368);
-        assert_eq!(layout.birth_template.len(), 92);
+        assert_eq!(
+            layout.issuer_template.len(),
+            VEGA_MDL_ISSUER_AUTHENTICATION_SIG_STRUCTURE_BYTES_V1
+        );
+        assert_eq!(
+            layout.birth_template.len(),
+            VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1
+        );
         assert_eq!(layout.issuer_birth_digest, 212..244);
         assert_eq!(layout.issuer_device_x, 277..309);
         assert_eq!(layout.issuer_device_y, 312..344);
@@ -234,7 +259,31 @@ mod tests {
         assert_eq!(layout.issuer_valid_until_datetime, 156..176);
         assert_eq!(layout.birth_random, 13..29);
         assert_eq!(layout.birth_date, 53..63);
+        assert_eq!(
+            layout.issuer_signed_datetime.len(),
+            VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1
+        );
+        assert_eq!(
+            layout.issuer_valid_from_datetime.len(),
+            VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1
+        );
+        assert_eq!(
+            layout.issuer_valid_until_datetime.len(),
+            VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1
+        );
+        assert_eq!(layout.birth_random.len(), VEGA_MDL_BIRTH_RANDOM_BYTES_V1);
+        assert_eq!(layout.birth_date.len(), VEGA_MDL_FULL_DATE_TEXT_BYTES_V1);
         assert_eq!(layout.issuer_fixed.len(), layout.issuer_template.len());
         assert_eq!(layout.birth_fixed.len(), layout.birth_template.len());
+        assert_eq!(
+            (layout.issuer_template.len() + 9).div_ceil(64),
+            6,
+            "368-byte issuer message requires six SHA-256 blocks"
+        );
+        assert_eq!(
+            (layout.birth_template.len() + 9).div_ceil(64),
+            2,
+            "92-byte birth item requires two SHA-256 blocks"
+        );
     }
 }

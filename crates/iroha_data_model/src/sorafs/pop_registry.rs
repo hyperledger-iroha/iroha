@@ -145,7 +145,7 @@ impl PopIssuerPolicyV1 {
     ///
     /// Returns an error when Norito cannot encode the policy.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+        let encoded = norito::encode_canonical(self)?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(POP_ISSUER_POLICY_DIGEST_DOMAIN_V1);
         hasher.update(&encoded);
@@ -732,6 +732,34 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
 
+    fn encode_with_alternate_norito_layout<T: norito::NoritoSerialize>(value: &T) -> Vec<u8> {
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        norito::to_bytes(value).expect("encode alternate-layout PoP registry value")
+    }
+
+    fn assert_canonical_norito_round_trip<T>(value: &T)
+    where
+        T: core::fmt::Debug + PartialEq + norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let encoded = norito::encode_canonical(value).expect("encode canonical PoP registry value");
+        let decoded: T =
+            norito::decode_canonical(&encoded).expect("decode canonical PoP registry value");
+        assert_eq!(&decoded, value);
+
+        let alternate = encode_with_alternate_norito_layout(value);
+        assert_ne!(alternate, encoded);
+        let alternate_decoded: T = norito::decode_from_bytes(&alternate)
+            .expect("alternate-layout PoP registry value remains structurally decodable");
+        assert_eq!(&alternate_decoded, value);
+        assert!(matches!(
+            norito::decode_canonical::<T>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
+    }
+
     fn keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("valid test key")
     }
@@ -781,7 +809,21 @@ mod tests {
     fn policy_validation_and_digest_are_deterministic() {
         let policy = policy();
         policy.validate().expect("valid policy");
-        assert_eq!(policy.digest().unwrap(), policy.digest().unwrap());
+        let digest = policy.digest().expect("digest policy");
+        assert_eq!(digest, policy.digest().expect("repeat policy digest"));
+        assert_canonical_norito_round_trip(&policy);
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_digest = policy
+            .digest()
+            .expect("digest policy under alternate ambient layout");
+        drop(ambient);
+        assert_eq!(
+            ambient_digest, digest,
+            "issuer-policy identity must ignore ambient Norito layout"
+        );
 
         let mut invalid = policy.clone();
         invalid.issuer_id = "POP-ISSUER-NONCANONICAL".to_owned();
@@ -856,8 +898,6 @@ mod tests {
             audit_head: Some([8; 32]),
             updated_at_epoch: 9,
         };
-        let encoded = norito::to_bytes(&record).expect("encode");
-        let decoded: PopRegistryStatusV1 = norito::decode_from_bytes(&encoded).expect("decode");
-        assert_eq!(decoded, record);
+        assert_canonical_norito_round_trip(&record);
     }
 }

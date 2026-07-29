@@ -60,6 +60,18 @@ fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
     vm.alloc_input_tlv(&tlv).expect("alloc input")
 }
 
+fn canonical_norito_bytes<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
+    let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    norito::to_bytes(value).expect("encode canonical Norito fixture")
+}
+
+fn alternate_norito_bytes<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
+    let alternate_flags =
+        norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+    let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+    norito::to_bytes(value).expect("encode alternate-layout Norito fixture")
+}
+
 fn sample_wsv_caller() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -226,6 +238,482 @@ fn use_handle<T: IVMHost>(
         None => vm.set_register(12, 0),
     }
     host.syscall(syscalls::SYSCALL_USE_ASSET_HANDLE, vm)
+}
+
+fn use_handle_payloads<T: IVMHost>(
+    vm: &mut IVM,
+    host: &mut T,
+    handle_payload: &[u8],
+    intent_payload: &[u8],
+) -> Result<u64, VMError> {
+    use_handle_payloads_with_proof(vm, host, handle_payload, intent_payload, None)
+}
+
+fn use_handle_payloads_with_proof<T: IVMHost>(
+    vm: &mut IVM,
+    host: &mut T,
+    handle_payload: &[u8],
+    intent_payload: &[u8],
+    proof_payload: Option<&[u8]>,
+) -> Result<u64, VMError> {
+    let handle_ptr = store_tlv(vm, PointerType::AssetHandle, handle_payload);
+    let intent_ptr = store_tlv(vm, PointerType::NoritoBytes, intent_payload);
+    vm.set_register(10, handle_ptr);
+    vm.set_register(11, intent_ptr);
+    if let Some(proof_payload) = proof_payload {
+        let proof_ptr = store_tlv(vm, PointerType::ProofBlob, proof_payload);
+        vm.set_register(12, proof_ptr);
+    } else {
+        vm.set_register(12, 0);
+    }
+    host.syscall(syscalls::SYSCALL_USE_ASSET_HANDLE, vm)
+}
+
+fn adversarial_wsv_host(dsid: DataSpaceId, manifest_root: [u8; 32]) -> WsvHost {
+    let mut wsv = MockWorldStateView::new();
+    wsv.set_axt_policy(
+        dsid,
+        DataspaceAxtPolicy {
+            manifest_root,
+            target_lane: LaneId::new(0),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 1,
+        },
+    );
+    WsvHost::new_with_subject(wsv, sample_wsv_caller(), HashMap::new())
+        .with_axt_policy(Arc::new(axt::AllowAllAxtPolicy))
+}
+
+fn adversarial_descriptor(dsid: DataSpaceId) -> axt::AxtDescriptor {
+    axt::AxtDescriptor {
+        dsids: vec![dsid],
+        touches: vec![axt::AxtTouchSpec {
+            dsid,
+            read: vec!["orders".into()],
+            write: vec!["ledger".into()],
+        }],
+    }
+}
+
+fn adversarial_manifest() -> TouchManifest {
+    TouchManifest {
+        read: vec!["orders/item".into()],
+        write: vec!["ledger/item".into()],
+    }
+}
+
+fn assert_alternate_layouts_rejected_without_state_mutation<T: IVMHost>(
+    mut host: T,
+    dsid: DataSpaceId,
+    manifest_root: [u8; 32],
+) {
+    let mut vm = IVM::new(1_000_000);
+    let descriptor = adversarial_descriptor(dsid);
+    let manifest = adversarial_manifest();
+
+    let descriptor_bytes = canonical_norito_bytes(&descriptor);
+    let alternate_descriptor = alternate_norito_bytes(&descriptor);
+    assert_ne!(alternate_descriptor, descriptor_bytes);
+    assert_eq!(
+        norito::decode_from_bytes::<axt::AxtDescriptor>(&alternate_descriptor)
+            .expect("ordinary Norito decodes alternate-layout descriptor"),
+        descriptor
+    );
+    let descriptor_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &alternate_descriptor);
+    vm.set_register(10, descriptor_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+
+    let dsid_bytes = canonical_norito_bytes(&dsid);
+    let dsid_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &dsid_bytes);
+    let manifest_bytes = canonical_norito_bytes(&manifest);
+    let manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &manifest_bytes);
+    vm.set_register(10, dsid_ptr);
+    vm.set_register(11, manifest_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Err(VMError::PermissionDenied),
+        "a rejected begin must not install partial AXT state"
+    );
+
+    let descriptor_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &descriptor_bytes);
+    vm.set_register(10, descriptor_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(descriptor_bytes.len()))
+    );
+
+    let alternate_dsid = alternate_norito_bytes(&dsid);
+    assert_ne!(alternate_dsid, dsid_bytes);
+    assert_eq!(
+        norito::decode_from_bytes::<DataSpaceId>(&alternate_dsid)
+            .expect("ordinary Norito decodes alternate-layout dataspace"),
+        dsid
+    );
+    let alternate_dsid_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &alternate_dsid);
+    vm.set_register(10, alternate_dsid_ptr);
+    vm.set_register(11, manifest_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+
+    let alternate_manifest = alternate_norito_bytes(&manifest);
+    assert_ne!(alternate_manifest, manifest_bytes);
+    assert_eq!(
+        norito::decode_from_bytes::<TouchManifest>(&alternate_manifest)
+            .expect("ordinary Norito decodes alternate-layout manifest"),
+        manifest
+    );
+    let alternate_manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &alternate_manifest);
+    vm.set_register(10, dsid_ptr);
+    vm.set_register(11, alternate_manifest_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+
+    vm.set_register(10, dsid_ptr);
+    vm.set_register(11, manifest_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(
+            dsid_bytes.len().saturating_add(manifest_bytes.len())
+        )),
+        "alternate-layout touch failures must not record the dataspace"
+    );
+
+    let proof = proof_blob_for(dsid, manifest_root, b"alternate-layout", Some(50));
+    let proof_bytes = canonical_norito_bytes(&proof);
+    let alternate_proof = alternate_norito_bytes(&proof);
+    assert_ne!(alternate_proof, proof_bytes);
+    assert_eq!(
+        norito::decode_from_bytes::<axt::ProofBlob>(&alternate_proof)
+            .expect("ordinary Norito decodes alternate-layout proof"),
+        proof
+    );
+    let proof_ptr = store_tlv(&mut vm, PointerType::ProofBlob, &alternate_proof);
+    vm.set_register(10, dsid_ptr);
+    vm.set_register(11, proof_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+
+    let envelope = norito::decode_from_bytes::<axt::AxtProofEnvelope>(&proof.payload)
+        .expect("decode canonical proof envelope");
+    let alternate_envelope = alternate_norito_bytes(&envelope);
+    assert_ne!(alternate_envelope, proof.payload);
+    assert_eq!(
+        norito::decode_from_bytes::<axt::AxtProofEnvelope>(&alternate_envelope)
+            .expect("ordinary Norito decodes alternate-layout proof envelope"),
+        envelope
+    );
+    let nested_alternate_proof = axt::ProofBlob {
+        payload: alternate_envelope,
+        expiry_slot: proof.expiry_slot,
+    };
+    let nested_alternate_proof_bytes = canonical_norito_bytes(&nested_alternate_proof);
+    let proof_ptr = store_tlv(
+        &mut vm,
+        PointerType::ProofBlob,
+        &nested_alternate_proof_bytes,
+    );
+    vm.set_register(10, dsid_ptr);
+    vm.set_register(11, proof_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_VERIFY_DS_PROOF, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+
+    let binding = axt::compute_binding(&descriptor).expect("compute descriptor binding");
+    let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+    let mut handle = build_handle(dsid, binding, &["transfer"], account, 1, Some(1));
+    handle.group_binding.composability_group_id = vec![0xA5; 32];
+    handle.manifest_view_root = manifest_root.to_vec();
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: account.into(),
+            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            amount: Some(Quantity::from(1_u64)),
+        },
+    };
+    let handle_bytes = canonical_norito_bytes(&handle);
+    let intent_bytes = canonical_norito_bytes(&intent);
+    let alternate_handle = alternate_norito_bytes(&handle);
+    let alternate_intent = alternate_norito_bytes(&intent);
+    assert_ne!(alternate_handle, handle_bytes);
+    assert_ne!(alternate_intent, intent_bytes);
+    assert_eq!(
+        norito::decode_from_bytes::<AssetHandle>(&alternate_handle)
+            .expect("ordinary Norito decodes alternate-layout handle"),
+        handle
+    );
+    assert_eq!(
+        norito::decode_from_bytes::<RemoteSpendIntent>(&alternate_intent)
+            .expect("ordinary Norito decodes alternate-layout intent"),
+        intent
+    );
+    assert_eq!(
+        use_handle_payloads_with_proof(
+            &mut vm,
+            &mut host,
+            &handle_bytes,
+            &intent_bytes,
+            Some(&alternate_proof),
+        ),
+        Err(VMError::NoritoInvalid)
+    );
+    assert_eq!(
+        use_handle_payloads_with_proof(
+            &mut vm,
+            &mut host,
+            &handle_bytes,
+            &intent_bytes,
+            Some(&nested_alternate_proof_bytes),
+        ),
+        Err(VMError::NoritoInvalid)
+    );
+    assert_eq!(
+        use_handle_payloads(&mut vm, &mut host, &alternate_handle, &intent_bytes),
+        Err(VMError::NoritoInvalid)
+    );
+    assert_eq!(
+        use_handle_payloads(&mut vm, &mut host, &handle_bytes, &alternate_intent),
+        Err(VMError::NoritoInvalid)
+    );
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &handle, &intent, None),
+        Ok(use_handle_gas(&handle, &intent, None)),
+        "rejected proof/handle layouts must not cache a proof or consume the handle nonce"
+    );
+}
+
+fn assert_noncanonical_touch_keys_rejected_without_state_mutation<T: IVMHost>(
+    mut host: T,
+    dsid: DataSpaceId,
+) {
+    let mut vm = IVM::new(1_000_000);
+    let descriptor = adversarial_descriptor(dsid);
+    let invalid_paths = [
+        ("empty", vec!["".to_owned()]),
+        ("whitespace", vec![" orders".to_owned()]),
+        (
+            "duplicate",
+            vec!["orders/item".to_owned(), "orders/item".to_owned()],
+        ),
+        (
+            "unsorted",
+            vec!["orders/z".to_owned(), "orders/a".to_owned()],
+        ),
+    ];
+
+    for (label, paths) in &invalid_paths {
+        let mut invalid = descriptor.clone();
+        invalid.touches[0].read.clone_from(paths);
+        let payload = canonical_norito_bytes(&invalid);
+        let ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &payload);
+        vm.set_register(10, ptr);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+            Err(VMError::PermissionDenied),
+            "{label} descriptor touch keys must be rejected"
+        );
+    }
+
+    let dsid_bytes = canonical_norito_bytes(&dsid);
+    let dsid_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &dsid_bytes);
+    let valid_manifest = adversarial_manifest();
+    let valid_manifest_bytes = canonical_norito_bytes(&valid_manifest);
+    let valid_manifest_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &valid_manifest_bytes);
+    vm.set_register(10, dsid_ptr);
+    vm.set_register(11, 0);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Err(VMError::PermissionDenied),
+        "rejected descriptors must not install partial AXT state"
+    );
+
+    let descriptor_bytes = canonical_norito_bytes(&descriptor);
+    let descriptor_ptr = store_tlv(&mut vm, PointerType::AxtDescriptor, &descriptor_bytes);
+    vm.set_register(10, descriptor_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_BEGIN, &mut vm),
+        Ok(axt_gas(descriptor_bytes.len()))
+    );
+
+    for (label, paths) in invalid_paths {
+        let invalid = TouchManifest {
+            read: paths,
+            write: Vec::new(),
+        };
+        let payload = canonical_norito_bytes(&invalid);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, dsid_ptr);
+        vm.set_register(11, ptr);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+            Err(VMError::NoritoInvalid),
+            "{label} runtime touch keys must be rejected"
+        );
+    }
+
+    vm.set_register(10, dsid_ptr);
+    vm.set_register(11, valid_manifest_ptr);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_AXT_TOUCH, &mut vm),
+        Ok(axt_gas(
+            dsid_bytes.len().saturating_add(valid_manifest_bytes.len())
+        )),
+        "rejected manifests must not record a partial touch"
+    );
+}
+
+fn assert_invalid_handle_values_rejected_without_state_mutation<T: IVMHost>(
+    mut host: T,
+    dsid: DataSpaceId,
+    manifest_root: [u8; 32],
+) {
+    let mut vm = IVM::new(1_000_000);
+    let descriptor = adversarial_descriptor(dsid);
+    let manifest = adversarial_manifest();
+    begin_with_touch(&mut vm, &mut host, &descriptor, &manifest);
+
+    let binding = axt::compute_binding(&descriptor).expect("compute descriptor binding");
+    let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+    let mut handle = build_handle(dsid, binding, &["transfer"], account, 1, Some(1));
+    handle.group_binding.composability_group_id = vec![0x5A; 32];
+    handle.manifest_view_root = manifest_root.to_vec();
+    let intent = RemoteSpendIntent {
+        asset_dsid: dsid,
+        op: SpendOp {
+            kind: "transfer".into(),
+            from: account.into(),
+            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
+            amount: Some(Quantity::from(1_u64)),
+        },
+    };
+
+    let mut invalid_handles = Vec::new();
+    let mut invalid = handle.clone();
+    invalid.scope = vec![" transfer".into()];
+    invalid_handles.push(("whitespace scope", invalid, VMError::NoritoInvalid));
+    let mut invalid = handle.clone();
+    invalid.scope = vec!["transfer".into(), "transfer".into()];
+    invalid_handles.push(("duplicate scope", invalid, VMError::NoritoInvalid));
+    let mut invalid = handle.clone();
+    invalid.scope = vec!["withdraw".into(), "transfer".into()];
+    invalid_handles.push(("unsorted scope", invalid, VMError::NoritoInvalid));
+    let mut invalid = handle.clone();
+    invalid.subject.account.push(' ');
+    invalid_handles.push(("whitespace subject", invalid, VMError::NoritoInvalid));
+    let mut invalid = handle.clone();
+    invalid.budget.per_use = Some(Quantity::zero());
+    invalid_handles.push(("zero per-use budget", invalid, VMError::PermissionDenied));
+
+    let intent_bytes = canonical_norito_bytes(&intent);
+    for (label, invalid, expected) in invalid_handles {
+        assert_eq!(
+            use_handle_payloads(
+                &mut vm,
+                &mut host,
+                &canonical_norito_bytes(&invalid),
+                &intent_bytes,
+            ),
+            Err(expected),
+            "{label} must be rejected"
+        );
+    }
+
+    let mut invalid_intents = Vec::new();
+    let mut invalid = intent.clone();
+    invalid.op.kind.clear();
+    invalid_intents.push(("empty operation", invalid, VMError::NoritoInvalid));
+    let mut invalid = intent.clone();
+    invalid.op.from.push(' ');
+    invalid_intents.push(("whitespace source", invalid, VMError::NoritoInvalid));
+    let mut invalid = intent.clone();
+    invalid.op.to.clear();
+    invalid_intents.push(("empty destination", invalid, VMError::NoritoInvalid));
+    let mut invalid = intent.clone();
+    invalid.op.amount = Some(Quantity::zero());
+    invalid_intents.push(("zero amount", invalid, VMError::PermissionDenied));
+
+    let handle_bytes = canonical_norito_bytes(&handle);
+    for (label, invalid, expected) in invalid_intents {
+        assert_eq!(
+            use_handle_payloads(
+                &mut vm,
+                &mut host,
+                &handle_bytes,
+                &canonical_norito_bytes(&invalid),
+            ),
+            Err(expected),
+            "{label} must be rejected"
+        );
+    }
+
+    assert_eq!(
+        use_handle(&mut vm, &mut host, &handle, &intent, None),
+        Ok(use_handle_gas(&handle, &intent, None)),
+        "rejected values must not consume the handle nonce or budget"
+    );
+}
+
+#[test]
+fn axt_hosts_reject_alternate_norito_layouts_without_mutating_in_flight_state() {
+    let manifest_root = [0x41; 32];
+    let default_dsid = DataSpaceId::new(501);
+    assert_alternate_layouts_rejected_without_state_mutation(
+        DefaultHost::new(),
+        default_dsid,
+        manifest_root,
+    );
+
+    let wsv_dsid = DataSpaceId::new(502);
+    assert_alternate_layouts_rejected_without_state_mutation(
+        adversarial_wsv_host(wsv_dsid, manifest_root),
+        wsv_dsid,
+        manifest_root,
+    );
+}
+
+#[test]
+fn axt_hosts_reject_noncanonical_touch_keys_without_recording_touches() {
+    let default_dsid = DataSpaceId::new(503);
+    assert_noncanonical_touch_keys_rejected_without_state_mutation(
+        DefaultHost::new(),
+        default_dsid,
+    );
+
+    let wsv_dsid = DataSpaceId::new(504);
+    assert_noncanonical_touch_keys_rejected_without_state_mutation(
+        adversarial_wsv_host(wsv_dsid, [0x42; 32]),
+        wsv_dsid,
+    );
+}
+
+#[test]
+fn axt_hosts_reject_invalid_handle_and_intent_values_without_recording_usage() {
+    let manifest_root = [0x43; 32];
+    let default_dsid = DataSpaceId::new(505);
+    assert_invalid_handle_values_rejected_without_state_mutation(
+        DefaultHost::new(),
+        default_dsid,
+        manifest_root,
+    );
+
+    let wsv_dsid = DataSpaceId::new(506);
+    assert_invalid_handle_values_rejected_without_state_mutation(
+        adversarial_wsv_host(wsv_dsid, manifest_root),
+        wsv_dsid,
+        manifest_root,
+    );
 }
 
 #[test]
@@ -1003,7 +1491,7 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
     empty_group.group_binding.composability_group_id.clear();
     assert!(matches!(
         use_handle(&mut vm, &mut host, &empty_group, &intent, Some(&proof)),
-        Err(VMError::PermissionDenied)
+        Err(VMError::NoritoInvalid)
     ));
 }
 
@@ -1819,7 +2307,8 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
     };
     let mut host =
         WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
-            .with_axt_policy_snapshot(policy_snapshot);
+            .with_axt_policy_snapshot(policy_snapshot)
+            .expect("canonical policy snapshot");
 
     let descriptor = axt::AxtDescriptor {
         dsids: vec![dsid],
@@ -1862,6 +2351,35 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         use_handle(&mut vm, &mut host, &ok_lane, &intent, Some(&proof)),
         Err(VMError::PermissionDenied)
     ));
+}
+
+#[test]
+fn wsv_host_rejects_noncanonical_policy_snapshot_without_panicking() {
+    let dsid = DataSpaceId::new(130);
+    let entries = vec![AxtPolicyBinding {
+        dsid,
+        policy: AxtPolicyEntry {
+            manifest_root: [0x22; 32],
+            target_lane: LaneId::new(4),
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 0,
+        },
+    }];
+    let policy_snapshot = AxtPolicySnapshot {
+        version: 1,
+        entries,
+    };
+
+    assert!(
+        WsvHost::new_with_subject(
+            MockWorldStateView::new(),
+            sample_wsv_caller(),
+            HashMap::new(),
+        )
+        .with_axt_policy_snapshot(policy_snapshot)
+        .is_err()
+    );
 }
 
 #[test]

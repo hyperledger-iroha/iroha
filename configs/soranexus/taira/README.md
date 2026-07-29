@@ -11,7 +11,7 @@ deployment.
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
 - Consensus protocol: Sumeragi v2 state machine, wire revision 3 only (`wire_protocol_version = 3`)
 - Timing profile: 1,000 ms block cadence and one absolute 10,000 ms round deadline
-- Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
+- Candidate bounds: 96 transactions, 21 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
   geometry come from signed genesis, not a mutable local mode or RBC selector
 
@@ -109,12 +109,13 @@ config rather than wrapper-local defaults:
   the signed rollout canary.
 - `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
   `iroha` / `sorafs_manifest_builder` / `sorafs_tx_stdin_builder` build plus the
-  checked-in Taira config bundle into one timestamped
-  rollout artifact, building `irohad` with
-  `--features embedded-soracloud-runtime`, running the focused SoraSwap
-  deploy-route router regression plus the three-hop nested transfer canary
-  before packaging, and recording the git revision plus pre-bundle checks in
-  `rollout.manifest.json`.
+  checked-in Taira config bundle into one timestamped rollout artifact. It
+  builds `irohad` with the exact production
+  `embedded-soracloud-runtime,zk-stark` features, separately builds the native
+  privacy evidence runner with `privacy-release-evidence`, produces and
+  re-verifies native evidence only after the validator build, runs the focused
+  SoraSwap regressions, and records the frozen workspace-source identity plus
+  release checks in `rollout.manifest.json`.
 - `scripts/render_taira_edge_nginx_conf.py`: renders the shared-edge nginx
   config directly from the same validator roster used for per-validator
   `config.toml` generation so public Torii ingress cannot drift onto stale
@@ -163,6 +164,169 @@ config rather than wrapper-local defaults:
   for `taira.sora.org`, `taira-explorer.sora.org`, and the current
   `taira-validator-{1,2,3,4}.sora.org` direct-hostname layout on a shared host.
 
+## Native privacy release evidence
+
+Every Taira release bundle and Taira validator image must carry native
+end-to-end evidence for the exact 12 privacy protocols. This evidence is a
+post-build release gate, not a source-schema or pre-bundle report:
+
+- the ordinary `irohad` feature graph must not contain
+  `privacy-release-evidence`;
+- `taira_privacy_release_runner` is built separately with that feature after
+  the ordinary validator binary exists;
+- `scripts/compute_workspace_source_manifest.py` freezes the canonical
+  workspace source identity before any Cargo command and recomputes it after
+  the builds, after evidence generation, and before the archive is created;
+- the receipt, fixed-order 48-block stage-artifact bundle, and command manifest
+  are authoritative Norito. Their matching JSON files are mandatory,
+  deterministic projections which the runner decodes, re-encodes, and compares
+  for typed equality;
+- `native_release_expectations_v1.norito` is the authoritative frozen
+  expectation set. Its checked-in JSON projection is equally mandatory for
+  review, and the runner rejects any byte or typed-value disagreement between
+  them;
+- the frozen expectations enforce a peak-RSS ceiling and a generous elapsed
+  ceiling for every exact-12 maximum-shape row. The stage bundle records case
+  descriptors, failure classes, and the canonical valid proof bytes needed for
+  independent audit and reverification. It contains no witnesses or private
+  inputs. Every proof is bounded by its exact protocol ceiling and the 8 MiB
+  Taira consensus cap, and its recorded SHA-256 is recomputed from those bytes.
+
+The validator-image workflow does not send the mutable checkout as the Docker
+context. It freezes the raw-byte-sorted source path list, creates a
+deterministic `iroha-workspace-source-seal-v1` archive containing one explicit
+record for every regular file, directory, symlink, or deletion in that closure,
+and constructs a unique read-only context containing only the Dockerfile,
+source-seal verifier, archive, path list, and checksum controls. The verifier
+rejects path traversal, `.git`, hard links, special files, escaping symlinks,
+duplicates, extras, missing members, size/count overflow, mutated controls, and
+non-empty or symlink extraction destinations before Cargo runs. BuildKit
+recomputes the archive checksum and the canonical workspace manifest from the
+detached extraction before Cargo and again after evidence generation. The
+sealed context also contains the checksum-bound image smoke script. Taira uses
+only the reviewed, digest-pinned preprovisioned builder and runtime bases and
+fails if their required tools are absent; it does not run mutable package
+installation during the release build.
+
+Publication builds the final `BINARIES=irohad kagami` image once, loads and tags
+that single image locally, and uses its packaged `kagami` to generate the
+four-peer smoke bundle exercised by its packaged `irohad`. It then pushes those
+same local tags with the sealed smoke script. Dispatch strings enter shell steps
+only through environment variables and invalid tag components are rejected; the
+immutable tag always carries the full workspace-source digest. Before any push,
+the workflow creates, signs, verifies, and uploads the portable exact-12 release
+authority. Each pushed and registry-reported manifest digest must equal the
+Buildx digest that authority signed. There is no separate smoke build and no
+second publish build with a different binary set.
+
+The bundle stores these files under `provenance/privacy-native/` and includes
+the runner as `bin/taira_privacy_release_runner`. `rollout.manifest.json` and
+`sha256sums.txt` bind the authoritative Norito hashes. The JSON projections are
+for human inspection and cannot replace their paired Norito files.
+
+Before installing a bare-metal bundle, rerun the packaged verifier from the
+bundle root:
+
+```bash
+bundle=/path/to/taira-rollout-...
+source_sha="$(tr -d '\n' < "${bundle}/provenance/privacy-native/workspace-source-manifest.sha256")"
+"${bundle}/bin/taira_privacy_release_runner" verify \
+  --build-profile release \
+  --source-sha256 "${source_sha}" \
+  --exact12-matrix "${bundle}/provenance/privacy-native/exact12-v1.tsv" \
+  --expectations-norito "${bundle}/provenance/privacy-native/expectations-v1.norito" \
+  --expectations-json "${bundle}/provenance/privacy-native/expectations-v1.json" \
+  --cargo-lock "${bundle}/provenance/Cargo.lock" \
+  --validator-binary "${bundle}/bin/irohad" \
+  --command-manifest-norito "${bundle}/provenance/privacy-native/command-manifest-v1.norito" \
+  --command-manifest-json "${bundle}/provenance/privacy-native/command-manifest-v1.json" \
+  --stage-artifacts-norito "${bundle}/provenance/privacy-native/stage-artifacts-v1.norito" \
+  --stage-artifacts-json "${bundle}/provenance/privacy-native/stage-artifacts-v1.json" \
+  --receipt-norito "${bundle}/provenance/privacy-native/receipt-v1.norito" \
+  --receipt-json "${bundle}/provenance/privacy-native/receipt-v1.json"
+```
+
+For a container image, the equivalent runner is
+`/usr/local/bin/taira_privacy_release_runner`; use the same filenames under
+`/opt/iroha/provenance/privacy-native/` and
+`/opt/iroha/provenance/Cargo.lock`. Image construction already runs this
+bundled-path verification, but operators should repeat it when admitting an
+image into the rollout registry.
+
+A JSON-only `privacy-release.json`, the retired
+`taira_privacy_prebundle_gate` output, a test log, or a report generated before
+the final validator binary exists is not native privacy release evidence and
+must not be attached to a Taira rollout ticket as though it were.
+
+## Signed release authority
+
+A release-profile bundle or validator image is not a Taira release candidate
+until its portable Ed25519 authority tuple passes. Production builders require
+five paths/pins provisioned outside the checkout:
+
+- `TAIRA_RELEASE_EXTERNAL_SIGNER_PATH`: reviewed signer accepting the canonical
+  manifest path and one create-new raw-signature path;
+- `TAIRA_RELEASE_SIGNING_PUBLIC_KEY_PATH`: raw 32-byte Ed25519 public key;
+- `TAIRA_TRUSTED_RELEASE_SIGNING_FINGERPRINT`: independently reviewed SHA-256
+  of that raw public key;
+- `TAIRA_RELEASE_MANIFEST_VERIFIER_PATH`: independently reviewed
+  `sorafs-validate`;
+- `TAIRA_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256`: its reviewed SHA-256.
+
+Every file variable must use its canonical physical absolute path, without
+symlinked or `..` path components, and must resolve outside the checkout.
+No private key path or signing seed is accepted. Bare-metal builds emit
+`<bundle>.authority/`; image publication uploads
+`taira-validator-release-authority-<run-id>`. Each contains
+`release_manifest.json`, its raw `.sig` and `.pub`, and an `artifacts/`
+directory holding the canonical exact-12 authority, `SHA256SUMS`, the pinned
+native verifier, and the portable authority validator. The signed payload has
+no build-host absolute path. It binds the full workspace-source identity,
+exact-12 registry and retired-label set, validator, evidence runner, Cargo
+lock, matrix, all authoritative Norito evidence and mandatory JSON
+projections, plus either the archive digest or both OCI manifest and image
+configuration digests.
+
+Admission must first verify `release_manifest.json.sig` with the separately
+reviewed signer fingerprint and verifier digest, then run
+`taira_release_authority.py verify` against the candidate archive/image
+evidence. The archive verifier parses the tar directly and rejects traversal,
+duplicate members, links, sparse/special members, missing evidence, and any
+evidence size or digest mismatch. An archive, image tag, unsigned
+`rollout.manifest.json`, standalone public key, or self-reported registry
+digest is never release authority.
+
+For a bare-metal candidate, the portable verification shape is:
+
+```bash
+authority=/path/to/taira-rollout-....authority
+bundle=/path/to/extracted/taira-rollout-...
+archive=/path/to/taira-rollout-....tar.gz
+commit=<reviewed-full-40-character-commit>
+fingerprint=<reviewed-release-signing-public-key-sha256>
+verifier_sha=<reviewed-sorafs-validate-sha256>
+
+actual_verifier_sha="$(
+  python3 -S -c \
+    'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    "${authority}/artifacts/sorafs-validate"
+)"
+test "${actual_verifier_sha}" = "${verifier_sha}"
+"${authority}/artifacts/sorafs-validate" release-manifest \
+  --manifest "${authority}/release_manifest.json" \
+  --public-key "${authority}/release_manifest.json.pub" \
+  --public-key-fingerprint "${fingerprint}" \
+  --signature "${authority}/release_manifest.json.sig"
+python3 -S "${authority}/artifacts/taira_release_authority.py" verify \
+  --evidence-root "${bundle}" \
+  --commit "${commit}" \
+  --signing-fingerprint "${fingerprint}" \
+  --native-verifier-sha256 "${verifier_sha}" \
+  --archive "${archive}" \
+  --authority \
+    "${authority}/artifacts/taira-exact12-release-authority-v1.json"
+```
+
 ## Render validator configs
 
 Do not hand-edit `config.toml` into multiple validator copies. Instead:
@@ -185,12 +349,17 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    advert keys.
 4. Render the per-validator bundle:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
-5. Copy each validator's complete generated directory to its host and point the
-   node at `<validator-slug>/config.toml`. The renderer creates bundle and
-   runtime directories with mode `0700`, creates the onboarding/faucet signer
-   and API-token sidecars with mode `0600`, writes only signer paths and the
-   BLAKE3 token digest to peer config, and emits a protective `.gitignore`.
-   It prints sidecar paths but never their contents.
+5. Copy each validator's complete generated directory to that validator
+   host's canonical `/etc/iroha/taira-validator` directory. Every rendered
+   config binds signer sidecars and governance manifests to that same
+   first-release install root; it never embeds the developer checkout or
+   `dist/` path. The renderer creates bundle and runtime directories with mode
+   `0700`, creates the onboarding/faucet signer and API-token sidecars with mode
+   `0600`, writes only canonical signer paths and the BLAKE3 token digest to
+   peer config, and emits a protective `.gitignore`. It also creates co-located
+   `kagemusha/` and `sorafs_admission/` directories and rewrites the policy,
+   admission-envelope, signer, and manifest paths together when
+   `--install-root` is changed. It prints sidecar paths but never their contents.
 
 The bundle also contains one shared unsigned `genesis.json` whose dedicated
 topology transaction is rebuilt from the public roster and PoPs, plus
@@ -241,8 +410,10 @@ bash configs/soranexus/taira/taira-validator-container.sh \
 ```
 
 That sequence removes the mounted validator state under `TAIRA_STORAGE_PATH`
-after stopping the container, which is the required step for a true genesis
-reset.
+and the mutable Kagemusha artifact tree after stopping the container, which is
+the required step for a true genesis reset. Reset refuses broad system roots,
+the read-only config bundle, and equal or nested state roots before it stops the
+running container.
 
 When you run the shared nginx edge on one host, keep the same roster as the
 source of truth for the edge upstreams too:
@@ -368,10 +539,10 @@ Manual publish prerequisites:
   - `DOCKERHUB_TOKEN`
   - `HARBOR_USERNAME`
   - `HARBOR_TOKEN`
-- a self-hosted runner with enough RAM to finish the deploy-profile Rust
+- a self-hosted runner with enough RAM to finish the release-profile Rust
   compile inside `docker build`; the current Taira workflow now forces
-  `CARGO_BUILD_JOBS=1` and `BINARIES=irohad` so validator-image publishing is
-  not blocked by unrelated CLI build failures or Colima memory pressure
+  `CARGO_BUILD_JOBS=1` unchanged and `BINARIES=irohad kagami` so the exact final
+  image can run its four-peer smoke without building the unrelated `iroha` CLI
 - one explicit `workflow_dispatch` run against the chosen release ref so the
   first `hyperledger/iroha:taira-*` and
   `docker.soramitsu.co.jp/iroha3/iroha:taira-*` tags actually exist before
@@ -382,7 +553,7 @@ Manual publish prerequisites:
 If the Docker host is memory-constrained, cap Cargo parallelism during the
 image build:
 
-- `dpn-api-rust/ops/taira/build-validator-image.sh --cargo-build-jobs 1 --binaries irohad`
+- `dpn-api-rust/ops/taira/build-validator-image.sh --cargo-build-jobs 1 --binaries 'irohad kagami'`
 
 The DPN wrapper verifies the pinned base commit, exact binary worktree patch,
 full reconstructed source-tree digest, Rust toolchain, and reviewed Cargo lock
@@ -393,42 +564,55 @@ and records both digests in the image.
 The image ships:
 
 - `irohad`
+- `kagami`, because the exact final attested image is itself required to
+  generate and boot the four-peer release smoke topology
 - the checked-in static Taira bundle under `/opt/iroha/configs/soranexus/taira`
 - the bundled rANS codec tables under `/opt/iroha/codec/rans/tables`
 - a Taira-aware entrypoint that defaults to:
-  - `irohad --sora --config /config/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json`
+  - `irohad --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json`
 
 The image does **not** embed validator-specific runtime material. Keep using
-`render_taira_validator_bundle.py` to generate the mounted
-`/config/config.toml` from user-local roster/secrets files.
+`render_taira_validator_bundle.py` to generate the complete read-only
+`/etc/iroha/taira-validator` mount from user-local roster/secrets files. The
+matching authenticated Kagemusha policy belongs under `kagemusha/` in that
+bundle; its mutable artifact tree is mounted separately.
 
-`docker-compose.validator.yml` uses `pull_policy: missing` so a host-local
-`docker load` override works without forcing a registry lookup. When you want
-to refresh a published tag explicitly, run `docker compose ... pull` before
-`up -d`.
+`docker-compose.validator.yml` uses `pull_policy: missing` so an authority-bound
+host-local image ID works without forcing a registry lookup. Production
+launches require either that exact `sha256:<image-id>` or an admitted
+`repository@sha256:<manifest-digest>`; rolling or source tags are not deployment
+authority.
 
 Minimal container run example:
 
 ```bash
+TAIRA_IMAGE='hyperledger/iroha@sha256:<signed-manifest-digest>'
 docker run -d --name taira-validator-1 \
   --restart unless-stopped \
+  -e TAIRA_RUNTIME_PROFILE=production \
+  -e TAIRA_IMAGE_REFERENCE="$TAIRA_IMAGE" \
   -p 1337:1337 \
-  -p 18080:8080 \
-  -v "$PWD/dist/taira-validators/taira-validator-1/config.toml:/config/config.toml:ro" \
+  -p 18080:18080 \
+  -v /etc/iroha/taira-validator:/etc/iroha/taira-validator:ro \
   -v /var/lib/iroha/taira-validator-1:/storage \
-  hyperledger/iroha:taira-latest
+  -v /var/lib/iroha/taira-validator/kagemusha/v4:/var/lib/iroha/taira-validator/kagemusha/v4 \
+  "$TAIRA_IMAGE"
 ```
 
 If you need to override the bundled public genesis, point the entrypoint at a
 mounted manifest file:
 
 ```bash
+TAIRA_IMAGE='hyperledger/iroha@sha256:<signed-manifest-digest>'
 docker run --rm \
+  -e TAIRA_RUNTIME_PROFILE=production \
+  -e TAIRA_IMAGE_REFERENCE="$TAIRA_IMAGE" \
   -e IROHA_TAIRA_GENESIS=/config/genesis.json \
-  -v "$PWD/dist/taira-validators/taira-validator-1/config.toml:/config/config.toml:ro" \
+  -v /etc/iroha/taira-validator:/etc/iroha/taira-validator:ro \
   -v "$PWD/configs/soranexus/taira/genesis.json:/config/genesis.json:ro" \
   -v /var/lib/iroha/taira-validator-1:/storage \
-  hyperledger/iroha:taira-latest
+  -v /var/lib/iroha/taira-validator/kagemusha/v4:/var/lib/iroha/taira-validator/kagemusha/v4 \
+  "$TAIRA_IMAGE"
 ```
 
 If you need a disconnected or one-node smoke boot, mount both the manifest JSON
@@ -438,6 +622,8 @@ and a signed genesis payload. The entrypoint rewrites the copied
 
 ```bash
 docker run --rm \
+  -e TAIRA_RUNTIME_PROFILE=localnet \
+  -e IROHA_TAIRA_CONFIG=/config/config.toml \
   -e IROHA_TAIRA_GENESIS=/config/genesis.json \
   -e IROHA_TAIRA_SIGNED_GENESIS=/config/genesis.signed.nrt \
   -v "$PWD/dist/taira-localnet-smoke-container.toml:/config/config.toml:ro" \
@@ -445,7 +631,7 @@ docker run --rm \
   -v "$PWD/dist/taira-localnet-smoke/genesis.signed.nrt:/config/genesis.signed.nrt:ro" \
   -v "$PWD/dist/taira-localnet-smoke-container-storage:/storage" \
   -p 28080:8080 \
-  hyperledger/iroha:taira-latest
+  local/taira-validator:smoke
 ```
 
 The checked-in `check_mcp_rollout.sh --skip-public --local-root ...` helper
@@ -926,7 +1112,9 @@ instead of locally installed `irohad` binaries. The primary wrapper is
 on hosts that lack the Compose plugin. `docker-compose.validator.yml` remains
 available as an optional convenience for environments that do have Compose.
 
-1. Publish or otherwise load the image you intend to run on the host.
+1. Publish or otherwise load the image you intend to run on the host, verify
+   its signed release authority, and retain the admitted manifest digest or
+   image ID for `TAIRA_IMAGE`.
    - manual publish path:
      `workflow_dispatch` `.github/workflows/publish_taira_validator.yml`
    - local host-side override:
@@ -934,15 +1122,27 @@ available as an optional convenience for environments that do have Compose.
 2. Render the validator config bundle from your user-local roster and secrets:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 3. Install the rendered config and storage directories on the validator host:
-   - `sudo install -d -o 1001 -g 1001 /etc/iroha/taira-validator-1`
+   - `sudo install -d -m 0700 -o 1001 -g 1001 /etc/iroha/taira-validator`
    - `sudo install -d -o 1001 -g 1001 /var/lib/iroha/taira-validator-1`
-   - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
+   - `sudo install -d -m 0700 -o 1001 -g 1001 /var/lib/iroha/taira-validator/kagemusha/v4`
+   - `sudo cp -a dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator/`
+   - install the authenticated rollout policy as
+     `/etc/iroha/taira-validator/kagemusha/release-policy.norito`, and install
+     its reviewed artifact tree under
+     `/var/lib/iroha/taira-validator/kagemusha/v4`; both are mandatory
+   - install reviewed SoraFS admission envelopes, if any, under the rendered
+     `/etc/iroha/taira-validator/sorafs_admission` directory
+   - after installing all runtime inputs, run
+     `sudo chown -R 1001:1001 /etc/iroha/taira-validator /var/lib/iroha/taira-validator-1 /var/lib/iroha/taira-validator/kagemusha/v4`
 4. Copy the sample env file and adjust the host-specific values:
    - `sudo cp configs/soranexus/taira/taira-validator-container.compose.env.example /etc/default/taira-validator-container.compose.env`
    - set at least:
-     - `TAIRA_IMAGE=hyperledger/iroha:taira-latest` or the exact pushed `taira-<suffix>` tag
-     - `TAIRA_CONFIG_PATH=/etc/iroha/taira-validator-1/config.toml`
+     - `TAIRA_IMAGE=hyperledger/iroha@sha256:<signed-manifest-digest>` or the
+       authority-bound `sha256:<image-id>`; tags are rejected in production
+     - `TAIRA_RUNTIME_PROFILE=production`
+     - `TAIRA_CONFIG_BUNDLE_PATH=/etc/iroha/taira-validator`
      - `TAIRA_STORAGE_PATH=/var/lib/iroha/taira-validator-1`
+     - `TAIRA_KAGEMUSHA_ARTIFACT_PATH=/var/lib/iroha/taira-validator/kagemusha/v4`
      - `TAIRA_TORII_PORT=18080` unless your ingress expects another loopback port
 5. Start the validator directly with the plain-`docker` wrapper:
    - `bash configs/soranexus/taira/taira-validator-container.sh --env-file /etc/default/taira-validator-container.compose.env up`
@@ -989,19 +1189,32 @@ away from the shipped MCP-enabled config:
      `IROHA_DIR=/opt/iroha ops/taira/build-validator-bundle.sh`
    - the wrapper accepts either the policy-pinned clean commit or the one exact
      attested source patch, then writes
-     `dist/taira-rollout/<bundle>/rollout.manifest.json` plus
-     `sha256sums.txt`
+     `dist/taira-rollout/<bundle>/rollout.manifest.json`,
+     `sha256sums.txt`, the archive, and its sibling signed
+     `<bundle>.authority/` tuple
+   - it freezes the canonical workspace source manifest before Cargo runs,
+     builds the production validator without the evidence feature, then builds
+     `taira_privacy_release_runner` separately and emits the paired Norito/JSON
+     receipt, 48-block stage bundle, command manifest, and frozen expectations
+     under `provenance/privacy-native/`
+   - run the packaged `verify` command from
+     [Native privacy release evidence](#native-privacy-release-evidence) before
+     installation; this re-executes the native stages through the copied runner
+     and rejects a changed validator, runner, Cargo lock, source identity,
+     expectation ceiling, artifact order, digest, or JSON projection
    - the script runs `cargo test -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib`
-     and `cargo test -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib`
+     and `cargo test -p iroha_core call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts --lib`
      before packaging so SoraSwap universal contract deploy routing and nested
-     AssetOps transfer authority are proven against the exact source checkout;
-     use `--skip-local-regressions` only after that exact runtime bundle was
-     already validated from source
+     AssetOps transfer authority are proven against the exact source checkout.
+     Release profile rejects both `--skip-build` and
+     `--skip-local-regressions`; those flags are debug-only.
    - the bundle now includes both `scripts/render_taira_validator_bundle.py`
      and `scripts/render_taira_edge_nginx_conf.py` so validator config and
      shared-edge nginx can be rendered from the same roster artifact
-   - capture the emitted git revision and archive path in the rollout ticket;
-     that is the exact runtime candidate the later SoraSwap gate must approve
+   - capture the emitted git revision, archive path, signed authority tuple,
+     reviewed signer fingerprint, and authority-manifest SHA-256 in the rollout
+     ticket; together they identify the exact candidate the later SoraSwap gate
+     must approve
 3. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
@@ -1010,10 +1223,19 @@ away from the shipped MCP-enabled config:
      `streaming_identity_*`, `sorafs_council_public_keys`, and
      `sorafs_council_signature_threshold` fields because the checked-in template
      intentionally leaves those deployment values as fail-closed placeholders
-   - `sudo install -d -m 0700 -o iroha -g iroha /etc/iroha/taira-validator-1`
-   - `sudo cp -R dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator-1/`
-   - preserve the generated `0600` modes and update the absolute signer paths
-     in `config.toml` if the bundle moved to a different location
+   - `sudo install -d -m 0700 -o iroha -g iroha /etc/iroha/taira-validator`
+   - `sudo install -d -m 0700 -o iroha -g iroha /var/lib/iroha/taira-validator-1`
+   - `sudo install -d -m 0700 -o iroha -g iroha /var/lib/iroha/taira-validator/kagemusha/v4`
+   - `sudo cp -a dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator/`
+   - preserve the generated `0600` modes; signer and governance paths already
+     target this canonical install root and must not be rewritten
+   - install the authenticated rollout policy at
+     `/etc/iroha/taira-validator/kagemusha/release-policy.norito` and its
+     artifact tree at `/var/lib/iroha/taira-validator/kagemusha/v4`
+   - install reviewed SoraFS admission envelopes, if any, under
+     `/etc/iroha/taira-validator/sorafs_admission`
+   - after installing all runtime inputs, run
+     `sudo chown -R iroha:iroha /etc/iroha/taira-validator /var/lib/iroha/taira-validator-1 /var/lib/iroha/taira-validator`
 4. Install the newly built binaries plus the sample systemd unit from
    `configs/soranexus/taira/taira-irohad.service`:
    - install native Inrou prerequisites before enabling the unit, for example
@@ -1025,21 +1247,23 @@ away from the shipped MCP-enabled config:
    - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/iroha /usr/local/bin/iroha`
    - `sudo cp configs/soranexus/taira/taira-irohad.service /etc/systemd/system/`
    - copy `configs/soranexus/taira/taira-irohad.env.example` to
-     `/etc/default/taira-irohad` and adjust `IROHA_TAIRA_CONFIG=` if you want
-     the unit to use a generated config path without editing `ExecStart=`
-   - add `/etc/default/taira-irohad` if you want the unit to use a generated
-     config path without editing `ExecStart=`, for example:
-     `IROHA_TAIRA_CONFIG=/etc/iroha/taira-validator-1/config.toml`
+     `/etc/default/taira-irohad`; the supplied unit deliberately preflights the
+     complete canonical `/etc/iroha/taira-validator` bundle, so do not override
+     only `IROHA_TAIRA_CONFIG` to another install root
+   - if a deployment intentionally uses another renderer `--install-root`,
+     update the unit's config, signer, manifest, SoraFS admission, Kagemusha
+     policy, and artifact preflight paths together before enabling it
    - if your repo checkout or binary path differs from `/opt/iroha` and
-     `/usr/local/bin/irohad`, adjust `WorkingDirectory=` and `ExecStart=`
-     before enabling the unit
+     `/usr/local/bin/irohad`, adjust `WorkingDirectory=` and set
+     `IROHA_TAIRA_IROHAD_BIN=` in `/etc/default/taira-irohad` before enabling
+     the unit
 5. Reload systemd and restart the validator:
    - `sudo systemctl daemon-reload`
    - `sudo systemctl enable --now taira-irohad.service`
    - `sudo systemctl restart taira-irohad.service`
 6. Capture the resolved config in the rollout ticket:
    - `sudo journalctl -u taira-irohad.service -n 200 --no-pager`
-   - `cd /opt/iroha && /usr/local/bin/irohad --sora --config "${IROHA_TAIRA_CONFIG:-configs/soranexus/taira/config.toml}" --genesis-manifest-json "${IROHA_TAIRA_GENESIS:-configs/soranexus/taira/genesis.json}" --trace-config | tee /tmp/taira-trace-config.txt`
+   - `cd /opt/iroha && sudo -u iroha env KURA_STORE_DIR=/var/lib/iroha/taira-validator-1 SNAPSHOT_STORE_DIR=/var/lib/iroha/taira-validator-1/snapshot /usr/local/bin/irohad --sora --config /etc/iroha/taira-validator/config.toml --genesis-manifest-json /opt/iroha/configs/soranexus/taira/genesis.json --trace-config | tee /tmp/taira-trace-config.txt`
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
 7. Prove the validator's loopback Torii endpoint exposes MCP and the expected
    direct-ingress routes before any public cutover:
@@ -1146,16 +1370,24 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
+     `max_transactions = 96`, `max_payload_bytes = 22020096`, and
      `proposal_queue_scan_multiplier = 4` bounds, plus the
      `[sumeragi.queues]` canonical outer-ingress wire-byte baseline
-     `authenticated_non_validator_sources = 2`, `body_bytes = 242221056`, and
-     `body_source_bytes = 34603008`, before running public write canaries or
+     `authenticated_non_validator_sources = 2`, `body_bytes = 315621376`, and
+     `body_source_bytes = 45088768`, before running public write canaries or
      scenario sweeps. The four-validator baseline isolates every validator,
      both authenticated non-validator source lanes, and anonymous delivery;
      `render_taira_validator_bundle.py` raises `body_bytes` to at least
      `(validator_count + authenticated_non_validator_sources + 1) *
      body_source_bytes` for larger legal rosters.
+     The 21 MiB body is derived from two 10 MiB transaction-admission ceilings
+     (each carrying one 9 MiB privacy action) plus 1 MiB of canonical block
+     framing. The matching DA ceiling is `22020096`; the per-source queue
+     rounds the exact ordinary/completion/timeout minimum up to 43 MiB. Keep
+     `[network] max_frame_bytes_tx_gossip = 11534336` (11 MiB plaintext),
+     `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and
+     `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes) with
+     those values.
      Fast-finality caps are retired in v2.
    - assert that an attempted direct SoraFS payload POST returns `404` and leaves
      both the local manifest count and storage-byte reservation unchanged.

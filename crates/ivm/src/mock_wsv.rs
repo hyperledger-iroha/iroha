@@ -13,13 +13,18 @@ pub use iroha_data_model::prelude::{AssetDefinitionId, DomainId, Mintable, Name,
 use iroha_data_model::{
     asset::{AssetBalanceScope, AssetId},
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
-    nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
+    nexus::{
+        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
+        DataSpaceId, LaneId,
+    },
     proof::{ProofAttachment, VerifyingKeyId},
+    query::QueryRequest,
     smart_contract::ContractAddress,
 };
 #[cfg(test)]
 use iroha_primitives::numeric::Numeric;
 use iroha_primitives::{json::Json, numeric::Quantity, numeric_abi::QuantityValueV1};
+use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
 use norito::{
     decode_from_bytes,
     derive::{Decode, Encode},
@@ -142,7 +147,15 @@ impl SpaceDirectoryAxtPolicy {
         }
     }
 
-    pub fn from_policy_snapshot(snapshot: &AxtPolicySnapshot) -> Self {
+    /// Construct a policy from a canonical data-model snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when the snapshot is not
+    /// canonically ordered or its version does not bind its exact entries.
+    pub fn from_policy_snapshot(
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
         Self::from_policy_snapshot_with_timing(
             snapshot,
             NonZeroU64::new(1).expect("non-zero slot length"),
@@ -150,11 +163,18 @@ impl SpaceDirectoryAxtPolicy {
         )
     }
 
+    /// Construct a policy from a canonical data-model snapshot and timing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when the snapshot is not
+    /// canonically ordered or its version does not bind its exact entries.
     pub fn from_policy_snapshot_with_timing(
         snapshot: &AxtPolicySnapshot,
         slot_length_ms: NonZeroU64,
         max_clock_skew_ms: u64,
-    ) -> Self {
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
+        snapshot.validate()?;
         let mut policies = HashMap::new();
         for binding in &snapshot.entries {
             policies.insert(
@@ -162,7 +182,11 @@ impl SpaceDirectoryAxtPolicy {
                 DataspaceAxtPolicy::from_model_entry(&binding.policy),
             );
         }
-        Self::from_snapshot_with_timing(policies, slot_length_ms, max_clock_skew_ms)
+        Ok(Self::from_snapshot_with_timing(
+            policies,
+            slot_length_ms,
+            max_clock_skew_ms,
+        ))
     }
 
     pub fn with_current_slot(mut self, slot: u64) -> Self {
@@ -327,16 +351,11 @@ impl Default for Account {
 /// Scope and purpose
 /// - Provides minimal primitives for tests (domain/account/asset/nft/roles/triggers/peers) and
 ///   a compact shielded (ZK) asset state with recent-root windows.
-/// - Implements a developer JSON-envelope path for a subset of admin-style operations via
-///   `SMARTCONTRACT_EXECUTE_QUERY (0xA1)` and `SMARTCONTRACT_EXECUTE_INSTRUCTION (0xA0)`.
-///   Supported envelopes include:
-///   - Queries: `wsv.get_balance`, `wsv.list_triggers`, `wsv.has_permission`,
-///     `wsv.list_domains_for_account`, `wsv.list_accounts_for_domain`.
-///   - Admin: `wsv.create_role`, `wsv.grant_role`, `wsv.revoke_role`,
-///     `wsv.grant_permission`, `wsv.revoke_permission`, `wsv.create_trigger`,
-///     `wsv.set_trigger_enabled`, `wsv.remove_trigger`.
-/// - Production hosts should prefer Norito TLVs; the JSON envelope path is intended for tests
-///   and dev tooling and mirrors ISI/syscall behavior under pointer‑ABI validation.
+/// - Enforces canonical `NoritoBytes(QueryRequest)` at
+///   `SMARTCONTRACT_EXECUTE_QUERY (0xA1)`, then reports `NotImplemented` because this mock has no
+///   query-state executor.
+/// - Accepts only canonical `NoritoBytes(InstructionBox)` plus the matching mandatory operation
+///   tag at `SMARTCONTRACT_EXECUTE_INSTRUCTION (0xA0)`, matching the production V1 ABI.
 #[derive(Clone, Default)]
 pub struct MockWorldStateView {
     domains: HashMap<DomainId, ()>,
@@ -507,7 +526,16 @@ impl MockWorldStateView {
     }
 
     /// Load AXT policies from a data-model snapshot.
-    pub fn load_axt_policy_snapshot_model(&mut self, snapshot: &AxtPolicySnapshot) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] without changing the
+    /// installed policies when the snapshot is not canonical.
+    pub fn load_axt_policy_snapshot_model(
+        &mut self,
+        snapshot: &AxtPolicySnapshot,
+    ) -> Result<(), AxtPolicySnapshotValidationError> {
+        snapshot.validate()?;
         let map = snapshot
             .entries
             .iter()
@@ -519,6 +547,7 @@ impl MockWorldStateView {
             })
             .collect();
         self.axt_policies = map;
+        Ok(())
     }
 
     /// Return the logical wall-clock timestamp used for gating elections.
@@ -826,17 +855,25 @@ impl MockWorldStateView {
         start_ts: u64,
         end_ts: u64,
     ) -> bool {
+        let Ok(option_count) = DMZk::validate_election_options_v1(options) else {
+            return false;
+        };
+        if end_ts < start_ts || self.elections.contains_key(&election_id) {
+            return false;
+        }
         let e = ElectionState {
             options,
             eligible_root,
             start_ts,
             end_ts,
             finalized: false,
-            tally: vec![0; options as usize],
+            tally: vec![0; option_count],
             ballot_nullifiers: HashSet::new(),
             ciphertexts: Vec::new(),
         };
-        self.elections.insert(election_id, e).is_none()
+        let previous = self.elections.insert(election_id, e);
+        debug_assert!(previous.is_none());
+        true
     }
 
     /// Submit a ballot ciphertext with a unique nullifier.
@@ -893,10 +930,10 @@ impl MockWorldStateView {
         let Some(e) = self.elections.get_mut(election_id) else {
             return false;
         };
-        if e.finalized {
-            return false;
-        }
-        if tally.len() != e.options as usize {
+        if e.finalized
+            || DMZk::validate_election_tally_v1(e.options, e.tally.len()).is_err()
+            || DMZk::validate_election_tally_v1(e.options, tally.len()).is_err()
+        {
             return false;
         }
         e.tally = tally;
@@ -1677,14 +1714,6 @@ impl MockWorldStateView {
         true
     }
 
-    /// Legacy mock alias used by older instruction-box payload tests.
-    pub fn set_nft_data(&mut self, caller: &AccountId, id: &NftId, json: Vec<u8>) -> bool {
-        let key = "data"
-            .parse::<Name>()
-            .expect("static metadata key is valid");
-        self.set_nft_metadata(caller, id, key, json)
-    }
-
     /// Burn (remove) an NFT. Caller must be owner or issuer.
     pub fn burn_nft(&mut self, caller: &AccountId, id: &NftId) -> bool {
         let caller_subject = Self::account_subject(caller);
@@ -1738,80 +1767,6 @@ fn hash_vk_bytes(backend: &str, bytes: &[u8]) -> [u8; 32] {
 use core::str;
 
 use iroha_data_model::isi::{InstructionBox as DMInstructionBox, zk as DMZk};
-
-struct EnvelopeInstructionHandler {
-    aliases: &'static [&'static str],
-    decode: fn(norito::json::Value) -> Result<DMInstructionBox, VMError>,
-}
-
-fn decode_dm_instruction<T>(payload: norito::json::Value) -> Result<DMInstructionBox, VMError>
-where
-    T: iroha_data_model::isi::Instruction + norito::json::JsonDeserializeOwned,
-{
-    let instruction: T = norito::json::from_value(payload).map_err(|_| VMError::NoritoInvalid)?;
-    Ok(iroha_data_model::isi::Instruction::into_instruction_box(
-        Box::new(instruction),
-    ))
-}
-
-const ENVELOPE_INSTRUCTION_HANDLERS: &[EnvelopeInstructionHandler] = &[
-    EnvelopeInstructionHandler {
-        aliases: &[
-            "zk.RegisterZkAsset",
-            "zk::RegisterZkAsset",
-            "iroha_data_model::isi::zk::RegisterZkAsset",
-        ],
-        decode: decode_dm_instruction::<DMZk::RegisterZkAsset>,
-    },
-    EnvelopeInstructionHandler {
-        aliases: &[
-            "zk.Shield",
-            "zk::Shield",
-            "iroha_data_model::isi::zk::Shield",
-        ],
-        decode: decode_dm_instruction::<DMZk::Shield>,
-    },
-    EnvelopeInstructionHandler {
-        aliases: &[
-            "zk.ZkTransfer",
-            "zk::ZkTransfer",
-            "iroha_data_model::isi::zk::ZkTransfer",
-        ],
-        decode: decode_dm_instruction::<DMZk::ZkTransfer>,
-    },
-    EnvelopeInstructionHandler {
-        aliases: &[
-            "zk.Unshield",
-            "zk::Unshield",
-            "iroha_data_model::isi::zk::Unshield",
-        ],
-        decode: decode_dm_instruction::<DMZk::Unshield>,
-    },
-    EnvelopeInstructionHandler {
-        aliases: &[
-            "zk.CreateElection",
-            "zk::CreateElection",
-            "iroha_data_model::isi::zk::CreateElection",
-        ],
-        decode: decode_dm_instruction::<DMZk::CreateElection>,
-    },
-    EnvelopeInstructionHandler {
-        aliases: &[
-            "zk.SubmitBallot",
-            "zk::SubmitBallot",
-            "iroha_data_model::isi::zk::SubmitBallot",
-        ],
-        decode: decode_dm_instruction::<DMZk::SubmitBallot>,
-    },
-    EnvelopeInstructionHandler {
-        aliases: &[
-            "zk.FinalizeElection",
-            "zk::FinalizeElection",
-            "iroha_data_model::isi::zk::FinalizeElection",
-        ],
-        decode: decode_dm_instruction::<DMZk::FinalizeElection>,
-    },
-];
 
 // -----------------------------
 // ZK shielded ledger structures
@@ -2346,10 +2301,18 @@ impl WsvHost {
     }
 
     /// Builder-style helper to seed AXT policies from a Space Directory snapshot.
-    pub fn with_axt_policy_snapshot(mut self, snapshot: AxtPolicySnapshot) -> Self {
-        self.wsv.load_axt_policy_snapshot_model(&snapshot);
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtPolicySnapshotValidationError`] when the supplied snapshot
+    /// is not canonical.
+    pub fn with_axt_policy_snapshot(
+        mut self,
+        snapshot: AxtPolicySnapshot,
+    ) -> Result<Self, AxtPolicySnapshotValidationError> {
+        self.wsv.load_axt_policy_snapshot_model(&snapshot)?;
         self.refresh_axt_policy();
-        self
+        Ok(self)
     }
 
     /// Builder-style helper to set a target lane expectation.
@@ -2773,41 +2736,23 @@ impl WsvHost {
     }
 
     fn decode_account_payload(&self, payload: &[u8]) -> Result<AccountId, VMError> {
-        if let Ok(id) = decode_from_bytes::<AccountId>(payload) {
-            return Ok(id);
-        }
-        let subject = decode_from_bytes::<AccountId>(payload).map_err(|_| VMError::DecodeError)?;
-        self.wsv
-            .canonical_account_id_for_subject(&subject)
-            .ok_or(VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_account_subject_payload(&self, payload: &[u8]) -> Result<AccountId, VMError> {
-        decode_from_bytes::<AccountId>(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_asset_payload(&self, payload: &[u8]) -> Result<AssetDefinitionId, VMError> {
-        decode_from_bytes::<AssetDefinitionId>(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_domain_payload(&self, payload: &[u8]) -> Result<DomainId, VMError> {
-        decode_from_bytes::<DomainId>(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_nft_payload(&self, payload: &[u8]) -> Result<NftId, VMError> {
-        decode_from_bytes::<NftId>(payload).map_err(|_| VMError::DecodeError)
-    }
-
-    fn decode_instruction_envelope(
-        ty: &str,
-        payload: norito::json::Value,
-    ) -> Result<Option<DMInstructionBox>, VMError> {
-        for handler in ENVELOPE_INSTRUCTION_HANDLERS {
-            if handler.aliases.contains(&ty) {
-                return (handler.decode)(payload).map(Some);
-            }
-        }
-        Ok(None)
+        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
     /// Decode a AccountId from a register which may contain either an index
@@ -2890,7 +2835,7 @@ impl WsvHost {
         if tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::NoritoInvalid);
         }
-        decode_from_bytes::<DataSpaceId>(tlv.payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito::<DataSpaceId>(tlv.payload).map_err(|_| VMError::DecodeError)
     }
 
     /// Decode one canonical V1 `quantity` argument from a register.
@@ -2986,7 +2931,7 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         let batch: TransferAssetBatch =
-            decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+            decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
         if batch.entries().is_empty() {
             return Err(VMError::DecodeError);
         }
@@ -3045,8 +2990,7 @@ impl WsvHost {
                 return Err(VMError::PermissionDenied);
             }
         }
-        let envelope = decode_from_bytes::<axt::AxtProofEnvelope>(&proof.payload)
-            .map_err(|_| VMError::NoritoInvalid)?;
+        let envelope = decode_canonical_norito::<axt::AxtProofEnvelope>(&proof.payload)?;
         axt::preflight_fastpq_v1_proof_envelope_for_manifest(
             &envelope,
             dsid,
@@ -3064,8 +3008,7 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         let gas = Self::axt_gas(tlv.payload.len());
-        let descriptor: axt::AxtDescriptor =
-            norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let descriptor: axt::AxtDescriptor = decode_canonical_norito(tlv.payload)?;
         axt::validate_descriptor(&descriptor)?;
         let binding = axt::compute_binding(&descriptor).map_err(|_| VMError::NoritoInvalid)?;
         self.axt_state = Some(axt::HostAxtState::new(descriptor, binding));
@@ -3079,8 +3022,7 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         let mut gas_len = ds_tlv.payload.len();
-        let dsid: DataSpaceId =
-            norito::decode_from_bytes(ds_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -3096,8 +3038,9 @@ impl WsvHost {
                 return Err(VMError::NoritoInvalid);
             }
             gas_len = gas_len.saturating_add(manifest_tlv.payload.len());
-            norito::decode_from_bytes(manifest_tlv.payload).map_err(|_| VMError::NoritoInvalid)?
+            decode_canonical_norito(manifest_tlv.payload)?
         };
+        axt::validate_touch_manifest(&manifest)?;
         self.axt_policy.allow_touch(dsid, &manifest)?;
         state.record_touch(dsid, manifest)?;
         Ok(Self::axt_gas(gas_len))
@@ -3109,8 +3052,7 @@ impl WsvHost {
         if ds_tlv.type_id != PointerType::DataSpaceId {
             return Err(VMError::NoritoInvalid);
         }
-        let dsid: DataSpaceId =
-            norito::decode_from_bytes(ds_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let dsid: DataSpaceId = decode_canonical_norito(ds_tlv.payload)?;
         if !state_view.expected_dsids().contains(&dsid) {
             return Err(VMError::PermissionDenied);
         }
@@ -3128,8 +3070,8 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         let gas = Self::verify_gas(proof_tlv.payload.len());
-        let proof: ProofBlob =
-            norito::decode_from_bytes(proof_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let proof: ProofBlob = decode_canonical_norito(proof_tlv.payload)?;
+        axt::validate_proof_blob(&proof)?;
         self.validate_axt_proof(dsid, &proof)?;
         let state = self.axt_state.as_mut().expect("axt_state checked above");
         state.record_proof(dsid, Some(proof), None)?;
@@ -3142,8 +3084,8 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         let mut gas_len = handle_tlv.payload.len();
-        let handle: AssetHandle =
-            norito::decode_from_bytes(handle_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let handle: AssetHandle = decode_canonical_norito(handle_tlv.payload)?;
+        axt::validate_asset_handle(&handle)?;
         let Some(binding) = handle.binding_array() else {
             return Err(VMError::NoritoInvalid);
         };
@@ -3153,8 +3095,8 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         gas_len = gas_len.saturating_add(op_tlv.payload.len());
-        let intent: RemoteSpendIntent =
-            norito::decode_from_bytes(op_tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+        let intent: RemoteSpendIntent = decode_canonical_norito(op_tlv.payload)?;
+        axt::validate_remote_spend_intent(&intent)?;
         {
             let state = self.axt_state.as_ref().ok_or(VMError::PermissionDenied)?;
             if binding != state.binding() {
@@ -3176,12 +3118,12 @@ impl WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 gas_len = gas_len.saturating_add(proof_tlv.payload.len());
-                Some(
-                    norito::decode_from_bytes(proof_tlv.payload)
-                        .map_err(|_| VMError::NoritoInvalid)?,
-                )
+                Some(decode_canonical_norito(proof_tlv.payload)?)
             }
         };
+        if let Some(proof) = &proof {
+            axt::validate_proof_blob(proof)?;
+        }
         if let Some(proof_blob) = proof.as_ref() {
             self.validate_axt_proof(intent.asset_dsid, proof_blob)?;
         }
@@ -3248,6 +3190,7 @@ impl WsvHost {
         }
     }
 
+    #[cfg(test)]
     fn handle_finalize_election(&mut self, instr: &DMZk::FinalizeElection) -> Result<u64, VMError> {
         let Some(expected_hash) = self.zk_verified_tally.take() else {
             return Err(VMError::PermissionDenied);
@@ -3313,7 +3256,7 @@ impl WsvHost {
     }
 
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
-        decode_from_bytes(payload).map_err(|_| VMError::DecodeError)
+        decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_name_reg(&self, vm: &IVM, reg: usize) -> Result<Name, VMError> {
@@ -3424,20 +3367,15 @@ const MUTATION_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 const AXT_GAS_BASE: u64 = gas::HOST_BYTE_GAS_BASE;
 const AXT_GAS_PER_BYTE: u64 = gas::SYSCALL_GAS_PER_BYTE;
 
-/// Parse a JSON payload and return either the raw string value or selected field contents.
-fn parse_json_value_any(bytes: &[u8]) -> Result<njson::Value, VMError> {
-    if let Ok(raw) = core::str::from_utf8(bytes)
-        && let Ok(value) = njson::from_str(raw)
-    {
-        return Ok(value);
-    }
-    let json: Json = decode_from_bytes(bytes).map_err(|_| VMError::NoritoInvalid)?;
+/// Decode one canonical pointer-ABI `Json` payload.
+fn parse_json_value(bytes: &[u8]) -> Result<njson::Value, VMError> {
+    let json: Json = decode_canonical_norito(bytes)?;
     njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)
 }
 
-/// Parse a JSON payload and return either the raw string value or selected field contents.
-fn parse_json_string_any(bytes: &[u8], keys: &[&str]) -> Result<String, VMError> {
-    let value = parse_json_value_any(bytes)?;
+/// Parse a canonical pointer-ABI `Json` payload and return selected field contents.
+fn parse_json_string(bytes: &[u8], keys: &[&str]) -> Result<String, VMError> {
+    let value = parse_json_value(bytes)?;
     if let Some(s) = value.as_str() {
         return Ok(s.to_string());
     }
@@ -3449,9 +3387,9 @@ fn parse_json_string_any(bytes: &[u8], keys: &[&str]) -> Result<String, VMError>
     Err(VMError::NoritoInvalid)
 }
 
-/// Parse a JSON payload and extract a string array from the top-level value or one of the provided keys.
-fn parse_json_string_array_any(bytes: &[u8], keys: &[&str]) -> Result<Vec<String>, VMError> {
-    let value = parse_json_value_any(bytes)?;
+/// Parse a canonical pointer-ABI `Json` payload and extract a string array.
+fn parse_json_string_array(bytes: &[u8], keys: &[&str]) -> Result<Vec<String>, VMError> {
+    let value = parse_json_value(bytes)?;
 
     let array = if let Some(arr) = value.as_array() {
         arr
@@ -3472,12 +3410,6 @@ fn parse_json_string_array_any(bytes: &[u8], keys: &[&str]) -> Result<Vec<String
     Ok(out)
 }
 
-fn parse_account_id_literal(raw: &str) -> Result<AccountId, VMError> {
-    AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| VMError::NoritoInvalid)
-}
-
 fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
     AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -3488,142 +3420,14 @@ fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
         .map_err(|_| VMError::NoritoInvalid)
 }
 
-/// Parse a peer identifier from a JSON payload that may be either a raw string or an
-/// object containing a `peer` field.
-fn parse_peer_any(bytes: &[u8]) -> Result<Peer, VMError> {
-    let peer = parse_json_string_any(bytes, &["peer"])?;
+/// Parse a peer identifier from a canonical `Json` payload.
+fn parse_peer(bytes: &[u8]) -> Result<Peer, VMError> {
+    let peer = parse_json_string(bytes, &["peer"])?;
     Peer::from_str(&peer).map_err(|_| VMError::NoritoInvalid)
 }
 
-fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMError> {
-    fn parse_target<T>(map: &njson::Map) -> Result<T, VMError>
-    where
-        T: core::str::FromStr,
-    {
-        let target = map
-            .get("target")
-            .and_then(njson::Value::as_str)
-            .ok_or(VMError::NoritoInvalid)?;
-        target.parse().map_err(|_| VMError::NoritoInvalid)
-    }
-    fn parse_account_target(map: &njson::Map) -> Result<AccountId, VMError> {
-        let target = map
-            .get("target")
-            .and_then(njson::Value::as_str)
-            .ok_or(VMError::NoritoInvalid)?;
-        parse_account_subject_literal(target)
-    }
-
-    if let Some(name) = value.as_str() {
-        return parse_permission_name(name);
-    }
-
-    let map = value.as_object().ok_or(VMError::NoritoInvalid)?;
-    let kind = map
-        .get("type")
-        .and_then(njson::Value::as_str)
-        .ok_or(VMError::NoritoInvalid)?;
-
-    match kind {
-        "register_domain" => Ok(PermissionToken::RegisterDomain),
-        "register_account" => Ok(PermissionToken::RegisterAccount),
-        "register_asset_definition" => Ok(PermissionToken::RegisterAssetDefinition),
-        "register_zk_asset" => {
-            let id: AssetDefinitionId = parse_target(map)?;
-            Ok(PermissionToken::RegisterZkAsset(id))
-        }
-        "read_assets" => {
-            let account = parse_account_target(map)?;
-            Ok(PermissionToken::ReadAccountAssets(account))
-        }
-        "add_signatory" => {
-            let account = parse_account_target(map)?;
-            Ok(PermissionToken::AddSignatory(account))
-        }
-        "remove_signatory" => {
-            let account = parse_account_target(map)?;
-            Ok(PermissionToken::RemoveSignatory(account))
-        }
-        "set_account_quorum" => {
-            let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountQuorum(account))
-        }
-        "set_account_detail" => {
-            let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountDetail(account))
-        }
-        "shield" => {
-            let id: AssetDefinitionId = parse_target(map)?;
-            Ok(PermissionToken::Shield(id))
-        }
-        "unshield" => {
-            let id: AssetDefinitionId = parse_target(map)?;
-            Ok(PermissionToken::Unshield(id))
-        }
-        "mint_asset" => {
-            let id: AssetDefinitionId = parse_target(map)?;
-            Ok(PermissionToken::MintAsset(id))
-        }
-        "burn_asset" => {
-            let id: AssetDefinitionId = parse_target(map)?;
-            Ok(PermissionToken::BurnAsset(id))
-        }
-        "transfer_asset" => {
-            let id: AssetDefinitionId = parse_target(map)?;
-            Ok(PermissionToken::TransferAsset(id))
-        }
-        "CanTransferAsset" => {
-            if map.len() != 2 || !map.contains_key("type") || !map.contains_key("asset") {
-                return Err(VMError::NoritoInvalid);
-            }
-            let literal = map
-                .get("asset")
-                .and_then(njson::Value::as_str)
-                .ok_or(VMError::NoritoInvalid)?;
-            let asset = AssetId::parse_literal(literal).map_err(|_| VMError::NoritoInvalid)?;
-            if asset.canonical_literal() != literal {
-                return Err(VMError::NoritoInvalid);
-            }
-            Ok(PermissionToken::TransferAssetBucket(asset))
-        }
-        "manage_roles" => Ok(PermissionToken::ManageRoles),
-        "manage_permissions" => Ok(PermissionToken::ManagePermissions),
-        "manage_triggers" => Ok(PermissionToken::ManageTriggers),
-        "manage_peers" => Ok(PermissionToken::ManagePeers),
-        "custom" => {
-            let name = map
-                .get("name")
-                .and_then(njson::Value::as_str)
-                .ok_or(VMError::NoritoInvalid)?;
-            if name.is_empty() {
-                return Err(VMError::NoritoInvalid);
-            }
-            Ok(PermissionToken::Custom(name.to_string()))
-        }
-        _ => Err(VMError::NoritoInvalid),
-    }
-}
-
-/// Parse permission JSON into a PermissionToken.
-///
-/// DevEx: accept the string forms used by `iroha_cli` and unit tests, rather
-/// than requiring a full typed Norito JSON representation for IDs.
-fn parse_permission_json(s: &str) -> Result<PermissionToken, VMError> {
-    let value: njson::Value =
-        njson::from_slice(s.as_bytes()).map_err(|_| VMError::NoritoInvalid)?;
-    parse_permission_value(&value)
-}
-
-fn parse_permission_json_any(bytes: &[u8]) -> Result<PermissionToken, VMError> {
-    let value = parse_json_value_any(bytes)?;
-    parse_permission_value(&value)
-}
-
-fn parse_permission_name_any(bytes: &[u8]) -> Result<PermissionToken, VMError> {
-    if let Ok(raw) = core::str::from_utf8(bytes) {
-        return parse_permission_name(raw);
-    }
-    let name: Name = decode_from_bytes(bytes).map_err(|_| VMError::NoritoInvalid)?;
+fn parse_permission_name_payload(bytes: &[u8]) -> Result<PermissionToken, VMError> {
+    let name: Name = decode_canonical_norito(bytes)?;
     parse_permission_name(name.as_ref())
 }
 
@@ -3834,7 +3638,7 @@ impl IVMHost for WsvHost {
                 self.log_read_key(prefix.as_ref());
                 let keys = self.state_keys_with_prefix(&prefix)?;
                 let selected = Self::paged_state_keys(&keys, vm.register(11), vm.register(12))?;
-                let payload = norito::to_bytes(&selected).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&selected)?;
                 let gas = Self::state_keys_gas(selected.len(), payload.len());
                 preflight_reserved_syscall_gas(vm, gas)?;
                 let ptr = Self::alloc_norito_bytes_tlv(vm, &payload)?;
@@ -3890,8 +3694,7 @@ impl IVMHost for WsvHost {
                         type_id: tlv.type_id as u16,
                     });
                 }
-                let name: Name =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let name: Name = decode_canonical_norito(tlv.payload)?;
                 let Some(bytes) = self.public_inputs.get(&name) else {
                     return Err(VMError::PermissionDenied);
                 };
@@ -3929,7 +3732,8 @@ impl IVMHost for WsvHost {
                     });
                 }
                 let input_len = tlv.payload.len();
-                let val: i64 = decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let val: i64 =
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 vm.set_register(10, val as u64);
                 Ok(Self::numeric_payload_gas(input_len, 0))
             }
@@ -3968,8 +3772,8 @@ impl IVMHost for WsvHost {
                 }
                 let input_len = tlv.payload.len();
                 let json: iroha_primitives::json::Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let body = encode_canonical_norito(&json)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                 out.push(1);
@@ -3993,8 +3797,8 @@ impl IVMHost for WsvHost {
                 }
                 let input_len = tlv.payload.len();
                 let json: iroha_primitives::json::Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let body = encode_canonical_norito(&json)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                 out.push(1);
@@ -4008,7 +3812,7 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_JSON_OBJECT => {
                 let out_json = Json::from(njson::Value::Object(njson::Map::new()));
-                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&out_json)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                 out.push(1);
@@ -4044,7 +3848,7 @@ impl IVMHost for WsvHost {
                 }
 
                 let json: Json =
-                    decode_from_bytes(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let mut input_len = json_tlv.payload.len().saturating_add(key_tlv.payload.len());
                 let value: njson::Value = json
                     .try_into_any_norito()
@@ -4054,7 +3858,7 @@ impl IVMHost for WsvHost {
                     _ => return Err(VMError::DecodeError),
                 };
                 let key_name: Name =
-                    decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
 
                 let field = match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_JSON_SET_I64 => {
@@ -4073,7 +3877,7 @@ impl IVMHost for WsvHost {
                             });
                         }
                         input_len = input_len.saturating_add(value_tlv.payload.len());
-                        let account: AccountId = decode_from_bytes(value_tlv.payload)
+                        let account: AccountId = decode_canonical_norito(value_tlv.payload)
                             .map_err(|_| VMError::DecodeError)?;
                         njson::Value::from(account.to_string())
                     }
@@ -4082,7 +3886,7 @@ impl IVMHost for WsvHost {
 
                 obj.insert(key_name.to_string(), field);
                 let out_json = Json::from(njson::Value::Object(obj));
-                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&out_json)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
                 out.push(1);
@@ -4135,15 +3939,8 @@ impl IVMHost for WsvHost {
                 }
                 let input_len = tlv.payload.len();
                 let nm: iroha_data_model::name::Name =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-                if norito::to_bytes(&nm)
-                    .map_err(|_| VMError::DecodeError)?
-                    .as_slice()
-                    != tlv.payload
-                {
-                    return Err(VMError::DecodeError);
-                }
-                let body = norito::to_bytes(&nm).map_err(|_| VMError::NoritoInvalid)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let body = encode_canonical_norito(&nm)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
                 out.push(1);
@@ -4321,178 +4118,16 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, dst);
                 Ok(Self::input_publish_gas(total))
             }
-            // Development JSON envelope: execute read-only queries and return a pointer-ABI TLV
-            // with the response JSON in the INPUT region.
+            // WsvHost has no query-state executor, but it enforces the canonical V1
+            // request boundary before reporting that limitation.
             crate::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => {
-                // r10 = &Json envelope:
-                // {"type":"wsv.get_balance"|"wsv.list_triggers"|"wsv.has_permission"|
-                //          "wsv.list_domains_for_account"|"wsv.list_accounts_for_domain",
-                //  "payload": {...}}
                 let ptr = vm.register(10);
                 let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::Json {
+                if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                let query_input_len = tlv.payload.len();
-                let query_payload = tlv.payload.to_vec();
-                let json: Json =
-                    decode_from_bytes(&query_payload).map_err(|_| VMError::DecodeError)?;
-                let v: norito::json::Value =
-                    norito::json::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
-                let ty = v
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .ok_or(VMError::NoritoInvalid)?;
-                let payload = v.get("payload").cloned().ok_or(VMError::NoritoInvalid)?;
-
-                // Helper to produce a host-owned JSON TLV and return its pointer plus
-                // response payload length for deterministic query gas.
-                let mut return_json = |val: norito::json::Value| -> Result<(u64, usize), VMError> {
-                    let json = Json::from(&val);
-                    let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                    let body_len = body.len();
-                    let mut out = Vec::with_capacity(7 + body.len() + 32);
-                    out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                    out.push(1);
-                    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                    out.extend_from_slice(&body);
-                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                    out.extend_from_slice(&h);
-                    vm.alloc_host_tlv(&out).map(|ptr| (ptr, body_len))
-                };
-                let query_gas = |response_len: usize| {
-                    Self::singular_query_gas(query_input_len.saturating_add(response_len))
-                };
-
-                // Dispatch simple queries
-                match ty {
-                    // Get account balance (permission-checked): {account_id, asset_id} -> {balance}
-                    "wsv.get_balance" => {
-                        let acc = parse_account_id_literal(
-                            payload
-                                .get("account_id")
-                                .and_then(|v| v.as_str())
-                                .ok_or(VMError::NoritoInvalid)?,
-                        )?;
-                        let asset = payload
-                            .get("asset_id")
-                            .and_then(|v| v.as_str())
-                            .ok_or(VMError::NoritoInvalid)?
-                            .parse()
-                            .map_err(|_| VMError::NoritoInvalid)?;
-                        let authority = self.context_authority_subject();
-                        if let Some(bal) = self.wsv.balance_checked(&authority, &acc, &asset) {
-                            let mut map = njson::Map::new();
-                            map.insert("balance".to_owned(), njson::Value::String(bal.to_string()));
-                            let (p, response_len) = return_json(njson::Value::Object(map))?;
-                            vm.set_register(10, p);
-                            Ok(query_gas(response_len))
-                        } else {
-                            Err(VMError::PermissionDenied)
-                        }
-                    }
-                    // List triggers: -> {triggers: [{name, enabled}, ...]}
-                    "wsv.list_triggers" => {
-                        let mut items = Vec::new();
-                        for (name, en) in self.wsv.triggers.iter() {
-                            let mut map = njson::Map::new();
-                            map.insert("name".to_owned(), njson::Value::from(name.clone()));
-                            map.insert("enabled".to_owned(), njson::Value::from(*en));
-                            items.push(njson::Value::Object(map));
-                        }
-                        let mut map = njson::Map::new();
-                        map.insert("triggers".to_owned(), njson::Value::Array(items));
-                        let (p, response_len) = return_json(njson::Value::Object(map))?;
-                        vm.set_register(10, p);
-                        Ok(query_gas(response_len))
-                    }
-                    // Has permission: {account_id, permission} -> {ok: bool}
-                    "wsv.has_permission" => {
-                        let acc = parse_account_id_literal(
-                            payload
-                                .get("account_id")
-                                .and_then(|v| v.as_str())
-                                .ok_or(VMError::NoritoInvalid)?,
-                        )?;
-                        // Permission can be a string or a JSON object with {type,target}
-                        let ok = if let Some(s) = payload.get("permission").and_then(|v| v.as_str())
-                        {
-                            if let Ok(tok) = parse_permission_name(s) {
-                                self.wsv.has_permission(&acc, &tok)
-                            } else {
-                                false
-                            }
-                        } else if let Some(obj) =
-                            payload.get("permission").and_then(|v| v.as_object())
-                        {
-                            let s =
-                                norito::json::to_json(&norito::json::Value::Object(obj.clone()))
-                                    .map_err(|_| VMError::NoritoInvalid)?;
-                            if let Ok(tok) = parse_permission_json(&s) {
-                                self.wsv.has_permission(&acc, &tok)
-                            } else {
-                                false
-                            }
-                        } else {
-                            return Err(VMError::NoritoInvalid);
-                        };
-                        let mut map = njson::Map::new();
-                        map.insert("ok".to_owned(), njson::Value::from(ok));
-                        let (p, response_len) = return_json(njson::Value::Object(map))?;
-                        vm.set_register(10, p);
-                        Ok(query_gas(response_len))
-                    }
-                    // List domains linked to an account identified by account literal:
-                    // {account_id} -> {domains:[...]}
-                    "wsv.list_domains_for_account" => {
-                        let acc = parse_account_id_literal(
-                            payload
-                                .get("account_id")
-                                .and_then(|v| v.as_str())
-                                .ok_or(VMError::NoritoInvalid)?,
-                        )?;
-                        let domains = self.wsv.domains_for_account(&acc);
-                        let mut map = njson::Map::new();
-                        map.insert(
-                            "domains".to_owned(),
-                            njson::Value::Array(
-                                domains
-                                    .into_iter()
-                                    .map(|domain| njson::Value::from(domain.to_string()))
-                                    .collect(),
-                            ),
-                        );
-                        let (p, response_len) = return_json(njson::Value::Object(map))?;
-                        vm.set_register(10, p);
-                        Ok(query_gas(response_len))
-                    }
-                    // List account literals for all subjects linked to a domain:
-                    // {domain_id} -> {domain_id, account_ids:[...]}
-                    "wsv.list_accounts_for_domain" => {
-                        let domain_literal = payload
-                            .get("domain_id")
-                            .and_then(|v| v.as_str())
-                            .ok_or(VMError::NoritoInvalid)?;
-                        let domain = DomainId::parse_fully_qualified(domain_literal)
-                            .map_err(|_| VMError::NoritoInvalid)?;
-                        let account_ids = self
-                            .wsv
-                            .linked_subjects_for_domain(&domain)
-                            .into_iter()
-                            .map(|subject| njson::Value::from(subject.to_string()))
-                            .collect::<Vec<_>>();
-                        let mut map = njson::Map::new();
-                        map.insert(
-                            "domain_id".to_owned(),
-                            njson::Value::from(domain.to_string()),
-                        );
-                        map.insert("account_ids".to_owned(), njson::Value::Array(account_ids));
-                        let (p, response_len) = return_json(njson::Value::Object(map))?;
-                        vm.set_register(10, p);
-                        Ok(query_gas(response_len))
-                    }
-                    _ => Err(VMError::NoritoInvalid),
-                }
+                let _: QueryRequest = decode_canonical_norito(tlv.payload)?;
+                Err(VMError::NotImplemented { syscall: number })
             }
             // Link ZK_VERIFY syscalls: decode Norito envelope and set per-op verified flags.
             syscalls::SYSCALL_ZK_VERIFY_TRANSFER
@@ -4527,7 +4162,7 @@ impl IVMHost for WsvHost {
                     return Ok(gas);
                 }
                 let env: iroha_data_model::zk::OpenVerifyEnvelope =
-                    match norito::decode_from_bytes(tlv.payload) {
+                    match decode_canonical_norito(tlv.payload) {
                         Ok(env) => env,
                         Err(_) => {
                             vm.set_register(10, 0);
@@ -4563,709 +4198,61 @@ impl IVMHost for WsvHost {
                 Ok(gas)
             }
             syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
-                // r10 = &NoritoBytes or &Json (data model InstructionBox).
-                // Execute supported ZK ISIs against WSV.
+                // r10 = &NoritoBytes(canonical data-model InstructionBox), r11 = operation tag.
                 let p = vm.register(10);
                 let tlv = vm.validate_tlv(p)?;
                 let instruction_gas = Self::mutation_gas(tlv.payload.len());
-                let ib: DMInstructionBox = match tlv.type_id {
-                    PointerType::NoritoBytes => {
-                        // Primary: InstructionBox Norito encoding (name + payload)
-                        match norito::decode_from_bytes::<DMInstructionBox>(tlv.payload) {
-                            Ok(v) => v,
-                            Err(_) => {
-                                // Fallback: accept direct encoding of a few common instructions
-                                // used by tests/tools (SubmitBallot, FinalizeElection).
-                                if let Ok(v) =
-                                    norito::decode_from_bytes::<DMZk::SubmitBallot>(tlv.payload)
-                                {
-                                    DMInstructionBox::from(v)
-                                } else if let Ok(v) =
-                                    norito::decode_from_bytes::<DMZk::FinalizeElection>(tlv.payload)
-                                {
-                                    DMInstructionBox::from(v)
-                                } else {
-                                    // For governance/ZK cases, treat malformed payloads as
-                                    // permission failures rather than codec errors to mirror
-                                    // latch gating semantics expected by tests.
-                                    return Err(VMError::PermissionDenied);
-                                }
-                            }
-                        }
-                    }
-                    PointerType::Json => {
-                        if tlv.payload.len() > self.zk_cfg.max_envelope_bytes {
-                            return Err(VMError::PermissionDenied);
-                        }
-                        // Envelope handlers are routed through the registry above so adding new
-                        // developers' envelopes only requires registering aliases and a decode
-                        // function. Long-term, unify this with the production CoreHost once the
-                        // envelope is stabilized (or keep behind a `dev-envelopes` feature flag
-                        // if intended for tests only).
-                        // Support a JSON envelope: { "type": "...", "payload": { ... } }
-                        // If parsing as envelope fails, fall back to serde InstructionBox for non-ZK tests.
-                        fn parse_json_envelope(
-                            value: norito::json::Value,
-                        ) -> Result<(String, norito::json::Value), VMError>
-                        {
-                            use norito::json::Value;
-                            let Value::Object(mut map) = value else {
-                                return Err(VMError::NoritoInvalid);
-                            };
-                            if map.len() != 2
-                                || !map.contains_key("type")
-                                || !map.contains_key("payload")
-                            {
-                                return Err(VMError::NoritoInvalid);
-                            }
-                            let ty = match map.remove("type").expect("checked contains_key") {
-                                Value::String(s) if !s.trim().is_empty() => s,
-                                _ => return Err(VMError::NoritoInvalid),
-                            };
-                            let payload = map.remove("payload").expect("checked contains_key");
-                            if !matches!(payload, Value::Object(_)) {
-                                return Err(VMError::NoritoInvalid);
-                            }
-                            Ok((ty, payload))
-                        }
-
-                        let root = decode_from_bytes::<Json>(tlv.payload)
-                            .ok()
-                            .and_then(|json| {
-                                norito::json::from_str::<norito::json::Value>(json.get()).ok()
-                            })
-                            .or_else(|| {
-                                norito::json::from_slice::<norito::json::Value>(tlv.payload).ok()
-                            });
-
-                        if let Some(root) = root {
-                            let (ty, payload) = parse_json_envelope(root)?;
-                            let ty_ref = ty.as_str();
-                            let alias_matches = |aliases: &[&str]| aliases.contains(&ty_ref);
-                            let parse_quantity_field =
-                                |payload: &norito::json::Value,
-                                 key: &str|
-                                 -> Result<Quantity, VMError> {
-                                    let value = payload.get(key).ok_or(VMError::NoritoInvalid)?;
-                                    norito::json::from_value::<Quantity>(value.clone())
-                                        .map_err(|_| VMError::NoritoInvalid)
-                                };
-                            match Self::decode_instruction_envelope(ty_ref, payload.clone())? {
-                                Some(instr) => instr,
-                                None => {
-                                    if alias_matches(&["wsv.mint_asset"]) {
-                                        let account_s = payload
-                                            .get("account_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let asset_s = payload
-                                            .get("asset_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let amount = parse_quantity_field(&payload, "amount")?;
-                                        let account = parse_account_id_literal(account_s)?;
-                                        let asset: AssetDefinitionId =
-                                            asset_s.parse().map_err(|_| VMError::NoritoInvalid)?;
-                                        let token = PermissionToken::MintAsset(asset.clone());
-                                        if !self.wsv.has_permission(&self.caller, &token) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let ok =
-                                            self.wsv.mint(&self.caller, account, asset, amount);
-                                        return if ok {
-                                            Ok(instruction_gas)
-                                        } else {
-                                            Err(VMError::PermissionDenied)
-                                        };
-                                    }
-                                    if alias_matches(&["wsv.burn_asset"]) {
-                                        let account_s = payload
-                                            .get("account_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let asset_s = payload
-                                            .get("asset_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let amount = parse_quantity_field(&payload, "amount")?;
-                                        let account = parse_account_id_literal(account_s)?;
-                                        let asset: AssetDefinitionId =
-                                            asset_s.parse().map_err(|_| VMError::NoritoInvalid)?;
-                                        if MockWorldStateView::account_subject(&account)
-                                            != MockWorldStateView::account_subject(&self.caller)
-                                        {
-                                            let token = PermissionToken::BurnAsset(asset.clone());
-                                            if !self.wsv.has_permission(&self.caller, &token) {
-                                                return Err(VMError::PermissionDenied);
-                                            }
-                                        }
-                                        let ok =
-                                            self.wsv.burn(&self.caller, account, asset, amount);
-                                        return if ok {
-                                            Ok(instruction_gas)
-                                        } else {
-                                            Err(VMError::PermissionDenied)
-                                        };
-                                    }
-                                    if alias_matches(&["wsv.transfer_asset"]) {
-                                        let from_s = payload
-                                            .get("from")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let to_s = payload
-                                            .get("to")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let asset_s = payload
-                                            .get("asset_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let amount = parse_quantity_field(&payload, "amount")?;
-                                        let from = parse_account_id_literal(from_s)?;
-                                        let to = parse_account_id_literal(to_s)?;
-                                        let asset: AssetDefinitionId =
-                                            asset_s.parse().map_err(|_| VMError::NoritoInvalid)?;
-                                        if MockWorldStateView::account_subject(&self.caller)
-                                            != MockWorldStateView::account_subject(&from)
-                                            && !self.allow_contract_runtime_asset_transfer_bypass
-                                        {
-                                            let token =
-                                                PermissionToken::TransferAsset(asset.clone());
-                                            if !self.wsv.has_permission(&self.caller, &token) {
-                                                return Err(VMError::PermissionDenied);
-                                            }
-                                        }
-                                        let ok = self.wsv.transfer_with_permission_bypass(
-                                            &self.caller,
-                                            from,
-                                            to,
-                                            asset,
-                                            amount,
-                                            self.allow_contract_runtime_asset_transfer_bypass,
-                                        );
-                                        return if ok {
-                                            Ok(instruction_gas)
-                                        } else {
-                                            Err(VMError::PermissionDenied)
-                                        };
-                                    }
-                                    if alias_matches(&["wsv.nft_mint_asset"]) {
-                                        let nft_s = payload
-                                            .get("nft_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let owner_s = payload
-                                            .get("owner")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let nft: NftId =
-                                            nft_s.parse().map_err(|_| VMError::NoritoInvalid)?;
-                                        let owner = parse_account_id_literal(owner_s)?;
-                                        let ok =
-                                            self.wsv.create_nft(owner, self.caller.clone(), nft);
-                                        if ok {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.nft_transfer_asset"]) {
-                                        let from_s = payload
-                                            .get("from")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let nft_s = payload
-                                            .get("nft_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let to_s = payload
-                                            .get("to")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let from = parse_account_id_literal(from_s)?;
-                                        let nft: NftId =
-                                            nft_s.parse().map_err(|_| VMError::NoritoInvalid)?;
-                                        let to = parse_account_id_literal(to_s)?;
-                                        let ok =
-                                            self.wsv.transfer_nft(&self.caller, from, to, &nft);
-                                        if ok {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.nft_burn_asset"]) {
-                                        let nft_s = payload
-                                            .get("nft_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let nft: NftId =
-                                            nft_s.parse().map_err(|_| VMError::NoritoInvalid)?;
-                                        let ok = self.wsv.burn_nft(&self.caller, &nft);
-                                        if ok {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.nft_set_metadata"]) {
-                                        let nft_s = payload
-                                            .get("nft_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let data = payload
-                                            .get("data")
-                                            .cloned()
-                                            .unwrap_or(norito::json::Value::Null);
-                                        let nft: NftId =
-                                            nft_s.parse().map_err(|_| VMError::NoritoInvalid)?;
-                                        let json = norito::json::to_json(&data)
-                                            .map_err(|_| VMError::NoritoInvalid)?;
-                                        if self.wsv.set_nft_data(
-                                            &self.caller,
-                                            &nft,
-                                            json.into_bytes(),
-                                        ) {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.register_domain"]) {
-                                        let domain_s = payload
-                                            .get("domain_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let domain = DomainId::parse_fully_qualified(domain_s)
-                                            .map_err(|_| VMError::NoritoInvalid)?;
-                                        let ok = self.wsv.register_domain(&self.caller, domain);
-                                        if ok {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.register_account"]) {
-                                        let account_s = payload
-                                            .get("account_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let key_s = payload
-                                            .get("public_key")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let account = parse_account_id_literal(account_s)?;
-                                        let public_key = key_s
-                                            .parse::<PublicKey>()
-                                            .map_err(|_| VMError::NoritoInvalid)?
-                                            .to_string();
-                                        if self.wsv.register_account(&self.caller, account.clone())
-                                            && self.wsv.add_signatory(
-                                                &self.caller,
-                                                &account,
-                                                public_key,
-                                            )
-                                        {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.register_asset_definition"]) {
-                                        return Err(VMError::NoritoInvalid);
-                                    }
-                                    if alias_matches(&["wsv.create_role"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManageRoles,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let role_s = payload
-                                            .get("role_id")
-                                            .or_else(|| payload.get("role"))
-                                            .or_else(|| payload.get("name"))
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let perms = payload
-                                            .get("permissions")
-                                            .or_else(|| payload.get("perms"))
-                                            .cloned()
-                                            .unwrap_or(norito::json::Value::Null);
-                                        let mut perms_set = HashSet::new();
-                                        let mut push_perm =
-                                            |val: &norito::json::Value| -> Result<(), VMError> {
-                                                match val {
-                                                    norito::json::Value::String(s) => {
-                                                        perms_set.insert(parse_permission_name(s)?);
-                                                    }
-                                                    norito::json::Value::Object(_) => {
-                                                        let json = norito::json::to_json(val)
-                                                            .map_err(|_| VMError::NoritoInvalid)?;
-                                                        perms_set
-                                                            .insert(parse_permission_json(&json)?);
-                                                    }
-                                                    _ => return Err(VMError::NoritoInvalid),
-                                                }
-                                                Ok(())
-                                            };
-                                        match perms {
-                                            norito::json::Value::Array(items) => {
-                                                for item in &items {
-                                                    push_perm(item)?;
-                                                }
-                                            }
-                                            norito::json::Value::Null => {
-                                                return Err(VMError::NoritoInvalid);
-                                            }
-                                            other => push_perm(&other)?,
-                                        }
-                                        if self.wsv.create_role(role_s, perms_set) {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.delete_role"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManageRoles,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let role_s = payload
-                                            .get("role_id")
-                                            .or_else(|| payload.get("role"))
-                                            .or_else(|| payload.get("name"))
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        if self.wsv.delete_role(role_s) {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.grant_role"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManageRoles,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let role_s = payload
-                                            .get("role_id")
-                                            .or_else(|| payload.get("role"))
-                                            .or_else(|| payload.get("name"))
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let acc_s = payload
-                                            .get("account_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let acc = parse_account_id_literal(acc_s)?;
-                                        if self.wsv.grant_role(&acc, role_s) {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.revoke_role"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManageRoles,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let role_s = payload
-                                            .get("role_id")
-                                            .or_else(|| payload.get("role"))
-                                            .or_else(|| payload.get("name"))
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let acc_s = payload
-                                            .get("account_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let acc = parse_account_id_literal(acc_s)?;
-                                        if self.wsv.revoke_role(&acc, role_s) {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.grant_permission"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManagePermissions,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let acc_s = payload
-                                            .get("account_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let perm_val = payload
-                                            .get("permission")
-                                            .cloned()
-                                            .unwrap_or(norito::json::Value::Null);
-                                        let acc = parse_account_id_literal(acc_s)?;
-                                        let tok = if let Some(s) = perm_val.as_str() {
-                                            parse_permission_name(s)?
-                                        } else {
-                                            let s = norito::json::to_json(&perm_val)
-                                                .map_err(|_| VMError::NoritoInvalid)?;
-                                            parse_permission_json(&s)?
-                                        };
-                                        self.wsv.grant_permission(&acc, tok);
-                                        return Ok(instruction_gas);
-                                    }
-                                    if alias_matches(&["wsv.revoke_permission"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManagePermissions,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let acc_s = payload
-                                            .get("account_id")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let perm_val = payload
-                                            .get("permission")
-                                            .cloned()
-                                            .unwrap_or(norito::json::Value::Null);
-                                        let acc = parse_account_id_literal(acc_s)?;
-                                        let tok = if let Some(s) = perm_val.as_str() {
-                                            parse_permission_name(s)?
-                                        } else {
-                                            let s = norito::json::to_json(&perm_val)
-                                                .map_err(|_| VMError::NoritoInvalid)?;
-                                            parse_permission_json(&s)?
-                                        };
-                                        self.wsv.revoke_permission(&acc, &tok);
-                                        return Ok(instruction_gas);
-                                    }
-                                    if alias_matches(&["wsv.create_trigger"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManageTriggers,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let name = payload
-                                            .get("name")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        self.wsv.triggers.insert(name.to_string(), true);
-                                        return Ok(instruction_gas);
-                                    }
-                                    if alias_matches(&["wsv.remove_trigger"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManageTriggers,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let name = payload
-                                            .get("name")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        if self.wsv.triggers.remove(name).is_some() {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.set_trigger_enabled"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManageTriggers,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let name = payload
-                                            .get("name")
-                                            .and_then(|v| v.as_str())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let enabled = payload
-                                            .get("enabled")
-                                            .and_then(|v| v.as_bool())
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        if let Some(e) = self.wsv.triggers.get_mut(name) {
-                                            *e = enabled;
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    if alias_matches(&["wsv.register_peer"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManagePeers,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let peer_value = payload
-                                            .get("peer")
-                                            .cloned()
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let peer: Peer = norito::json::from_value(peer_value)
-                                            .map_err(|_| VMError::NoritoInvalid)?;
-                                        self.wsv.peers.insert(peer);
-                                        return Ok(instruction_gas);
-                                    }
-                                    if alias_matches(&["wsv.unregister_peer"]) {
-                                        if !self.wsv.has_permission(
-                                            &self.caller,
-                                            &PermissionToken::ManagePeers,
-                                        ) {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                        let peer_value = payload
-                                            .get("peer")
-                                            .cloned()
-                                            .ok_or(VMError::NoritoInvalid)?;
-                                        let peer: Peer = norito::json::from_value(peer_value)
-                                            .map_err(|_| VMError::NoritoInvalid)?;
-                                        if self.wsv.peers.remove(&peer) {
-                                            return Ok(instruction_gas);
-                                        } else {
-                                            return Err(VMError::PermissionDenied);
-                                        }
-                                    }
-                                    return Err(VMError::NoritoInvalid);
-                                }
-                            }
-                        } else {
-                            // Fallback: non-envelope instruction JSON payload.
-                            norito::json::from_slice::<DMInstructionBox>(tlv.payload)
-                                .map_err(|_| VMError::NoritoInvalid)?
-                        }
-                    }
-                    _ => return Err(VMError::NoritoInvalid),
-                };
+                if tlv.type_id != PointerType::NoritoBytes {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let ib: DMInstructionBox = decode_canonical_norito(tlv.payload)?;
                 let any = (&*ib) as &dyn iroha_data_model::isi::Instruction;
                 let any_ref = any.as_any();
-                // RegisterZkAsset
-                if let Some(instr) = any_ref.downcast_ref::<DMZk::RegisterZkAsset>() {
-                    let mode = match *instr.mode() {
-                        DMZk::ZkAssetMode::ZkNative => ZkAssetMode::ZkNative,
-                        DMZk::ZkAssetMode::Hybrid => ZkAssetMode::Hybrid,
-                    };
-                    // Permission: RegisterZkAsset(asset)
-                    let tok = PermissionToken::RegisterZkAsset(instr.asset().clone());
-                    if !self.wsv.has_permission(&self.caller, &tok) {
-                        return Err(VMError::PermissionDenied);
-                    }
-                    let ok = self.wsv.register_zk_asset(
-                        instr.asset().clone(),
-                        ZkPolicyConfig {
-                            mode,
-                            allow_shield: *instr.allow_shield(),
-                            allow_unshield: *instr.allow_unshield(),
-                            vk_transfer: instr.vk_transfer().clone(),
-                            vk_unshield: instr.vk_unshield().clone(),
-                            vk_shield: instr.vk_shield().clone(),
-                        },
-                    );
-                    return if ok {
+                match vm.register(11) {
+                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {
+                        let Some(instr) = any_ref.downcast_ref::<DMZk::SubmitBallot>() else {
+                            return Err(VMError::PermissionDenied);
+                        };
+                        self.handle_submit_ballot(instr)?;
                         Ok(instruction_gas)
-                    } else {
-                        Err(VMError::PermissionDenied)
-                    };
-                }
-                // Shield
-                if let Some(instr) = any_ref.downcast_ref::<DMZk::Shield>() {
-                    let amount = instr.amount().clone();
-                    // Permission: Shield(asset)
-                    let tok = PermissionToken::Shield(instr.asset().clone());
-                    if !self.wsv.has_permission(&self.caller, &tok) {
-                        return Err(VMError::PermissionDenied);
                     }
-                    let from = Self::materialize_subject_account(&mut self.wsv, instr.from());
-                    let ok =
-                        self.wsv
-                            .shield(&from, instr.asset(), amount, *instr.note_commitment());
-                    return if ok {
-                        Ok(instruction_gas)
-                    } else {
-                        Err(VMError::PermissionDenied)
-                    };
-                }
-                // ZkTransfer
-                if let Some(instr) = any_ref.downcast_ref::<DMZk::ZkTransfer>() {
-                    // Require a successful verify call before mutation
-                    if !self.zk_verified_transfer {
-                        return Err(VMError::PermissionDenied);
+                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD => {
+                        let Some(instr) = any_ref.downcast_ref::<DMZk::Unshield>() else {
+                            return Err(VMError::PermissionDenied);
+                        };
+                        let amount = instr.public_amount().clone();
+                        let tok = PermissionToken::Unshield(instr.asset().clone());
+                        if !self.wsv.has_permission(&self.caller, &tok)
+                            || !self.zk_verified_unshield
+                        {
+                            return Err(VMError::PermissionDenied);
+                        }
+                        self.zk_verified_unshield = false;
+                        let to = Self::materialize_subject_account(&mut self.wsv, instr.to());
+                        if self.wsv.unshield(
+                            &to,
+                            instr.asset(),
+                            amount,
+                            instr.inputs().as_slice(),
+                            instr.outputs().as_slice(),
+                            instr.proof(),
+                        ) {
+                            Ok(instruction_gas)
+                        } else {
+                            Err(VMError::PermissionDenied)
+                        }
                     }
-                    self.zk_verified_transfer = false; // one-shot
-                    let ok = self.wsv.zk_transfer(
-                        instr.asset(),
-                        instr.inputs().as_slice(),
-                        instr.outputs().as_slice(),
-                        instr.proof(),
-                    );
-                    return if ok {
-                        Ok(instruction_gas)
-                    } else {
-                        Err(VMError::PermissionDenied)
-                    };
-                }
-                // Unshield
-                if let Some(instr) = any_ref.downcast_ref::<DMZk::Unshield>() {
-                    let amount = instr.public_amount().clone();
-                    // Permission: Unshield(asset)
-                    let tok = PermissionToken::Unshield(instr.asset().clone());
-                    if !self.wsv.has_permission(&self.caller, &tok) {
-                        return Err(VMError::PermissionDenied);
+                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE => {
+                        if any_ref
+                            .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+                            .is_none()
+                        {
+                            return Err(VMError::PermissionDenied);
+                        }
+                        Err(VMError::NotImplemented { syscall: number })
                     }
-                    // Require prior verify
-                    if !self.zk_verified_unshield {
-                        return Err(VMError::PermissionDenied);
-                    }
-                    self.zk_verified_unshield = false;
-                    let to = Self::materialize_subject_account(&mut self.wsv, instr.to());
-                    let ok = self.wsv.unshield(
-                        &to,
-                        instr.asset(),
-                        amount,
-                        instr.inputs().as_slice(),
-                        instr.outputs().as_slice(),
-                        instr.proof(),
-                    );
-                    return if ok {
-                        Ok(instruction_gas)
-                    } else {
-                        Err(VMError::PermissionDenied)
-                    };
+                    _ => Err(VMError::PermissionDenied),
                 }
-                // CreateElection
-                if let Some(instr) = any_ref.downcast_ref::<DMZk::CreateElection>() {
-                    let ok = self.wsv.create_election(
-                        instr.election_id().clone(),
-                        *instr.options(),
-                        *instr.eligible_root(),
-                        *instr.start_ts(),
-                        *instr.end_ts(),
-                    );
-                    return if ok {
-                        Ok(instruction_gas)
-                    } else {
-                        Err(VMError::PermissionDenied)
-                    };
-                }
-                // SubmitBallot
-                if let Some(instr) = any_ref.downcast_ref::<DMZk::SubmitBallot>() {
-                    self.handle_submit_ballot(instr)?;
-                    return Ok(instruction_gas);
-                }
-                // FinalizeElection
-                if let Some(instr) = any_ref.downcast_ref::<DMZk::FinalizeElection>() {
-                    self.handle_finalize_election(instr)?;
-                    return Ok(instruction_gas);
-                }
-                // Unsupported instruction kind for this mock
-                Err(VMError::PermissionDenied)
             }
             // ZK read-only syscalls for shielded ledger/elections
             syscalls::SYSCALL_ZK_ROOTS_GET => {
@@ -5275,8 +4262,7 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let input_len = tlv.payload.len();
-                let req: crate::zk_verify::RootsGetRequest =
-                    norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let req: crate::zk_verify::RootsGetRequest = decode_canonical_norito(tlv.payload)?;
                 let asset: AssetDefinitionId =
                     req.asset_id.parse().map_err(|_| VMError::NoritoInvalid)?;
                 let (latest, roots, height) = if let Some(state) = self.wsv.zk_assets.get(&asset) {
@@ -5304,7 +4290,7 @@ impl IVMHost for WsvHost {
                     roots,
                     height,
                 };
-                let body = norito::to_bytes(&resp).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&resp)?;
                 let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
                 preflight_reserved_syscall_gas(vm, gas)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -5326,14 +4312,16 @@ impl IVMHost for WsvHost {
                 }
                 let input_len = tlv.payload.len();
                 let req: crate::zk_verify::VoteGetTallyRequest =
-                    norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                    decode_canonical_norito(tlv.payload)?;
                 let (finalized, tally) = if let Some(e) = self.wsv.elections.get(&req.election_id) {
+                    DMZk::validate_election_tally_v1(e.options, e.tally.len())
+                        .map_err(|_| VMError::NoritoInvalid)?;
                     (e.finalized, e.tally.clone())
                 } else {
                     (false, Vec::new())
                 };
                 let resp = crate::zk_verify::VoteGetTallyResponse { finalized, tally };
-                let body = norito::to_bytes(&resp).map_err(|_| VMError::NoritoInvalid)?;
+                let body = encode_canonical_norito(&resp)?;
                 let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
                 preflight_reserved_syscall_gas(vm, gas)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -5354,7 +4342,7 @@ impl IVMHost for WsvHost {
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
                 }
-                let peer = parse_peer_any(tlv.payload)?;
+                let peer = parse_peer(tlv.payload)?;
                 self.wsv.peers.insert(peer);
                 Ok(Self::mutation_gas(0))
             }
@@ -5365,7 +4353,7 @@ impl IVMHost for WsvHost {
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
                 }
-                let peer = parse_peer_any(tlv.payload)?;
+                let peer = parse_peer(tlv.payload)?;
                 if self.wsv.peers.remove(&peer) {
                     Ok(Self::mutation_gas(0))
                 } else {
@@ -5379,7 +4367,7 @@ impl IVMHost for WsvHost {
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
                 }
-                let name = parse_json_string_any(tlv.payload, &["name"])?;
+                let name = parse_json_string(tlv.payload, &["name"])?;
                 self.wsv.triggers.insert(name, true);
                 Ok(Self::mutation_gas(0))
             }
@@ -5419,8 +4407,7 @@ impl IVMHost for WsvHost {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                let req: scode::DeactivateContractInstance =
-                    norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let req: scode::DeactivateContractInstance = decode_canonical_norito(tlv.payload)?;
                 if self
                     .wsv
                     .contract_instances
@@ -5438,8 +4425,7 @@ impl IVMHost for WsvHost {
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                let req: scode::RemoveSmartContractBytes =
-                    norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let req: scode::RemoveSmartContractBytes = decode_canonical_norito(tlv.payload)?;
                 let code_hash = *req.code_hash();
                 if self.wsv.contract_manifests.contains(&code_hash) {
                     return Err(VMError::PermissionDenied);
@@ -5484,7 +4470,7 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let json: Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let signatory: PublicKey =
                     njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
                 if self
@@ -5504,7 +4490,7 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let json: Json =
-                    decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let signatory: PublicKey =
                     njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
                 let key = signatory.to_string();
@@ -5541,7 +4527,7 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let json: Json =
-                    decode_from_bytes(val_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                    decode_canonical_norito(val_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let value: njson::Value =
                     njson::from_str(json.get()).map_err(|_| VMError::NoritoInvalid)?;
                 let minified = njson::to_vec(&value).map_err(|_| VMError::NoritoInvalid)?;
@@ -5714,7 +4700,7 @@ impl IVMHost for WsvHost {
                 // Return the domainless account subject so raw equality checks inside
                 // contracts match AccountId::parse(...) literals and stored AccountId state.
                 let authority = self.context_authority_subject();
-                let payload = norito::to_bytes(&authority).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&authority)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                 tlv.push(1);
@@ -5743,7 +4729,7 @@ impl IVMHost for WsvHost {
                     vm.set_register(10, 0);
                     return Ok(Self::sysvar_gas(0));
                 };
-                let payload = norito::to_bytes(contract).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(contract)?;
                 let pointer = Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, &payload)?;
                 vm.set_register(10, pointer);
                 Ok(Self::sysvar_gas(payload.len()))
@@ -5753,8 +4739,7 @@ impl IVMHost for WsvHost {
                     .contract_runtime_address
                     .as_ref()
                     .ok_or(VMError::PermissionDenied)?;
-                let payload =
-                    norito::to_bytes(&contract.subject_id()).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&contract.subject_id())?;
                 let pointer = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
                 vm.set_register(10, pointer);
                 Ok(Self::sysvar_gas(payload.len()))
@@ -5772,10 +4757,7 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS => {
                 let alias_pointer = vm.register(10);
                 let alias_tlv = vm.validate_tlv(alias_pointer)?;
-                if !matches!(
-                    alias_tlv.type_id,
-                    PointerType::Blob | PointerType::NoritoBytes
-                ) {
+                if alias_tlv.type_id != PointerType::Blob {
                     return Err(VMError::NoritoInvalid);
                 }
                 let alias_input_len = alias_tlv.payload.len();
@@ -5787,7 +4769,7 @@ impl IVMHost for WsvHost {
                     .get(&alias)
                     .map(|binding| binding.account.clone())
                     .ok_or(VMError::PermissionDenied)?;
-                let payload = norito::to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
+                let payload = encode_canonical_norito(&account)?;
                 let pointer = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
                 vm.set_register(10, pointer);
                 Ok(Self::singular_query_gas(
@@ -5801,7 +4783,7 @@ impl IVMHost for WsvHost {
                 {
                     return Err(VMError::PermissionDenied);
                 }
-                // r10=&AccountId (subject), r11=permission as Name or Json
+                // r10=&AccountId (subject), r11=&Name(permission)
                 let subject = self.decode_account_subject_reg(vm, 10)?;
                 // Decode permission token from TLV in r11
                 let token = {
@@ -5817,11 +4799,10 @@ impl IVMHost for WsvHost {
                             tlv.payload.len()
                         );
                     }
-                    match tlv.type_id {
-                        PointerType::Name => parse_permission_name_any(tlv.payload)?,
-                        PointerType::Json => parse_permission_json_any(tlv.payload)?,
-                        _ => return Err(VMError::NoritoInvalid),
+                    if tlv.type_id != PointerType::Name {
+                        return Err(VMError::NoritoInvalid);
                     }
+                    parse_permission_name_payload(tlv.payload)?
                 };
                 self.wsv.grant_permission(&subject, token);
                 Ok(Self::mutation_gas(0))
@@ -5837,11 +4818,10 @@ impl IVMHost for WsvHost {
                 let token = {
                     let v = vm.register(11);
                     let tlv = vm.validate_tlv(v)?;
-                    match tlv.type_id {
-                        PointerType::Name => parse_permission_name_any(tlv.payload)?,
-                        PointerType::Json => parse_permission_json_any(tlv.payload)?,
-                        _ => return Err(VMError::NoritoInvalid),
+                    if tlv.type_id != PointerType::Name {
+                        return Err(VMError::NoritoInvalid);
                     }
+                    parse_permission_name_payload(tlv.payload)?
                 };
                 self.wsv.revoke_permission(&subject, &token);
                 Ok(Self::mutation_gas(0))
@@ -5894,8 +4874,7 @@ impl IVMHost for WsvHost {
                         return Err(VMError::NoritoInvalid);
                     }
                     let mut set = HashSet::new();
-                    for name in parse_json_string_array_any(tlv.payload, &["perms", "permissions"])?
-                    {
+                    for name in parse_json_string_array(tlv.payload, &["perms", "permissions"])? {
                         let tok = parse_permission_name(&name)?;
                         set.insert(tok);
                     }
@@ -6118,6 +5097,8 @@ impl IVMHost for WsvHost {
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
                 }
+                let _: Json =
+                    decode_canonical_norito(tlv.payload).map_err(|_| VMError::DecodeError)?;
                 if self
                     .wsv
                     .set_nft_metadata(&self.caller, &nft, key, tlv.payload.to_vec())
@@ -6211,178 +5192,37 @@ impl IVMHost for WsvHost {
 
 // Keep tests at the end of the file to satisfy clippy without local allows.
 #[cfg(test)]
-mod tests_permission_json {
-    use super::*;
-    use iroha_data_model::domain::DomainId;
-
-    fn account(domain: &str, controller: &str) -> AccountId {
-        let _domain_id = DomainId::try_new(domain, "universal").expect("test domain id");
-        let public_key: PublicKey = controller.parse().expect("test public key");
-        AccountId::new(public_key)
-    }
-
-    #[test]
-    fn parse_read_assets_json_ok() {
-        let alice = account(
-            "domain",
-            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
-        );
-        let target = njson::to_json(&alice).expect("serialize account target");
-        let s = format!("{{\"type\":\"read_assets\",\"target\":{target}}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(
-            tok,
-            PermissionToken::ReadAccountAssets(id) if id == alice
-        ));
-    }
-
-    #[test]
-    fn parse_unknown_json_err() {
-        let s = "{\"type\":\"unknown\"}";
-        assert!(matches!(
-            parse_permission_json(s),
-            Err(VMError::NoritoInvalid)
-        ));
-    }
-
-    #[test]
-    fn parse_register_zk_asset_ok() {
-        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("land", "universal").unwrap(),
-            "gold".parse().unwrap(),
-        );
-        let s = format!("{{\"type\":\"register_zk_asset\",\"target\":\"{ad}\"}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(tok, PermissionToken::RegisterZkAsset(id) if id == ad));
-    }
-
-    #[test]
-    fn parse_shield_ok() {
-        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("land", "universal").unwrap(),
-            "silver".parse().unwrap(),
-        );
-        let s = format!("{{\"type\":\"shield\",\"target\":\"{ad}\"}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(tok, PermissionToken::Shield(id) if id == ad));
-    }
-
-    #[test]
-    fn parse_unshield_ok() {
-        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("land", "universal").unwrap(),
-            "bronze".parse().unwrap(),
-        );
-        let s = format!("{{\"type\":\"unshield\",\"target\":\"{ad}\"}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(tok, PermissionToken::Unshield(id) if id == ad));
-    }
-
-    #[test]
-    fn parse_add_signatory_ok() {
-        let bob = account(
-            "wonder",
-            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-        );
-        let target = njson::to_json(&bob).expect("serialize account target");
-        let s = format!("{{\"type\":\"add_signatory\",\"target\":{target}}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(
-            tok,
-            PermissionToken::AddSignatory(id) if id == bob
-        ));
-    }
-
-    #[test]
-    fn parse_remove_signatory_ok() {
-        let bob = account(
-            "wonder",
-            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-        );
-        let target = njson::to_json(&bob).expect("serialize account target");
-        let s = format!("{{\"type\":\"remove_signatory\",\"target\":{target}}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(
-            tok,
-            PermissionToken::RemoveSignatory(id) if id == bob
-        ));
-    }
-
-    #[test]
-    fn parse_set_account_quorum_ok() {
-        let bob = account(
-            "wonder",
-            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-        );
-        let target = njson::to_json(&bob).expect("serialize account target");
-        let s = format!("{{\"type\":\"set_account_quorum\",\"target\":{target}}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(
-            tok,
-            PermissionToken::SetAccountQuorum(id) if id == bob
-        ));
-    }
-
-    #[test]
-    fn parse_set_account_detail_ok() {
-        let bob = account(
-            "wonder",
-            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-        );
-        let target = njson::to_json(&bob).expect("serialize account target");
-        let s = format!("{{\"type\":\"set_account_detail\",\"target\":{target}}}");
-        let tok = parse_permission_json(&s).expect("parse ok");
-        assert!(matches!(
-            tok,
-            PermissionToken::SetAccountDetail(id) if id == bob
-        ));
-    }
-
-    #[test]
-    fn parse_manage_permissions_variants_ok() {
-        let direct = parse_permission_json("\"manage_permissions\"").expect("parse direct");
-        assert!(matches!(direct, PermissionToken::ManagePermissions));
-
-        let wrapped =
-            parse_permission_json("{\"type\":\"manage_roles\"}").expect("parse wrapped object");
-        assert!(matches!(wrapped, PermissionToken::ManageRoles));
-    }
-
-    #[test]
-    fn parse_custom_permission_variants_ok() {
-        let direct = parse_permission_json("\"BenefitAdmin\"").expect("parse direct custom");
-        assert!(matches!(direct, PermissionToken::Custom(name) if name == "BenefitAdmin"));
-
-        let wrapped = parse_permission_json("{\"type\":\"custom\",\"name\":\"BenefitSpend\"}")
-            .expect("parse wrapped custom");
-        assert!(matches!(wrapped, PermissionToken::Custom(name) if name == "BenefitSpend"));
-    }
-}
-
-#[cfg(test)]
 mod tests_peer_json {
     use super::*;
 
     #[test]
-    fn parse_peer_accepts_raw_and_wrapped_json() {
+    fn parse_peer_accepts_canonical_string_and_wrapped_json() {
         const SAMPLE: &str =
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774@127.0.0.1:1337";
 
         let raw = format!("\"{SAMPLE}\"");
-        let peer_raw = parse_peer_any(raw.as_bytes()).expect("raw peer parses");
+        let raw = Json::from_str_norito(&raw).expect("string Json");
+        let raw = encode_canonical_norito(&raw).expect("canonical string Json");
+        let peer_raw = parse_peer(&raw).expect("string peer parses");
         assert_eq!(peer_raw.to_string(), SAMPLE);
 
         let wrapped = format!("{{\"peer\":\"{SAMPLE}\"}}");
-        let peer_wrapped = parse_peer_any(wrapped.as_bytes()).expect("wrapped peer parses");
+        let wrapped = Json::from_str_norito(&wrapped).expect("wrapped Json");
+        let wrapped = encode_canonical_norito(&wrapped).expect("canonical wrapped Json");
+        let peer_wrapped = parse_peer(&wrapped).expect("wrapped peer parses");
         assert_eq!(peer_wrapped.to_string(), SAMPLE);
     }
 
     #[test]
-    fn parse_peer_rejects_missing_payload() {
-        assert!(matches!(
-            parse_peer_any(br#"{"not_peer":true}"#),
+    fn parse_peer_rejects_raw_and_missing_payload() {
+        assert_eq!(
+            parse_peer(br#"{"peer":"not-a-frame"}"#),
             Err(VMError::NoritoInvalid)
-        ));
+        );
+        let missing =
+            Json::from_str_norito(r#"{"not_peer":true}"#).expect("missing-peer Json value");
+        let missing = encode_canonical_norito(&missing).expect("canonical missing-peer Json");
+        assert!(matches!(parse_peer(&missing), Err(VMError::NoritoInvalid)));
     }
 }
 
@@ -6415,7 +5255,9 @@ mod tests_axt_policy_snapshot {
         assert_eq!(entry.policy.current_slot, 42);
 
         let mut wsv_loaded = MockWorldStateView::new();
-        wsv_loaded.load_axt_policy_snapshot_model(&snapshot);
+        wsv_loaded
+            .load_axt_policy_snapshot_model(&snapshot)
+            .expect("canonical policy snapshot");
         let policies = wsv_loaded.axt_policy_snapshot();
         let loaded = policies.get(&dsid).expect("policy present");
         assert_eq!(loaded.target_lane.as_u32(), 3);
@@ -6423,6 +5265,35 @@ mod tests_axt_policy_snapshot {
         assert_eq!(loaded.min_sub_nonce, 9);
         assert_eq!(loaded.current_slot, 42);
         assert_eq!(loaded.manifest_root, [0x11; 32]);
+    }
+
+    #[test]
+    fn noncanonical_axt_policy_snapshot_is_rejected_without_mutation() {
+        let mut wsv = MockWorldStateView::new();
+        let dsid = DataSpaceId::new(7);
+        wsv.set_axt_policy(
+            dsid,
+            DataspaceAxtPolicy {
+                manifest_root: [0x11; 32],
+                target_lane: LaneId::new(3),
+                min_handle_era: 5,
+                min_sub_nonce: 9,
+                current_slot: 42,
+            },
+        );
+        let before = wsv.axt_policy_snapshot_model();
+        let mut invalid = before.clone();
+        invalid.version ^= 1;
+
+        assert!(matches!(
+            SpaceDirectoryAxtPolicy::from_policy_snapshot(&invalid),
+            Err(AxtPolicySnapshotValidationError::VersionMismatch { .. })
+        ));
+        assert!(matches!(
+            wsv.load_axt_policy_snapshot_model(&invalid),
+            Err(AxtPolicySnapshotValidationError::VersionMismatch { .. })
+        ));
+        assert_eq!(wsv.axt_policy_snapshot_model(), before);
     }
 
     #[test]
@@ -6454,10 +5325,7 @@ mod tests_axt_policy_snapshot {
 
 #[cfg(test)]
 mod tests_governance_elections {
-    use iroha_data_model::{
-        isi::BuiltInInstruction,
-        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
-    };
+    use iroha_data_model::proof::{ProofAttachment, ProofBox, VerifyingKeyId};
 
     use super::*;
     use crate::Memory;
@@ -6488,6 +5356,57 @@ mod tests_governance_elections {
         );
         attachment.envelope_hash = Some(hash);
         attachment
+    }
+
+    #[test]
+    fn create_election_enforces_v1_shape_before_mutation() {
+        let mut wsv = MockWorldStateView::new();
+
+        assert!(!wsv.create_election("zero".to_owned(), 0, [0; 32], 0, 1));
+        assert!(wsv.elections.is_empty());
+        assert!(!wsv.create_election(
+            "too-many".to_owned(),
+            DMZk::MAX_ELECTION_OPTIONS_V1 + 1,
+            [0; 32],
+            0,
+            1
+        ));
+        assert!(wsv.elections.is_empty());
+        assert!(!wsv.create_election("inverted".to_owned(), 1, [0; 32], 2, 1));
+        assert!(wsv.elections.is_empty());
+
+        assert!(wsv.create_election("one".to_owned(), 1, [1; 32], 0, 1));
+        let one = wsv.elections.get("one").expect("one-option election");
+        assert_eq!(one.options, 1);
+        assert_eq!(one.tally, vec![0]);
+
+        assert!(!wsv.create_election(
+            "one".to_owned(),
+            DMZk::MAX_ELECTION_OPTIONS_V1,
+            [2; 32],
+            0,
+            1
+        ));
+        let one = wsv
+            .elections
+            .get("one")
+            .expect("original election retained");
+        assert_eq!(one.options, 1);
+        assert_eq!(one.eligible_root, [1; 32]);
+        assert_eq!(one.tally, vec![0]);
+
+        assert!(wsv.create_election(
+            "max".to_owned(),
+            DMZk::MAX_ELECTION_OPTIONS_V1,
+            [3; 32],
+            0,
+            1
+        ));
+        assert_eq!(
+            wsv.elections.get("max").expect("max election").tally.len(),
+            DMZk::MAX_ELECTION_OPTIONS_V1 as usize
+        );
+        assert_eq!(wsv.elections.len(), 2);
     }
 
     #[test]
@@ -6600,6 +5519,92 @@ mod tests_governance_elections {
         assert!(wsv.finalize_election("e-invalid", vec![10, 11], proof_ok));
         let e = wsv.elections.get("e-invalid").unwrap();
         assert_eq!(e.tally, vec![10, 11]);
+    }
+
+    #[test]
+    fn finalize_rejects_corrupt_stored_shape_without_mutation() {
+        let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
+        assert!(wsv.create_election("corrupt".to_owned(), 2, [0; 32], 0, u64::MAX));
+        wsv.elections
+            .get_mut("corrupt")
+            .expect("election")
+            .tally
+            .pop();
+
+        assert!(!wsv.finalize_election("corrupt", vec![5, 7], dummy_tally_proof([0x44; 32])));
+        let election = wsv.elections.get("corrupt").expect("election retained");
+        assert!(!election.finalized);
+        assert_eq!(election.tally, vec![0]);
+    }
+
+    #[test]
+    fn finalize_enforces_zero_max_and_over_max_tally_boundaries() {
+        let mut wsv = MockWorldStateView::new();
+        register_vote_vk(&mut wsv);
+        for election_id in ["submitted", "stored-zero", "stored-over"] {
+            assert!(wsv.create_election(
+                election_id.to_owned(),
+                DMZk::MAX_ELECTION_OPTIONS_V1,
+                [0; 32],
+                0,
+                u64::MAX
+            ));
+        }
+
+        assert!(!wsv.finalize_election("submitted", Vec::new(), dummy_tally_proof([0x50; 32])));
+        assert!(!wsv.finalize_election(
+            "submitted",
+            vec![1; DMZk::MAX_ELECTION_OPTIONS_V1 as usize + 1],
+            dummy_tally_proof([0x51; 32])
+        ));
+        let submitted = wsv.elections.get("submitted").expect("election");
+        assert!(!submitted.finalized);
+        assert_eq!(
+            submitted.tally,
+            vec![0; DMZk::MAX_ELECTION_OPTIONS_V1 as usize]
+        );
+
+        wsv.elections
+            .get_mut("stored-zero")
+            .expect("election")
+            .tally
+            .clear();
+        assert!(!wsv.finalize_election(
+            "stored-zero",
+            vec![1; DMZk::MAX_ELECTION_OPTIONS_V1 as usize],
+            dummy_tally_proof([0x52; 32])
+        ));
+        let stored_zero = wsv.elections.get("stored-zero").expect("election");
+        assert!(!stored_zero.finalized);
+        assert!(stored_zero.tally.is_empty());
+
+        wsv.elections
+            .get_mut("stored-over")
+            .expect("election")
+            .tally
+            .push(0);
+        assert!(!wsv.finalize_election(
+            "stored-over",
+            vec![1; DMZk::MAX_ELECTION_OPTIONS_V1 as usize],
+            dummy_tally_proof([0x53; 32])
+        ));
+        let stored_over = wsv.elections.get("stored-over").expect("election");
+        assert!(!stored_over.finalized);
+        assert_eq!(
+            stored_over.tally.len(),
+            DMZk::MAX_ELECTION_OPTIONS_V1 as usize + 1
+        );
+
+        let final_tally: Vec<u64> = (0..DMZk::MAX_ELECTION_OPTIONS_V1).map(u64::from).collect();
+        assert!(wsv.finalize_election(
+            "submitted",
+            final_tally.clone(),
+            dummy_tally_proof([0x54; 32])
+        ));
+        let submitted = wsv.elections.get("submitted").expect("election");
+        assert!(submitted.finalized);
+        assert_eq!(submitted.tally, final_tally);
     }
 
     #[test]
@@ -6789,7 +5794,8 @@ mod tests_governance_elections {
             ),
             nullifier: [7u8; 32],
         };
-        let ib_bytes = sb.encode_as_instruction_box();
+        let ib_bytes = encode_canonical_norito(&DMInstructionBox::from(sb))
+            .expect("encode canonical ballot InstructionBox");
         let mut tlv = Vec::with_capacity(7 + ib_bytes.len() + 32);
         tlv.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
         tlv.push(1);
@@ -6799,6 +5805,7 @@ mod tests_governance_elections {
         tlv.extend_from_slice(&hh);
         vm.memory.preload_input(0, &tlv).expect("preload input");
         vm.set_register(10, Memory::INPUT_START);
+        vm.set_register(11, syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
         let res = unsafe {
             let host_ptr = vm
                 .host_mut_any()
@@ -6935,23 +5942,13 @@ mod tests_governance_elections {
                 vote_vk_id(),
             ),
         };
-        let ib_bytes = fe.encode_as_instruction_box();
-        let mut tlv = Vec::with_capacity(7 + ib_bytes.len() + 32);
-        tlv.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-        tlv.push(1);
-        tlv.extend_from_slice(&(ib_bytes.len() as u32).to_be_bytes());
-        tlv.extend_from_slice(&ib_bytes);
-        let hh: [u8; 32] = iroha_crypto::Hash::new(&ib_bytes).into();
-        tlv.extend_from_slice(&hh);
-        vm.memory.preload_input(0, &tlv).expect("preload input");
-        vm.set_register(10, Memory::INPUT_START);
-        let res = unsafe {
-            let host_ptr = vm
+        let res = {
+            let host = vm
                 .host_mut_any()
-                .unwrap()
+                .expect("host")
                 .downcast_mut::<WsvHost>()
-                .unwrap() as *mut WsvHost;
-            (*host_ptr).syscall(syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
+                .expect("WsvHost");
+            host.handle_finalize_election(&fe)
         };
         assert!(matches!(res, Err(VMError::PermissionDenied)));
     }
@@ -7601,6 +6598,83 @@ mod tests_null_decode {
     }
 
     #[test]
+    fn vote_tally_query_rejects_zero_and_over_max_shapes_and_returns_exact_max() {
+        let caller: AccountId = test_account_id(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+            "wonderland",
+        );
+        for corrupt_len in [0, DMZk::MAX_ELECTION_OPTIONS_V1 as usize + 1] {
+            let mut wsv = MockWorldStateView::new();
+            assert!(wsv.create_election(
+                "corrupt".to_owned(),
+                DMZk::MAX_ELECTION_OPTIONS_V1,
+                [0; 32],
+                0,
+                u64::MAX
+            ));
+            wsv.elections.get_mut("corrupt").expect("election").tally = vec![0; corrupt_len];
+            let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(host);
+
+            let request = crate::zk_verify::VoteGetTallyRequest {
+                election_id: "corrupt".to_owned(),
+            };
+            let payload = encode_canonical_norito(&request).expect("encode tally request");
+            let request_ptr = vm
+                .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+                .expect("allocate tally request");
+            vm.set_register(10, request_ptr);
+
+            assert_eq!(
+                call_syscall(&mut vm, syscalls::SYSCALL_ZK_VOTE_GET_TALLY),
+                Err(VMError::NoritoInvalid),
+                "stored tally length {corrupt_len} must fail closed"
+            );
+            assert_eq!(
+                vm.register(10),
+                request_ptr,
+                "failed query must not publish a response"
+            );
+        }
+
+        let mut wsv = MockWorldStateView::new();
+        assert!(wsv.create_election(
+            "max".to_owned(),
+            DMZk::MAX_ELECTION_OPTIONS_V1,
+            [0; 32],
+            0,
+            u64::MAX
+        ));
+        let expected: Vec<u64> = (0..DMZk::MAX_ELECTION_OPTIONS_V1).map(u64::from).collect();
+        let election = wsv.elections.get_mut("max").expect("election");
+        election.tally.clone_from(&expected);
+        election.finalized = true;
+        let host = WsvHost::new_with_subject(wsv, caller, HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+        let request = crate::zk_verify::VoteGetTallyRequest {
+            election_id: "max".to_owned(),
+        };
+        let payload = encode_canonical_norito(&request).expect("encode tally request");
+        let request_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &payload))
+            .expect("allocate tally request");
+        vm.set_register(10, request_ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_ZK_VOTE_GET_TALLY)
+            .expect("valid max-size tally response");
+        let output = vm
+            .validate_tlv(vm.register(10))
+            .expect("tally response TLV");
+        assert_eq!(output.type_id, PointerType::NoritoBytes);
+        let response: crate::zk_verify::VoteGetTallyResponse =
+            decode_canonical_norito(output.payload).expect("canonical tally response");
+        assert!(response.finalized);
+        assert_eq!(response.tally, expected);
+        assert_eq!(response.tally.len(), DMZk::MAX_ELECTION_OPTIONS_V1 as usize);
+    }
+
+    #[test]
     fn input_publish_tlv_rejects_oversized_envelope() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -7784,7 +6858,7 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn smartcontract_query_json_envelope_charges_request_and_response_bytes() {
+    fn smartcontract_query_accepts_only_canonical_query_request() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
@@ -7794,79 +6868,281 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let envelope = norito::json::object([
-            (
-                "type",
-                norito::json::to_value("wsv.list_triggers").expect("serialize type"),
-            ),
-            (
-                "payload",
-                norito::json::Value::Object(norito::json::Map::new()),
-            ),
-        ])
-        .expect("query envelope");
-        let envelope_json =
-            Json::from_str_norito(&norito::json::to_json(&envelope).expect("json string"))
-                .expect("norito json");
-        let envelope_payload = norito::to_bytes(&envelope_json).expect("encode query envelope");
+        let request =
+            QueryRequest::Singular(iroha_data_model::query::SingularQueryBox::FindParameters(
+                iroha_data_model::query::executor::FindParameters,
+            ));
+        let canonical_payload =
+            encode_canonical_norito(&request).expect("encode canonical QueryRequest");
         let ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Json, &envelope_payload))
-            .expect("alloc query envelope");
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &canonical_payload))
+            .expect("alloc canonical query");
         vm.set_register(10, ptr);
 
-        let gas = call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY)
-            .expect("execute query");
-        let out = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("query output");
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_probe = vec!["ambient".to_owned(), "layout".to_owned()];
+        let ambient_before = norito::to_bytes(&ambient_probe).expect("encode ambient probe");
         assert_eq!(
-            gas,
-            WsvHost::singular_query_gas(envelope_payload.len().saturating_add(out.payload.len()))
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
+            Err(VMError::NotImplemented {
+                syscall: syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY,
+            })
+        );
+        assert_eq!(
+            norito::to_bytes(&ambient_probe).expect("re-encode ambient probe"),
+            ambient_before,
+            "canonical query decoding must restore ambient Norito flags"
+        );
+        drop(ambient_guard);
+
+        let alternate_payload = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&request).expect("encode alternate-layout QueryRequest")
+        };
+        assert_ne!(alternate_payload, canonical_payload);
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &alternate_payload))
+            .expect("alloc alternate-layout query");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &canonical_payload))
+            .expect("alloc wrong pointer type");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let wrong_payload = encode_canonical_norito(&Json::from(norito::json::Value::Object(
+            norito::json::Map::new(),
+        )))
+        .expect("encode wrong nominal type");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &wrong_payload))
+            .expect("alloc wrong nominal payload");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &[0xFF]))
+            .expect("alloc malformed query");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY),
+            Err(VMError::NoritoInvalid)
         );
     }
 
     #[test]
-    fn smartcontract_instruction_json_envelope_charges_payload_bytes() {
+    fn smartcontract_instruction_accepts_only_canonical_instruction_box() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
+        let vote_vk = VerifyingKeyId::new("halo2/ipa", "canonical-box-ballot");
         let mut wsv = MockWorldStateView::new();
-        wsv.add_account_unchecked(caller.clone());
-        wsv.grant_permission(&caller, PermissionToken::ManageTriggers);
-        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        wsv.insert_verifying_key(vote_vk.clone(), vec![0x02]);
+        assert!(wsv.create_election("canonical-box".to_owned(), 2, [0x42; 32], 0, u64::MAX));
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        host.__test_push_verified_ballot([0xAB; 32]);
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let envelope = norito::json::object([
-            (
-                "type",
-                norito::json::to_value("wsv.create_trigger").expect("serialize type"),
+        let instruction = DMZk::SubmitBallot {
+            election_id: "canonical-box".to_owned(),
+            ciphertext: vec![0xCA, 0xFE],
+            ballot_proof: ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                iroha_data_model::proof::ProofBox::new("halo2/ipa".into(), vec![0x01]),
+                vote_vk,
             ),
-            (
-                "payload",
-                norito::json::object([(
-                    "name",
-                    norito::json::to_value("gas-test").expect("serialize trigger name"),
-                )])
-                .expect("trigger payload"),
-            ),
-        ])
-        .expect("instruction envelope");
-        let envelope_json =
-            Json::from_str_norito(&norito::json::to_json(&envelope).expect("json string"))
-                .expect("norito json");
-        let envelope_payload =
-            norito::to_bytes(&envelope_json).expect("encode instruction envelope");
+            nullifier: [0x11; 32],
+        };
+        let boxed_payload = encode_canonical_norito(&DMInstructionBox::from(instruction.clone()))
+            .expect("encode canonical InstructionBox");
         let ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Json, &envelope_payload))
-            .expect("alloc instruction envelope");
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &boxed_payload))
+            .expect("alloc canonical instruction");
         vm.set_register(10, ptr);
+        vm.set_register(11, syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
 
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let ambient_guard = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_probe = vec!["ambient".to_owned(), "layout".to_owned()];
+        let ambient_before = norito::to_bytes(&ambient_probe).expect("encode ambient probe");
         let gas = call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
-            .expect("execute instruction");
-        assert_eq!(gas, WsvHost::mutation_gas(envelope_payload.len()));
+            .expect("execute canonical InstructionBox");
+        assert_eq!(gas, WsvHost::mutation_gas(boxed_payload.len()));
+        assert_eq!(
+            norito::to_bytes(&ambient_probe).expect("re-encode ambient probe"),
+            ambient_before,
+            "canonical instruction decoding must restore ambient Norito flags"
+        );
+        assert_eq!(
+            vm.host_mut_any()
+                .expect("host")
+                .downcast_ref::<WsvHost>()
+                .expect("WsvHost")
+                .wsv
+                .elections
+                .get("canonical-box")
+                .expect("election")
+                .ciphertexts
+                .len(),
+            1
+        );
+        drop(ambient_guard);
+
+        let direct_payload =
+            encode_canonical_norito(&instruction).expect("encode direct concrete instruction");
+        assert_ne!(direct_payload, boxed_payload);
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &direct_payload))
+            .expect("alloc direct instruction");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let alternate_payload = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::to_bytes(&DMInstructionBox::from(instruction.clone()))
+                .expect("encode alternate-layout InstructionBox")
+        };
+        assert_ne!(alternate_payload, boxed_payload);
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &alternate_payload))
+            .expect("alloc alternate-layout instruction");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &boxed_payload))
+            .expect("alloc wrong pointer type");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let wrong_payload = encode_canonical_norito(&Json::from(norito::json::Value::Object(
+            norito::json::Map::new(),
+        )))
+        .expect("encode wrong nominal type");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &wrong_payload))
+            .expect("alloc wrong payload type");
+        vm.set_register(10, ptr);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let canonical_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &boxed_payload))
+            .expect("alloc canonical instruction for tag checks");
+        vm.set_register(10, canonical_ptr);
+        for tag in [
+            0,
+            99,
+            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD,
+            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+        ] {
+            vm.set_register(11, tag);
+            assert_eq!(
+                call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+                Err(VMError::PermissionDenied),
+                "tag {tag} must not authorize SubmitBallot"
+            );
+        }
+
+        let other = DMZk::CreateElection {
+            election_id: "unsupported".to_owned(),
+            options: 2,
+            eligible_root: [0x42; 32],
+            start_ts: 1,
+            end_ts: 2,
+            vk_ballot: VerifyingKeyId::new("halo2/ipa", "ballot"),
+            vk_tally: VerifyingKeyId::new("halo2/ipa", "tally"),
+            domain_tag: "unsupported".to_owned(),
+        };
+        let other_payload = encode_canonical_norito(&DMInstructionBox::from(other))
+            .expect("encode unsupported InstructionBox");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &other_payload))
+            .expect("alloc unsupported instruction");
+        vm.set_register(10, ptr);
+        vm.set_register(11, syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT);
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+            Err(VMError::PermissionDenied)
+        );
+        assert_eq!(
+            vm.host_mut_any()
+                .expect("host")
+                .downcast_ref::<WsvHost>()
+                .expect("WsvHost")
+                .wsv
+                .elections
+                .get("canonical-box")
+                .expect("election")
+                .ciphertexts
+                .len(),
+            1,
+            "rejected frames must not mutate the election"
+        );
+        assert!(
+            !vm.host_mut_any()
+                .expect("host")
+                .downcast_ref::<WsvHost>()
+                .expect("WsvHost")
+                .wsv
+                .elections
+                .contains_key("unsupported")
+        );
+
+        let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
+            iroha_data_model::bridge::SccpLaneIdV1 {
+                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                target: iroha_data_model::bridge::SccpNetworkV1::BscTestnet,
+            },
+            [0x44; 32],
+            [0x45; 32],
+        )
+        .expect("valid SCCP context");
+        let record =
+            iroha_data_model::isi::bridge::RecordSccpMessage::new(context, vec![0xAA, 0xBB]);
+        let record_payload = encode_canonical_norito(&DMInstructionBox::from(record))
+            .expect("encode RecordSccpMessage InstructionBox");
+        let ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &record_payload))
+            .expect("alloc RecordSccpMessage");
+        vm.set_register(10, ptr);
+        vm.set_register(
+            11,
+            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+        );
+        assert_eq!(
+            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
+            Err(VMError::NotImplemented {
+                syscall: syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+            })
+        );
     }
 
     #[test]
@@ -8037,47 +7313,6 @@ mod tests_null_decode {
         assert_eq!(invoke(false, false, 10, 10), Err(VMError::PermissionDenied));
         assert_eq!(invoke(false, true, 11, 10), Err(VMError::PermissionDenied));
         assert!(invoke(false, true, 10, 10).is_ok());
-    }
-
-    #[test]
-    fn execute_instruction_rejects_oversized_json_envelope() {
-        let caller: AccountId = test_account_id(
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
-            "wonderland",
-        );
-        let host =
-            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
-                .with_zk_halo2_config(crate::host::ZkHalo2Config {
-                    max_envelope_bytes: 96,
-                    ..Default::default()
-                });
-        let mut vm = IVM::new(u64::MAX);
-        vm.set_host(host);
-
-        let oversized_env = norito::json::object([
-            (
-                "type",
-                norito::json::to_value("wsv.create_role").expect("serialize type"),
-            ),
-            (
-                "payload",
-                norito::json::object([(
-                    "name",
-                    norito::json::to_value(&"a".repeat(256)).expect("serialize oversized name"),
-                )])
-                .expect("serialize payload"),
-            ),
-        ])
-        .expect("serialize envelope");
-        let envelope_bytes =
-            norito::json::to_vec(&oversized_env).expect("serialize envelope bytes");
-        let ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::Json, &envelope_bytes))
-            .expect("alloc oversized envelope");
-        vm.set_register(10, ptr);
-        let err = call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION)
-            .expect_err("oversized json envelope should be rejected");
-        assert!(matches!(err, VMError::PermissionDenied));
     }
 
     #[test]

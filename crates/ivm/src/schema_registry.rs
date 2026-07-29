@@ -11,6 +11,7 @@ use iroha_data_model::query::{
     QueryRequest, QueryResponse,
     json_wrappers::{QueryRequestJson, query_request_from_json, query_request_to_json},
 };
+use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
 
 // Canonical schema type definitions used by the default registry for encoding/decoding.
 // Keep these at module scope so Norito type identity remains stable across encode/decode.
@@ -55,9 +56,9 @@ pub trait SchemaRegistry {
     fn info(&self, name: &str) -> Option<SchemaInfo>;
     /// Resolve a canonical family name from either that family or an exact schema name.
     fn resolve_family(&self, name: &str) -> Option<String>;
-    /// Encode a JSON payload according to `name` into Norito bytes.
+    /// Encode a JSON payload according to `name` into canonical V1 Norito bytes.
     fn encode_json(&self, name: &str, json: &[u8]) -> Option<Vec<u8>>;
-    /// Decode Norito bytes according to `name` into minified JSON bytes.
+    /// Decode canonical V1 Norito bytes according to `name` into minified JSON bytes.
     fn decode_to_json(&self, name: &str, bytes: &[u8]) -> Option<Vec<u8>>;
     /// Return all known versions for a base schema name (e.g., "Order").
     fn list_versions(&self, base: &str) -> Option<Vec<(String, SchemaInfo)>>;
@@ -181,7 +182,7 @@ impl SchemaRegistry for DefaultRegistry {
                 let qty = object.get("qty")?.as_i64()?;
                 let side = object.get("side")?.as_str()?.to_string();
                 let order = OrderSchema { qty, side };
-                norito::to_bytes(&order).ok()
+                encode_canonical_norito(&order).ok()
             }
             "OrderByTime" => {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
@@ -190,7 +191,7 @@ impl SchemaRegistry for DefaultRegistry {
                 let side = object.get("side")?.as_str()?.to_string();
                 let tif = u32::try_from(object.get("tif")?.as_u64()?).ok()?;
                 let order = OrderByTimeSchema { qty, side, tif };
-                norito::to_bytes(&order).ok()
+                encode_canonical_norito(&order).ok()
             }
             "TradeV1" => {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
@@ -199,7 +200,7 @@ impl SchemaRegistry for DefaultRegistry {
                 let price = object.get("price")?.as_i64()?;
                 let side = object.get("side")?.as_str()?.to_string();
                 let t = TradeV1Schema { qty, price, side };
-                norito::to_bytes(&t).ok()
+                encode_canonical_norito(&t).ok()
             }
             "TradeV2" => {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
@@ -214,16 +215,16 @@ impl SchemaRegistry for DefaultRegistry {
                     side,
                     venue,
                 };
-                norito::to_bytes(&t).ok()
+                encode_canonical_norito(&t).ok()
             }
             "QueryRequest" => {
                 let req_json: QueryRequestJson = norito::json::from_slice(json).ok()?;
                 let req = query_request_from_json(req_json).ok()?;
-                norito::to_bytes(&req).ok()
+                encode_canonical_norito(&req).ok()
             }
             "QueryResponse" => {
                 let resp: QueryResponse = norito::json::from_slice(json).ok()?;
-                norito::to_bytes(&resp).ok()
+                encode_canonical_norito(&resp).ok()
             }
             _ => None,
         }
@@ -232,14 +233,14 @@ impl SchemaRegistry for DefaultRegistry {
     fn decode_to_json(&self, name: &str, bytes: &[u8]) -> Option<Vec<u8>> {
         match name {
             "Order" => {
-                let o: OrderSchema = norito::decode_from_bytes(bytes).ok()?;
+                let o: OrderSchema = decode_canonical_norito(bytes).ok()?;
                 let mut map = norito::json::Map::new();
                 map.insert("qty".to_owned(), norito::json::Value::from(o.qty));
                 map.insert("side".to_owned(), norito::json::Value::from(o.side));
                 norito::json::to_vec(&norito::json::Value::Object(map)).ok()
             }
             "OrderByTime" => {
-                let o: OrderByTimeSchema = norito::decode_from_bytes(bytes).ok()?;
+                let o: OrderByTimeSchema = decode_canonical_norito(bytes).ok()?;
                 let mut map = norito::json::Map::new();
                 map.insert("qty".to_owned(), norito::json::Value::from(o.qty));
                 map.insert("side".to_owned(), norito::json::Value::from(o.side));
@@ -247,7 +248,7 @@ impl SchemaRegistry for DefaultRegistry {
                 norito::json::to_vec(&norito::json::Value::Object(map)).ok()
             }
             "TradeV1" => {
-                let t: TradeV1Schema = norito::decode_from_bytes(bytes).ok()?;
+                let t: TradeV1Schema = decode_canonical_norito(bytes).ok()?;
                 let mut map = norito::json::Map::new();
                 map.insert("qty".to_owned(), norito::json::Value::from(t.qty));
                 map.insert("price".to_owned(), norito::json::Value::from(t.price));
@@ -255,7 +256,7 @@ impl SchemaRegistry for DefaultRegistry {
                 norito::json::to_vec(&norito::json::Value::Object(map)).ok()
             }
             "TradeV2" => {
-                let t: TradeV2Schema = norito::decode_from_bytes(bytes).ok()?;
+                let t: TradeV2Schema = decode_canonical_norito(bytes).ok()?;
                 let mut map = norito::json::Map::new();
                 map.insert("qty".to_owned(), norito::json::Value::from(t.qty));
                 map.insert("price".to_owned(), norito::json::Value::from(t.price));
@@ -264,12 +265,12 @@ impl SchemaRegistry for DefaultRegistry {
                 norito::json::to_vec(&norito::json::Value::Object(map)).ok()
             }
             "QueryRequest" => {
-                let req: QueryRequest = norito::decode_from_bytes(bytes).ok()?;
+                let req: QueryRequest = decode_canonical_norito(bytes).ok()?;
                 let req_json = query_request_to_json(&req);
                 norito::json::to_vec(&req_json).ok()
             }
             "QueryResponse" => {
-                let resp: QueryResponse = norito::decode_from_bytes(bytes).ok()?;
+                let resp: QueryResponse = decode_canonical_norito(bytes).ok()?;
                 norito::json::to_vec(&resp).ok()
             }
             _ => None,
@@ -338,6 +339,40 @@ mod tests {
         let enc = reg.encode_json("Order", input).expect("encode");
         let dec = reg.decode_to_json("Order", &enc).expect("decode to json");
         assert!(eq_json(input, &dec));
+    }
+
+    #[test]
+    fn registry_codec_is_ambient_independent_and_rejects_alternate_layout() {
+        let reg = DefaultRegistry::new();
+        let input = br#"{"qty":10,"side":"canonical"}"#;
+        let canonical = reg
+            .encode_json("Order", input)
+            .expect("encode canonical Order");
+        let value = OrderSchema {
+            qty: 10,
+            side: "canonical".to_owned(),
+        };
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let alternate = norito::to_bytes(&value).expect("encode alternate-layout Order");
+        assert_ne!(
+            alternate, canonical,
+            "fixture must distinguish alternate and canonical V1 layouts"
+        );
+        assert_eq!(
+            reg.encode_json("Order", input),
+            Some(canonical.clone()),
+            "registry output must ignore ambient layout flags"
+        );
+        assert!(
+            reg.decode_to_json("Order", &alternate).is_none(),
+            "registry input must reject an ordinarily decodable alternate layout"
+        );
+        let decoded = reg
+            .decode_to_json("Order", &canonical)
+            .expect("decode canonical Order under alternate ambient flags");
+        assert!(eq_json(input, &decoded));
     }
 
     #[test]

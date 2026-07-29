@@ -19,6 +19,7 @@ import os
 import pathlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -193,6 +194,33 @@ def source_seal_home() -> pathlib.Path:
     return pathlib.Path.home().resolve(strict=True)
 
 
+def selected_lockfile_path(
+    root: pathlib.Path, configured: pathlib.Path | None = None
+) -> pathlib.Path:
+    """Return one canonical, non-symbolic Cargo lock used by the build."""
+
+    candidate = configured if configured is not None else root / "Cargo.lock"
+    if not candidate.is_absolute():
+        raise RuntimeError("selected Cargo lock path must be absolute")
+    canonical_spelling = pathlib.Path(os.path.abspath(candidate))
+    if candidate != canonical_spelling:
+        raise RuntimeError("selected Cargo lock path must be canonical")
+    try:
+        metadata = candidate.lstat()
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise RuntimeError(
+            "selected Cargo lock must be a non-symbolic regular file"
+        ) from error
+    if (
+        resolved != candidate
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+    ):
+        raise RuntimeError("selected Cargo lock must be a non-symbolic regular file")
+    return candidate
+
+
 def source_seal_environment(
     *,
     cargo: AuthenticatedTool,
@@ -240,6 +268,7 @@ def source_seal_environment(
         "LC_ALL": "C.UTF-8",
         "PATH": os.pathsep.join(path_entries),
         "RUSTC": str(rustc.invocation),
+        "RUSTC_BOOTSTRAP": "1",
         "RUSTUP_HOME": str(rustup_home),
         "TMPDIR": str(temporary_directory),
     }
@@ -282,7 +311,12 @@ def run(
     return result
 
 
-def metadata(root: pathlib.Path, target: str) -> dict[str, object]:
+def metadata(
+    root: pathlib.Path,
+    target: str,
+    lockfile_path: pathlib.Path | None = None,
+) -> dict[str, object]:
+    lockfile = selected_lockfile_path(root, lockfile_path)
     cargo, rustc, git = source_seal_tools()
     output = run(
         root,
@@ -291,6 +325,10 @@ def metadata(root: pathlib.Path, target: str) -> dict[str, object]:
             "metadata",
             "--locked",
             "--offline",
+            "-Z",
+            "unstable-options",
+            "--lockfile-path",
+            str(lockfile),
             "--format-version",
             "1",
             "--features",
@@ -304,11 +342,13 @@ def metadata(root: pathlib.Path, target: str) -> dict[str, object]:
 
 
 def local_dependency_roots(
-    root: pathlib.Path, targets: Iterable[str] = APPLE_TARGETS
+    root: pathlib.Path,
+    targets: Iterable[str] = APPLE_TARGETS,
+    lockfile_path: pathlib.Path | None = None,
 ) -> set[str]:
     package_roots: set[pathlib.Path] = set()
     for target in targets:
-        document = metadata(root, target)
+        document = metadata(root, target, lockfile_path)
         packages = {
             package["id"]: package
             for package in document["packages"]
@@ -362,7 +402,12 @@ def local_dependency_roots(
     return {path.as_posix() for path in package_roots}
 
 
-def seal_inputs(root: pathlib.Path, platform: str = "apple") -> list[str]:
+def seal_inputs(
+    root: pathlib.Path,
+    platform: str = "apple",
+    lockfile_path: pathlib.Path | None = None,
+) -> list[str]:
+    lockfile = selected_lockfile_path(root, lockfile_path)
     try:
         targets = PLATFORM_TARGETS[platform]
         platform_inputs = PLATFORM_ROOT_INPUTS[platform]
@@ -370,12 +415,21 @@ def seal_inputs(root: pathlib.Path, platform: str = "apple") -> list[str]:
         raise RuntimeError(f"unsupported source-seal platform: {platform}") from error
     candidates = set(COMMON_ROOT_INPUTS)
     candidates.update(platform_inputs)
-    candidates.update(local_dependency_roots(root, targets))
-    existing = [value for value in candidates if (root / value).exists()]
+    candidates.update(local_dependency_roots(root, targets, lockfile))
+    existing = [
+        value
+        for value in candidates
+        if (value == "Cargo.lock" and lockfile.is_file()) or (root / value).exists()
+    ]
     return sorted(existing)
 
 
-def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
+def listed_files(
+    root: pathlib.Path,
+    inputs: Iterable[str],
+    lockfile_path: pathlib.Path | None = None,
+) -> list[str]:
+    lockfile = selected_lockfile_path(root, lockfile_path)
     input_set = set(inputs)
     cargo, rustc, git = source_seal_tools()
     output = run(
@@ -398,7 +452,7 @@ def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
     }
 
     # Some workspace-wide build inputs are intentionally ignored by repository
-    # policy (notably the root Cargo.lock). They still affect the bridge binary,
+    # policy (notably the selected Cargo.lock). They still affect the bridge binary,
     # so an explicit ROOT_INPUT must be sealed even when `git ls-files -co
     # --exclude-standard` omits it. Do not recursively include arbitrary ignored
     # files below directory inputs: build outputs and local corpora remain outside
@@ -406,10 +460,10 @@ def listed_files(root: pathlib.Path, inputs: Iterable[str]) -> list[str]:
     for relative in ROOT_INPUTS:
         if relative not in input_set:
             continue
-        path = root / relative
-        if path.is_symlink():
+        source = lockfile if relative == "Cargo.lock" else root / relative
+        if source.is_symlink():
             raise RuntimeError(f"explicit source-seal input is symlinked: {relative}")
-        if path.is_file():
+        if source.is_file():
             listed.add(relative)
 
     return sorted(listed)
@@ -448,15 +502,20 @@ def normalize_swift_native_bridge_hash_pins(contents: bytes) -> bytes:
     )
 
 
-def fingerprint(root: pathlib.Path, inputs: list[str]) -> str:
+def fingerprint(
+    root: pathlib.Path,
+    inputs: list[str],
+    lockfile_path: pathlib.Path | None = None,
+) -> str:
+    lockfile = selected_lockfile_path(root, lockfile_path)
     digest = hashlib.sha256()
-    for relative in listed_files(root, inputs):
-        path = root / relative
-        if path.is_symlink():
+    for relative in listed_files(root, inputs, lockfile):
+        source = lockfile if relative == "Cargo.lock" else root / relative
+        if source.is_symlink():
             raise RuntimeError(f"source-seal input is symlinked: {relative}")
-        if not path.is_file():
+        if not source.is_file():
             raise RuntimeError(f"source-seal input is not a regular file: {relative}")
-        contents = path.read_bytes()
+        contents = source.read_bytes()
         if relative == SWIFT_NATIVE_BRIDGE_PATH:
             contents = normalize_swift_native_bridge_hash_pins(contents)
         digest.update(relative.encode("utf-8"))
@@ -466,7 +525,17 @@ def fingerprint(root: pathlib.Path, inputs: list[str]) -> str:
     return digest.hexdigest()
 
 
-def status(root: pathlib.Path, inputs: list[str]) -> str:
+def status(
+    root: pathlib.Path,
+    inputs: list[str],
+    lockfile_path: pathlib.Path | None = None,
+) -> str:
+    lockfile = selected_lockfile_path(root, lockfile_path)
+    status_inputs = [
+        relative
+        for relative in inputs
+        if relative != "Cargo.lock" or lockfile == root / "Cargo.lock"
+    ]
     cargo, rustc, git = source_seal_tools()
     output = run(
         root,
@@ -476,7 +545,7 @@ def status(root: pathlib.Path, inputs: list[str]) -> str:
             "--porcelain=v1",
             "--untracked-files=all",
             "--",
-            *inputs,
+            *status_inputs,
         ],
         source_seal_environment(cargo=cargo, rustc=rustc, git=git),
     )
@@ -496,15 +565,20 @@ def source_commit(root: pathlib.Path) -> str:
     return value
 
 
-def snapshot(root: pathlib.Path, platform: str) -> dict[str, object]:
+def snapshot(
+    root: pathlib.Path,
+    platform: str,
+    lockfile_path: pathlib.Path | None = None,
+) -> dict[str, object]:
     """Return the canonical source state consumed by one platform build."""
 
-    inputs = seal_inputs(root, platform)
+    lockfile = selected_lockfile_path(root, lockfile_path)
+    inputs = seal_inputs(root, platform, lockfile)
     source_commit_before = source_commit(root)
-    source_status_before = status(root, inputs)
-    source_fingerprint_before = fingerprint(root, inputs)
-    source_fingerprint_after = fingerprint(root, inputs)
-    source_status_after = status(root, inputs)
+    source_status_before = status(root, inputs, lockfile)
+    source_fingerprint_before = fingerprint(root, inputs, lockfile)
+    source_fingerprint_after = fingerprint(root, inputs, lockfile)
+    source_status_after = status(root, inputs, lockfile)
     source_commit_after = source_commit(root)
     if source_commit_before != source_commit_after:
         raise RuntimeError(
@@ -530,17 +604,31 @@ def snapshot(root: pathlib.Path, platform: str) -> dict[str, object]:
     }
 
 
-def snapshot_bytes(root: pathlib.Path, platform: str) -> bytes:
+def snapshot_bytes(
+    root: pathlib.Path,
+    platform: str,
+    lockfile_path: pathlib.Path | None = None,
+) -> bytes:
     return (
-        json.dumps(snapshot(root, platform), sort_keys=True, separators=(",", ":")) + "\n"
+        json.dumps(
+            snapshot(root, platform, lockfile_path),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
     ).encode("utf-8")
 
 
-def verify_snapshot(root: pathlib.Path, platform: str, snapshot_path: pathlib.Path) -> None:
+def verify_snapshot(
+    root: pathlib.Path,
+    platform: str,
+    snapshot_path: pathlib.Path,
+    lockfile_path: pathlib.Path | None = None,
+) -> None:
     """Reject a missing, tampered, stale, or mixed-source build snapshot."""
 
     expected = snapshot_path.read_bytes()
-    current = snapshot_bytes(root, platform)
+    current = snapshot_bytes(root, platform, lockfile_path)
     if expected != current:
         raise RuntimeError(
             f"{platform} NoritoBridge source changed after the build started"
@@ -561,27 +649,33 @@ def parse_args() -> argparse.Namespace:
         type=pathlib.Path,
         help="Build-start snapshot to authenticate in verify mode.",
     )
+    parser.add_argument(
+        "--lockfile-path",
+        type=pathlib.Path,
+        help="Absolute canonical Cargo lock consumed by metadata and fingerprinting.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     root = args.root.resolve()
-    inputs = seal_inputs(root, args.platform)
+    lockfile = selected_lockfile_path(root, args.lockfile_path)
+    inputs = seal_inputs(root, args.platform, lockfile)
     if args.mode == "fingerprint":
-        print(fingerprint(root, inputs))
+        print(fingerprint(root, inputs, lockfile))
     elif args.mode == "paths":
         print("\n".join(inputs))
     elif args.mode == "status":
-        value = status(root, inputs)
+        value = status(root, inputs, lockfile)
         if value:
             print(value)
     elif args.mode == "snapshot":
-        sys.stdout.buffer.write(snapshot_bytes(root, args.platform))
+        sys.stdout.buffer.write(snapshot_bytes(root, args.platform, lockfile))
     else:
         if args.snapshot is None:
             raise RuntimeError("verify mode requires --snapshot")
-        verify_snapshot(root, args.platform, args.snapshot.resolve())
+        verify_snapshot(root, args.platform, args.snapshot.resolve(), lockfile)
     return 0
 
 

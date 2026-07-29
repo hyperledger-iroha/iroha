@@ -996,6 +996,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Supply every required parameter by its declared name."
     ),
     explanation!(
+        "E_NAMED_ARGUMENT_HOLE",
+        Semantic,
+        "a named call supplies a later optional parameter after omitting an earlier optional ABI slot",
+        "Supply the earlier optional parameter too, or omit the complete trailing optional suffix."
+    ),
+    explanation!(
         "E_NAMED_ARGUMENTS_REQUIRED",
         Semantic,
         "a safety-sensitive call uses positional arguments",

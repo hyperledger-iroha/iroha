@@ -17,6 +17,13 @@ from .crypto import (
     ContractCall,
     Ed25519KeyPair,
     Instruction,
+    PrivacyBootleLanternPresentationActionBuildResultV1,
+    PrivacyJindoActionBuildResultV1,
+    PrivacyVeRangeActionBuildResultV1,
+    PrivacyVegaActionPreparationV1,
+    PrivacyZkAceTransferActionBuildResultV1,
+    PrivacyZkAmsBatchAdmissionActionBuildResultV1,
+    PrivacyZkAmsProvisionAccountActionBuildResultV1,
     SignedTransactionEnvelope,
     TransactionBuilder,
     TransactionExecutableEntry,
@@ -40,7 +47,6 @@ __all__ = [
 
 
 MetadataLike = Optional[Mapping[str, Any]]
-PositiveU128Like = Union[str, int]
 FixedBytesLike = Union[str, bytes, bytearray, memoryview]
 VerifyingKeyLike = Union[str, Mapping[str, Any]]
 _U128_MAX = (1 << 128) - 1
@@ -99,21 +105,21 @@ def _normalize_asset_transfer_limits(
     return normalized
 
 
-def _normalize_positive_u128_literal(quantity: Any, context: str) -> str:
-    if isinstance(quantity, bool):
-        raise ValueError(f"{context} must be a positive decimal u128 string")
-    if isinstance(quantity, int):
-        value = quantity
-    elif isinstance(quantity, str):
-        text = quantity.strip()
-        if not text.isdecimal():
-            raise ValueError(f"{context} must be a positive decimal u128 string")
-        value = int(text, 10)
-    else:
-        raise TypeError(f"{context} must be a positive decimal u128 string")
-    if value <= 0 or value > _U128_MAX:
-        raise ValueError(f"{context} must be a positive decimal u128 string")
-    return str(value)
+def _require_canonical_positive_u128_literal(quantity: Any, context: str) -> str:
+    message = f"{context} must be a canonical positive decimal u128 string"
+    if type(quantity) is not str:
+        raise TypeError(message)
+    if (
+        not quantity
+        or len(quantity) > 39
+        or not quantity.isascii()
+        or not quantity.isdigit()
+        or quantity.startswith("0")
+    ):
+        raise ValueError(message)
+    if int(quantity, 10) > _U128_MAX:
+        raise ValueError(message)
+    return quantity
 
 
 @dataclass(frozen=True)
@@ -592,78 +598,6 @@ class TransactionDraft:
         )
         return self
 
-    def register_zk_ace_identity_commitment(
-        self,
-        asset_definition_id: str,
-        *,
-        identity_commitment: FixedBytesLike,
-        policy_hash: FixedBytesLike,
-        allowed_accounts: Sequence[str],
-        verifier_key: VerifyingKeyLike,
-        action_class: Optional[str] = None,
-        domain_tag: Optional[str] = None,
-    ) -> TransactionDraft:
-        """Append a `RegisterZkAceIdentityCommitment` instruction."""
-
-        self.add_instruction(
-            Instruction.register_zk_ace_identity_commitment(
-                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                identity_commitment,
-                policy_hash,
-                allowed_accounts,
-                verifier_key=verifier_key,
-                action_class=action_class,
-                domain_tag=domain_tag,
-            )
-        )
-        return self
-
-    def rotate_zk_ace_identity_commitment(
-        self,
-        asset_definition_id: str,
-        *,
-        old_identity_commitment: FixedBytesLike,
-        new_identity_commitment: FixedBytesLike,
-        policy_hash: FixedBytesLike,
-        allowed_accounts: Sequence[str],
-        verifier_key: VerifyingKeyLike,
-        action_class: Optional[str] = None,
-        domain_tag: Optional[str] = None,
-    ) -> TransactionDraft:
-        """Append a `RotateZkAceIdentityCommitment` instruction."""
-
-        self.add_instruction(
-            Instruction.rotate_zk_ace_identity_commitment(
-                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                old_identity_commitment,
-                new_identity_commitment,
-                policy_hash,
-                allowed_accounts,
-                verifier_key=verifier_key,
-                action_class=action_class,
-                domain_tag=domain_tag,
-            )
-        )
-        return self
-
-    def revoke_zk_ace_identity_commitment(
-        self,
-        asset_definition_id: str,
-        *,
-        identity_commitment: FixedBytesLike,
-        reason_hash: Optional[FixedBytesLike] = None,
-    ) -> TransactionDraft:
-        """Append a `RevokeZkAceIdentityCommitment` instruction."""
-
-        self.add_instruction(
-            Instruction.revoke_zk_ace_identity_commitment(
-                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                identity_commitment,
-                reason_hash=reason_hash,
-            )
-        )
-        return self
-
     def shield_asset(
         self,
         asset_definition_id: str,
@@ -783,44 +717,6 @@ class TransactionDraft:
                 list(outputs),
                 dict(proof),
                 root_hint=root_hint,
-            )
-        )
-        return self
-
-    def zk_ace_authorized_transfer(
-        self,
-        *,
-        from_account_id: str,
-        to_account_id: str,
-        asset_definition_id: str,
-        amount: PositiveU128Like,
-        identity_commitment: FixedBytesLike,
-        tx_digest: FixedBytesLike,
-        chain_id: str,
-        domain_tag: str,
-        action_class: str,
-        replay_nullifier: FixedBytesLike,
-        policy_hash: FixedBytesLike,
-        proof: Mapping[str, Any],
-    ) -> TransactionDraft:
-        """Append a prepared `SubmitZkAceAuthorizedTransfer` instruction."""
-
-        if not isinstance(proof, Mapping):
-            raise TypeError("proof must be a mapping")
-        self.add_instruction(
-            Instruction.zk_ace_authorized_transfer(
-                _require_non_empty_string(from_account_id, "from_account_id"),
-                _require_non_empty_string(to_account_id, "to_account_id"),
-                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-                _normalize_positive_u128_literal(amount, "amount"),
-                identity_commitment,
-                tx_digest,
-                _require_non_empty_string(chain_id, "chain_id"),
-                _require_non_empty_string(domain_tag, "domain_tag"),
-                _require_non_empty_string(action_class, "action_class"),
-                replay_nullifier,
-                policy_hash,
-                dict(proof),
             )
         )
         return self
@@ -1567,6 +1463,273 @@ class TransactionDraft:
             nonce=effective_nonce,
             metadata=effective_metadata,
             lane_privacy_attachments=self._lane_privacy_attachments,
+        )
+
+    def sign_privacy_zk_ace_transfer_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        canonical_policy_archive: bytes,
+        source_account_id: str,
+        destination_account_id: str,
+        amount: str,
+        identity_root: bytes,
+        identity_blinding: bytes,
+        replay_secret: bytes,
+    ) -> PrivacyZkAceTransferActionBuildResultV1:
+        """Build and sign one native, intent-bound ZK-ACE transfer action.
+
+        The exact governed policy is supplied as a canonical typed archive.
+        Identity and replay witness material is consumed only by the native
+        prover and is not returned by the result object.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native ZK-ACE transparent-transfer action requires an otherwise "
+                "empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_zk_ace_transfer_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            canonical_policy_archive,
+            _require_exact_non_empty_string(
+                source_account_id,
+                "source_account_id",
+            ),
+            _require_exact_non_empty_string(
+                destination_account_id,
+                "destination_account_id",
+            ),
+            _require_canonical_positive_u128_literal(amount, "amount"),
+            identity_root,
+            identity_blinding,
+            replay_secret,
+        )
+
+    def sign_privacy_jindo_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        witness_polynomials: Sequence[Sequence[bytes]],
+        evaluation_point: bytes,
+    ) -> PrivacyJindoActionBuildResultV1:
+        """Build and sign one intent-bound native Jindo component action.
+
+        This is a closed action constructor. A Jindo action cannot be combined
+        with another executable, an explicit batch, or privacy attachments.
+        The proof stays inside the returned signed transaction envelope.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native Jindo action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_jindo_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            witness_polynomials,
+            evaluation_point,
+        )
+
+    def sign_privacy_verange_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        asset_definition_id: str,
+        policy_id: bytes,
+        bit_length: int,
+        values: Sequence[int],
+        blindings: Sequence[bytes],
+    ) -> PrivacyVeRangeActionBuildResultV1:
+        """Build and sign one intent-bound native VeRange component action.
+
+        Values and blindings are private prover inputs. The result exposes only
+        their ordered P-256 commitments and public proof metadata.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native VeRange action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_verange_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            asset_definition_id,
+            policy_id,
+            bit_length,
+            list(values),
+            list(blindings),
+        )
+
+    def prepare_privacy_vega_action_v1(
+        self,
+        *,
+        canonical_genesis_hash: bytes,
+        issuer_id: bytes,
+        issuer_record_epoch: int,
+        issuer_record_digest: bytes,
+        issuer_public_key: bytes,
+        presentation_year: int,
+        presentation_month: int,
+        presentation_day: int,
+        minimum_age_years: int,
+        reader_challenge: bytes,
+        session_transcript_digest: bytes,
+    ) -> PrivacyVegaActionPreparationV1:
+        """Freeze one intent-bound Vega draft and return its holder-signing data.
+
+        The returned single-use preparation exposes the canonical transaction
+        intent and final ``H_dev``. After the holder signs that exact digest,
+        call ``preparation.finalize_privacy_vega_action_v1(...)`` with the
+        transaction key and private credential witness. This two-phase API is
+        required because ``H_dev`` binds the exact frozen transaction intent.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native Vega action requires an otherwise empty transaction draft"
+            )
+        return self.to_builder().prepare_privacy_vega_action_v1(
+            canonical_genesis_hash,
+            issuer_id,
+            issuer_record_epoch,
+            issuer_record_digest,
+            issuer_public_key,
+            presentation_year,
+            presentation_month,
+            presentation_day,
+            minimum_age_years,
+            reader_challenge,
+            session_transcript_digest,
+        )
+
+    def sign_privacy_zk_ams_batch_admission_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        issuer_id: bytes,
+        issuer_public_key: bytes,
+        issuer_policy_record_digest: bytes,
+        registry_id: bytes,
+        registry_record_digest: bytes,
+        policy_id: bytes,
+        policy_digest: bytes,
+        account_registry_root: bytes,
+        account_registry_root_epoch: int,
+        subject_commitments: Sequence[bytes],
+        credential_nonces: Sequence[bytes],
+        seed_secrets: Sequence[bytes],
+        issuer_signatures: Sequence[bytes],
+    ) -> PrivacyZkAmsBatchAdmissionActionBuildResultV1:
+        """Build and sign one native ZK-AMS batch-admission action.
+
+        Credential nonces, seed secrets, and issuer signatures are private
+        native prover inputs. The result exposes only authenticated public
+        admission metadata and the signed transaction envelope.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native ZK-AMS batch-admission action requires an otherwise "
+                "empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_zk_ams_batch_admission_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            issuer_id,
+            issuer_public_key,
+            issuer_policy_record_digest,
+            registry_id,
+            registry_record_digest,
+            policy_id,
+            policy_digest,
+            account_registry_root,
+            account_registry_root_epoch,
+            list(subject_commitments),
+            list(credential_nonces),
+            list(seed_secrets),
+            list(issuer_signatures),
+        )
+
+    def sign_privacy_zk_ams_provision_account_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        issuer_id: bytes,
+        issuer_public_key: bytes,
+        issuer_policy_record_digest: bytes,
+        registry_id: bytes,
+        registry_record_digest: bytes,
+        policy_id: bytes,
+        policy_digest: bytes,
+        account_registry_root: bytes,
+        account_registry_root_epoch: int,
+        admitted_seed_key_ring: Sequence[bytes],
+        account_id: str,
+        seed_secret: bytes,
+    ) -> PrivacyZkAmsProvisionAccountActionBuildResultV1:
+        """Build and sign one native ZK-AMS account-provisioning action.
+
+        The signer index and key image are derived natively from ``seed_secret``;
+        callers cannot inject either value.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native ZK-AMS account-provisioning action requires an otherwise "
+                "empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_zk_ams_provision_account_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            issuer_id,
+            issuer_public_key,
+            issuer_policy_record_digest,
+            registry_id,
+            registry_record_digest,
+            policy_id,
+            policy_digest,
+            account_registry_root,
+            account_registry_root_epoch,
+            list(admitted_seed_key_ring),
+            account_id,
+            seed_secret,
+        )
+
+    def sign_privacy_bootle_lantern_presentation_action_v1(
+        self,
+        private_key: bytes,
+        *,
+        canonical_genesis_hash: bytes,
+        canonical_policy_archive: bytes,
+        disclosure_indices: Sequence[int],
+        secret_polynomials: Sequence[Sequence[int]],
+        attributes: Sequence[bytes],
+    ) -> PrivacyBootleLanternPresentationActionBuildResultV1:
+        """Build and sign one native Bootle/Lantern presentation action.
+
+        Disclosed values are derived natively from the eight private attributes;
+        callers provide only the ordered disclosure indices.
+        """
+
+        if self._explicit_batch or self._entries or self._lane_privacy_attachments:
+            raise ValueError(
+                "native Bootle/Lantern presentation action requires an otherwise "
+                "empty transaction draft"
+            )
+        return self.to_builder().sign_privacy_bootle_lantern_presentation_action_v1(
+            private_key,
+            canonical_genesis_hash,
+            canonical_policy_archive,
+            list(disclosure_indices),
+            [list(polynomial) for polynomial in secret_polynomials],
+            list(attributes),
         )
 
     def sign_with_keypair(
